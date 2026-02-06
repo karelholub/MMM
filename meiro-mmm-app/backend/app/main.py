@@ -101,6 +101,112 @@ def health():
 
 # ==================== OAuth Routes ====================
 
+# NOTE: static routes must be registered before the wildcard {platform} routes
+# so FastAPI matches /api/auth/status before /api/auth/{platform}.
+
+@app.get("/api/auth/status")
+def auth_status():
+    """Get connection status for all platforms."""
+    connected = get_all_connected_platforms()
+    if meiro_cdp.is_connected() and "meiro_cdp" not in connected:
+        connected.append("meiro_cdp")
+    return {"connected": connected}
+
+@app.get("/api/auth/callback/{platform}")
+async def oauth_callback(platform: str, code: Optional[str] = Query(None), error: Optional[str] = Query(None)):
+    """Handle OAuth callback and exchange code for access token."""
+    if error:
+        return RedirectResponse(url=f"{FRONTEND_URL}/datasources?error={platform}&message={error}")
+
+    if not code:
+        return RedirectResponse(url=f"{FRONTEND_URL}/datasources?error={platform}&message=no_code")
+
+    redirect_uri = f"{BASE_URL}/api/auth/callback/{platform}"
+
+    try:
+        if platform == "meta":
+            client_id = os.getenv("META_APP_ID", "")
+            client_secret = os.getenv("META_APP_SECRET", "")
+            if not client_id or not client_secret:
+                raise HTTPException(status_code=500, detail="Meta OAuth not configured")
+
+            token_url = "https://graph.facebook.com/v19.0/oauth/access_token"
+            params = {
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "redirect_uri": redirect_uri,
+                "code": code,
+            }
+            response = requests.get(token_url, params=params, timeout=30)
+            response.raise_for_status()
+            token_data = response.json()
+
+            # Store the token (includes access_token, expires_in, token_type)
+            save_token("meta", token_data)
+            return RedirectResponse(url=f"{FRONTEND_URL}/datasources?success=meta")
+
+        elif platform == "google":
+            client_id = os.getenv("GOOGLE_CLIENT_ID", "")
+            client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
+            if not client_id or not client_secret:
+                raise HTTPException(status_code=500, detail="Google OAuth not configured")
+
+            token_url = "https://oauth2.googleapis.com/token"
+            data = {
+                "code": code,
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "redirect_uri": redirect_uri,
+                "grant_type": "authorization_code",
+            }
+            response = requests.post(token_url, data=data, timeout=30)
+            response.raise_for_status()
+            token_data = response.json()
+
+            # Store the token (includes access_token, refresh_token, expires_in)
+            save_token("google", token_data)
+            return RedirectResponse(url=f"{FRONTEND_URL}/datasources?success=google")
+
+        elif platform == "linkedin":
+            client_id = os.getenv("LINKEDIN_CLIENT_ID", "")
+            client_secret = os.getenv("LINKEDIN_CLIENT_SECRET", "")
+            if not client_id or not client_secret:
+                raise HTTPException(status_code=500, detail="LinkedIn OAuth not configured")
+
+            token_url = "https://www.linkedin.com/oauth/v2/accessToken"
+            data = {
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": redirect_uri,
+                "client_id": client_id,
+                "client_secret": client_secret,
+            }
+            response = requests.post(token_url, data=data, timeout=30)
+            response.raise_for_status()
+            token_data = response.json()
+
+            # Store the token
+            save_token("linkedin", token_data)
+            return RedirectResponse(url=f"{FRONTEND_URL}/datasources?success=linkedin")
+
+        else:
+            return RedirectResponse(url=f"{FRONTEND_URL}/datasources?error={platform}&message=unknown_platform")
+
+    except requests.RequestException as e:
+        print(f"OAuth error for {platform}: {e}")
+        return RedirectResponse(url=f"{FRONTEND_URL}/datasources?error={platform}&message=token_exchange_failed")
+    except Exception as e:
+        print(f"Unexpected error for {platform}: {e}")
+        return RedirectResponse(url=f"{FRONTEND_URL}/datasources?error={platform}&message=unexpected_error")
+
+@app.delete("/api/auth/{platform}")
+def disconnect_platform(platform: str):
+    """Disconnect a platform by deleting its tokens."""
+    if delete_token(platform):
+        return {"message": f"Disconnected {platform}"}
+    else:
+        raise HTTPException(status_code=404, detail=f"No connection found for {platform}")
+
 @app.get("/api/auth/{platform}")
 def start_oauth(platform: str):
     """Start OAuth flow for a platform by redirecting to authorization URL."""
@@ -148,109 +254,6 @@ def start_oauth(platform: str):
     
     else:
         raise HTTPException(status_code=400, detail=f"Unknown platform: {platform}")
-
-@app.get("/api/auth/callback/{platform}")
-async def oauth_callback(platform: str, code: Optional[str] = Query(None), error: Optional[str] = Query(None)):
-    """Handle OAuth callback and exchange code for access token."""
-    if error:
-        return RedirectResponse(url=f"{FRONTEND_URL}/datasources?error={platform}&message={error}")
-    
-    if not code:
-        return RedirectResponse(url=f"{FRONTEND_URL}/datasources?error={platform}&message=no_code")
-    
-    redirect_uri = f"{BASE_URL}/api/auth/callback/{platform}"
-    
-    try:
-        if platform == "meta":
-            client_id = os.getenv("META_APP_ID", "")
-            client_secret = os.getenv("META_APP_SECRET", "")
-            if not client_id or not client_secret:
-                raise HTTPException(status_code=500, detail="Meta OAuth not configured")
-            
-            token_url = "https://graph.facebook.com/v19.0/oauth/access_token"
-            params = {
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "redirect_uri": redirect_uri,
-                "code": code,
-            }
-            response = requests.get(token_url, params=params, timeout=30)
-            response.raise_for_status()
-            token_data = response.json()
-            
-            # Store the token (includes access_token, expires_in, token_type)
-            save_token("meta", token_data)
-            return RedirectResponse(url=f"{FRONTEND_URL}/datasources?success=meta")
-        
-        elif platform == "google":
-            client_id = os.getenv("GOOGLE_CLIENT_ID", "")
-            client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
-            if not client_id or not client_secret:
-                raise HTTPException(status_code=500, detail="Google OAuth not configured")
-            
-            token_url = "https://oauth2.googleapis.com/token"
-            data = {
-                "code": code,
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "redirect_uri": redirect_uri,
-                "grant_type": "authorization_code",
-            }
-            response = requests.post(token_url, data=data, timeout=30)
-            response.raise_for_status()
-            token_data = response.json()
-            
-            # Store the token (includes access_token, refresh_token, expires_in)
-            save_token("google", token_data)
-            return RedirectResponse(url=f"{FRONTEND_URL}/datasources?success=google")
-        
-        elif platform == "linkedin":
-            client_id = os.getenv("LINKEDIN_CLIENT_ID", "")
-            client_secret = os.getenv("LINKEDIN_CLIENT_SECRET", "")
-            if not client_id or not client_secret:
-                raise HTTPException(status_code=500, detail="LinkedIn OAuth not configured")
-            
-            token_url = "https://www.linkedin.com/oauth/v2/accessToken"
-            data = {
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": redirect_uri,
-                "client_id": client_id,
-                "client_secret": client_secret,
-            }
-            response = requests.post(token_url, data=data, timeout=30)
-            response.raise_for_status()
-            token_data = response.json()
-            
-            # Store the token
-            save_token("linkedin", token_data)
-            return RedirectResponse(url=f"{FRONTEND_URL}/datasources?success=linkedin")
-        
-        else:
-            return RedirectResponse(url=f"{FRONTEND_URL}/datasources?error={platform}&message=unknown_platform")
-    
-    except requests.RequestException as e:
-        print(f"OAuth error for {platform}: {e}")
-        return RedirectResponse(url=f"{FRONTEND_URL}/datasources?error={platform}&message=token_exchange_failed")
-    except Exception as e:
-        print(f"Unexpected error for {platform}: {e}")
-        return RedirectResponse(url=f"{FRONTEND_URL}/datasources?error={platform}&message=unexpected_error")
-
-@app.get("/api/auth/status")
-def auth_status():
-    """Get connection status for all platforms."""
-    connected = get_all_connected_platforms()
-    if meiro_cdp.is_connected() and "meiro_cdp" not in connected:
-        connected.append("meiro_cdp")
-    return {"connected": connected}
-
-@app.delete("/api/auth/{platform}")
-def disconnect_platform(platform: str):
-    """Disconnect a platform by deleting its tokens."""
-    if delete_token(platform):
-        return {"message": f"Disconnected {platform}"}
-    else:
-        raise HTTPException(status_code=404, detail=f"No connection found for {platform}")
 
 @app.post("/api/datasets/upload")
 async def upload_dataset(
