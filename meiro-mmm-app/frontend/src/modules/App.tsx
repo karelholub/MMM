@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import DatasetUploader from './DatasetUploader'
+import DatasetWizard from './DatasetWizard'
 import ModelConfigurator from './ModelConfigurator'
 import BudgetOptimizer from './BudgetOptimizer'
 import MMMDashboard from './MMMDashboard'
@@ -55,10 +56,10 @@ async function createRun(payload: ModelConfig) {
 }
 
 export default function App() {
-  const [step, setStep] = useState<'upload' | 'configure' | 'results' | 'compare' | 'datasources'>('results')
+  const [step, setStep] = useState<'upload' | 'wizard' | 'configure' | 'results' | 'compare' | 'datasources'>('results')
   const [datasetConfig, setDatasetConfig] = useState<{ dataset_id: string, columns: ColumnMapping } | null>(null)
   const [runId, setRunId] = useState<string>('');
-  
+
   const mutation = useMutation({
     mutationFn: createRun,
     onSuccess: (data) => {
@@ -71,12 +72,15 @@ export default function App() {
     queryKey: ['run', runId],
     queryFn: () => getRun(runId),
     enabled: !!runId && step === 'results',
-    refetchInterval: (data) => (data?.status === 'finished' ? false : 1000),
+    refetchInterval: (data) => {
+      const status = data?.state?.data?.status
+      return status === 'finished' || status === 'error' ? false : 1000
+    },
   });
 
   const handleMappingComplete = (mapping: { dataset_id: string, columns: ColumnMapping }) => {
     setDatasetConfig(mapping)
-    // Immediately run model via API with sensible defaults (no manual configure step)
+    // Immediately run model via API with sensible defaults
     const cfg: ModelConfig = {
       dataset_id: mapping.dataset_id,
       frequency: 'W',
@@ -101,6 +105,10 @@ export default function App() {
     return <DatasetUploader onMappingComplete={handleMappingComplete} />
   }
 
+  if (step === 'wizard') {
+    return <DatasetWizard onComplete={handleMappingComplete} />
+  }
+
   // Configure step removed from flow; model runs via API immediately after mapping
 
   if (step === 'datasources') {
@@ -117,14 +125,14 @@ export default function App() {
       <header style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom: 32, paddingBottom: 20, borderBottom: '2px solid #e9ecef'}}>
         <h1 style={{ fontSize: '32px', fontWeight: '700', color: '#212529', margin: 0 }}>Meiro MMM</h1>
         <div style={{ display: 'flex', gap: 12 }}>
-          <button onClick={() => setStep('results')} style={{ 
-            padding: '10px 20px', 
-            fontSize: '14px', 
+          <button onClick={() => setStep('results')} style={{
+            padding: '10px 20px',
+            fontSize: '14px',
             fontWeight: '600',
-            backgroundColor: '#343a40', 
-            color: 'white', 
-            border: 'none', 
-            borderRadius: '6px', 
+            backgroundColor: '#343a40',
+            color: 'white',
+            border: 'none',
+            borderRadius: '6px',
             cursor: 'pointer',
             boxShadow: '0 2px 4px rgba(52,58,64,0.3)',
             transition: 'all 0.2s'
@@ -133,14 +141,14 @@ export default function App() {
           onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#343a40'}>
             Dashboard
           </button>
-          <button onClick={() => setStep('datasources')} style={{ 
-            padding: '10px 20px', 
-            fontSize: '14px', 
+          <button onClick={() => setStep('datasources')} style={{
+            padding: '10px 20px',
+            fontSize: '14px',
             fontWeight: '600',
-            backgroundColor: '#17a2b8', 
-            color: 'white', 
-            border: 'none', 
-            borderRadius: '6px', 
+            backgroundColor: '#17a2b8',
+            color: 'white',
+            border: 'none',
+            borderRadius: '6px',
             cursor: 'pointer',
             boxShadow: '0 2px 4px rgba(23,162,184,0.3)',
             transition: 'all 0.2s'
@@ -149,30 +157,46 @@ export default function App() {
           onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#17a2b8'}>
             Data Sources
           </button>
-          <button onClick={() => setStep('upload')} style={{ 
-            padding: '10px 20px', 
-            fontSize: '14px', 
+          <button onClick={() => setStep('wizard')} style={{
+            padding: '10px 20px',
+            fontSize: '14px',
             fontWeight: '600',
-            backgroundColor: '#007bff', 
-            color: 'white', 
-            border: 'none', 
-            borderRadius: '6px', 
+            backgroundColor: '#6f42c1',
+            color: 'white',
+            border: 'none',
+            borderRadius: '6px',
+            cursor: 'pointer',
+            boxShadow: '0 2px 4px rgba(111,66,193,0.3)',
+            transition: 'all 0.2s'
+          }}
+          onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#5a32a3'}
+          onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#6f42c1'}>
+            Dataset Wizard
+          </button>
+          <button onClick={() => setStep('upload')} style={{
+            padding: '10px 20px',
+            fontSize: '14px',
+            fontWeight: '600',
+            backgroundColor: '#007bff',
+            color: 'white',
+            border: 'none',
+            borderRadius: '6px',
             cursor: 'pointer',
             boxShadow: '0 2px 4px rgba(0,123,255,0.3)',
             transition: 'all 0.2s'
           }}
           onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#0056b3'}
           onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#007bff'}>
-            Upload Data
+            Quick Upload
           </button>
-          <button onClick={() => setStep('compare')} style={{ 
-            padding: '10px 20px', 
-            fontSize: '14px', 
+          <button onClick={() => setStep('compare')} style={{
+            padding: '10px 20px',
+            fontSize: '14px',
             fontWeight: '600',
-            backgroundColor: '#28a745', 
-            color: 'white', 
-            border: 'none', 
-            borderRadius: '6px', 
+            backgroundColor: '#28a745',
+            color: 'white',
+            border: 'none',
+            borderRadius: '6px',
             cursor: 'pointer',
             boxShadow: '0 2px 4px rgba(40,167,69,0.3)',
             transition: 'all 0.2s'
@@ -183,21 +207,27 @@ export default function App() {
           </button>
         </div>
       </header>
-      
+
       {runId && (
         <div style={{ marginBottom: 16, padding: '12px 16px', backgroundColor: '#f8f9fa', borderRadius: '6px', borderLeft: '4px solid #007bff' }}>
           <p style={{ margin: 0, fontSize: '14px', color: '#666' }}>
             <strong>Run ID:</strong> <code style={{ backgroundColor: '#e9ecef', padding: '2px 6px', borderRadius: '3px', fontWeight: '600' }}>{runId}</code>
+            {run?.engine && (
+              <span style={{ marginLeft: 12, padding: '2px 8px', backgroundColor: run.engine === 'pymc-marketing' ? '#28a745' : '#6c757d', color: '#fff', borderRadius: '4px', fontSize: '12px', fontWeight: '600' }}>
+                {run.engine === 'pymc-marketing' ? 'Bayesian MMM' : 'Ridge Fallback'}
+              </span>
+            )}
           </p>
         </div>
       )}
-      
+
       {!runId && (
         <div style={{ background: '#fff', border: '1px solid #e9ecef', borderRadius: 8, padding: 24, marginBottom: 24 }}>
           <h2 style={{ marginTop: 0 }}>Welcome to Meiro MMM</h2>
-          <p style={{ color: '#6c757d' }}>Start by uploading a dataset or connecting data sources. When a model run is created via the API, results will appear here.</p>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={() => setStep('upload')} style={{ padding: '10px 16px', background: '#007bff', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>Upload Data</button>
+          <p style={{ color: '#6c757d' }}>Start by using the Dataset Wizard, uploading a dataset, or connecting data sources. When a model run is created, results will appear here.</p>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button onClick={() => setStep('wizard')} style={{ padding: '10px 16px', background: '#6f42c1', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: '600' }}>Dataset Wizard</button>
+            <button onClick={() => setStep('upload')} style={{ padding: '10px 16px', background: '#007bff', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>Quick Upload</button>
             <button onClick={() => setStep('datasources')} style={{ padding: '10px 16px', background: '#17a2b8', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>Data Sources</button>
             <button onClick={() => setStep('compare')} style={{ padding: '10px 16px', background: '#28a745', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>Compare Models</button>
           </div>
@@ -206,20 +236,20 @@ export default function App() {
 
       {!run && mutation.isPending && (
         <div style={{ textAlign: 'center', padding: 60, backgroundColor: '#f8f9fa', borderRadius: '8px', marginBottom: 32 }}>
-          <div style={{ 
-            width: '48px', 
-            height: '48px', 
-            border: '4px solid #e3f2fd', 
-            borderTopColor: '#007bff', 
-            borderRadius: '50%', 
+          <div style={{
+            width: '48px',
+            height: '48px',
+            border: '4px solid #e3f2fd',
+            borderTopColor: '#007bff',
+            borderRadius: '50%',
             animation: 'spin 1s linear infinite',
             margin: '0 auto 20px'
           }}></div>
           <p style={{ fontSize: '18px', fontWeight: '600', color: '#333', margin: '0 0 8px' }}>Running model...</p>
-          <p style={{ fontSize: '14px', color: '#666', margin: 0 }}>This may take a few moments.</p>
+          <p style={{ fontSize: '14px', color: '#666', margin: 0 }}>Using PyMC-Marketing Bayesian MMM when available, Ridge regression as fallback.</p>
         </div>
       )}
-      
+
       {run && (
         <div>
           {run.status === 'finished' && "r2" in run ? (
@@ -230,7 +260,14 @@ export default function App() {
                   <div style={{ marginBottom: 24, padding: '20px', backgroundColor: '#e7f3ff', borderRadius: '8px', border: '2px solid #007bff' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                       <span style={{ fontSize: '14px', color: '#666', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Model Quality</span>
-                      <span style={{ fontSize: '12px', color: '#6c757d', backgroundColor: '#fff', padding: '4px 8px', borderRadius: '4px', fontWeight: '600' }}>STATUS: FINISHED</span>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        {run.engine && (
+                          <span style={{ fontSize: '12px', padding: '4px 8px', borderRadius: '4px', fontWeight: '600', backgroundColor: run.engine === 'pymc-marketing' ? '#28a745' : '#6c757d', color: '#fff' }}>
+                            {run.engine === 'pymc-marketing' ? 'Bayesian' : 'Ridge'}
+                          </span>
+                        )}
+                        <span style={{ fontSize: '12px', color: '#6c757d', backgroundColor: '#fff', padding: '4px 8px', borderRadius: '4px', fontWeight: '600' }}>STATUS: FINISHED</span>
+                      </div>
                     </div>
                     <div style={{ fontSize: '48px', fontWeight: '700', color: '#007bff', lineHeight: '1' }}>
                       {Number(run.r2).toFixed(3)}
@@ -240,18 +277,51 @@ export default function App() {
                     </p>
                   </div>
                 )}
-                
+
+                {/* Bayesian diagnostics */}
+                {run.diagnostics && (
+                  <div style={{ marginBottom: 24, padding: '16px', backgroundColor: '#f0f7ff', borderRadius: '6px', border: '1px solid #b8daff' }}>
+                    <h4 style={{ margin: '0 0 12px', fontSize: '15px', fontWeight: '600', color: '#004085' }}>MCMC Diagnostics</h4>
+                    <div style={{ display: 'flex', gap: 24, fontSize: '14px' }}>
+                      {run.diagnostics.rhat_max != null && (
+                        <div>
+                          <span style={{ color: '#6c757d' }}>Max R-hat: </span>
+                          <strong style={{ color: run.diagnostics.rhat_max < 1.05 ? '#28a745' : '#dc3545' }}>
+                            {run.diagnostics.rhat_max.toFixed(3)}
+                          </strong>
+                        </div>
+                      )}
+                      {run.diagnostics.ess_bulk_min != null && (
+                        <div>
+                          <span style={{ color: '#6c757d' }}>Min ESS Bulk: </span>
+                          <strong style={{ color: run.diagnostics.ess_bulk_min > 400 ? '#28a745' : '#dc3545' }}>
+                            {Math.round(run.diagnostics.ess_bulk_min)}
+                          </strong>
+                        </div>
+                      )}
+                      {run.diagnostics.divergences != null && (
+                        <div>
+                          <span style={{ color: '#6c757d' }}>Divergences: </span>
+                          <strong style={{ color: run.diagnostics.divergences === 0 ? '#28a745' : '#dc3545' }}>
+                            {run.diagnostics.divergences}
+                          </strong>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {"contrib" in run && run.contrib && (
                   <div style={{ marginBottom: 24 }}>
                     <h3 style={{ fontSize: '18px', fontWeight: '600', marginBottom: 12, color: '#495057' }}>Channel Contribution</h3>
                     <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
                       {run.contrib.map((c: any) => (
-                        <li key={c.channel} style={{ 
-                          padding: '12px 16px', 
-                          backgroundColor: '#f8f9fa', 
-                          marginBottom: '8px', 
-                          borderRadius: '6px', 
-                          display: 'flex', 
+                        <li key={c.channel} style={{
+                          padding: '12px 16px',
+                          backgroundColor: '#f8f9fa',
+                          marginBottom: '8px',
+                          borderRadius: '6px',
+                          display: 'flex',
                           justifyContent: 'space-between',
                           alignItems: 'center',
                           border: '1px solid #e9ecef'
@@ -263,18 +333,18 @@ export default function App() {
                     </ul>
                   </div>
                 )}
-                
+
                 {"roi" in run && run.roi && (
                   <div>
                     <h3 style={{ fontSize: '18px', fontWeight: '600', marginBottom: 12, color: '#495057' }}>Return on Investment (ROI)</h3>
                     <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
                       {run.roi.map((r: any) => (
-                        <li key={r.channel} style={{ 
-                          padding: '12px 16px', 
-                          backgroundColor: '#f8f9fa', 
-                          marginBottom: '8px', 
-                          borderRadius: '6px', 
-                          display: 'flex', 
+                        <li key={r.channel} style={{
+                          padding: '12px 16px',
+                          backgroundColor: '#f8f9fa',
+                          marginBottom: '8px',
+                          borderRadius: '6px',
+                          display: 'flex',
                           justifyContent: 'space-between',
                           alignItems: 'center',
                           border: '1px solid #e9ecef'
@@ -304,8 +374,8 @@ export default function App() {
 
       {/* MMM Dashboard - show when model is finished */}
       {run && "r2" in run && datasetConfig && (
-        <MMMDashboard 
-          runId={runId} 
+        <MMMDashboard
+          runId={runId}
           datasetId={datasetConfig.dataset_id}
         />
       )}
@@ -315,7 +385,7 @@ export default function App() {
         <BudgetOptimizer
           roiData={run.roi}
           contribData={run.contrib}
-          baselineKPI={100} // TODO: Get from actual dataset
+          baselineKPI={100}
           runId={runId}
         />
       )}
