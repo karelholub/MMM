@@ -13,6 +13,8 @@ import csv
 import requests
 from app.utils.token_store import save_token, get_token, delete_token, get_all_connected_platforms
 from app.utils.encrypt import encrypt, decrypt
+from app.mmm_engine import fit_model as mmm_fit_model, engine_info
+from app.connectors import meiro_cdp
 
 app = FastAPI(title="Meiro MMM API", version="0.1.0-prototype")
 
@@ -95,7 +97,7 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", **engine_info()}
 
 # ==================== OAuth Routes ====================
 
@@ -238,6 +240,8 @@ async def oauth_callback(platform: str, code: Optional[str] = Query(None), error
 def auth_status():
     """Get connection status for all platforms."""
     connected = get_all_connected_platforms()
+    if meiro_cdp.is_connected() and "meiro_cdp" not in connected:
+        connected.append("meiro_cdp")
     return {"connected": connected}
 
 @app.delete("/api/auth/{platform}")
@@ -381,6 +385,7 @@ def connectors_status():
         (DATA_DIR / "meta_ads.csv", "Meta"),
         (DATA_DIR / "google_ads.csv", "Google"),
         (DATA_DIR / "linkedin_ads.csv", "LinkedIn"),
+        (DATA_DIR / "meiro_cdp.csv", "Meiro CDP"),
         (DATA_DIR / "unified_ads.csv", "Unified"),
     ]
     stats = {}
@@ -509,7 +514,7 @@ def fetch_linkedin(since: str, until: str, access_token: Optional[str] = None):
 
 @app.post("/api/connectors/merge")
 def merge_ads():
-    sources = [DATA_DIR / "meta_ads.csv", DATA_DIR / "google_ads.csv", DATA_DIR / "linkedin_ads.csv"]
+    sources = [DATA_DIR / "meta_ads.csv", DATA_DIR / "google_ads.csv", DATA_DIR / "linkedin_ads.csv", DATA_DIR / "meiro_cdp.csv"]
     frames = []
     for p in sources:
         if p.exists():
@@ -532,6 +537,199 @@ def merge_ads():
     out_path = DATA_DIR / "unified_ads.csv"
     unified.to_csv(out_path, index=False)
     return {"rows": int(len(unified)), "path": str(out_path)}
+
+# ==================== Meiro CDP Connector Routes ====================
+
+class MeiroCDPConnectRequest(BaseModel):
+    api_base_url: str
+    api_key: str
+
+class MeiroCDPExportRequest(BaseModel):
+    since: str
+    until: str
+    event_types: Optional[List[str]] = None
+    attributes: Optional[List[str]] = None
+    segment_id: Optional[str] = None
+
+@app.post("/api/connectors/meiro/connect")
+def meiro_connect(req: MeiroCDPConnectRequest):
+    """Connect to a Meiro CDP instance by storing API credentials."""
+    result = meiro_cdp.test_connection(req.api_base_url, req.api_key)
+    if result.get("ok"):
+        meiro_cdp.save_config(req.api_base_url, req.api_key)
+        return {"message": "Connected to Meiro CDP", "connected": True}
+    raise HTTPException(status_code=400, detail=result.get("message", "Connection failed"))
+
+@app.delete("/api/connectors/meiro")
+def meiro_disconnect():
+    """Disconnect from Meiro CDP."""
+    if meiro_cdp.disconnect():
+        return {"message": "Disconnected from Meiro CDP"}
+    raise HTTPException(status_code=404, detail="No Meiro CDP connection found")
+
+@app.get("/api/connectors/meiro/status")
+def meiro_status():
+    """Check if Meiro CDP is connected."""
+    return {"connected": meiro_cdp.is_connected()}
+
+@app.get("/api/connectors/meiro/attributes")
+def meiro_attributes():
+    """List available customer attributes from Meiro CDP."""
+    if not meiro_cdp.is_connected():
+        raise HTTPException(status_code=401, detail="Meiro CDP not connected")
+    try:
+        return meiro_cdp.list_attributes()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/connectors/meiro/events")
+def meiro_events():
+    """List available event types from Meiro CDP."""
+    if not meiro_cdp.is_connected():
+        raise HTTPException(status_code=401, detail="Meiro CDP not connected")
+    try:
+        return meiro_cdp.list_events()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/connectors/meiro/segments")
+def meiro_segments():
+    """List customer segments from Meiro CDP."""
+    if not meiro_cdp.is_connected():
+        raise HTTPException(status_code=401, detail="Meiro CDP not connected")
+    try:
+        return meiro_cdp.list_segments()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/connectors/meiro/fetch")
+def meiro_fetch(req: MeiroCDPExportRequest):
+    """Fetch data from Meiro CDP, transform to MMM format, save as CSV."""
+    if not meiro_cdp.is_connected():
+        raise HTTPException(status_code=401, detail="Meiro CDP not connected")
+    try:
+        df = meiro_cdp.fetch_and_transform(
+            since=req.since,
+            until=req.until,
+            event_types=req.event_types,
+            attributes=req.attributes,
+            segment_id=req.segment_id,
+        )
+        out_path = DATA_DIR / "meiro_cdp.csv"
+        df.to_csv(out_path, index=False)
+        # Also register as a dataset
+        dataset_id = "meiro-cdp-export"
+        DATASETS[dataset_id] = {"path": out_path, "type": "sales"}
+        return {"rows": len(df), "path": str(out_path), "dataset_id": dataset_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==================== Dataset Validation (Wizard support) ====================
+
+@app.get("/api/datasets/{dataset_id}/validate")
+def validate_dataset(dataset_id: str):
+    """
+    Validate a dataset for MMM readiness. Returns column types,
+    missing value counts, date range, and smart column suggestions.
+    """
+    dataset_info = DATASETS.get(dataset_id)
+    if not dataset_info:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    path = dataset_info.get("path")
+    if not path or not path.exists():
+        raise HTTPException(status_code=404, detail="Dataset file not found")
+
+    df = pd.read_csv(path)
+    columns = list(df.columns)
+    n_rows = len(df)
+
+    # Column metadata
+    col_info = []
+    for col in columns:
+        dtype = str(df[col].dtype)
+        missing = int(df[col].isna().sum())
+        unique = int(df[col].nunique())
+        sample_values = df[col].dropna().head(3).tolist()
+        col_info.append({
+            "name": col,
+            "dtype": dtype,
+            "missing": missing,
+            "unique": unique,
+            "sample_values": sample_values,
+        })
+
+    # Date detection
+    date_column = None
+    date_range = None
+    for col in columns:
+        try:
+            parsed = pd.to_datetime(df[col], errors="coerce")
+            if parsed.notna().sum() > len(df) * 0.8:
+                date_column = col
+                date_range = {
+                    "min": str(parsed.min().date()),
+                    "max": str(parsed.max().date()),
+                    "n_periods": int(parsed.nunique()),
+                }
+                break
+        except Exception:
+            continue
+
+    # Smart suggestions
+    spend_keywords = ["spend", "cost", "budget", "investment", "ad_spend"]
+    kpi_keywords = ["sales", "revenue", "conversions", "orders", "profit", "aov", "clicks"]
+    covariate_keywords = ["holiday", "price", "index", "competitor", "temperature", "season"]
+
+    suggested_spend = [
+        col for col in columns
+        if any(kw in col.lower() for kw in spend_keywords)
+        and df[col].dtype in ["float64", "int64", "float32", "int32"]
+    ]
+    suggested_kpi = [
+        col for col in columns
+        if any(kw in col.lower() for kw in kpi_keywords)
+        and df[col].dtype in ["float64", "int64", "float32", "int32"]
+    ]
+    suggested_covariates = [
+        col for col in columns
+        if any(kw in col.lower() for kw in covariate_keywords)
+        and df[col].dtype in ["float64", "int64", "float32", "int32"]
+        and col not in suggested_spend
+        and col not in suggested_kpi
+    ]
+
+    # Detect format
+    is_tall = {"channel", "campaign", "spend"}.issubset(set(columns))
+
+    # Data quality warnings
+    warnings = []
+    if n_rows < 20:
+        warnings.append(f"Only {n_rows} rows — at least 26 weeks recommended for reliable MMM results.")
+    if date_column and date_range:
+        if date_range["n_periods"] < 20:
+            warnings.append(f"Only {date_range['n_periods']} unique dates — more time periods improve model accuracy.")
+    for ci in col_info:
+        if ci["missing"] > 0:
+            pct = ci["missing"] / n_rows * 100
+            if pct > 10:
+                warnings.append(f"Column '{ci['name']}' has {pct:.0f}% missing values.")
+
+    return {
+        "dataset_id": dataset_id,
+        "n_rows": n_rows,
+        "n_columns": len(columns),
+        "columns": col_info,
+        "date_column": date_column,
+        "date_range": date_range,
+        "format": "tall" if is_tall else "wide",
+        "suggestions": {
+            "spend_channels": suggested_spend,
+            "kpi_columns": suggested_kpi,
+            "covariates": suggested_covariates,
+        },
+        "warnings": warnings,
+    }
 
 @app.get("/api/models/{run_id}/summary/channel")
 def get_channel_summary(run_id: str):
@@ -713,134 +911,80 @@ def optimize_auto(run_id: str, request: OptimizeRequest = OptimizeRequest()):
         raise HTTPException(status_code=500, detail=f"Optimization error: {str(e)}")
 
 def _fit_model(run_id: str, cfg: ModelConfig):
-    # Load data
+    """
+    Background task: fit MMM model using the engine module.
+
+    Uses PyMC-Marketing Bayesian MMM when available, otherwise
+    falls back to Ridge regression.
+    """
     dataset_info = DATASETS.get(cfg.dataset_id)
     if not dataset_info:
         RUNS[run_id] = {"status": "error", "detail": "Dataset not found"}
         return
-    
-    csv = dataset_info.get("path")
-    df = pd.read_csv(csv, parse_dates=["date"])
 
-    # Detect tall (campaign-level) vs wide (channel spend columns) format
+    csv_path = dataset_info.get("path")
+    df = pd.read_csv(csv_path, parse_dates=["date"])
+
+    # Validate target column exists
+    if cfg.kpi not in df.columns:
+        RUNS[run_id] = {"status": "error", "detail": f"Column '{cfg.kpi}' missing"}
+        return
+
+    # Validate spend channel columns (for wide format)
     tall_cols = {"channel", "campaign", "spend"}
     is_tall = tall_cols.issubset(set(df.columns))
-
-    import numpy as np
-    from sklearn.linear_model import Ridge
-
-    if is_tall:
-        # Build feature name as channel|campaign and pivot to wide by date
-        df["__feature"] = df["channel"].astype(str) + "|" + df["campaign"].astype(str)
-        spend_wide = (
-            df.pivot_table(index="date", columns="__feature", values="spend", aggfunc="sum", fill_value=0)
-            .sort_index()
-        )
-        # KPI as total per date
-        if cfg.kpi not in df.columns:
-            RUNS[run_id] = {"status": "error", "detail": f"Column '{cfg.kpi}' missing"}
-            return
-        y_series = df.groupby("date")[cfg.kpi].sum().reindex(spend_wide.index).fillna(0.0)
-        X = spend_wide.values
-        y = y_series.values
-        features = list(spend_wide.columns)
-        model = Ridge(alpha=1.0).fit(X, y)
-        coef = model.coef_.tolist()
-        denom = float(sum(abs(c) for c in coef)) or 1.0
-        kpi_mean = float(y_series.mean())
-
-        # Means per feature
-        feature_mean_spend = {f: float(spend_wide[f].mean()) for f in features}
-
-        # Per-campaign metrics
-        campaigns = []
-        channel_summary_acc: Dict[str, Dict[str, float]] = {}
-        for f, b in zip(features, coef):
-            ch_name, camp_name = f.split("|", 1)
-            mean_share = float(abs(b)) / denom
-            roi_val = float(b * kpi_mean / (feature_mean_spend.get(f, 0.0) + 1e-6))
-            mroas = roi_val  # placeholder for marginal ROAS
-            # elasticity proxy: beta * mean_spend / kpi_mean
-            elasticity = float(b) * (feature_mean_spend.get(f, 0.0)) / (kpi_mean + 1e-6)
-            campaigns.append({
-                "channel": ch_name,
-                "campaign": camp_name,
-                "feature": f,
-                "beta": float(b),
-                "mean_share": mean_share,
-                "roi": roi_val,
-                "mroas": mroas,
-                "elasticity": elasticity,
-                "mean_spend": feature_mean_spend.get(f, 0.0)
-            })
-            acc = channel_summary_acc.setdefault(ch_name, {"spend": 0.0, "roi": 0.0, "mroas": 0.0, "elasticity": 0.0})
-            acc["spend"] += feature_mean_spend.get(f, 0.0)
-            acc["roi"] += max(roi_val, 0.0)
-            acc["mroas"] += max(mroas, 0.0)
-            acc["elasticity"] += elasticity
-
-        channel_summary = [
-            {
-                "channel": ch,
-                "spend": vals["spend"],
-                "roi": vals["roi"],
-                "mroas": vals["mroas"],
-                "elasticity": vals["elasticity"],
-            }
-            for ch, vals in channel_summary_acc.items()
-        ]
-
-        # Also compute legacy contrib/roi by channel (summing campaign metrics) for compatibility
-        contrib = [
-            {"channel": ch, "beta": 0.0, "mean_share": float(sum(c["mean_share"] for c in campaigns if c["channel"] == ch))}
-            for ch in channel_summary_acc.keys()
-        ]
-        roi = [
-            {"channel": ch, "roi": float(next((s["roi"] for s in channel_summary if s["channel"] == ch), 0.0))}
-            for ch in channel_summary_acc.keys()
-        ]
-
-        RUNS[run_id] = {
-            "status": "finished",
-            "r2": float(model.score(X, y)),
-            "contrib": contrib,
-            "roi": roi,
-            "config": RUNS[run_id]["config"],
-            "kpi_mode": cfg.kpi_mode if hasattr(cfg, 'kpi_mode') else 'conversions',
-            "campaigns": campaigns,
-            "channel_summary": channel_summary,
-        }
-    else:
-        # Wide format path (existing behavior)
-        # Basic validation
-        cols_needed = [cfg.kpi] + cfg.spend_channels
-        for c in cols_needed:
+    if not is_tall:
+        for c in cfg.spend_channels:
             if c not in df.columns:
                 RUNS[run_id] = {"status": "error", "detail": f"Column '{c}' missing"}
                 return
 
-        X = df[cfg.spend_channels].fillna(0.0).values
-        y = df[cfg.kpi].fillna(0.0).values
-        model = Ridge(alpha=1.0).fit(X, y)
+    # Build adstock / saturation config from priors
+    priors = cfg.priors or {}
+    adstock_cfg = {
+        "l_max": 8,
+        "alpha_mean": priors.get("adstock", {}).get("alpha_mean", 0.5),
+        "alpha_sd": priors.get("adstock", {}).get("alpha_sd", 0.2),
+    }
+    saturation_cfg = {
+        "lam_mean": priors.get("saturation", {}).get("lam_mean", 0.001),
+        "lam_sd": priors.get("saturation", {}).get("lam_sd", 0.0005),
+    }
+    mcmc_cfg = cfg.mcmc or {"draws": 1000, "tune": 1000, "chains": 4, "target_accept": 0.9}
 
-        coef = model.coef_.tolist()
-        denom = float(sum(abs(c) for c in coef)) or 1.0
-        kpi_mean = float(df[cfg.kpi].mean())
+    try:
+        RUNS[run_id]["status"] = "running"
 
-        contrib = [
-            {"channel": ch, "beta": float(b), "mean_share": float(abs(b))/denom}
-            for ch, b in zip(cfg.spend_channels, coef)
-        ]
-        roi = [
-            {"channel": ch, "roi": float(b * kpi_mean / (float(df[ch].mean()) + 1e-6))}
-            for ch, b in zip(cfg.spend_channels, coef)
-        ]
+        result = mmm_fit_model(
+            df=df,
+            target_column=cfg.kpi,
+            channel_columns=cfg.spend_channels,
+            control_columns=cfg.covariates or [],
+            date_column="date",
+            adstock_cfg=adstock_cfg,
+            saturation_cfg=saturation_cfg,
+            mcmc_cfg=mcmc_cfg,
+        )
 
         RUNS[run_id] = {
             "status": "finished",
-            "r2": float(model.score(X, y)),
-            "contrib": contrib,
-            "roi": roi,
+            "r2": result["r2"],
+            "contrib": result["contrib"],
+            "roi": result["roi"],
+            "engine": result.get("engine", "unknown"),
             "config": RUNS[run_id]["config"],
-            "kpi_mode": cfg.kpi_mode if hasattr(cfg, 'kpi_mode') else 'conversions',
+            "kpi_mode": cfg.kpi_mode if hasattr(cfg, "kpi_mode") else "conversions",
+        }
+
+        # Forward optional fields from engine result
+        for key in ("campaigns", "channel_summary", "adstock_params", "saturation_params", "diagnostics"):
+            if key in result:
+                RUNS[run_id][key] = result[key]
+
+    except Exception as exc:
+        RUNS[run_id] = {
+            "status": "error",
+            "detail": str(exc),
+            "config": RUNS[run_id].get("config", {}),
+            "kpi_mode": cfg.kpi_mode if hasattr(cfg, "kpi_mode") else "conversions",
         }

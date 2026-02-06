@@ -7,10 +7,10 @@ pydantic
 python-multipart
 cryptography
 requests
-# Later add full stack for PyMC-Marketing:
-# pymc-marketing
-# pymc
-# arviz
-# xarray
-# numpyro
-# cmdstanpy
+# PyMC-Marketing Bayesian MMM stack
+pymc-marketing>=0.9.0
+pymc>=5.10.0
+arviz>=0.17.0
+xarray>=2023.12.0
+numpyro>=0.13.0
+jax[cpu]>=0.4.20

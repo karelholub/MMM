@@ -4,6 +4,7 @@ import { fetchMetaAds } from '../connectors/metaConnector'
 import { fetchGoogleAds } from '../connectors/googleConnector'
 import { fetchLinkedInAds } from '../connectors/linkedinConnector'
 import { mergeAdsData, getConnectorStatus } from '../connectors/mergeAdsData'
+import { connectMeiroCDP, disconnectMeiroCDP, fetchMeiroCDPData } from '../connectors/meiroConnector'
 import ConnectAccounts from '../components/ConnectAccounts'
 
 interface AuthStatus {
@@ -26,6 +27,12 @@ export default function DataSources() {
   const [gTo, setGTo] = useState('2024-01-31')
   const [busy, setBusy] = useState(false)
   const [showConnect, setShowConnect] = useState(false)
+  // Meiro CDP state
+  const [meiroUrl, setMeiroUrl] = useState('')
+  const [meiroKey, setMeiroKey] = useState('')
+  const [meiroSince, setMeiroSince] = useState('2024-01-01')
+  const [meiroUntil, setMeiroUntil] = useState('2024-12-31')
+  const [meiroMsg, setMeiroMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
   const { data: authStatus } = useQuery<AuthStatus>({
     queryKey: ['authStatus'],
@@ -264,6 +271,160 @@ export default function DataSources() {
           >
             Fetch LinkedIn Ads
           </button>
+        </div>
+
+        {/* Meiro CDP */}
+        <div style={{ background: '#fff', border: isConnected('meiro_cdp') ? '2px solid #6f42c1' : '1px solid #e9ecef', borderRadius: 8, padding: 20 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>Meiro CDP</h3>
+            {isConnected('meiro_cdp') ? (
+              <span style={{ padding: '4px 8px', backgroundColor: '#6f42c1', color: 'white', borderRadius: '4px', fontSize: '12px', fontWeight: '600' }}>
+                Connected
+              </span>
+            ) : (
+              <span style={{ padding: '4px 8px', backgroundColor: '#ffc107', color: '#333', borderRadius: '4px', fontSize: '12px', fontWeight: '600' }}>
+                Not Connected
+              </span>
+            )}
+          </div>
+
+          {meiroMsg && (
+            <div style={{
+              padding: '8px 12px',
+              marginBottom: 12,
+              borderRadius: 4,
+              backgroundColor: meiroMsg.type === 'success' ? '#d4edda' : '#f8d7da',
+              color: meiroMsg.type === 'success' ? '#155724' : '#721c24',
+              fontSize: '13px',
+            }}>
+              {meiroMsg.text}
+            </div>
+          )}
+
+          {!isConnected('meiro_cdp') ? (
+            <div>
+              <p style={{ color: '#6c757d', fontSize: '14px', marginBottom: 12 }}>
+                Connect your Meiro CDP instance to import customer attribution and event data.
+              </p>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8, marginBottom: 12 }}>
+                <input
+                  placeholder="API Base URL (e.g. https://your-instance.meiro.io)"
+                  value={meiroUrl}
+                  onChange={e => setMeiroUrl(e.target.value)}
+                  style={{ padding: '8px', border: '1px solid #ced4da', borderRadius: '4px' }}
+                />
+                <input
+                  placeholder="API Key"
+                  type="password"
+                  value={meiroKey}
+                  onChange={e => setMeiroKey(e.target.value)}
+                  style={{ padding: '8px', border: '1px solid #ced4da', borderRadius: '4px' }}
+                />
+              </div>
+              <button
+                disabled={busy || !meiroUrl || !meiroKey}
+                onClick={async () => {
+                  setBusy(true)
+                  setMeiroMsg(null)
+                  try {
+                    await connectMeiroCDP({ api_base_url: meiroUrl, api_key: meiroKey })
+                    setMeiroMsg({ type: 'success', text: 'Connected to Meiro CDP!' })
+                    await refresh()
+                  } catch (e: any) {
+                    setMeiroMsg({ type: 'error', text: e.message || 'Connection failed' })
+                  } finally {
+                    setBusy(false)
+                  }
+                }}
+                style={{
+                  padding: '10px 20px',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  backgroundColor: (!busy && meiroUrl && meiroKey) ? '#6f42c1' : '#6c757d',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: (!busy && meiroUrl && meiroKey) ? 'pointer' : 'not-allowed',
+                }}
+              >
+                Connect Meiro CDP
+              </button>
+            </div>
+          ) : (
+            <div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
+                <input
+                  type="date"
+                  value={meiroSince}
+                  onChange={e => setMeiroSince(e.target.value)}
+                  style={{ padding: '8px', border: '1px solid #ced4da', borderRadius: '4px' }}
+                />
+                <input
+                  type="date"
+                  value={meiroUntil}
+                  onChange={e => setMeiroUntil(e.target.value)}
+                  style={{ padding: '8px', border: '1px solid #ced4da', borderRadius: '4px' }}
+                />
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  disabled={busy}
+                  onClick={async () => {
+                    setBusy(true)
+                    setMeiroMsg(null)
+                    try {
+                      const result = await fetchMeiroCDPData({ since: meiroSince, until: meiroUntil })
+                      setMeiroMsg({ type: 'success', text: `Fetched ${result.rows} rows from Meiro CDP` })
+                      await refresh()
+                    } catch (e: any) {
+                      setMeiroMsg({ type: 'error', text: e.message || 'Fetch failed' })
+                    } finally {
+                      setBusy(false)
+                    }
+                  }}
+                  style={{
+                    padding: '10px 20px',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    backgroundColor: !busy ? '#6f42c1' : '#6c757d',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '6px',
+                    cursor: !busy ? 'pointer' : 'not-allowed',
+                  }}
+                >
+                  Fetch CDP Data
+                </button>
+                <button
+                  disabled={busy}
+                  onClick={async () => {
+                    setBusy(true)
+                    try {
+                      await disconnectMeiroCDP()
+                      setMeiroMsg({ type: 'success', text: 'Disconnected from Meiro CDP' })
+                      await refresh()
+                    } catch (e: any) {
+                      setMeiroMsg({ type: 'error', text: e.message || 'Disconnect failed' })
+                    } finally {
+                      setBusy(false)
+                    }
+                  }}
+                  style={{
+                    padding: '10px 20px',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    backgroundColor: '#dc3545',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '6px',
+                    cursor: !busy ? 'pointer' : 'not-allowed',
+                  }}
+                >
+                  Disconnect
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         <div style={{ background: '#fff', border: '1px solid #e9ecef', borderRadius: 8, padding: 20 }}>
