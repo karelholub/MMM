@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MMMTimeSeries",
+  "type": "object",
+  "properties": {
+    "frequency": {"type": "string", "enum": ["D", "W"]},
+    "index": {"type": "array", "items": {"type": "string", "format": "date"}},
+    "kpi": {"type": "string"},
+    "spend_channels": {"type": "array", "items": {"type": "string"}},
+    "covariates": {"type": "array", "items": {"type": "string"}},
+    "frame": {"type": "array", "items": {"type": "object"}}
+  },
+  "required": ["frequency", "index", "kpi", "spend_channels", "frame"]
+}

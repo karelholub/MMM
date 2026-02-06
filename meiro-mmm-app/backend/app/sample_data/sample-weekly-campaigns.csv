@@ -1,0 +1,17 @@
+date,channel,campaign,spend,conversions,revenue,aov
+2024-01-01,Meta,Meta_Campaign_1,400,120,2400,20
+2024-01-01,Meta,Meta_Campaign_2,600,130,2600,20
+2024-01-01,Google,Google_Search_Brand,700,200,4000,20
+2024-01-01,Google,Google_Search_Generic,500,140,2800,20
+2024-01-01,Display,Display_Prospecting,300,60,1200,20
+2024-01-08,Meta,Meta_Campaign_1,420,125,2500,20
+2024-01-08,Meta,Meta_Campaign_2,580,135,2700,20
+2024-01-08,Google,Google_Search_Brand,730,210,4200,20
+2024-01-08,Google,Google_Search_Generic,520,145,2900,20
+2024-01-08,Display,Display_Prospecting,320,62,1240,20
+2024-01-15,Meta,Meta_Campaign_1,430,130,2600,20
+2024-01-15,Meta,Meta_Campaign_2,600,140,2800,20
+2024-01-15,Google,Google_Search_Brand,750,215,4300,20
+2024-01-15,Google,Google_Search_Generic,540,150,3000,20
+2024-01-15,Display,Display_Prospecting,330,65,1300,20
+

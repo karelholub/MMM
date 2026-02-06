@@ -1,0 +1,16 @@
+fastapi
+uvicorn[standard]
+pandas
+scikit-learn
+scipy
+pydantic
+python-multipart
+cryptography
+requests
+# Later add full stack for PyMC-Marketing:
+# pymc-marketing
+# pymc
+# arviz
+# xarray
+# numpyro
+# cmdstanpy
