@@ -1,464 +1,285 @@
-import { useEffect, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { fetchMetaAds } from '../connectors/metaConnector'
-import { fetchGoogleAds } from '../connectors/googleConnector'
-import { fetchLinkedInAds } from '../connectors/linkedinConnector'
-import { mergeAdsData, getConnectorStatus } from '../connectors/mergeAdsData'
-import { connectMeiroCDP, disconnectMeiroCDP, fetchMeiroCDPData } from '../connectors/meiroConnector'
-import ConnectAccounts from '../components/ConnectAccounts'
+import { useState, useRef } from 'react'
+import { useQuery, useMutation } from '@tanstack/react-query'
+import { connectMeiroCDP, disconnectMeiroCDP, getMeiroCDPStatus } from '../connectors/meiroConnector'
 
-interface AuthStatus {
-  connected: string[]
+interface DataSourcesProps {
+  onJourneysImported: () => void
 }
 
-async function getAuthStatus(): Promise<AuthStatus> {
-  const res = await fetch('/api/auth/status')
-  if (!res.ok) throw new Error('Failed to fetch auth status')
-  return res.json()
-}
+const card = {
+  backgroundColor: '#fff',
+  borderRadius: 12,
+  border: '1px solid #e9ecef',
+  padding: 24,
+  boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+  marginBottom: 16,
+} as const
 
-export default function DataSources() {
-  const [status, setStatus] = useState<any>({})
-  const [metaAccount, setMetaAccount] = useState('')
-  const [avgAov, setAvgAov] = useState(20)
-  const [since, setSince] = useState('2024-01-01')
-  const [until, setUntil] = useState('2024-01-31')
-  const [gFrom, setGFrom] = useState('2024-01-01')
-  const [gTo, setGTo] = useState('2024-01-31')
-  const [busy, setBusy] = useState(false)
-  const [showConnect, setShowConnect] = useState(false)
-  // Meiro CDP state
+export default function DataSources({ onJourneysImported }: DataSourcesProps) {
+  const fileRef = useRef<HTMLInputElement>(null)
   const [meiroUrl, setMeiroUrl] = useState('')
   const [meiroKey, setMeiroKey] = useState('')
-  const [meiroSince, setMeiroSince] = useState('2024-01-01')
-  const [meiroUntil, setMeiroUntil] = useState('2024-12-31')
-  const [meiroMsg, setMeiroMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
-  const { data: authStatus } = useQuery<AuthStatus>({
-    queryKey: ['authStatus'],
-    queryFn: getAuthStatus,
-    refetchInterval: 3000,
+  const authQuery = useQuery({
+    queryKey: ['auth-status'],
+    queryFn: async () => {
+      const res = await fetch('/api/auth/status')
+      if (!res.ok) return { connected: [] }
+      return res.json()
+    },
   })
 
-  const refresh = async () => {
-    const s = await getConnectorStatus()
-    setStatus(s)
-  }
+  const meiroQuery = useQuery({
+    queryKey: ['meiro-status'],
+    queryFn: getMeiroCDPStatus,
+  })
 
-  useEffect(() => { refresh() }, [])
+  const journeysQuery = useQuery({
+    queryKey: ['journeys-summary'],
+    queryFn: async () => {
+      const res = await fetch('/api/attribution/journeys')
+      if (!res.ok) return { loaded: false }
+      return res.json()
+    },
+  })
 
-  const run = async (fn: () => Promise<any>) => {
-    setBusy(true)
-    try { await fn(); await refresh() } finally { setBusy(false) }
-  }
+  const uploadMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const formData = new FormData()
+      formData.append('file', file)
+      const res = await fetch('/api/attribution/journeys/upload', { method: 'POST', body: formData })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ detail: 'Upload failed' }))
+        throw new Error(data.detail || 'Upload failed')
+      }
+      return res.json()
+    },
+    onSuccess: () => onJourneysImported(),
+  })
 
-  const isConnected = (platform: string) => authStatus?.connected?.includes(platform) || false
+  const loadSampleMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch('/api/attribution/journeys/load-sample', { method: 'POST' })
+      if (!res.ok) throw new Error('Failed')
+      return res.json()
+    },
+    onSuccess: () => onJourneysImported(),
+  })
 
-  if (showConnect) {
-    return (
-      <div>
-        <button
-          onClick={() => setShowConnect(false)}
-          style={{
-            marginBottom: 20,
-            padding: '8px 16px',
-            fontSize: '14px',
-            backgroundColor: '#6c757d',
-            color: 'white',
-            border: 'none',
-            borderRadius: '6px',
-            cursor: 'pointer'
-          }}
-        >
-          ← Back to Data Sources
-        </button>
-        <ConnectAccounts />
-      </div>
-    )
-  }
+  const importCdpMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch('/api/attribution/journeys/from-cdp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ detail: 'Import failed' }))
+        throw new Error(data.detail || 'Import failed')
+      }
+      return res.json()
+    },
+    onSuccess: () => onJourneysImported(),
+  })
+
+  const connectMeiroMutation = useMutation({
+    mutationFn: async () => connectMeiroCDP({ api_base_url: meiroUrl, api_key: meiroKey }),
+    onSuccess: () => meiroQuery.refetch(),
+  })
+
+  const disconnectMeiroMutation = useMutation({
+    mutationFn: disconnectMeiroCDP,
+    onSuccess: () => meiroQuery.refetch(),
+  })
+
+  const connected: string[] = authQuery.data?.connected || []
+  const meiroConnected = meiroQuery.data?.connected || false
+  const journeysLoaded = journeysQuery.data?.loaded || false
 
   return (
-    <div style={{ maxWidth: 1000, margin: '0 auto', padding: 24 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <div>
-          <h1 style={{ marginTop: 0, fontSize: '28px', fontWeight: '700', color: '#212529', marginBottom: 8 }}>Data Sources</h1>
-          <p style={{ color: '#6c757d', margin: 0 }}>Connect ad platforms, fetch campaign data, and build a unified dataset for MMM.</p>
-        </div>
-        <button
-          onClick={() => setShowConnect(true)}
-          style={{
-            padding: '10px 20px',
-            fontSize: '14px',
-            fontWeight: '600',
-            backgroundColor: '#007bff',
-            color: 'white',
-            border: 'none',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            boxShadow: '0 2px 4px rgba(0,123,255,0.3)'
-          }}
-        >
-          Manage Connections
-        </button>
-      </div>
+    <div>
+      <h2 style={{ margin: '0 0 8px', fontSize: '22px', fontWeight: '700', color: '#212529' }}>Data Sources</h2>
+      <p style={{ margin: '0 0 24px', fontSize: '14px', color: '#6c757d' }}>
+        Import conversion path data for attribution analysis. Upload JSON, connect to Meiro CDP, or use sample data.
+      </p>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 16 }}>
-        <div style={{ background: '#fff', border: '1px solid #e9ecef', borderRadius: 8, padding: 20 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>Meta Ads</h3>
-            {isConnected('meta') ? (
-              <span style={{ padding: '4px 8px', backgroundColor: '#28a745', color: 'white', borderRadius: '4px', fontSize: '12px', fontWeight: '600' }}>
-                Connected
-              </span>
-            ) : (
-              <span style={{ padding: '4px 8px', backgroundColor: '#ffc107', color: '#333', borderRadius: '4px', fontSize: '12px', fontWeight: '600' }}>
-                Not Connected
-              </span>
-            )}
-          </div>
-          {isConnected('meta') ? (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-              <input 
-                placeholder="Ad Account ID (act_...)" 
-                value={metaAccount} 
-                onChange={e=>setMetaAccount(e.target.value)}
-                style={{ padding: '8px', border: '1px solid #ced4da', borderRadius: '4px' }}
-              />
-              <input 
-                type="date" 
-                value={since} 
-                onChange={e=>setSince(e.target.value)}
-                style={{ padding: '8px', border: '1px solid #ced4da', borderRadius: '4px' }}
-              />
-              <input 
-                type="date" 
-                value={until} 
-                onChange={e=>setUntil(e.target.value)}
-                style={{ padding: '8px', border: '1px solid #ced4da', borderRadius: '4px' }}
-              />
-              <input 
-                type="number" 
-                step={0.01} 
-                value={avgAov} 
-                onChange={e=>setAvgAov(parseFloat(e.target.value))} 
-                placeholder="Avg AOV"
-                style={{ padding: '8px', border: '1px solid #ced4da', borderRadius: '4px' }}
-              />
-            </div>
-          ) : (
-            <p style={{ color: '#6c757d', fontSize: '14px', marginBottom: 12 }}>
-              Connect your Meta account to fetch data automatically. No manual token entry needed.
-            </p>
-          )}
-          <button 
-            disabled={busy || !isConnected('meta') || !metaAccount} 
-            onClick={() => run(() => fetchMetaAds({ ad_account_id: metaAccount, since, until, avg_aov: avgAov }))} 
-            style={{ 
-              marginTop: 8,
-              padding: '10px 20px',
-              fontSize: '14px',
-              fontWeight: '600',
-              backgroundColor: (!busy && isConnected('meta') && metaAccount) ? '#28a745' : '#6c757d',
-              color: 'white',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: (!busy && isConnected('meta') && metaAccount) ? 'pointer' : 'not-allowed'
-            }}
-          >
-            Fetch Meta Ads
-          </button>
-        </div>
-
-        <div style={{ background: '#fff', border: '1px solid #e9ecef', borderRadius: 8, padding: 20 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>Google Ads</h3>
-            {isConnected('google') ? (
-              <span style={{ padding: '4px 8px', backgroundColor: '#28a745', color: 'white', borderRadius: '4px', fontSize: '12px', fontWeight: '600' }}>
-                Connected
-              </span>
-            ) : (
-              <span style={{ padding: '4px 8px', backgroundColor: '#ffc107', color: '#333', borderRadius: '4px', fontSize: '12px', fontWeight: '600' }}>
-                Not Connected
-              </span>
-            )}
-          </div>
-          {isConnected('google') ? (
-            <div style={{ display: 'flex', gap: 8 }}>
-              <input 
-                type="date" 
-                value={gFrom} 
-                onChange={e=>setGFrom(e.target.value)}
-                style={{ padding: '8px', border: '1px solid #ced4da', borderRadius: '4px' }}
-              />
-              <input 
-                type="date" 
-                value={gTo} 
-                onChange={e=>setGTo(e.target.value)}
-                style={{ padding: '8px', border: '1px solid #ced4da', borderRadius: '4px' }}
-              />
-            </div>
-          ) : (
-            <p style={{ color: '#6c757d', fontSize: '14px', marginBottom: 12 }}>
-              Connect your Google Ads account to fetch data automatically.
-            </p>
-          )}
-          <button 
-            disabled={busy || !isConnected('google')} 
-            onClick={() => run(() => fetchGoogleAds({ from: gFrom, to: gTo }))} 
-            style={{ 
-              marginTop: 8,
-              padding: '10px 20px',
-              fontSize: '14px',
-              fontWeight: '600',
-              backgroundColor: (!busy && isConnected('google')) ? '#28a745' : '#6c757d',
-              color: 'white',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: (!busy && isConnected('google')) ? 'pointer' : 'not-allowed'
-            }}
-          >
-            Fetch Google Ads
-          </button>
-        </div>
-
-        <div style={{ background: '#fff', border: '1px solid #e9ecef', borderRadius: 8, padding: 20 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>LinkedIn Ads</h3>
-            {isConnected('linkedin') ? (
-              <span style={{ padding: '4px 8px', backgroundColor: '#28a745', color: 'white', borderRadius: '4px', fontSize: '12px', fontWeight: '600' }}>
-                Connected
-              </span>
-            ) : (
-              <span style={{ padding: '4px 8px', backgroundColor: '#ffc107', color: '#333', borderRadius: '4px', fontSize: '12px', fontWeight: '600' }}>
-                Not Connected
-              </span>
-            )}
-          </div>
-          {isConnected('linkedin') ? (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-              <input 
-                type="date" 
-                value={since} 
-                onChange={e=>setSince(e.target.value)}
-                style={{ padding: '8px', border: '1px solid #ced4da', borderRadius: '4px' }}
-              />
-              <input 
-                type="date" 
-                value={until} 
-                onChange={e=>setUntil(e.target.value)}
-                style={{ padding: '8px', border: '1px solid #ced4da', borderRadius: '4px' }}
-              />
-            </div>
-          ) : (
-            <p style={{ color: '#6c757d', fontSize: '14px', marginBottom: 12 }}>
-              Connect your LinkedIn account to fetch data automatically. No manual token entry needed.
-            </p>
-          )}
-          <button 
-            disabled={busy || !isConnected('linkedin')} 
-            onClick={() => run(() => fetchLinkedInAds({ since, until }))} 
-            style={{ 
-              marginTop: 8,
-              padding: '10px 20px',
-              fontSize: '14px',
-              fontWeight: '600',
-              backgroundColor: (!busy && isConnected('linkedin')) ? '#28a745' : '#6c757d',
-              color: 'white',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: (!busy && isConnected('linkedin')) ? 'pointer' : 'not-allowed'
-            }}
-          >
-            Fetch LinkedIn Ads
-          </button>
-        </div>
-
-        {/* Meiro CDP */}
-        <div style={{ background: '#fff', border: isConnected('meiro_cdp') ? '2px solid #6f42c1' : '1px solid #e9ecef', borderRadius: 8, padding: 20 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>Meiro CDP</h3>
-            {isConnected('meiro_cdp') ? (
-              <span style={{ padding: '4px 8px', backgroundColor: '#6f42c1', color: 'white', borderRadius: '4px', fontSize: '12px', fontWeight: '600' }}>
-                Connected
-              </span>
-            ) : (
-              <span style={{ padding: '4px 8px', backgroundColor: '#ffc107', color: '#333', borderRadius: '4px', fontSize: '12px', fontWeight: '600' }}>
-                Not Connected
-              </span>
-            )}
-          </div>
-
-          {meiroMsg && (
-            <div style={{
-              padding: '8px 12px',
-              marginBottom: 12,
-              borderRadius: 4,
-              backgroundColor: meiroMsg.type === 'success' ? '#d4edda' : '#f8d7da',
-              color: meiroMsg.type === 'success' ? '#155724' : '#721c24',
-              fontSize: '13px',
-            }}>
-              {meiroMsg.text}
-            </div>
-          )}
-
-          {!isConnected('meiro_cdp') ? (
-            <div>
-              <p style={{ color: '#6c757d', fontSize: '14px', marginBottom: 12 }}>
-                Connect your Meiro CDP instance to import customer attribution and event data.
-              </p>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8, marginBottom: 12 }}>
-                <input
-                  placeholder="API Base URL (e.g. https://your-instance.meiro.io)"
-                  value={meiroUrl}
-                  onChange={e => setMeiroUrl(e.target.value)}
-                  style={{ padding: '8px', border: '1px solid #ced4da', borderRadius: '4px' }}
-                />
-                <input
-                  placeholder="API Key"
-                  type="password"
-                  value={meiroKey}
-                  onChange={e => setMeiroKey(e.target.value)}
-                  style={{ padding: '8px', border: '1px solid #ced4da', borderRadius: '4px' }}
-                />
-              </div>
-              <button
-                disabled={busy || !meiroUrl || !meiroKey}
-                onClick={async () => {
-                  setBusy(true)
-                  setMeiroMsg(null)
-                  try {
-                    await connectMeiroCDP({ api_base_url: meiroUrl, api_key: meiroKey })
-                    setMeiroMsg({ type: 'success', text: 'Connected to Meiro CDP!' })
-                    await refresh()
-                  } catch (e: any) {
-                    setMeiroMsg({ type: 'error', text: e.message || 'Connection failed' })
-                  } finally {
-                    setBusy(false)
-                  }
-                }}
-                style={{
-                  padding: '10px 20px',
-                  fontSize: '14px',
-                  fontWeight: '600',
-                  backgroundColor: (!busy && meiroUrl && meiroKey) ? '#6f42c1' : '#6c757d',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '6px',
-                  cursor: (!busy && meiroUrl && meiroKey) ? 'pointer' : 'not-allowed',
-                }}
-              >
-                Connect Meiro CDP
-              </button>
-            </div>
-          ) : (
-            <div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
-                <input
-                  type="date"
-                  value={meiroSince}
-                  onChange={e => setMeiroSince(e.target.value)}
-                  style={{ padding: '8px', border: '1px solid #ced4da', borderRadius: '4px' }}
-                />
-                <input
-                  type="date"
-                  value={meiroUntil}
-                  onChange={e => setMeiroUntil(e.target.value)}
-                  style={{ padding: '8px', border: '1px solid #ced4da', borderRadius: '4px' }}
-                />
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  disabled={busy}
-                  onClick={async () => {
-                    setBusy(true)
-                    setMeiroMsg(null)
-                    try {
-                      const result = await fetchMeiroCDPData({ since: meiroSince, until: meiroUntil })
-                      setMeiroMsg({ type: 'success', text: `Fetched ${result.rows} rows from Meiro CDP` })
-                      await refresh()
-                    } catch (e: any) {
-                      setMeiroMsg({ type: 'error', text: e.message || 'Fetch failed' })
-                    } finally {
-                      setBusy(false)
-                    }
-                  }}
-                  style={{
-                    padding: '10px 20px',
-                    fontSize: '14px',
-                    fontWeight: '600',
-                    backgroundColor: !busy ? '#6f42c1' : '#6c757d',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '6px',
-                    cursor: !busy ? 'pointer' : 'not-allowed',
-                  }}
-                >
-                  Fetch CDP Data
-                </button>
-                <button
-                  disabled={busy}
-                  onClick={async () => {
-                    setBusy(true)
-                    try {
-                      await disconnectMeiroCDP()
-                      setMeiroMsg({ type: 'success', text: 'Disconnected from Meiro CDP' })
-                      await refresh()
-                    } catch (e: any) {
-                      setMeiroMsg({ type: 'error', text: e.message || 'Disconnect failed' })
-                    } finally {
-                      setBusy(false)
-                    }
-                  }}
-                  style={{
-                    padding: '10px 20px',
-                    fontSize: '14px',
-                    fontWeight: '600',
-                    backgroundColor: '#dc3545',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '6px',
-                    cursor: !busy ? 'pointer' : 'not-allowed',
-                  }}
-                >
-                  Disconnect
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div style={{ background: '#fff', border: '1px solid #e9ecef', borderRadius: 8, padding: 20 }}>
-          <h3 style={{ marginTop: 0, fontSize: '18px', fontWeight: '600' }}>Merge & Prepare</h3>
-          <p style={{ color: '#6c757d', fontSize: '14px', marginBottom: 12 }}>
-            Combine data from all connected platforms into a unified dataset.
+      {/* Current Data Status */}
+      <div style={{ ...card, backgroundColor: journeysLoaded ? '#d4edda' : '#fff3cd', borderColor: journeysLoaded ? '#c3e6cb' : '#ffc107' }}>
+        <h3 style={{ margin: '0 0 8px', fontSize: '16px', fontWeight: '600', color: journeysLoaded ? '#155724' : '#856404' }}>
+          {journeysLoaded ? 'Data Loaded' : 'No Data Loaded'}
+        </h3>
+        {journeysLoaded ? (
+          <p style={{ margin: 0, fontSize: '14px', color: '#155724' }}>
+            {journeysQuery.data?.count} journeys loaded ({journeysQuery.data?.converted} converted).
+            Channels: {journeysQuery.data?.channels?.join(', ')}
           </p>
-          <button 
-            disabled={busy} 
-            onClick={() => run(mergeAdsData)}
-            style={{
-              padding: '10px 20px',
-              fontSize: '14px',
-              fontWeight: '600',
-              backgroundColor: !busy ? '#007bff' : '#6c757d',
-              color: 'white',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: !busy ? 'pointer' : 'not-allowed'
-            }}
+        ) : (
+          <p style={{ margin: 0, fontSize: '14px', color: '#856404' }}>
+            Upload conversion path data or load sample data to begin analysis.
+          </p>
+        )}
+      </div>
+
+      {/* Quick Actions */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 24 }}>
+        <div style={card}>
+          <h3 style={{ margin: '0 0 8px', fontSize: '16px', fontWeight: '600', color: '#28a745' }}>Sample Data</h3>
+          <p style={{ fontSize: '13px', color: '#6c757d', marginBottom: 16 }}>
+            Load 30 sample customer journeys with 6 channels (google_ads, meta_ads, linkedin_ads, email, whatsapp, direct).
+          </p>
+          <button
+            onClick={() => loadSampleMutation.mutate()}
+            disabled={loadSampleMutation.isPending}
+            style={{ padding: '10px 24px', fontSize: '14px', fontWeight: '600', backgroundColor: '#28a745', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', width: '100%' }}
           >
-            Merge All & Build unified_ads.csv
+            {loadSampleMutation.isPending ? 'Loading...' : 'Load Sample Data'}
           </button>
+        </div>
+
+        <div style={card}>
+          <h3 style={{ margin: '0 0 8px', fontSize: '16px', fontWeight: '600', color: '#007bff' }}>Upload JSON</h3>
+          <p style={{ fontSize: '13px', color: '#6c757d', marginBottom: 16 }}>
+            Upload a JSON file with customer journeys. Expected: array of objects with touchpoints and conversion_value.
+          </p>
+          <input ref={fileRef} type="file" accept=".json" style={{ display: 'none' }}
+            onChange={(e) => { const file = e.target.files?.[0]; if (file) uploadMutation.mutate(file) }} />
+          <button
+            onClick={() => fileRef.current?.click()}
+            disabled={uploadMutation.isPending}
+            style={{ padding: '10px 24px', fontSize: '14px', fontWeight: '600', backgroundColor: '#007bff', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', width: '100%' }}
+          >
+            {uploadMutation.isPending ? 'Uploading...' : 'Upload JSON File'}
+          </button>
+          {uploadMutation.isError && <p style={{ color: '#dc3545', fontSize: '13px', marginTop: 8 }}>{(uploadMutation.error as Error).message}</p>}
+        </div>
+
+        <div style={card}>
+          <h3 style={{ margin: '0 0 8px', fontSize: '16px', fontWeight: '600', color: '#6f42c1' }}>Import from CDP</h3>
+          <p style={{ fontSize: '13px', color: '#6c757d', marginBottom: 16 }}>
+            Parse CDP profile data into attribution journeys. Connect Meiro CDP first and fetch data.
+          </p>
+          <button
+            onClick={() => importCdpMutation.mutate()}
+            disabled={importCdpMutation.isPending}
+            style={{ padding: '10px 24px', fontSize: '14px', fontWeight: '600', backgroundColor: '#6f42c1', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', width: '100%' }}
+          >
+            {importCdpMutation.isPending ? 'Importing...' : 'Import from CDP'}
+          </button>
+          {importCdpMutation.isError && <p style={{ color: '#dc3545', fontSize: '13px', marginTop: 8 }}>{(importCdpMutation.error as Error).message}</p>}
         </div>
       </div>
 
-      <div style={{ marginTop: 24, background: '#fff', border: '1px solid #e9ecef', borderRadius: 8, padding: 20 }}>
-        <h3 style={{ marginTop: 0, fontSize: '18px', fontWeight: '600' }}>Connector Status</h3>
-        <pre style={{ background: '#f8f9fa', padding: 12, borderRadius: 6, overflow: 'auto', fontSize: '12px' }}>
-          {JSON.stringify(status, null, 2)}
+      {/* Meiro CDP Connection */}
+      <div style={{ ...card, borderColor: meiroConnected ? '#28a745' : '#e9ecef' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <div>
+            <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '600', color: '#495057' }}>Meiro CDP</h3>
+            <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#6c757d' }}>
+              Connect to your Meiro CDP instance to fetch customer profile attributes with conversion path data.
+            </p>
+          </div>
+          <span style={{
+            padding: '4px 12px', borderRadius: 12, fontSize: '12px', fontWeight: '700',
+            backgroundColor: meiroConnected ? '#d4edda' : '#f8f9fa',
+            color: meiroConnected ? '#155724' : '#6c757d',
+          }}>
+            {meiroConnected ? 'Connected' : 'Not Connected'}
+          </span>
+        </div>
+
+        {!meiroConnected ? (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 12, alignItems: 'end' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#6c757d', marginBottom: 4 }}>API Base URL</label>
+              <input type="text" value={meiroUrl} onChange={(e) => setMeiroUrl(e.target.value)}
+                placeholder="https://your-cdp.meiro.io"
+                style={{ width: '100%', padding: '10px', fontSize: '14px', border: '1px solid #dee2e6', borderRadius: 6, boxSizing: 'border-box' }} />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#6c757d', marginBottom: 4 }}>API Key</label>
+              <input type="password" value={meiroKey} onChange={(e) => setMeiroKey(e.target.value)}
+                placeholder="Your API key"
+                style={{ width: '100%', padding: '10px', fontSize: '14px', border: '1px solid #dee2e6', borderRadius: 6, boxSizing: 'border-box' }} />
+            </div>
+            <button
+              onClick={() => connectMeiroMutation.mutate()}
+              disabled={!meiroUrl || !meiroKey || connectMeiroMutation.isPending}
+              style={{
+                padding: '10px 24px', fontSize: '14px', fontWeight: '600',
+                backgroundColor: (!meiroUrl || !meiroKey) ? '#ccc' : '#007bff',
+                color: 'white', border: 'none', borderRadius: 6,
+                cursor: (!meiroUrl || !meiroKey) ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap',
+              }}
+            >
+              {connectMeiroMutation.isPending ? 'Connecting...' : 'Connect'}
+            </button>
+          </div>
+        ) : (
+          <button onClick={() => disconnectMeiroMutation.mutate()}
+            style={{ padding: '8px 20px', fontSize: '13px', fontWeight: '600', backgroundColor: '#dc3545', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer' }}>
+            Disconnect
+          </button>
+        )}
+        {connectMeiroMutation.isError && <p style={{ color: '#dc3545', fontSize: '13px', marginTop: 8 }}>{(connectMeiroMutation.error as Error).message}</p>}
+      </div>
+
+      {/* Ad Platform Connections */}
+      <div style={card}>
+        <h3 style={{ margin: '0 0 16px', fontSize: '16px', fontWeight: '600', color: '#495057' }}>Ad Platform Connections</h3>
+        <p style={{ fontSize: '13px', color: '#6c757d', marginBottom: 16 }}>
+          OAuth connections for pulling expense data. Expenses auto-import when you fetch data.
+        </p>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          {[
+            { platform: 'meta', label: 'Meta Ads', color: '#1877F2' },
+            { platform: 'google', label: 'Google Ads', color: '#4285F4' },
+            { platform: 'linkedin', label: 'LinkedIn Ads', color: '#0A66C2' },
+          ].map(p => {
+            const isConnected = connected.includes(p.platform)
+            return (
+              <div key={p.platform} style={{
+                display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px', borderRadius: 8,
+                backgroundColor: isConnected ? `${p.color}10` : '#f8f9fa',
+                border: `1px solid ${isConnected ? p.color : '#dee2e6'}`,
+              }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: isConnected ? '#28a745' : '#dee2e6' }} />
+                <span style={{ fontSize: '14px', fontWeight: '600', color: '#495057' }}>{p.label}</span>
+                {isConnected ? (
+                  <span style={{ fontSize: '12px', color: '#28a745', fontWeight: '600' }}>Connected</span>
+                ) : (
+                  <a href={`/api/auth/${p.platform}`}
+                    style={{ fontSize: '12px', fontWeight: '600', color: p.color, textDecoration: 'none', padding: '2px 8px', border: `1px solid ${p.color}`, borderRadius: 4 }}>
+                    Connect
+                  </a>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Data Format Docs */}
+      <div style={{ ...card, backgroundColor: '#f0f7ff', borderColor: '#b8daff' }}>
+        <h3 style={{ margin: '0 0 12px', fontSize: '16px', fontWeight: '600', color: '#004085' }}>Expected JSON Format</h3>
+        <pre style={{ backgroundColor: 'white', padding: 16, borderRadius: 8, fontSize: '12px', overflow: 'auto', border: '1px solid #e9ecef', color: '#495057' }}>
+{`[
+  {
+    "customer_id": "c001",
+    "touchpoints": [
+      {"channel": "google_ads", "timestamp": "2024-01-02"},
+      {"channel": "email", "timestamp": "2024-01-05"},
+      {"channel": "direct", "timestamp": "2024-01-07"}
+    ],
+    "conversion_value": 120.00,
+    "converted": true
+  },
+  ...
+]`}
         </pre>
+        <p style={{ fontSize: '13px', color: '#004085', marginTop: 12, marginBottom: 0 }}>
+          CDP profile attributes with conversion paths will be automatically parsed using configurable field mapping.
+        </p>
       </div>
     </div>
   )
 }
-
-
