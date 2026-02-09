@@ -12,6 +12,28 @@ interface BudgetScenario {
   [channel: string]: number
 }
 
+interface ChannelConstraint {
+  min: number
+  max: number
+  locked: boolean
+}
+
+interface WhatIfResult {
+  baseline: {
+    total_kpi: number
+    per_channel: Record<string, number>
+  }
+  scenario: {
+    total_kpi: number
+    per_channel: Record<string, number>
+    multipliers: Record<string, number>
+  }
+  lift: {
+    absolute: number
+    percent: number
+  }
+}
+
 const COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff7c7c', '#8dd1e1', '#d084d0']
 
 export default function BudgetOptimizer({ roiData, contribData, baselineKPI = 100, runId }: BudgetOptimizerProps) {
@@ -21,10 +43,19 @@ export default function BudgetOptimizer({ roiData, contribData, baselineKPI = 10
       return acc
     }, {} as BudgetScenario)
   )
+  const [constraints, setConstraints] = useState<Record<string, ChannelConstraint>>(
+    roiData.reduce((acc, { channel }) => {
+      acc[channel] = { min: 0.5, max: 2.0, locked: false }
+      return acc
+    }, {} as Record<string, ChannelConstraint>)
+  )
   const [optimalMix, setOptimalMix] = useState<BudgetScenario | null>(null)
   const [optimalUplift, setOptimalUplift] = useState<number | null>(null)
   const [optimizationMessage, setOptimizationMessage] = useState<string | null>(null)
   const [isOptimizing, setIsOptimizing] = useState(false)
+  const [totalBudget, setTotalBudget] = useState(1.0)
+  const [whatIfResult, setWhatIfResult] = useState<WhatIfResult | null>(null)
+  const [isWhatIfLoading, setIsWhatIfLoading] = useState(false)
 
   // Calculate baseline (when all multipliers = 1.0)
   // Contributions represent the share of impact each channel drives
@@ -73,6 +104,15 @@ export default function BudgetOptimizer({ roiData, contribData, baselineKPI = 10
     setOptimalMix(null)
     setOptimalUplift(null)
     setOptimizationMessage(null)
+    setTotalBudget(1.0)
+    setWhatIfResult(null)
+  }
+
+  const updateConstraint = (channel: string, patch: Partial<ChannelConstraint>) => {
+    setConstraints(prev => ({
+      ...prev,
+      [channel]: { ...(prev[channel] || { min: 0.5, max: 2.0, locked: false }), ...patch }
+    }))
   }
 
   const handleSuggestOptimal = async () => {
@@ -83,10 +123,24 @@ export default function BudgetOptimizer({ roiData, contribData, baselineKPI = 10
 
     setIsOptimizing(true)
     try {
+      const channel_constraints: Record<string, any> = {}
+      Object.entries(constraints).forEach(([ch, c]) => {
+        channel_constraints[ch] = {
+          min: c.min,
+          max: c.max,
+          locked: c.locked,
+        }
+      })
+
       const res = await fetch(`/api/models/${runId}/optimize/auto`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ total_budget: 1.0 }),
+        body: JSON.stringify({
+          total_budget: totalBudget,
+          min_spend: 0.5,
+          max_spend: 2.0,
+          channel_constraints,
+        }),
       })
 
       if (!res.ok) throw new Error('Optimization failed')
@@ -100,6 +154,35 @@ export default function BudgetOptimizer({ roiData, contribData, baselineKPI = 10
       alert('Failed to get optimal mix. Please try again.')
     } finally {
       setIsOptimizing(false)
+    }
+  }
+
+  const handleRunWhatIfBackend = async () => {
+    if (!runId) {
+      alert('Run ID not available')
+      return
+    }
+
+    setIsWhatIfLoading(true)
+    setWhatIfResult(null)
+    try {
+      const res = await fetch(`/api/models/${runId}/what_if`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(multipliers),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        const d = data?.detail
+        const msg = typeof d === 'string' ? d : Array.isArray(d) ? (d[0]?.msg || JSON.stringify(d)) : (d?.msg || 'What-if simulation failed')
+        throw new Error(msg)
+      }
+      setWhatIfResult(data as WhatIfResult)
+    } catch (error) {
+      console.error('What-if error:', error)
+      alert(error instanceof Error ? error.message : 'Failed to run backend what-if simulation. Please try again.')
+    } finally {
+      setIsWhatIfLoading(false)
     }
   }
 
@@ -120,11 +203,41 @@ export default function BudgetOptimizer({ roiData, contribData, baselineKPI = 10
     <div style={{ marginTop: 32, backgroundColor: '#fafafa', padding: 24, borderRadius: 8 }}>
       <h2 style={{ marginTop: 0, marginBottom: 24 }}>Budget Optimizer</h2>
       <p style={{ fontSize: '14px', color: '#666', marginBottom: 24 }}>
-        Adjust channel spend levels to see predicted KPI impact. 1.0 = current spend, 2.0 = double budget.
+        Adjust channel spend levels to see predicted KPI impact. 1.0 = current spend, 2.0 = double budget. The optimizer
+        works with relative multipliers around your current mix.
       </p>
 
+      {/* Global optimization settings */}
+      <div style={{ 
+        display: 'flex', 
+        gap: 16, 
+        marginBottom: 24, 
+        padding: 16, 
+        borderRadius: 8, 
+        backgroundColor: 'white',
+        border: '1px solid #e0e0e0'
+      }}>
+        <div style={{ flex: 1 }}>
+          <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
+            Average budget multiplier (all channels)
+          </label>
+          <input
+            type="number"
+            min={0.5}
+            max={2}
+            step={0.1}
+            value={totalBudget}
+            onChange={(e) => setTotalBudget(parseFloat(e.target.value) || 1)}
+            style={{ width: '100%', padding: 8, borderRadius: 4, border: '1px solid #ced4da', fontSize: 13 }}
+          />
+          <p style={{ fontSize: 12, color: '#6c757d', marginTop: 4 }}>
+            1.0 keeps the overall budget at baseline; values &gt; 1.0 increase total spend, &lt; 1.0 decrease it.
+          </p>
+        </div>
+      </div>
+
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
-        {/* Left: Sliders */}
+        {/* Left: Sliders & per-channel constraints */}
         <div>
           <h3 style={{ marginTop: 0, marginBottom: 16 }}>Spend Multipliers</h3>
           {roiData.map(({ channel }, idx) => {
@@ -132,6 +245,7 @@ export default function BudgetOptimizer({ roiData, contribData, baselineKPI = 10
             const spendChange = ((multiplier - 1) * 100).toFixed(0)
             const spendChangeStr = spendChange === '0' ? '0%' : spendChange.startsWith('-') ? `${spendChange}%` : `+${spendChange}%`
             
+            const constraint = constraints[channel] || { min: 0.5, max: 2.0, locked: false }
             return (
               <div key={channel} style={{ marginBottom: 24 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
@@ -151,6 +265,36 @@ export default function BudgetOptimizer({ roiData, contribData, baselineKPI = 10
                   onChange={(e) => handleSliderChange(channel, e.target.value)}
                   style={{ width: '100%', accentColor: COLORS[idx % COLORS.length] }}
                 />
+                <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center', fontSize: 12 }}>
+                  <label>
+                    Min&nbsp;
+                    <input
+                      type="number"
+                      step={0.1}
+                      value={constraint.min}
+                      onChange={(e) => updateConstraint(channel, { min: parseFloat(e.target.value) || 0 })}
+                      style={{ width: 60, padding: 4, borderRadius: 4, border: '1px solid #ced4da' }}
+                    />
+                  </label>
+                  <label>
+                    Max&nbsp;
+                    <input
+                      type="number"
+                      step={0.1}
+                      value={constraint.max}
+                      onChange={(e) => updateConstraint(channel, { max: parseFloat(e.target.value) || 0 })}
+                      style={{ width: 60, padding: 4, borderRadius: 4, border: '1px solid #ced4da' }}
+                    />
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <input
+                      type="checkbox"
+                      checked={constraint.locked}
+                      onChange={(e) => updateConstraint(channel, { locked: e.target.checked })}
+                    />
+                    Lock
+                  </label>
+                </div>
               </div>
             )
           })}
@@ -276,36 +420,152 @@ export default function BudgetOptimizer({ roiData, contribData, baselineKPI = 10
       )}
 
       {/* Action Buttons */}
-      <div style={{ marginTop: 24, textAlign: 'center', display: 'flex', gap: 8, justifyContent: 'center' }}>
-        <button
-          onClick={handleSuggestOptimal}
-          disabled={isOptimizing || !runId}
-          style={{
-            padding: '10px 24px',
-            fontSize: '14px',
-            backgroundColor: (!runId || isOptimizing) ? '#6c757d' : '#007bff',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: (!runId || isOptimizing) ? 'not-allowed' : 'pointer'
-          }}
-        >
-          {isOptimizing ? 'Optimizing...' : 'Suggest Optimal Mix'}
-        </button>
-        <button
-          onClick={handleReset}
-          style={{
-            padding: '10px 24px',
-            fontSize: '14px',
-            backgroundColor: '#6c757d',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: 'pointer'
-          }}
-        >
-          Reset to Baseline
-        </button>
+      <div style={{ marginTop: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+          <button
+            onClick={handleSuggestOptimal}
+            disabled={isOptimizing || !runId}
+            style={{
+              padding: '10px 24px',
+              fontSize: '14px',
+              backgroundColor: (!runId || isOptimizing) ? '#6c757d' : '#007bff',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: (!runId || isOptimizing) ? 'not-allowed' : 'pointer'
+            }}
+          >
+            {isOptimizing ? 'Optimizing...' : 'Suggest Optimal Mix'}
+          </button>
+          <button
+            onClick={handleRunWhatIfBackend}
+            disabled={isWhatIfLoading || !runId}
+            style={{
+              padding: '10px 24px',
+              fontSize: '14px',
+              backgroundColor: (!runId || isWhatIfLoading) ? '#6c757d' : '#17a2b8',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: (!runId || isWhatIfLoading) ? 'not-allowed' : 'pointer'
+            }}
+          >
+            {isWhatIfLoading ? 'Running…' : 'Run backend what-if'}
+          </button>
+          <button
+            onClick={handleReset}
+            style={{
+              padding: '10px 24px',
+              fontSize: '14px',
+              backgroundColor: '#6c757d',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer'
+            }}
+          >
+            Reset to Baseline
+          </button>
+        </div>
+
+        {whatIfResult && (
+          <div
+            style={{
+              marginTop: 8,
+              backgroundColor: 'white',
+              padding: 16,
+              borderRadius: 8,
+              border: '1px solid #e0e0e0'
+            }}
+          >
+            <h3 style={{ marginTop: 0, marginBottom: 8, fontSize: 16 }}>Backend What-if Summary</h3>
+            <p style={{ fontSize: 13, color: '#6c757d', marginBottom: 12 }}>
+              Uses the fitted MMM model (ROI × contribution) to recompute total KPI and channel contributions for the current slider multipliers.
+            </p>
+            <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+              <div style={{ minWidth: 180 }}>
+                <p style={{ margin: 0, fontSize: 13 }}>Baseline KPI</p>
+                <p style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>
+                  {whatIfResult.baseline.total_kpi.toFixed(2)}
+                </p>
+              </div>
+              <div style={{ minWidth: 180 }}>
+                <p style={{ margin: 0, fontSize: 13 }}>Scenario KPI</p>
+                <p
+                  style={{
+                    margin: 0,
+                    fontSize: 18,
+                    fontWeight: 600,
+                    color: whatIfResult.lift.percent >= 0 ? '#28a745' : '#dc3545'
+                  }}
+                >
+                  {whatIfResult.scenario.total_kpi.toFixed(2)}
+                </p>
+              </div>
+              <div style={{ minWidth: 180 }}>
+                <p style={{ margin: 0, fontSize: 13 }}>Lift</p>
+                <p
+                  style={{
+                    margin: 0,
+                    fontSize: 18,
+                    fontWeight: 600,
+                    color: whatIfResult.lift.percent >= 0 ? '#28a745' : '#dc3545'
+                  }}
+                >
+                  {whatIfResult.lift.percent >= 0 ? '+' : ''}
+                  {whatIfResult.lift.percent.toFixed(1)}%
+                </p>
+              </div>
+            </div>
+
+            <div style={{ marginTop: 16, overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: 'left', padding: 6, borderBottom: '1px solid #dee2e6' }}>Channel</th>
+                    <th style={{ textAlign: 'right', padding: 6, borderBottom: '1px solid #dee2e6' }}>Baseline</th>
+                    <th style={{ textAlign: 'right', padding: 6, borderBottom: '1px solid #dee2e6' }}>Scenario</th>
+                    <th style={{ textAlign: 'right', padding: 6, borderBottom: '1px solid #dee2e6' }}>Delta</th>
+                    <th style={{ textAlign: 'right', padding: 6, borderBottom: '1px solid #dee2e6' }}>Multiplier</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {roiData.map(({ channel }) => {
+                    const base = whatIfResult.baseline.per_channel[channel] ?? 0
+                    const scen = whatIfResult.scenario.per_channel[channel] ?? 0
+                    const mult = whatIfResult.scenario.multipliers[channel] ?? 1
+                    const delta = scen - base
+                    return (
+                      <tr key={channel}>
+                        <td style={{ padding: 6, borderBottom: '1px solid #f1f3f5' }}>{channel}</td>
+                        <td style={{ padding: 6, borderBottom: '1px solid #f1f3f5', textAlign: 'right' }}>
+                          {base.toFixed(3)}
+                        </td>
+                        <td style={{ padding: 6, borderBottom: '1px solid #f1f3f5', textAlign: 'right' }}>
+                          {scen.toFixed(3)}
+                        </td>
+                        <td
+                          style={{
+                            padding: 6,
+                            borderBottom: '1px solid #f1f3f5',
+                            textAlign: 'right',
+                            color: delta >= 0 ? '#28a745' : '#dc3545'
+                          }}
+                        >
+                          {delta >= 0 ? '+' : ''}
+                          {delta.toFixed(3)}
+                        </td>
+                        <td style={{ padding: 6, borderBottom: '1px solid #f1f3f5', textAlign: 'right' }}>
+                          {mult.toFixed(2)}x
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

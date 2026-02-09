@@ -15,10 +15,29 @@ const card = {
   marginBottom: 16,
 } as const
 
+const ADMIN_PLATFORMS = [
+  { id: 'google', label: 'Google Ads', clientIdLabel: 'Client ID', clientSecretLabel: 'Client Secret', hasAppId: false },
+  { id: 'meta', label: 'Meta Ads', clientIdLabel: 'App ID', clientSecretLabel: 'App Secret', hasAppId: true },
+  { id: 'linkedin', label: 'LinkedIn Ads', clientIdLabel: 'Client ID', clientSecretLabel: 'Client Secret', hasAppId: false },
+] as const
+
 export default function DataSources({ onJourneysImported }: DataSourcesProps) {
   const fileRef = useRef<HTMLInputElement>(null)
   const [meiroUrl, setMeiroUrl] = useState('')
   const [meiroKey, setMeiroKey] = useState('')
+  const [adminOpen, setAdminOpen] = useState(false)
+  const [adminCreds, setAdminCreds] = useState<Record<string, { client_id?: string; client_secret?: string; app_id?: string; app_secret?: string }>>({
+    google: {}, meta: {}, linkedin: {},
+  })
+
+  const configStatusQuery = useQuery({
+    queryKey: ['admin-datasource-config'],
+    queryFn: async () => {
+      const res = await fetch('/api/admin/datasource-config')
+      if (!res.ok) return { google: { configured: false }, meta: { configured: false }, linkedin: { configured: false } }
+      return res.json()
+    },
+  })
 
   const authQuery = useQuery({
     queryKey: ['auth-status'],
@@ -32,6 +51,15 @@ export default function DataSources({ onJourneysImported }: DataSourcesProps) {
   const meiroQuery = useQuery({
     queryKey: ['meiro-status'],
     queryFn: getMeiroCDPStatus,
+  })
+
+  const meiroProfilesQuery = useQuery({
+    queryKey: ['meiro-profiles'],
+    queryFn: async () => {
+      const res = await fetch('/api/connectors/meiro/profiles')
+      if (!res.ok) return { stored_count: 0, webhook_url: '' }
+      return res.json()
+    },
   })
 
   const journeysQuery = useQuery({
@@ -92,6 +120,28 @@ export default function DataSources({ onJourneysImported }: DataSourcesProps) {
     onSuccess: () => meiroQuery.refetch(),
   })
 
+  const saveConfigMutation = useMutation({
+    mutationFn: async (payload: { platform: string; client_id?: string; client_secret?: string; app_id?: string; app_secret?: string }) => {
+      const res = await fetch('/api/admin/datasource-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          platform: payload.platform,
+          client_id: payload.client_id || undefined,
+          client_secret: payload.client_secret || undefined,
+          app_id: payload.app_id || undefined,
+          app_secret: payload.app_secret || undefined,
+        }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.detail || 'Failed to save')
+      }
+      return res.json()
+    },
+    onSuccess: () => configStatusQuery.refetch(),
+  })
+
   const connected: string[] = authQuery.data?.connected || []
   const meiroConnected = meiroQuery.data?.connected || false
   const journeysLoaded = journeysQuery.data?.loaded || false
@@ -117,6 +167,115 @@ export default function DataSources({ onJourneysImported }: DataSourcesProps) {
           <p style={{ margin: 0, fontSize: '14px', color: '#856404' }}>
             Upload conversion path data or load sample data to begin analysis.
           </p>
+        )}
+      </div>
+
+      {/* Administration – OAuth credentials */}
+      <div style={{ ...card, borderColor: '#6c757d' }}>
+        <button
+          type="button"
+          onClick={() => setAdminOpen(!adminOpen)}
+          style={{
+            width: '100%',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            padding: 0,
+            border: 'none',
+            background: 'none',
+            cursor: 'pointer',
+            fontSize: '16px',
+            fontWeight: 600,
+            color: '#495057',
+            textAlign: 'left',
+          }}
+        >
+          <span>Administration – OAuth credentials</span>
+          <span style={{ fontSize: '14px', color: '#6c757d' }}>{adminOpen ? '▼' : '▶'}</span>
+        </button>
+        <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#6c757d' }}>
+          Configure Google, Meta, and LinkedIn OAuth so you can use “Connect” below. Stored encrypted on the server.
+        </p>
+        {adminOpen && (
+          <div style={{ marginTop: 20, paddingTop: 20, borderTop: '1px solid #e9ecef' }}>
+            {ADMIN_PLATFORMS.map(p => {
+              const status = configStatusQuery.data?.[p.id]
+              const configured = status?.configured ?? false
+              const creds = adminCreds[p.id] || {}
+              const idKey = p.hasAppId ? 'app_id' : 'client_id'
+              const secretKey = p.hasAppId ? 'app_secret' : 'client_secret'
+              const saving = saveConfigMutation.isPending && saveConfigMutation.variables?.platform === p.id
+              return (
+                <div key={p.id} style={{ marginBottom: 24, padding: 16, backgroundColor: '#f8f9fa', borderRadius: 8 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                    <strong style={{ fontSize: '14px', color: '#212529' }}>{p.label}</strong>
+                    <span style={{ fontSize: '12px', fontWeight: 600, color: configured ? '#28a745' : '#dc3545' }}>
+                      {configured ? 'Configured' : 'Not configured'}
+                    </span>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 12, alignItems: 'end' }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#6c757d', marginBottom: 4 }}>{p.clientIdLabel}</label>
+                      <input
+                        type="text"
+                        placeholder={configured ? '••••••••' : 'Enter ' + p.clientIdLabel}
+                        value={creds[idKey as keyof typeof creds] ?? ''}
+                        onChange={e => setAdminCreds(prev => ({ ...prev, [p.id]: { ...prev[p.id], [idKey]: e.target.value } }))}
+                        style={{ width: '100%', padding: '8px 10px', fontSize: '13px', border: '1px solid #dee2e6', borderRadius: 6, boxSizing: 'border-box' }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#6c757d', marginBottom: 4 }}>{p.clientSecretLabel}</label>
+                      <input
+                        type="password"
+                        placeholder={configured ? '••••••••' : 'Enter ' + p.clientSecretLabel}
+                        value={creds[secretKey as keyof typeof creds] ?? ''}
+                        onChange={e => setAdminCreds(prev => ({ ...prev, [p.id]: { ...prev[p.id], [secretKey]: e.target.value } }))}
+                        style={{ width: '100%', padding: '8px 10px', fontSize: '13px', border: '1px solid #dee2e6', borderRadius: 6, boxSizing: 'border-box' }}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      disabled={saving || (p.hasAppId ? !creds.app_id?.trim() && !creds.app_secret?.trim() : !creds.client_id?.trim() && !creds.client_secret?.trim())}
+                      onClick={() => {
+                        const payload: { platform: string; client_id?: string; client_secret?: string; app_id?: string; app_secret?: string } = { platform: p.id }
+                        if (p.hasAppId) {
+                          if (creds.app_id?.trim()) payload.app_id = creds.app_id.trim()
+                          if (creds.app_secret?.trim()) payload.app_secret = creds.app_secret.trim()
+                        } else {
+                          if (creds.client_id?.trim()) payload.client_id = creds.client_id.trim()
+                          if (creds.client_secret?.trim()) payload.client_secret = creds.client_secret.trim()
+                        }
+                        saveConfigMutation.mutate(payload)
+                      }}
+                      style={{
+                        padding: '8px 20px',
+                        fontSize: '13px',
+                        fontWeight: 600,
+                        backgroundColor: saving ? '#ccc' : '#6c757d',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: 6,
+                        cursor: saving ? 'not-allowed' : 'pointer',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {saving ? 'Saving…' : 'Save'}
+                    </button>
+                  </div>
+                  {saveConfigMutation.isError && saveConfigMutation.variables?.platform === p.id && (
+                    <p style={{ color: '#dc3545', fontSize: '12px', marginTop: 8 }}>{(saveConfigMutation.error as Error).message}</p>
+                  )}
+                  {saveConfigMutation.isSuccess && saveConfigMutation.variables?.platform === p.id && (
+                    <p style={{ color: '#28a745', fontSize: '12px', marginTop: 8 }}>Saved. You can connect this platform below.</p>
+                  )}
+                </div>
+              )
+            })}
+            <p style={{ fontSize: '12px', color: '#6c757d', marginTop: 8, marginBottom: 0 }}>
+              Environment variables (GOOGLE_CLIENT_ID, META_APP_ID, etc.) override these values if set.
+            </p>
+          </div>
         )}
       </div>
 
@@ -221,6 +380,23 @@ export default function DataSources({ onJourneysImported }: DataSourcesProps) {
           </button>
         )}
         {connectMeiroMutation.isError && <p style={{ color: '#dc3545', fontSize: '13px', marginTop: 8 }}>{(connectMeiroMutation.error as Error).message}</p>}
+
+        <div style={{ marginTop: 20, paddingTop: 20, borderTop: '1px solid #e9ecef' }}>
+          <h4 style={{ margin: '0 0 8px', fontSize: '14px', fontWeight: '600', color: '#495057' }}>Receive profiles from Meiro CDP</h4>
+          <p style={{ margin: 0, fontSize: '13px', color: '#6c757d' }}>
+            Meiro CDP can push customer profiles to this app. Configure a webhook in Meiro to POST profiles to the URL below. Then use &quot;Import from CDP&quot; to load them into attribution.
+          </p>
+          {meiroProfilesQuery.data?.webhook_url && (
+            <p style={{ margin: '8px 0 0', fontSize: '12px', fontFamily: 'monospace', backgroundColor: '#f8f9fa', padding: 8, borderRadius: 6, wordBreak: 'break-all' }}>
+              {meiroProfilesQuery.data.webhook_url}
+            </p>
+          )}
+          {meiroProfilesQuery.data && (
+            <p style={{ margin: '8px 0 0', fontSize: '13px', color: '#495057' }}>
+              Stored: <strong>{meiroProfilesQuery.data.stored_count ?? 0}</strong> profiles
+            </p>
+          )}
+        </div>
       </div>
 
       {/* Ad Platform Connections */}

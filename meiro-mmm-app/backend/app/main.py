@@ -1,4 +1,4 @@
-from fastapi import FastAPI, BackgroundTasks, UploadFile, File, HTTPException, Query
+from fastapi import FastAPI, BackgroundTasks, UploadFile, File, HTTPException, Query, Body, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
@@ -12,6 +12,7 @@ import time
 import requests
 from app.utils.token_store import save_token, get_token, delete_token, get_all_connected_platforms
 from app.utils.encrypt import encrypt, decrypt
+from app.utils import datasource_config as ds_config
 from app.mmm_engine import fit_model as mmm_fit_model, engine_info
 from app.connectors import meiro_cdp
 from app.attribution_engine import (
@@ -55,10 +56,42 @@ class ModelConfig(BaseModel):
                 data['kpi'] = {'conversions': 'conversions', 'aov': 'aov', 'profit': 'profit'}.get(data['kpi_mode'], 'conversions')
         super().__init__(**data)
 
+class ChannelConstraint(BaseModel):
+    """Optional per-channel constraints for automatic optimization.
+
+    The optimizer works with *relative multipliers* around the current allocation,
+    not absolute currency units. A value of 1.0 means "keep at baseline", 2.0
+    means "double relative weight", etc.
+    """
+
+    min: float | None = None
+    max: float | None = None
+    locked: bool = False
+
+
 class OptimizeRequest(BaseModel):
+    """Global + per-channel configuration for automatic budget optimization.
+
+    total_budget:
+        Interpreted as the *average* multiplier across channels. With N channels,
+        the optimizer enforces sum(x_i) = total_budget * N, where x_i are the
+        per-channel multipliers around the current mix.
+        A value of 1.0 keeps the overall level at baseline.
+
+    min_spend / max_spend:
+        Global lower/upper bounds for each channel's multiplier, used as
+        defaults when no per-channel constraint is provided.
+
+    channel_constraints:
+        Optional fine-grained constraints per channel. For a given channel:
+        - if locked=True, the multiplier is fixed at 1.0 (baseline)
+        - otherwise, min/max override the global bounds if provided.
+    """
+
     total_budget: float = 1.0
     min_spend: float = 0.5
     max_spend: float = 2.0
+    channel_constraints: Dict[str, ChannelConstraint] | None = None
 
 class MeiroCDPConnectRequest(BaseModel):
     api_base_url: str
@@ -331,30 +364,30 @@ async def oauth_callback(platform: str, code: Optional[str] = Query(None), error
     redirect_uri = f"{BASE_URL}/api/auth/callback/{platform}"
     try:
         if platform == "meta":
-            client_id = os.getenv("META_APP_ID", "")
-            client_secret = os.getenv("META_APP_SECRET", "")
+            client_id = ds_config.get_effective("meta", "app_id")
+            client_secret = ds_config.get_effective("meta", "app_secret")
             if not client_id or not client_secret:
-                raise HTTPException(status_code=500, detail="Meta OAuth not configured")
+                raise HTTPException(status_code=500, detail="Meta OAuth not configured. Set in Administration.")
             response = requests.get("https://graph.facebook.com/v19.0/oauth/access_token",
                 params={"client_id": client_id, "client_secret": client_secret, "redirect_uri": redirect_uri, "code": code}, timeout=30)
             response.raise_for_status()
             save_token("meta", response.json())
             return RedirectResponse(url=f"{FRONTEND_URL}/datasources?success=meta")
         elif platform == "google":
-            client_id = os.getenv("GOOGLE_CLIENT_ID", "")
-            client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
+            client_id = ds_config.get_effective("google", "client_id")
+            client_secret = ds_config.get_effective("google", "client_secret")
             if not client_id or not client_secret:
-                raise HTTPException(status_code=500, detail="Google OAuth not configured")
+                raise HTTPException(status_code=500, detail="Google OAuth not configured. Set in Administration.")
             response = requests.post("https://oauth2.googleapis.com/token",
                 data={"code": code, "client_id": client_id, "client_secret": client_secret, "redirect_uri": redirect_uri, "grant_type": "authorization_code"}, timeout=30)
             response.raise_for_status()
             save_token("google", response.json())
             return RedirectResponse(url=f"{FRONTEND_URL}/datasources?success=google")
         elif platform == "linkedin":
-            client_id = os.getenv("LINKEDIN_CLIENT_ID", "")
-            client_secret = os.getenv("LINKEDIN_CLIENT_SECRET", "")
+            client_id = ds_config.get_effective("linkedin", "client_id")
+            client_secret = ds_config.get_effective("linkedin", "client_secret")
             if not client_id or not client_secret:
-                raise HTTPException(status_code=500, detail="LinkedIn OAuth not configured")
+                raise HTTPException(status_code=500, detail="LinkedIn OAuth not configured. Set in Administration.")
             response = requests.post("https://www.linkedin.com/oauth/v2/accessToken",
                 data={"grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri, "client_id": client_id, "client_secret": client_secret}, timeout=30)
             response.raise_for_status()
@@ -371,23 +404,67 @@ def disconnect_platform(platform: str):
         return {"message": f"Disconnected {platform}"}
     raise HTTPException(status_code=404, detail=f"No connection found for {platform}")
 
+
+# ==================== Data Source Administration ====================
+
+class DatasourceCredentialUpdate(BaseModel):
+    """Update OAuth credentials for a platform. Only provided fields are updated."""
+    platform: str  # "google" | "meta" | "linkedin"
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
+    app_id: Optional[str] = None      # Meta only
+    app_secret: Optional[str] = None   # Meta only
+
+
+@app.get("/api/admin/datasource-config")
+def get_datasource_config_status():
+    """Return which platforms have credentials configured (no secret values)."""
+    return ds_config.get_status()
+
+
+@app.post("/api/admin/datasource-config")
+def update_datasource_config(body: DatasourceCredentialUpdate):
+    """Store OAuth credentials for a platform. Encrypted at rest. Env vars override if set."""
+    platform = body.platform.lower()
+    if platform not in ("google", "meta", "linkedin"):
+        raise HTTPException(status_code=400, detail="platform must be google, meta, or linkedin")
+    try:
+        if platform == "google":
+            if body.client_id is not None:
+                ds_config.set_stored("google", client_id=body.client_id)
+            if body.client_secret is not None:
+                ds_config.set_stored("google", client_secret=body.client_secret)
+        elif platform == "meta":
+            if body.app_id is not None:
+                ds_config.set_stored("meta", app_id=body.app_id)
+            if body.app_secret is not None:
+                ds_config.set_stored("meta", app_secret=body.app_secret)
+        elif platform == "linkedin":
+            if body.client_id is not None:
+                ds_config.set_stored("linkedin", client_id=body.client_id)
+            if body.client_secret is not None:
+                ds_config.set_stored("linkedin", client_secret=body.client_secret)
+        return {"message": "Credentials updated", "platform": platform, "configured": ds_config.get_platform_configured(platform)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 @app.get("/api/auth/{platform}")
 def start_oauth(platform: str):
     redirect_uri = f"{BASE_URL}/api/auth/callback/{platform}"
     if platform == "meta":
-        client_id = os.getenv("META_APP_ID", "")
+        client_id = ds_config.get_effective("meta", "app_id")
         if not client_id:
-            raise HTTPException(status_code=500, detail="META_APP_ID not configured")
+            raise HTTPException(status_code=500, detail="Meta OAuth not configured. Set credentials in Data Sources → Administration.")
         return RedirectResponse(url=f"https://www.facebook.com/v19.0/dialog/oauth?client_id={client_id}&redirect_uri={redirect_uri}&scope=ads_read,ads_management,business_management")
     elif platform == "google":
-        client_id = os.getenv("GOOGLE_CLIENT_ID", "")
+        client_id = ds_config.get_effective("google", "client_id")
         if not client_id:
-            raise HTTPException(status_code=500, detail="GOOGLE_CLIENT_ID not configured")
+            raise HTTPException(status_code=500, detail="Google OAuth not configured. Set credentials in Data Sources → Administration.")
         return RedirectResponse(url=f"https://accounts.google.com/o/oauth2/v2/auth?client_id={client_id}&redirect_uri={redirect_uri}&response_type=code&scope=https://www.googleapis.com/auth/adwords&access_type=offline&prompt=consent")
     elif platform == "linkedin":
-        client_id = os.getenv("LINKEDIN_CLIENT_ID", "")
+        client_id = ds_config.get_effective("linkedin", "client_id")
         if not client_id:
-            raise HTTPException(status_code=500, detail="LINKEDIN_CLIENT_ID not configured")
+            raise HTTPException(status_code=500, detail="LinkedIn OAuth not configured. Set credentials in Data Sources → Administration.")
         return RedirectResponse(url=f"https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope=r_ads_reporting,r_ads,r_organization_social")
     raise HTTPException(status_code=400, detail=f"Unknown platform: {platform}")
 
@@ -512,6 +589,65 @@ def channel_contrib(run_id: str):
 def roi(run_id: str):
     return RUNS.get(run_id, {}).get("roi", [])
 
+
+@app.post("/api/models/{run_id}/what_if")
+def what_if_scenario(run_id: str, scenario: Dict[str, float] = Body(..., embed=False)):
+    """Simulate a simple what-if scenario using per-channel multipliers.
+
+    The scenario is a mapping from channel -> multiplier, where 1.0 keeps the
+    channel at baseline, 2.0 doubles its relative contribution weight, etc.
+
+    This endpoint uses the already-fitted ROI and contribution shares and does
+    not re-run the full Bayesian model, so it is fast enough for interactive UI.
+    """
+
+    run = RUNS.get(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Model not found")
+
+    roi_map = {r["channel"]: r["roi"] for r in run.get("roi", [])}
+    contrib_map = {c["channel"]: c["mean_share"] for c in run.get("contrib", [])}
+    if not roi_map or not contrib_map:
+        raise HTTPException(status_code=400, detail="ROI or contribution data not available")
+
+    channels = sorted(roi_map.keys())
+
+    baseline_per_channel = {}
+    scenario_per_channel = {}
+    baseline_total = 0.0
+    scenario_total = 0.0
+
+    for ch in channels:
+        roi_val = float(roi_map.get(ch, 0.0))
+        share = float(contrib_map.get(ch, 0.0))
+        base = roi_val * share
+        mult = float(scenario.get(ch, 1.0))
+        new_val = base * mult
+
+        baseline_per_channel[ch] = base
+        scenario_per_channel[ch] = new_val
+        baseline_total += base
+        scenario_total += new_val
+
+    uplift_abs = scenario_total - baseline_total
+    uplift_pct = (uplift_abs / baseline_total * 100.0) if baseline_total != 0 else 0.0
+
+    return {
+        "baseline": {
+            "total_kpi": baseline_total,
+            "per_channel": baseline_per_channel,
+        },
+        "scenario": {
+            "total_kpi": scenario_total,
+            "per_channel": scenario_per_channel,
+            "multipliers": scenario,
+        },
+        "lift": {
+            "absolute": uplift_abs,
+            "percent": uplift_pct,
+        },
+    }
+
 @app.get("/api/models/{run_id}/summary/channel")
 def get_channel_summary(run_id: str):
     res = RUNS.get(run_id)
@@ -565,19 +701,46 @@ def optimize_auto(run_id: str, request: OptimizeRequest = OptimizeRequest()):
     contrib_map = {c["channel"]: c["mean_share"] for c in run.get("contrib", [])}
     if not roi_map or not contrib_map:
         raise HTTPException(status_code=400, detail="ROI or contribution data not available")
+
     channels = list(roi_map.keys())
     n = len(channels)
     roi_values = np.maximum(np.array([roi_map.get(ch, 0) for ch in channels]), 0.01)
     contrib_raw = np.array([contrib_map.get(ch, 0) for ch in channels])
     cs = contrib_raw.sum()
     contrib_values = contrib_raw / cs if cs > 0 else contrib_raw
+
+    # Baseline score corresponds to all multipliers = 1.0
     baseline_score = float(np.sum(roi_values * contrib_values))
-    def objective(x):
+
+    def objective(x: np.ndarray) -> float:
+        # We maximize incremental score over baseline; scipy minimizes, so negate.
         return -(np.sum(roi_values * contrib_values * x) - baseline_score)
-    constraints = ({"type": "eq", "fun": lambda x: np.sum(x) - (request.total_budget * n)})
-    bounds = [(request.min_spend, request.max_spend)] * n
+
+    # Sum of multipliers constrained to total_budget * n (average = total_budget)
+    constraints = ({"type": "eq", "fun": lambda x: np.sum(x) - (request.total_budget * n)},)
+
+    # Build per-channel bounds, falling back to global min/max
+    bounds: list[tuple[float, float]] = []
+    per_constraints = request.channel_constraints or {}
+    for ch in channels:
+        c = per_constraints.get(ch)
+        if c and c.locked:
+            bounds.append((1.0, 1.0))
+        else:
+            lo = c.min if c and c.min is not None else request.min_spend
+            hi = c.max if c and c.max is not None else request.max_spend
+            bounds.append((float(lo), float(hi)))
     try:
-        result = minimize(objective, np.ones(n) * request.total_budget, method='SLSQP', bounds=bounds, constraints=constraints, options={'maxiter': 1000})
+        # Start at all-ones (baseline) scaled by requested average multiplier
+        x0 = np.ones(n) * request.total_budget
+        result = minimize(
+            objective,
+            x0,
+            method="SLSQP",
+            bounds=bounds,
+            constraints=constraints,
+            options={"maxiter": 1000},
+        )
         if not result.success:
             return {"optimal_mix": {ch: float(request.total_budget) for ch in channels}, "predicted_kpi": baseline_score, "baseline_kpi": baseline_score, "uplift": 0.0, "message": "At baseline"}
         optimal_mix = {ch: float(val) for ch, val in zip(channels, result.x)}
@@ -731,6 +894,79 @@ def meiro_fetch(req: MeiroCDPExportRequest):
         return {"rows": len(df), "path": str(out_path), "dataset_id": "meiro-cdp-export"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/connectors/meiro/profiles")
+def meiro_profiles_status():
+    """Return count of profiles stored from Meiro CDP webhook and the URL Meiro should POST to."""
+    out_path = DATA_DIR / "meiro_cdp_profiles.json"
+    count = 0
+    if out_path.exists():
+        try:
+            data = json.loads(out_path.read_text())
+            count = len(data) if isinstance(data, list) else 0
+        except Exception:
+            pass
+    webhook_url = f"{BASE_URL}/api/connectors/meiro/profiles"
+    return {"stored_count": count, "webhook_url": webhook_url}
+
+
+@app.post("/api/connectors/meiro/profiles")
+async def meiro_receive_profiles(
+    request: Request,
+    x_meiro_webhook_secret: Optional[str] = Header(None, alias="X-Meiro-Webhook-Secret"),
+):
+    """
+    Webhook endpoint for Meiro CDP to push customer profiles.
+
+    Meiro CDP can POST profiles here (e.g. from a flow or export). Stored profiles
+    are used when you click "Import from CDP" in Data Sources.
+
+    Body (JSON):
+      - Array of profile objects: [ { "customer_id": "...", "touchpoints": [...], ... }, ... ]
+      - Or object: { "profiles": [ ... ], "replace": true }
+        - replace: true (default) = replace stored profiles with this payload
+        - replace: false = append to existing profiles
+
+    Optional security:
+      - Set env MEIRO_WEBHOOK_SECRET; then Meiro must send header X-Meiro-Webhook-Secret with that value.
+    """
+    webhook_secret = os.getenv("MEIRO_WEBHOOK_SECRET", "").strip()
+    if webhook_secret:
+        if not x_meiro_webhook_secret or x_meiro_webhook_secret != webhook_secret:
+            raise HTTPException(status_code=401, detail="Invalid or missing X-Meiro-Webhook-Secret")
+
+    try:
+        body = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+
+    if isinstance(body, list):
+        profiles = body
+        replace = True
+    elif isinstance(body, dict):
+        profiles = body.get("profiles", body.get("data", []))
+        replace = body.get("replace", True)
+        if not isinstance(profiles, list):
+            raise HTTPException(status_code=400, detail="Body must be an array of profiles or { 'profiles': [...] }")
+    else:
+        raise HTTPException(status_code=400, detail="Body must be JSON array or object with 'profiles' key")
+
+    out_path = DATA_DIR / "meiro_cdp_profiles.json"
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    if replace or not out_path.exists():
+        to_store = profiles
+    else:
+        try:
+            existing = json.loads(out_path.read_text())
+            to_store = (existing if isinstance(existing, list) else []) + list(profiles)
+        except Exception:
+            to_store = profiles
+
+    out_path.write_text(json.dumps(to_store, indent=2))
+    return {"received": len(profiles), "stored_total": len(to_store), "message": "Profiles saved. Use Import from CDP in Data Sources to load into attribution."}
+
 
 # ==================== Model Fitting Background Task ====================
 

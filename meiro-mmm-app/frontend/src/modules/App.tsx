@@ -5,6 +5,9 @@ import AttributionComparison from './AttributionComparison'
 import ConversionPaths from './ConversionPaths'
 import ExpenseManager from './ExpenseManager'
 import DataSources from './DataSources'
+import DatasetUploader from './DatasetUploader'
+import MMMDashboard from './MMMDashboard'
+import BudgetOptimizer from './BudgetOptimizer'
 
 type Page = 'dashboard' | 'comparison' | 'paths' | 'expenses' | 'datasources' | 'mmm'
 
@@ -29,6 +32,8 @@ const ATTRIBUTION_MODELS = [
 export default function App() {
   const [page, setPage] = useState<Page>('dashboard')
   const [selectedModel, setSelectedModel] = useState('linear')
+  const [mmmRunId, setMmmRunId] = useState<string | null>(null)
+  const [mmmDatasetId, setMmmDatasetId] = useState<string | null>(null)
 
   const journeysQuery = useQuery({
     queryKey: ['journeys-summary'],
@@ -58,6 +63,46 @@ export default function App() {
       if (!res.ok) throw new Error('Failed to run models')
       return res.json()
     },
+  })
+
+  const createMmmRunMutation = useMutation({
+    mutationFn: async (config: {
+      dataset_id: string
+      kpi: string
+      spend_channels: string[]
+      covariates: string[]
+    }) => {
+      const res = await fetch('/api/models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dataset_id: config.dataset_id,
+          frequency: 'W',
+          kpi_mode: 'conversions',
+          kpi: config.kpi,
+          spend_channels: config.spend_channels,
+          covariates: config.covariates || [],
+        }),
+      })
+      if (!res.ok) throw new Error('Failed to start MMM run')
+      return res.json()
+    },
+    onSuccess: (data, variables) => {
+      setMmmRunId(data.run_id)
+      setMmmDatasetId(variables.dataset_id)
+    },
+  })
+
+  const mmmRunQuery = useQuery({
+    queryKey: ['mmm-run', mmmRunId],
+    queryFn: async () => {
+      const res = await fetch(`/api/models/${mmmRunId}`)
+      if (!res.ok) throw new Error('Failed to fetch run')
+      return res.json()
+    },
+    enabled: !!mmmRunId,
+    refetchInterval: (data) =>
+      data?.status === 'finished' || data?.status === 'error' ? false : 2000,
   })
 
   useEffect(() => {
@@ -177,7 +222,7 @@ export default function App() {
 
       {/* Main Content */}
       <main style={{ padding: '24px 32px', maxWidth: 1400, margin: '0 auto' }}>
-        {!journeysLoaded && page !== 'datasources' && page !== 'expenses' && (
+        {!journeysLoaded && page !== 'datasources' && page !== 'expenses' && page !== 'mmm' && (
           <div style={{
             padding: 40, textAlign: 'center', backgroundColor: 'white',
             borderRadius: 12, border: '1px solid #e9ecef',
@@ -213,7 +258,7 @@ export default function App() {
           </div>
         )}
 
-        {(journeysLoaded || page === 'datasources' || page === 'expenses') && (
+        {(journeysLoaded || page === 'datasources' || page === 'expenses' || page === 'mmm') && (
           <>
             {page === 'dashboard' && (
               <ChannelPerformance model={selectedModel} channels={channels} modelsReady={!!runAllMutation.data} />
@@ -227,16 +272,77 @@ export default function App() {
               <DataSources onJourneysImported={() => { journeysQuery.refetch(); runAllMutation.mutate() }} />
             )}
             {page === 'mmm' && (
-              <div style={{ padding: 32, textAlign: 'center', backgroundColor: 'white', borderRadius: 12, border: '1px solid #e9ecef' }}>
-                <h2 style={{ color: '#495057' }}>Marketing Mix Modeling (Advanced)</h2>
-                <p style={{ color: '#6c757d' }}>
-                  The Bayesian MMM engine (PyMC-Marketing) is available for aggregate-level media mix modeling.
-                  Use the Dataset Wizard to upload weekly spend + KPI data and run a full Bayesian model.
-                </p>
-                <p style={{ fontSize: '13px', color: '#adb5bd', marginTop: 16 }}>
-                  This feature complements attribution. While attribution traces individual
-                  customer journeys, MMM provides aggregate-level insights about channel effectiveness.
-                </p>
+              <div style={{ maxWidth: 1200, margin: '0 auto' }}>
+                {!mmmRunId ? (
+                  <>
+                    <div style={{ marginBottom: 24 }}>
+                      <h2 style={{ fontSize: '22px', color: '#212529', marginBottom: 8 }}>Marketing Mix Modeling (MMM)</h2>
+                      <p style={{ fontSize: '14px', color: '#6c757d' }}>
+                        Upload weekly spend + KPI data, map columns, then run a Bayesian MMM. Results include ROI by channel, contributions, and budget optimization.
+                      </p>
+                    </div>
+                    <DatasetUploader
+                      onMappingComplete={(mapping) => {
+                        createMmmRunMutation.mutate({
+                          dataset_id: mapping.dataset_id,
+                          kpi: mapping.columns.kpi,
+                          spend_channels: mapping.columns.spend_channels,
+                          covariates: mapping.columns.covariates || [],
+                        })
+                      }}
+                    />
+                    {createMmmRunMutation.isPending && (
+                      <div style={{ marginTop: 24, padding: 24, textAlign: 'center', backgroundColor: '#f8f9fa', borderRadius: 8 }}>
+                        <p style={{ fontWeight: 600, color: '#495057' }}>Starting model run…</p>
+                        <p style={{ fontSize: '13px', color: '#6c757d' }}>You will be taken to results when the run is queued.</p>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    {(mmmRunQuery.isLoading || mmmRunQuery.data?.status === 'queued' || mmmRunQuery.data?.status === 'running') && (
+                      <div style={{ marginBottom: 24, padding: 24, textAlign: 'center', backgroundColor: '#fff3cd', borderRadius: 8, border: '1px solid #ffc107' }}>
+                        <p style={{ fontWeight: 600, color: '#856404' }}>Model {mmmRunQuery.data?.status === 'running' ? 'running' : 'queued'}…</p>
+                        <p style={{ fontSize: '13px', color: '#856404' }}>This may take a few minutes. The page will update automatically.</p>
+                      </div>
+                    )}
+                    {mmmRunQuery.data?.status === 'error' && (
+                      <div style={{ marginBottom: 24, padding: 24, backgroundColor: '#f8d7da', borderRadius: 8, border: '1px solid #f5c6cb' }}>
+                        <p style={{ fontWeight: 600, color: '#721c24' }}>Model run failed</p>
+                        <p style={{ fontSize: '13px', color: '#721c24' }}>{String((mmmRunQuery.data as any).detail ?? 'Unknown error')}</p>
+                        <button
+                          type="button"
+                          onClick={() => { setMmmRunId(null); setMmmDatasetId(null) }}
+                          style={{ marginTop: 12, padding: '8px 16px', fontSize: '14px', backgroundColor: '#6c757d', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer' }}
+                        >
+                          Start over
+                        </button>
+                      </div>
+                    )}
+                    {mmmRunQuery.data?.status === 'finished' && (
+                      <>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                          <h2 style={{ fontSize: '22px', color: '#212529', margin: 0 }}>MMM Results</h2>
+                          <button
+                            type="button"
+                            onClick={() => { setMmmRunId(null); setMmmDatasetId(null) }}
+                            style={{ padding: '8px 16px', fontSize: '14px', backgroundColor: '#6c757d', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer' }}
+                          >
+                            New model run
+                          </button>
+                        </div>
+                        <MMMDashboard runId={mmmRunId!} datasetId={mmmDatasetId ?? ''} />
+                        {mmmRunQuery.data?.roi?.length > 0 && mmmRunQuery.data?.contrib?.length > 0 && (
+                          <BudgetOptimizer
+                            roiData={mmmRunQuery.data.roi}
+                            contribData={mmmRunQuery.data.contrib}
+                            runId={mmmRunId!}
+                          />
+                        )}
+                      </>
+                    )}
+                  </>
+                )}
               </div>
             )}
           </>
