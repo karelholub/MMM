@@ -315,7 +315,7 @@ export default function MMMDashboard({ runId, datasetId }: MMMDashboardProps) {
               <YAxis tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }} />
               <Tooltip contentStyle={{ fontSize: t.font.sizeSm, borderRadius: t.radius.sm }} />
               <Bar dataKey="roi" name="ROI" radius={[4, 4, 0, 0]}>
-                {roi.map((_, i) => (
+                {roi.map((_: { channel: string }, i: number) => (
                   <Cell key={i} fill={t.color.chart[i % t.color.chart.length]} />
                 ))}
               </Bar>
@@ -346,7 +346,7 @@ export default function MMMDashboard({ runId, datasetId }: MMMDashboardProps) {
               <YAxis tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }} tickFormatter={(v) => `${(v * 100).toFixed(0)}%`} />
               <Tooltip formatter={(value: number) => `${(value * 100).toFixed(1)}%`} contentStyle={{ fontSize: t.font.sizeSm, borderRadius: t.radius.sm }} />
               <Bar dataKey="mean_share" name="Contribution" radius={[4, 4, 0, 0]}>
-                {contrib.map((_, i) => (
+                {contrib.map((_: { channel: string }, i: number) => (
                   <Cell key={i} fill={t.color.chart[(i + 2) % t.color.chart.length]} />
                 ))}
               </Bar>
@@ -419,8 +419,8 @@ export default function MMMDashboard({ runId, datasetId }: MMMDashboardProps) {
                 </tr>
               </thead>
               <tbody>
-                {roi.map((r, idx) => {
-                  const c = contrib.find((x) => x.channel === r.channel)
+                {roi.map((r: { channel: string; roi: number }, idx: number) => {
+                  const c = contrib.find((x: { channel: string }) => x.channel === r.channel)
                   return (
                     <tr key={r.channel} style={{ borderBottom: `1px solid ${t.color.borderLight}`, backgroundColor: idx % 2 === 0 ? t.color.surface : t.color.bg }}>
                       <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, fontWeight: t.font.weightMedium, color: t.color.text }}>{r.channel}</td>

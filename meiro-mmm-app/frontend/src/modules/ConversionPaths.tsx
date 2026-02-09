@@ -3,6 +3,16 @@ import { useQuery } from '@tanstack/react-query'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { tokens } from '../theme/tokens'
 
+interface NextBestRec {
+  channel: string
+  campaign?: string
+  step?: string
+  count: number
+  conversions: number
+  conversion_rate: number
+  avg_value: number
+}
+
 interface PathAnalysis {
   total_journeys: number
   avg_path_length: number
@@ -10,6 +20,8 @@ interface PathAnalysis {
   common_paths: { path: string; count: number; share: number }[]
   channel_frequency: Record<string, number>
   path_length_distribution: { min: number; max: number; median: number }
+  next_best_by_prefix?: Record<string, NextBestRec[]>
+  next_best_by_prefix_campaign?: Record<string, NextBestRec[]>
 }
 
 const METRIC_DEFINITIONS: Record<string, string> = {
@@ -19,10 +31,22 @@ const METRIC_DEFINITIONS: Record<string, string> = {
   'Path Length Range': 'Min and max touchpoints observed in paths.',
 }
 
-function exportPathsCSV(paths: { path: string; count: number; share: number }[]) {
-  const headers = ['Path', 'Count', 'Share (%)']
-  const rows = paths.map((p) => [p.path, p.count.toString(), (p.share * 100).toFixed(1)])
-  const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
+function exportPathsCSV(
+  paths: { path: string; count: number; share: number }[],
+  nextBestByPrefix?: Record<string, NextBestRec[]>
+) {
+  const headers = nextBestByPrefix ? ['Path', 'Count', 'Share (%)', 'Suggested next'] : ['Path', 'Count', 'Share (%)']
+  const rows = paths.map((p) => {
+    const base = [p.path, p.count.toString(), (p.share * 100).toFixed(1)]
+    if (nextBestByPrefix) {
+      const prefix = p.path.split(' > ').slice(0, -1).join(' > ')
+      const recs = nextBestByPrefix[prefix]
+      const top = recs?.[0]
+      base.push(top ? `${top.channel} (${(top.conversion_rate * 100).toFixed(1)}%)` : '')
+    }
+    return base
+  })
+  const csv = [headers.join(','), ...rows.map((r) => (Array.isArray(r) ? r : [r]).join(','))].join('\n')
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
@@ -37,6 +61,11 @@ export default function ConversionPaths() {
   const [pathSortDir, setPathSortDir] = useState<'asc' | 'desc'>('desc')
   const [freqSort, setFreqSort] = useState<'channel' | 'count' | 'pct'>('count')
   const [freqSortDir, setFreqSortDir] = useState<'asc' | 'desc'>('desc')
+  const [tryPathInput, setTryPathInput] = useState('')
+  const [tryPathLevel, setTryPathLevel] = useState<'channel' | 'campaign'>('channel')
+  const [tryPathResult, setTryPathResult] = useState<{ path_so_far: string; level: string; recommendations: NextBestRec[] } | null>(null)
+  const [tryPathLoading, setTryPathLoading] = useState(false)
+  const [tryPathError, setTryPathError] = useState<string | null>(null)
 
   const pathsQuery = useQuery<PathAnalysis>({
     queryKey: ['path-analysis'],
@@ -339,6 +368,137 @@ export default function ConversionPaths() {
         </div>
       </div>
 
+      {/* Try path – Next Best Action */}
+      <div
+        style={{
+          background: t.color.surface,
+          border: `1px solid ${t.color.borderLight}`,
+          borderRadius: t.radius.lg,
+          padding: t.space.xl,
+          boxShadow: t.shadowSm,
+          marginBottom: t.space.xl,
+        }}
+      >
+        <h3 style={{ margin: '0 0 8px', fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+          Try path – Next Best Action
+        </h3>
+        <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.textSecondary, marginBottom: t.space.lg }}>
+          Enter the path so far (e.g. <code style={{ background: t.color.bg, padding: '2px 6px', borderRadius: t.radius.sm }}>google_ads</code> or <code style={{ background: t.color.bg, padding: '2px 6px', borderRadius: t.radius.sm }}>google_ads, email</code>) to see recommended next channels or campaigns.
+        </p>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: t.space.md, alignItems: 'center', marginBottom: tryPathResult || tryPathError ? t.space.lg : 0 }}>
+          <input
+            type="text"
+            value={tryPathInput}
+            onChange={(e) => setTryPathInput(e.target.value)}
+            placeholder="e.g. google_ads > email"
+            style={{
+              flex: '1',
+              minWidth: 200,
+              padding: `${t.space.sm}px ${t.space.md}px`,
+              fontSize: t.font.sizeSm,
+              border: `1px solid ${t.color.border}`,
+              borderRadius: t.radius.sm,
+              color: t.color.text,
+            }}
+            onKeyDown={(e) => e.key === 'Enter' && (document.querySelector('[data-try-path-btn]') as HTMLButtonElement)?.click()}
+          />
+          {data.next_best_by_prefix_campaign && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              <input
+                type="radio"
+                checked={tryPathLevel === 'channel'}
+                onChange={() => setTryPathLevel('channel')}
+              />
+              Channel
+            </label>
+          )}
+          {data.next_best_by_prefix_campaign && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              <input
+                type="radio"
+                checked={tryPathLevel === 'campaign'}
+                onChange={() => setTryPathLevel('campaign')}
+              />
+              Campaign
+            </label>
+          )}
+          <button
+            data-try-path-btn
+            type="button"
+            disabled={tryPathLoading}
+            onClick={async () => {
+              setTryPathError(null)
+              setTryPathResult(null)
+              setTryPathLoading(true)
+              try {
+                const pathParam = encodeURIComponent(tryPathInput.trim())
+                const levelParam = tryPathLevel === 'campaign' && data.next_best_by_prefix_campaign ? 'campaign' : 'channel'
+                const res = await fetch(`/api/attribution/next_best_action?path_so_far=${pathParam}&level=${levelParam}`)
+                if (!res.ok) {
+                  const err = await res.json().catch(() => ({}))
+                  throw new Error(err.detail || res.statusText)
+                }
+                const json = await res.json()
+                setTryPathResult({ path_so_far: json.path_so_far, level: json.level, recommendations: json.recommendations || [] })
+              } catch (e) {
+                setTryPathError((e as Error).message)
+              } finally {
+                setTryPathLoading(false)
+              }
+            }}
+            style={{
+              padding: `${t.space.sm}px ${t.space.lg}px`,
+              fontSize: t.font.sizeSm,
+              fontWeight: t.font.weightMedium,
+              color: t.color.surface,
+              backgroundColor: t.color.accent,
+              border: 'none',
+              borderRadius: t.radius.sm,
+              cursor: tryPathLoading ? 'wait' : 'pointer',
+            }}
+          >
+            {tryPathLoading ? 'Loading…' : 'Get next best'}
+          </button>
+        </div>
+        {tryPathError && (
+          <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.danger }}>{tryPathError}</p>
+        )}
+        {tryPathResult && (
+          <div>
+            <p style={{ margin: '0 0 8px', fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              After path <strong style={{ color: t.color.text }}>{tryPathResult.path_so_far}</strong>
+              {tryPathResult.level === 'campaign' && ' (campaign-level)'}:
+            </p>
+            <ul style={{ margin: 0, paddingLeft: t.space.xl, listStyle: 'disc', display: 'flex', flexDirection: 'column', gap: t.space.xs }}>
+              {tryPathResult.recommendations.length === 0 ? (
+                <li style={{ fontSize: t.font.sizeSm, color: t.color.textMuted }}>No recommendations for this prefix.</li>
+              ) : (
+                tryPathResult.recommendations.map((rec, i) => (
+                  <li key={i} style={{ fontSize: t.font.sizeSm }}>
+                    <span
+                      style={{
+                        display: 'inline-block',
+                        padding: '2px 8px',
+                        backgroundColor: t.color.accentMuted,
+                        color: t.color.accent,
+                        borderRadius: t.radius.sm,
+                        fontWeight: t.font.weightSemibold,
+                        marginRight: t.space.sm,
+                      }}
+                    >
+                      {rec.campaign != null ? `${rec.channel} / ${rec.campaign}` : rec.channel}
+                    </span>
+                    <span style={{ color: t.color.textSecondary }}>
+                      {(rec.conversion_rate * 100).toFixed(0)}% conversion · {rec.count} journeys · avg ${rec.avg_value}
+                    </span>
+                  </li>
+                ))
+              )}
+            </ul>
+          </div>
+        )}
+      </div>
+
       {/* Common paths table + export */}
       <div
         style={{
@@ -355,7 +515,7 @@ export default function ConversionPaths() {
           </h3>
           <button
             type="button"
-            onClick={() => exportPathsCSV(data.common_paths)}
+            onClick={() => exportPathsCSV(data.common_paths, data.next_best_by_prefix)}
             style={{
               padding: `${t.space.sm}px ${t.space.lg}px`,
               fontSize: t.font.sizeSm,
@@ -408,10 +568,15 @@ export default function ConversionPaths() {
                 >
                   Share {pathSort === 'share' && (pathSortDir === 'asc' ? '↑' : '↓')}
                 </th>
+                <th style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'left', fontWeight: t.font.weightSemibold, color: t.color.textSecondary }}>Suggested next</th>
               </tr>
             </thead>
             <tbody>
-              {sortedPaths.slice(0, 20).map((p, idx) => (
+              {sortedPaths.slice(0, 20).map((p, idx) => {
+                const prefix = p.path.split(' > ').slice(0, -1).join(' > ')
+                const recs = data.next_best_by_prefix?.[prefix]
+                const top = recs?.[0]
+                return (
                 <tr
                   key={idx}
                   style={{
@@ -444,8 +609,29 @@ export default function ConversionPaths() {
                   <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontWeight: t.font.weightMedium, color: t.color.accent, fontVariantNumeric: 'tabular-nums' }}>
                     {(p.share * 100).toFixed(1)}%
                   </td>
+                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px` }}>
+                    {top ? (
+                      <span
+                        title={`${top.count} journeys, ${(top.conversion_rate * 100).toFixed(1)}% conversion, avg value $${top.avg_value}`}
+                        style={{
+                          display: 'inline-block',
+                          padding: '2px 8px',
+                          backgroundColor: t.color.accentMuted,
+                          color: t.color.accent,
+                          borderRadius: t.radius.sm,
+                          fontSize: t.font.sizeXs,
+                          fontWeight: t.font.weightSemibold,
+                        }}
+                      >
+                        {top.channel} ({(top.conversion_rate * 100).toFixed(0)}%)
+                      </span>
+                    ) : (
+                      <span style={{ color: t.color.textMuted, fontSize: t.font.sizeXs }}>—</span>
+                    )}
+                  </td>
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         </div>

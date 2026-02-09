@@ -375,6 +375,31 @@ def run_all_models(journeys: List[Dict]) -> List[Dict[str, Any]]:
     return results
 
 
+def journeys_to_campaign_steps(journeys: List[Dict]) -> List[Dict]:
+    """Convert journeys so each touchpoint's channel is campaign-level (channel:campaign or channel)."""
+    out = []
+    for j in journeys:
+        new_tps = []
+        for tp in j.get("touchpoints", []):
+            step = _step_string(tp, "campaign")
+            new_tps.append({**tp, "channel": step})
+        out.append({**j, "touchpoints": new_tps})
+    return out
+
+
+def run_attribution_campaign(
+    journeys: List[Dict],
+    model: str = "linear",
+    **kwargs,
+) -> Dict[str, Any]:
+    """
+    Run attribution at campaign level (channel:campaign or channel). Returns same shape as run_attribution
+    but with keys as campaign steps.
+    """
+    campaign_journeys = journeys_to_campaign_steps(journeys)
+    return run_attribution(campaign_journeys, model=model, **kwargs)
+
+
 def compute_channel_performance(
     attribution_result: Dict[str, Any],
     expenses: Dict[str, float],
@@ -561,3 +586,83 @@ def analyze_paths(journeys: List[Dict]) -> Dict[str, Any]:
             "median": float(np.median(lengths)) if lengths else 0,
         },
     }
+
+
+def _step_string(tp: Dict, level: str) -> str:
+    """Build a single step string: channel only, or channel:campaign when level is campaign and campaign present."""
+    ch = tp.get("channel", "unknown")
+    if level == "campaign" and tp.get("campaign"):
+        return f"{ch}:{tp['campaign']}"
+    return ch
+
+
+def compute_next_best_action(
+    journeys: List[Dict],
+    level: str = "channel",
+) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    For each path prefix, compute recommended next step (channel or channel:campaign) based on
+    historical conversion rate and value among journeys that took that next step.
+
+    level: "channel" = steps are channel only; "campaign" = steps are "channel:campaign" when
+    touchpoint has campaign, else channel.
+
+    Returns a dict keyed by path prefix with value = list of
+    { channel, campaign (optional), step, count, conversions, conversion_rate, avg_value }
+    sorted by conversion_rate descending, then avg_value descending.
+    """
+    step_stats: Dict[Tuple[str, str], Dict[str, Any]] = defaultdict(
+        lambda: {"count": 0, "conversions": 0, "total_value": 0.0}
+    )
+
+    for j in journeys:
+        tps = j.get("touchpoints", [])
+        steps = [_step_string(tp, level) for tp in tps]
+        converted = j.get("converted", True)
+        value = float(j.get("conversion_value", 0) or 0)
+
+        for i in range(len(steps)):
+            prefix = " > ".join(steps[:i]) if i > 0 else ""
+            next_step = steps[i]
+            key = (prefix, next_step)
+            step_stats[key]["count"] += 1
+            if converted:
+                step_stats[key]["conversions"] += 1
+                step_stats[key]["total_value"] += value
+
+    by_prefix: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for (prefix, next_step), stats in step_stats.items():
+        count = stats["count"]
+        conv = stats["conversions"]
+        total_val = stats["total_value"]
+        channel = next_step.split(":", 1)[0] if ":" in next_step else next_step
+        campaign = next_step.split(":", 1)[1] if ":" in next_step else None
+        rec: Dict[str, Any] = {
+            "channel": channel,
+            "step": next_step,
+            "count": count,
+            "conversions": conv,
+            "conversion_rate": round(conv / count, 4) if count else 0,
+            "avg_value": round(total_val / count, 2) if count else 0,
+            "avg_value_converted": round(total_val / conv, 2) if conv else 0,
+        }
+        if campaign is not None:
+            rec["campaign"] = campaign
+        by_prefix[prefix].append(rec)
+
+    for prefix in by_prefix:
+        by_prefix[prefix].sort(
+            key=lambda x: (x["conversion_rate"], x["avg_value"]),
+            reverse=True,
+        )
+
+    return dict(by_prefix)
+
+
+def has_any_campaign(journeys: List[Dict]) -> bool:
+    """Return True if any touchpoint in journeys has a campaign field."""
+    for j in journeys:
+        for tp in j.get("touchpoints", []):
+            if tp.get("campaign"):
+                return True
+    return False

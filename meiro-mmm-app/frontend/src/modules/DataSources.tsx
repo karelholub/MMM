@@ -442,8 +442,8 @@ export default function DataSources({ onJourneysImported }: DataSourcesProps) {
   {
     "customer_id": "c001",
     "touchpoints": [
-      {"channel": "google_ads", "timestamp": "2024-01-02"},
-      {"channel": "email", "timestamp": "2024-01-05"},
+      {"channel": "google_ads", "campaign": "Brand", "timestamp": "2024-01-02"},
+      {"channel": "email", "campaign": "Welcome", "timestamp": "2024-01-05"},
       {"channel": "direct", "timestamp": "2024-01-07"}
     ],
     "conversion_value": 120.00,
@@ -453,6 +453,9 @@ export default function DataSources({ onJourneysImported }: DataSourcesProps) {
 ]`}
         </pre>
         <p style={{ fontSize: '13px', color: '#004085', marginTop: 12, marginBottom: 0 }}>
+          <code style={{ background: 'rgba(0,0,0,0.06)', padding: '2px 6px', borderRadius: 4 }}>campaign</code> on touchpoints is optional; when present, Campaign Performance and Next Best Action use campaign-level data.
+        </p>
+        <p style={{ fontSize: '13px', color: '#004085', marginTop: 8, marginBottom: 0 }}>
           CDP profile attributes with conversion paths will be automatically parsed using configurable field mapping.
         </p>
       </div>

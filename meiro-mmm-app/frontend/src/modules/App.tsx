@@ -1,19 +1,28 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import ChannelPerformance from './ChannelPerformance'
-import AttributionComparison from './AttributionComparison'
-import ConversionPaths from './ConversionPaths'
-import ExpenseManager from './ExpenseManager'
-import DataSources from './DataSources'
-import DatasetUploader from './DatasetUploader'
-import MMMDashboard from './MMMDashboard'
-import BudgetOptimizer from './BudgetOptimizer'
 import { tokens } from '../theme/tokens'
 
-type Page = 'dashboard' | 'comparison' | 'paths' | 'expenses' | 'datasources' | 'mmm'
+const ChannelPerformance = lazy(() => import('./ChannelPerformance'))
+const AttributionComparison = lazy(() => import('./AttributionComparison'))
+const ConversionPaths = lazy(() => import('./ConversionPaths'))
+const ExpenseManager = lazy(() => import('./ExpenseManager'))
+const DataSources = lazy(() => import('./DataSources'))
+const DatasetUploader = lazy(() => import('./DatasetUploader'))
+const MMMDashboard = lazy(() => import('./MMMDashboard'))
+const BudgetOptimizer = lazy(() => import('./BudgetOptimizer'))
+const CampaignPerformance = lazy(() => import('./CampaignPerformance'))
+
+type Page = 'dashboard' | 'comparison' | 'paths' | 'campaigns' | 'expenses' | 'datasources' | 'mmm'
+
+const PAGE_FALLBACK = (
+  <div style={{ padding: 48, textAlign: 'center', color: '#64748b', fontSize: 14 }}>
+    Loading…
+  </div>
+)
 
 const NAV_ITEMS: { key: Page; label: string; color: string }[] = [
   { key: 'dashboard', label: 'Channel Performance', color: '#007bff' },
+  { key: 'campaigns', label: 'Campaign Performance', color: '#0d9488' },
   { key: 'comparison', label: 'Attribution Models', color: '#6f42c1' },
   { key: 'paths', label: 'Conversion Paths', color: '#17a2b8' },
   { key: 'expenses', label: 'Expenses', color: '#28a745' },
@@ -30,6 +39,13 @@ const ATTRIBUTION_MODELS = [
   { id: 'markov', label: 'Data-Driven (Markov)' },
 ]
 
+const LAYOUT_STYLES = {
+  root: { fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', minHeight: '100vh', backgroundColor: '#f4f6f9' as const },
+  header: { background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)', color: 'white', padding: '20px 32px', display: 'flex' as const, justifyContent: 'space-between' as const, alignItems: 'center' as const },
+  nav: { display: 'flex' as const, flexWrap: 'wrap' as const, gap: 8, padding: '12px 32px', alignItems: 'center' as const, backgroundColor: 'white', borderBottom: '1px solid #e9ecef', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' },
+  main: { padding: '24px 32px', maxWidth: 1400, margin: '0 auto' as const },
+} as const
+
 export default function App() {
   const [page, setPage] = useState<Page>('dashboard')
   const [selectedModel, setSelectedModel] = useState('linear')
@@ -43,7 +59,7 @@ export default function App() {
       if (!res.ok) return { loaded: false, count: 0 }
       return res.json()
     },
-    refetchInterval: 5000,
+    refetchInterval: 15 * 1000,
   })
 
   const loadSampleMutation = useMutation({
@@ -102,8 +118,10 @@ export default function App() {
       return res.json()
     },
     enabled: !!mmmRunId,
-    refetchInterval: (data) =>
-      data?.status === 'finished' || data?.status === 'error' ? false : 2000,
+    refetchInterval: (query) => {
+      const data = query.state?.data as { status?: string } | undefined
+      return data?.status === 'finished' || data?.status === 'error' ? false : 2000
+    },
   })
 
   useEffect(() => {
@@ -112,22 +130,37 @@ export default function App() {
     }
   }, [journeysQuery.data?.loaded])
 
-  const journeysLoaded = journeysQuery.data?.loaded || false
-  const journeyCount = journeysQuery.data?.count || 0
-  const convertedCount = journeysQuery.data?.converted || 0
-  const channels: string[] = journeysQuery.data?.channels || []
+  const journeysLoaded = journeysQuery.data?.loaded ?? false
+  const journeyCount = journeysQuery.data?.count ?? 0
+  const convertedCount = journeysQuery.data?.converted ?? 0
+  const channels = useMemo(() => journeysQuery.data?.channels ?? [], [journeysQuery.data?.channels])
+
+  const handleSetPage = useCallback((p: Page) => setPage(p), [])
+  const handleSetDatasources = useCallback(() => setPage('datasources'), [])
+  const handleMmmStartOver = useCallback(() => {
+    setMmmRunId(null)
+    setMmmDatasetId(null)
+  }, [])
+  const onJourneysImported = useCallback(() => {
+    void journeysQuery.refetch()
+    runAllMutation.mutate()
+  }, [])
+  const onMmmMappingComplete = useCallback(
+    (mapping: { dataset_id: string; columns: { kpi: string; spend_channels: string[]; covariates?: string[] } }) => {
+      createMmmRunMutation.mutate({
+        dataset_id: mapping.dataset_id,
+        kpi: mapping.columns.kpi,
+        spend_channels: mapping.columns.spend_channels,
+        covariates: mapping.columns.covariates ?? [],
+      })
+    },
+    [createMmmRunMutation],
+  )
 
   return (
-    <div style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', minHeight: '100vh', backgroundColor: '#f4f6f9' }}>
+    <div style={LAYOUT_STYLES.root}>
       {/* Header */}
-      <header style={{
-        background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)',
-        color: 'white',
-        padding: '20px 32px',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-      }}>
+      <header style={LAYOUT_STYLES.header}>
         <div>
           <h1 style={{ margin: 0, fontSize: '24px', fontWeight: '700', letterSpacing: '-0.5px' }}>
             Meiro Attribution Dashboard
@@ -180,15 +213,11 @@ export default function App() {
       </header>
 
       {/* Navigation */}
-      <nav style={{
-        display: 'flex', flexWrap: 'wrap', gap: 8, padding: '12px 32px', alignItems: 'center',
-        backgroundColor: 'white', borderBottom: '1px solid #e9ecef',
-        boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
-      }}>
+      <nav style={LAYOUT_STYLES.nav}>
         {NAV_ITEMS.map(item => (
           <button
             key={item.key}
-            onClick={() => setPage(item.key)}
+            onClick={() => handleSetPage(item.key)}
             style={{
               padding: '10px 20px', fontSize: '14px',
               fontWeight: page === item.key ? '700' : '500',
@@ -202,7 +231,7 @@ export default function App() {
           </button>
         ))}
 
-        {(page === 'dashboard' || page === 'comparison') && (
+        {(page === 'dashboard' || page === 'comparison' || page === 'campaigns') && (
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
             <label style={{ fontSize: '13px', fontWeight: '600', color: '#6c757d' }}>Model:</label>
             <select
@@ -222,8 +251,8 @@ export default function App() {
       </nav>
 
       {/* Main Content */}
-      <main style={{ padding: '24px 32px', maxWidth: 1400, margin: '0 auto' }}>
-        {!journeysLoaded && page !== 'datasources' && page !== 'expenses' && page !== 'mmm' && page !== 'comparison' && page !== 'paths' && (
+      <main style={LAYOUT_STYLES.main}>
+        {!journeysLoaded && page !== 'datasources' && page !== 'expenses' && page !== 'mmm' && page !== 'comparison' && page !== 'paths' && page !== 'campaigns' && (
           <div style={{
             padding: 40, textAlign: 'center', backgroundColor: 'white',
             borderRadius: 12, border: '1px solid #e9ecef',
@@ -246,7 +275,7 @@ export default function App() {
                 Load Sample Data
               </button>
               <button
-                onClick={() => setPage('datasources')}
+                onClick={handleSetDatasources}
                 style={{
                   padding: '14px 28px', fontSize: '15px', fontWeight: '600',
                   backgroundColor: '#fd7e14', color: 'white', border: 'none',
@@ -259,10 +288,13 @@ export default function App() {
           </div>
         )}
 
-        {(journeysLoaded || page === 'datasources' || page === 'expenses' || page === 'mmm' || page === 'comparison' || page === 'paths') && (
-          <>
+        {(journeysLoaded || page === 'datasources' || page === 'expenses' || page === 'mmm' || page === 'comparison' || page === 'paths' || page === 'campaigns') && (
+          <Suspense fallback={PAGE_FALLBACK}>
             {page === 'dashboard' && (
               <ChannelPerformance model={selectedModel} channels={channels} modelsReady={!!runAllMutation.data} />
+            )}
+            {page === 'campaigns' && (
+              <CampaignPerformance model={selectedModel} modelsReady={!!runAllMutation.data} />
             )}
             {page === 'comparison' && (
               <AttributionComparison selectedModel={selectedModel} onSelectModel={setSelectedModel} />
@@ -270,7 +302,7 @@ export default function App() {
             {page === 'paths' && <ConversionPaths />}
             {page === 'expenses' && <ExpenseManager />}
             {page === 'datasources' && (
-              <DataSources onJourneysImported={() => { journeysQuery.refetch(); runAllMutation.mutate() }} />
+              <DataSources onJourneysImported={onJourneysImported} />
             )}
             {page === 'mmm' && (
               <div style={{ maxWidth: 1400, margin: '0 auto' }}>
@@ -284,16 +316,7 @@ export default function App() {
                         Upload weekly spend + KPI data, map columns, then run a Bayesian MMM. Results include ROI by channel, contributions, and budget optimization.
                       </p>
                     </div>
-                    <DatasetUploader
-                      onMappingComplete={(mapping) => {
-                        createMmmRunMutation.mutate({
-                          dataset_id: mapping.dataset_id,
-                          kpi: mapping.columns.kpi,
-                          spend_channels: mapping.columns.spend_channels,
-                          covariates: mapping.columns.covariates || [],
-                        })
-                      }}
-                    />
+                    <DatasetUploader onMappingComplete={onMmmMappingComplete} />
                     {createMmmRunMutation.isPending && (
                       <div style={{ marginTop: tokens.space.xl, padding: tokens.space.xl, textAlign: 'center', backgroundColor: tokens.color.bg, borderRadius: tokens.radius.lg, border: `1px solid ${tokens.color.border}` }}>
                         <p style={{ fontWeight: tokens.font.weightSemibold, color: tokens.color.text, margin: 0 }}>Starting model run…</p>
@@ -315,7 +338,7 @@ export default function App() {
                         <p style={{ fontSize: tokens.font.sizeSm, color: tokens.color.danger, marginTop: tokens.space.sm }}>{String((mmmRunQuery.data as { detail?: string }).detail ?? 'Unknown error')}</p>
                         <button
                           type="button"
-                          onClick={() => { setMmmRunId(null); setMmmDatasetId(null) }}
+                          onClick={handleMmmStartOver}
                           style={{ marginTop: tokens.space.md, padding: `${tokens.space.sm}px ${tokens.space.lg}px`, fontSize: tokens.font.sizeSm, backgroundColor: tokens.color.textMuted, color: tokens.color.surface, border: 'none', borderRadius: tokens.radius.sm, cursor: 'pointer', fontWeight: tokens.font.weightMedium }}
                         >
                           Start over
@@ -328,7 +351,7 @@ export default function App() {
                           <h2 style={{ margin: 0, fontSize: tokens.font.size2xl, fontWeight: tokens.font.weightBold, color: tokens.color.text }}>MMM Results</h2>
                           <button
                             type="button"
-                            onClick={() => { setMmmRunId(null); setMmmDatasetId(null) }}
+                            onClick={handleMmmStartOver}
                             style={{ padding: `${tokens.space.sm}px ${tokens.space.lg}px`, fontSize: tokens.font.sizeSm, fontWeight: tokens.font.weightMedium, color: tokens.color.surface, backgroundColor: tokens.color.textSecondary, border: 'none', borderRadius: tokens.radius.sm, cursor: 'pointer' }}
                           >
                             New model run
@@ -348,7 +371,7 @@ export default function App() {
                 )}
               </div>
             )}
-          </>
+          </Suspense>
         )}
       </main>
     </div>

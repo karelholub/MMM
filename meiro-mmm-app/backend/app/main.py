@@ -17,8 +17,8 @@ from app.mmm_engine import fit_model as mmm_fit_model, engine_info
 from app.connectors import meiro_cdp
 from app.attribution_engine import (
     run_attribution, run_all_models as run_all_attribution,
-    compute_channel_performance, parse_conversion_paths,
-    analyze_paths, ATTRIBUTION_MODELS,
+    run_attribution_campaign, compute_channel_performance, parse_conversion_paths,
+    analyze_paths, compute_next_best_action, has_any_campaign, ATTRIBUTION_MODELS,
 )
 
 app = FastAPI(title="Meiro Attribution Dashboard API", version="0.2.0")
@@ -284,10 +284,34 @@ def get_attribution_result(model: str):
 
 @app.get("/api/attribution/paths")
 def get_path_analysis():
-    """Analyze conversion paths for common patterns and statistics."""
+    """Analyze conversion paths for common patterns and statistics. Includes next-best-action recommendations per path prefix (channel and optionally campaign level)."""
     if not JOURNEYS:
         raise HTTPException(status_code=400, detail="No journeys loaded.")
-    return analyze_paths(JOURNEYS)
+    path_analysis = analyze_paths(JOURNEYS)
+    path_analysis["next_best_by_prefix"] = compute_next_best_action(JOURNEYS, level="channel")
+    if has_any_campaign(JOURNEYS):
+        path_analysis["next_best_by_prefix_campaign"] = compute_next_best_action(JOURNEYS, level="campaign")
+    return path_analysis
+
+
+def _next_best_action_impl(path_so_far: str = "", level: str = "channel"):
+    if not JOURNEYS:
+        raise HTTPException(status_code=400, detail="No journeys loaded.")
+    prefix = path_so_far.strip().replace(",", " > ").replace("  ", " ").strip()
+    use_level = "campaign" if level == "campaign" and has_any_campaign(JOURNEYS) else "channel"
+    nba = compute_next_best_action(JOURNEYS, level=use_level)
+    recommendations = nba.get(prefix, [])
+    return {"path_so_far": prefix or "(start)", "level": use_level, "recommendations": recommendations[:10]}
+
+
+@app.get("/api/attribution/next-best-action")
+@app.get("/api/attribution/next_best_action")
+def get_next_best_action(path_so_far: str = "", level: str = "channel"):
+    """
+    Given a path prefix (e.g. 'google_ads' or 'google_ads > email'), return recommended next channels
+    (or channel:campaign when level=campaign and data has campaign). Use comma or ' > ' to separate steps.
+    """
+    return _next_best_action_impl(path_so_far=path_so_far, level=level)
 
 @app.get("/api/attribution/performance")
 def get_channel_performance(model: str = "linear"):
@@ -311,6 +335,63 @@ def get_channel_performance(model: str = "linear"):
         "total_attributed_value": result.get("total_value", 0),
         "total_conversions": result.get("total_conversions", 0),
     }
+
+
+@app.get("/api/attribution/campaign-performance")
+def get_campaign_performance(model: str = "linear"):
+    """Campaign-level attribution (channel:campaign). Requires touchpoints with campaign. Returns campaigns with attributed value and optional suggested next (NBA)."""
+    if not JOURNEYS:
+        raise HTTPException(status_code=400, detail="No journeys loaded.")
+    if not has_any_campaign(JOURNEYS):
+        return {
+            "model": model,
+            "campaigns": [],
+            "total_conversions": 0,
+            "total_value": 0,
+            "message": "No campaign data in touchpoints. Add a 'campaign' field to use campaign performance.",
+        }
+    result = run_attribution_campaign(JOURNEYS, model=model)
+    expense_by_channel: Dict[str, float] = {}
+    for exp in EXPENSES.values():
+        expense_by_channel[exp.channel] = expense_by_channel.get(exp.channel, 0) + exp.amount
+
+    campaigns_list = []
+    for ch in result.get("channels", []):
+        step = ch["channel"]
+        channel_name = step.split(":", 1)[0] if ":" in step else step
+        campaign_name = step.split(":", 1)[1] if ":" in step else None
+        spend = expense_by_channel.get(channel_name, 0)
+        attr_val = ch["attributed_value"]
+        attr_conv = ch.get("attributed_conversions", 0)
+        roi = ((attr_val - spend) / spend) if spend and spend > 0 else None  # ratio, e.g. 1.5 = 150%
+        roas = (attr_val / spend) if spend and spend > 0 else None
+        cpa = (spend / attr_conv) if spend and attr_conv and attr_conv > 0 else None
+        campaigns_list.append({
+            "campaign": step,
+            "channel": channel_name,
+            "campaign_name": campaign_name,
+            "attributed_value": ch["attributed_value"],
+            "attributed_share": ch["attributed_share"],
+            "attributed_conversions": ch.get("attributed_conversions", 0),
+            "spend": round(spend, 2),
+            "roi": round(roi, 4) if roi is not None else None,
+            "roas": round(roas, 2) if roas is not None else None,
+            "cpa": round(cpa, 2) if cpa is not None else None,
+        })
+
+    nba_campaign = compute_next_best_action(JOURNEYS, level="campaign")
+    for c in campaigns_list:
+        recs = nba_campaign.get(c["campaign"], [])
+        c["suggested_next"] = recs[0] if recs else None
+
+    return {
+        "model": model,
+        "campaigns": campaigns_list,
+        "total_conversions": result.get("total_conversions", 0),
+        "total_value": result.get("total_value", 0),
+        "total_spend": sum(expense_by_channel.values()),
+    }
+
 
 # ==================== Expense Management ====================
 
