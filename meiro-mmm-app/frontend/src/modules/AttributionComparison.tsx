@@ -78,6 +78,60 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
   const models = Object.keys(results).filter((k) => !results[k].error)
   const t = tokens
 
+  const allChannels = new Set<string>()
+  for (const model of models) {
+    const r = results[model]
+    if (r?.channels) for (const ch of r.channels) allChannels.add(ch.channel)
+  }
+  const comparisonData = Array.from(allChannels).map((channel) => {
+    const row: Record<string, unknown> = { channel }
+    for (const model of models) {
+      const r = results[model]
+      const ch = r?.channels?.find((c: { channel: string }) => c.channel === channel)
+      row[model] = ch ? ch.attributed_value : 0
+      row[`${model}_share`] = ch ? ch.attributed_share : 0
+    }
+    return row
+  })
+
+  const sortedData = useMemo(() => {
+    return [...comparisonData].sort((a, b) => {
+      let va: number | string = a[sortBy] as number | string
+      let vb: number | string = b[sortBy] as number | string
+      if (sortBy === 'channel') {
+        va = String(va)
+        vb = String(vb)
+        return sortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va)
+      }
+      va = Number(va ?? 0)
+      vb = Number(vb ?? 0)
+      return sortDir === 'asc' ? va - vb : vb - va
+    })
+  }, [comparisonData, sortBy, sortDir])
+
+  const selectedResult = results[selectedModel]
+
+  if (resultsQuery.isError) {
+    return (
+      <div
+        style={{
+          background: t.color.surface,
+          border: `1px solid ${t.color.danger}`,
+          borderRadius: t.radius.lg,
+          padding: t.space.xxl,
+          boxShadow: t.shadowSm,
+        }}
+      >
+        <h3 style={{ margin: '0 0 8px', fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.danger }}>
+          Could not load attribution results
+        </h3>
+        <p style={{ margin: 0, fontSize: t.font.sizeMd, color: t.color.textSecondary }}>
+          {(resultsQuery.error as Error)?.message || 'Backend may be unreachable. Check that the API is running and CORS/proxy is correct.'}
+        </p>
+      </div>
+    )
+  }
+
   if (resultsQuery.isLoading) {
     return (
       <div
@@ -117,40 +171,6 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
       </div>
     )
   }
-
-  const allChannels = new Set<string>()
-  for (const model of models) {
-    const r = results[model]
-    if (r.channels) for (const ch of r.channels) allChannels.add(ch.channel)
-  }
-
-  const comparisonData = Array.from(allChannels).map((channel) => {
-    const row: Record<string, unknown> = { channel }
-    for (const model of models) {
-      const r = results[model]
-      const ch = r.channels?.find((c) => c.channel === channel)
-      row[model] = ch ? ch.attributed_value : 0
-      row[`${model}_share`] = ch ? ch.attributed_share : 0
-    }
-    return row
-  })
-
-  const sortedData = useMemo(() => {
-    return [...comparisonData].sort((a, b) => {
-      let va: number | string = a[sortBy] as number | string
-      let vb: number | string = b[sortBy] as number | string
-      if (sortBy === 'channel') {
-        va = String(va)
-        vb = String(vb)
-        return sortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va)
-      }
-      va = Number(va ?? 0)
-      vb = Number(vb ?? 0)
-      return sortDir === 'asc' ? va - vb : vb - va
-    })
-  }, [comparisonData, sortBy, sortDir])
-
-  const selectedResult = results[selectedModel]
 
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto' }}>

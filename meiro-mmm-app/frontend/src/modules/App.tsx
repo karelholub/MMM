@@ -181,7 +181,7 @@ export default function App() {
 
       {/* Navigation */}
       <nav style={{
-        display: 'flex', gap: 4, padding: '12px 32px',
+        display: 'flex', flexWrap: 'wrap', gap: 8, padding: '12px 32px', alignItems: 'center',
         backgroundColor: 'white', borderBottom: '1px solid #e9ecef',
         boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
       }}>
@@ -223,7 +223,7 @@ export default function App() {
 
       {/* Main Content */}
       <main style={{ padding: '24px 32px', maxWidth: 1400, margin: '0 auto' }}>
-        {!journeysLoaded && page !== 'datasources' && page !== 'expenses' && page !== 'mmm' && (
+        {!journeysLoaded && page !== 'datasources' && page !== 'expenses' && page !== 'mmm' && page !== 'comparison' && page !== 'paths' && (
           <div style={{
             padding: 40, textAlign: 'center', backgroundColor: 'white',
             borderRadius: 12, border: '1px solid #e9ecef',
@@ -259,7 +259,7 @@ export default function App() {
           </div>
         )}
 
-        {(journeysLoaded || page === 'datasources' || page === 'expenses' || page === 'mmm') && (
+        {(journeysLoaded || page === 'datasources' || page === 'expenses' || page === 'mmm' || page === 'comparison' || page === 'paths') && (
           <>
             {page === 'dashboard' && (
               <ChannelPerformance model={selectedModel} channels={channels} modelsReady={!!runAllMutation.data} />

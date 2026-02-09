@@ -50,6 +50,62 @@ export default function ConversionPaths() {
   const data = pathsQuery.data
   const t = tokens
 
+  const channelFreq = data?.channel_frequency ?? {}
+  const totalTouchpoints = Object.values(channelFreq).reduce((s, n) => s + n, 0)
+  const freqRows = Object.entries(channelFreq).map(([channel, count]) => ({
+    channel,
+    count,
+    pct: totalTouchpoints > 0 ? (count / totalTouchpoints) * 100 : 0,
+  }))
+
+  const sortedFreq = useMemo(() => {
+    return [...freqRows].sort((a, b) => {
+      let cmp = 0
+      if (freqSort === 'channel') cmp = a.channel.localeCompare(b.channel)
+      else if (freqSort === 'count') cmp = a.count - b.count
+      else cmp = a.pct - b.pct
+      return freqSortDir === 'asc' ? cmp : -cmp
+    })
+  }, [freqRows, freqSort, freqSortDir])
+
+  const commonPaths = data?.common_paths ?? []
+  const sortedPaths = useMemo(() => {
+    return [...commonPaths].sort((a, b) => {
+      const cmp = pathSort === 'count' ? a.count - b.count : a.share - b.share
+      return pathSortDir === 'asc' ? cmp : -cmp
+    })
+  }, [commonPaths, pathSort, pathSortDir])
+
+  const kpis = data
+    ? [
+        { label: 'Total Journeys', value: data.total_journeys.toLocaleString(), def: METRIC_DEFINITIONS['Total Journeys'] },
+        { label: 'Avg Path Length', value: `${data.avg_path_length} touchpoints`, def: METRIC_DEFINITIONS['Avg Path Length'] },
+        { label: 'Avg Time to Convert', value: data.avg_time_to_conversion_days != null ? `${data.avg_time_to_conversion_days} days` : 'N/A', def: METRIC_DEFINITIONS['Avg Time to Convert'] },
+        { label: 'Path Length Range', value: `${data.path_length_distribution.min} – ${data.path_length_distribution.max}`, def: METRIC_DEFINITIONS['Path Length Range'] },
+      ]
+    : []
+
+  if (pathsQuery.isError) {
+    return (
+      <div
+        style={{
+          background: t.color.surface,
+          border: `1px solid ${t.color.danger}`,
+          borderRadius: t.radius.lg,
+          padding: t.space.xxl,
+          boxShadow: t.shadowSm,
+        }}
+      >
+        <h3 style={{ margin: '0 0 8px', fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.danger }}>
+          Could not load path analysis
+        </h3>
+        <p style={{ margin: 0, fontSize: t.font.sizeMd, color: t.color.textSecondary }}>
+          {(pathsQuery.error as Error)?.message || 'Backend may be unreachable. Check that the API is running and CORS/proxy is correct.'}
+        </p>
+      </div>
+    )
+  }
+
   if (pathsQuery.isLoading) {
     return (
       <div
@@ -89,37 +145,6 @@ export default function ConversionPaths() {
       </div>
     )
   }
-
-  const totalTouchpoints = Object.values(data.channel_frequency).reduce((s, n) => s + n, 0)
-  const freqRows = Object.entries(data.channel_frequency).map(([channel, count]) => ({
-    channel,
-    count,
-    pct: totalTouchpoints > 0 ? (count / totalTouchpoints) * 100 : 0,
-  }))
-
-  const sortedFreq = useMemo(() => {
-    return [...freqRows].sort((a, b) => {
-      let cmp = 0
-      if (freqSort === 'channel') cmp = a.channel.localeCompare(b.channel)
-      else if (freqSort === 'count') cmp = a.count - b.count
-      else cmp = a.pct - b.pct
-      return freqSortDir === 'asc' ? cmp : -cmp
-    })
-  }, [freqRows, freqSort, freqSortDir])
-
-  const sortedPaths = useMemo(() => {
-    return [...data.common_paths].sort((a, b) => {
-      const cmp = pathSort === 'count' ? a.count - b.count : a.share - b.share
-      return pathSortDir === 'asc' ? cmp : -cmp
-    })
-  }, [data.common_paths, pathSort, pathSortDir])
-
-  const kpis = [
-    { label: 'Total Journeys', value: data.total_journeys.toLocaleString(), def: METRIC_DEFINITIONS['Total Journeys'] },
-    { label: 'Avg Path Length', value: `${data.avg_path_length} touchpoints`, def: METRIC_DEFINITIONS['Avg Path Length'] },
-    { label: 'Avg Time to Convert', value: data.avg_time_to_conversion_days != null ? `${data.avg_time_to_conversion_days} days` : 'N/A', def: METRIC_DEFINITIONS['Avg Time to Convert'] },
-    { label: 'Path Length Range', value: `${data.path_length_distribution.min} – ${data.path_length_distribution.max}`, def: METRIC_DEFINITIONS['Path Length Range'] },
-  ]
 
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto' }}>
