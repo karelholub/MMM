@@ -8,6 +8,7 @@ import DataSources from './DataSources'
 import DatasetUploader from './DatasetUploader'
 import MMMDashboard from './MMMDashboard'
 import BudgetOptimizer from './BudgetOptimizer'
+import { tokens } from '../theme/tokens'
 
 type Page = 'dashboard' | 'comparison' | 'paths' | 'expenses' | 'datasources' | 'mmm'
 
@@ -272,12 +273,14 @@ export default function App() {
               <DataSources onJourneysImported={() => { journeysQuery.refetch(); runAllMutation.mutate() }} />
             )}
             {page === 'mmm' && (
-              <div style={{ maxWidth: 1200, margin: '0 auto' }}>
+              <div style={{ maxWidth: 1400, margin: '0 auto' }}>
                 {!mmmRunId ? (
                   <>
-                    <div style={{ marginBottom: 24 }}>
-                      <h2 style={{ fontSize: '22px', color: '#212529', marginBottom: 8 }}>Marketing Mix Modeling (MMM)</h2>
-                      <p style={{ fontSize: '14px', color: '#6c757d' }}>
+                    <div style={{ marginBottom: tokens.space.xl }}>
+                      <h1 style={{ margin: 0, fontSize: tokens.font.size2xl, fontWeight: tokens.font.weightBold, color: tokens.color.text, letterSpacing: '-0.02em' }}>
+                        Marketing Mix Modeling (MMM)
+                      </h1>
+                      <p style={{ margin: `${tokens.space.xs}px 0 0`, fontSize: tokens.font.sizeSm, color: tokens.color.textSecondary }}>
                         Upload weekly spend + KPI data, map columns, then run a Bayesian MMM. Results include ROI by channel, contributions, and budget optimization.
                       </p>
                     </div>
@@ -292,28 +295,28 @@ export default function App() {
                       }}
                     />
                     {createMmmRunMutation.isPending && (
-                      <div style={{ marginTop: 24, padding: 24, textAlign: 'center', backgroundColor: '#f8f9fa', borderRadius: 8 }}>
-                        <p style={{ fontWeight: 600, color: '#495057' }}>Starting model run…</p>
-                        <p style={{ fontSize: '13px', color: '#6c757d' }}>You will be taken to results when the run is queued.</p>
+                      <div style={{ marginTop: tokens.space.xl, padding: tokens.space.xl, textAlign: 'center', backgroundColor: tokens.color.bg, borderRadius: tokens.radius.lg, border: `1px solid ${tokens.color.border}` }}>
+                        <p style={{ fontWeight: tokens.font.weightSemibold, color: tokens.color.text, margin: 0 }}>Starting model run…</p>
+                        <p style={{ fontSize: tokens.font.sizeSm, color: tokens.color.textSecondary, marginTop: tokens.space.sm }}>You will be taken to results when the run is queued.</p>
                       </div>
                     )}
                   </>
                 ) : (
                   <>
                     {(mmmRunQuery.isLoading || mmmRunQuery.data?.status === 'queued' || mmmRunQuery.data?.status === 'running') && (
-                      <div style={{ marginBottom: 24, padding: 24, textAlign: 'center', backgroundColor: '#fff3cd', borderRadius: 8, border: '1px solid #ffc107' }}>
-                        <p style={{ fontWeight: 600, color: '#856404' }}>Model {mmmRunQuery.data?.status === 'running' ? 'running' : 'queued'}…</p>
-                        <p style={{ fontSize: '13px', color: '#856404' }}>This may take a few minutes. The page will update automatically.</p>
+                      <div style={{ marginBottom: tokens.space.xl, padding: tokens.space.xl, textAlign: 'center', backgroundColor: tokens.color.warningMuted, borderRadius: tokens.radius.lg, border: `1px solid ${tokens.color.warning}` }}>
+                        <p style={{ fontWeight: tokens.font.weightSemibold, color: tokens.color.warning, margin: 0 }}>Model {mmmRunQuery.data?.status === 'running' ? 'running' : 'queued'}…</p>
+                        <p style={{ fontSize: tokens.font.sizeSm, color: tokens.color.warning, marginTop: tokens.space.sm }}>This may take a few minutes. The page will update automatically.</p>
                       </div>
                     )}
                     {mmmRunQuery.data?.status === 'error' && (
-                      <div style={{ marginBottom: 24, padding: 24, backgroundColor: '#f8d7da', borderRadius: 8, border: '1px solid #f5c6cb' }}>
-                        <p style={{ fontWeight: 600, color: '#721c24' }}>Model run failed</p>
-                        <p style={{ fontSize: '13px', color: '#721c24' }}>{String((mmmRunQuery.data as any).detail ?? 'Unknown error')}</p>
+                      <div style={{ marginBottom: tokens.space.xl, padding: tokens.space.xl, backgroundColor: tokens.color.dangerMuted, borderRadius: tokens.radius.lg, border: `1px solid ${tokens.color.danger}` }}>
+                        <p style={{ fontWeight: tokens.font.weightSemibold, color: tokens.color.danger, margin: 0 }}>Model run failed</p>
+                        <p style={{ fontSize: tokens.font.sizeSm, color: tokens.color.danger, marginTop: tokens.space.sm }}>{String((mmmRunQuery.data as { detail?: string }).detail ?? 'Unknown error')}</p>
                         <button
                           type="button"
                           onClick={() => { setMmmRunId(null); setMmmDatasetId(null) }}
-                          style={{ marginTop: 12, padding: '8px 16px', fontSize: '14px', backgroundColor: '#6c757d', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer' }}
+                          style={{ marginTop: tokens.space.md, padding: `${tokens.space.sm}px ${tokens.space.lg}px`, fontSize: tokens.font.sizeSm, backgroundColor: tokens.color.textMuted, color: tokens.color.surface, border: 'none', borderRadius: tokens.radius.sm, cursor: 'pointer', fontWeight: tokens.font.weightMedium }}
                         >
                           Start over
                         </button>
@@ -321,12 +324,12 @@ export default function App() {
                     )}
                     {mmmRunQuery.data?.status === 'finished' && (
                       <>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                          <h2 style={{ fontSize: '22px', color: '#212529', margin: 0 }}>MMM Results</h2>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: tokens.space.xl, flexWrap: 'wrap', gap: tokens.space.md }}>
+                          <h2 style={{ margin: 0, fontSize: tokens.font.size2xl, fontWeight: tokens.font.weightBold, color: tokens.color.text }}>MMM Results</h2>
                           <button
                             type="button"
                             onClick={() => { setMmmRunId(null); setMmmDatasetId(null) }}
-                            style={{ padding: '8px 16px', fontSize: '14px', backgroundColor: '#6c757d', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer' }}
+                            style={{ padding: `${tokens.space.sm}px ${tokens.space.lg}px`, fontSize: tokens.font.sizeSm, fontWeight: tokens.font.weightMedium, color: tokens.color.surface, backgroundColor: tokens.color.textSecondary, border: 'none', borderRadius: tokens.radius.sm, cursor: 'pointer' }}
                           >
                             New model run
                           </button>
