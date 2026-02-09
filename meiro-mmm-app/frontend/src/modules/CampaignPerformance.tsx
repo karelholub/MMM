@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { tokens } from '../theme/tokens'
@@ -91,6 +91,9 @@ type SortDir = 'asc' | 'desc'
 export default function CampaignPerformance({ model, modelsReady }: CampaignPerformanceProps) {
   const [sortKey, setSortKey] = useState<SortKey>('attributed_value')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
+  const [search, setSearch] = useState('')
+  const [channelFilter, setChannelFilter] = useState<string>('')
+  const [campaignTargets, setCampaignTargets] = useState<Record<string, number>>({})
 
   const perfQuery = useQuery<CampaignPerformanceResponse>({
     queryKey: ['campaign-performance', model],
@@ -107,9 +110,22 @@ export default function CampaignPerformance({ model, modelsReady }: CampaignPerf
   const loading = perfQuery.isLoading || !modelsReady
   const campaigns = data?.campaigns ?? []
 
-  const sortedCampaigns = useMemo(() => {
+  const filteredCampaigns = useMemo(() => {
     if (!campaigns.length) return []
-    return [...campaigns].sort((a, b) => {
+    const q = search.trim().toLowerCase()
+    const byChannel = channelFilter.trim()
+    return campaigns.filter((c) => {
+      const matchSearch = !q || c.campaign.toLowerCase().includes(q) || c.channel.toLowerCase().includes(q) || (c.campaign_name ?? '').toLowerCase().includes(q)
+      const matchChannel = !byChannel || c.channel === byChannel
+      return matchSearch && matchChannel
+    })
+  }, [campaigns, search, channelFilter])
+
+  const channelsList = useMemo(() => Array.from(new Set(campaigns.map((c) => c.channel))).sort(), [campaigns])
+
+  const sortedCampaigns = useMemo(() => {
+    if (!filteredCampaigns.length) return []
+    return [...filteredCampaigns].sort((a, b) => {
       const va = a[sortKey]
       const vb = b[sortKey]
       if (va == null && vb == null) return 0
@@ -118,7 +134,13 @@ export default function CampaignPerformance({ model, modelsReady }: CampaignPerf
       const cmp = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb))
       return sortDir === 'asc' ? cmp : -cmp
     })
-  }, [campaigns, sortKey, sortDir])
+  }, [filteredCampaigns, sortKey, sortDir])
+
+  const setCampaignTarget = useCallback((campaign: string, value: number) => {
+    setCampaignTargets((prev) => (value > 0 ? { ...prev, [campaign]: value } : (() => { const next = { ...prev }; delete next[campaign]; return next })()))
+  }, [])
+
+  const totalBudgetTarget = useMemo(() => Object.values(campaignTargets).reduce((s, v) => s + v, 0), [campaignTargets])
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
@@ -194,6 +216,8 @@ export default function CampaignPerformance({ model, modelsReady }: CampaignPerf
   const totalSpend = data.total_spend ?? campaigns.reduce((s, c) => s + c.spend, 0)
   const totalROAS = totalSpend > 0 ? data.total_value / totalSpend : 0
   const avgCPA = data.total_conversions > 0 ? totalSpend / data.total_conversions : 0
+  const filteredTotalSpend = filteredCampaigns.reduce((s, c) => s + c.spend, 0)
+  const filteredTotalValue = filteredCampaigns.reduce((s, c) => s + c.attributed_value, 0)
 
   const kpis = [
     { label: 'Total Spend', value: formatCurrency(totalSpend), def: METRIC_DEFINITIONS['Total Spend'] },
@@ -203,7 +227,7 @@ export default function CampaignPerformance({ model, modelsReady }: CampaignPerf
     { label: 'Avg CPA', value: formatCurrency(avgCPA), def: '' },
   ]
 
-  const chartData = campaigns.map((c) => ({
+  const chartData = filteredCampaigns.map((c) => ({
     name: c.campaign_name ? `${c.channel} / ${c.campaign_name}` : c.campaign,
     spend: c.spend,
     attributed_value: c.attributed_value,
@@ -211,15 +235,89 @@ export default function CampaignPerformance({ model, modelsReady }: CampaignPerf
 
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: t.space.xl, flexWrap: 'wrap', gap: t.space.md }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: t.space.md, flexWrap: 'wrap', gap: t.space.md }}>
         <div>
           <h1 style={{ margin: 0, fontSize: t.font.size2xl, fontWeight: t.font.weightBold, color: t.color.text, letterSpacing: '-0.02em' }}>
             Campaign Performance
           </h1>
           <p style={{ margin: `${t.space.xs}px 0 0`, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-            Attribution model: <strong style={{ color: t.color.accent }}>{MODEL_LABELS[model] || model}</strong>. Suggested next from Next Best Action (NBA).
+            Attribution model: <strong style={{ color: t.color.accent }}>{MODEL_LABELS[model] || model}</strong>. Search and filter below; set budget targets to compare vs actual spend.
           </p>
         </div>
+      </div>
+
+      {/* Search and filter */}
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: t.space.md,
+          alignItems: 'center',
+          marginBottom: t.space.xl,
+          background: t.color.surface,
+          border: `1px solid ${t.color.borderLight}`,
+          borderRadius: t.radius.lg,
+          padding: t.space.lg,
+          boxShadow: t.shadowSm,
+        }}
+      >
+        <label style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightMedium, color: t.color.textSecondary }}>
+          Search
+        </label>
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Campaign or channel name..."
+          style={{
+            minWidth: 200,
+            padding: `${t.space.sm}px ${t.space.md}px`,
+            fontSize: t.font.sizeSm,
+            border: `1px solid ${t.color.border}`,
+            borderRadius: t.radius.sm,
+            color: t.color.text,
+          }}
+        />
+        <label style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightMedium, color: t.color.textSecondary }}>
+          Channel
+        </label>
+        <select
+          value={channelFilter}
+          onChange={(e) => setChannelFilter(e.target.value)}
+          style={{
+            padding: `${t.space.sm}px ${t.space.md}px`,
+            fontSize: t.font.sizeSm,
+            border: `1px solid ${t.color.border}`,
+            borderRadius: t.radius.sm,
+            color: t.color.text,
+            background: t.color.surface,
+          }}
+        >
+          <option value="">All channels</option>
+          {channelsList.map((ch) => (
+            <option key={ch} value={ch}>{ch}</option>
+          ))}
+        </select>
+        {(search || channelFilter) && (
+          <button
+            type="button"
+            onClick={() => { setSearch(''); setChannelFilter('') }}
+            style={{
+              padding: `${t.space.sm}px ${t.space.md}px`,
+              fontSize: t.font.sizeSm,
+              color: t.color.textSecondary,
+              background: 'transparent',
+              border: `1px solid ${t.color.border}`,
+              borderRadius: t.radius.sm,
+              cursor: 'pointer',
+            }}
+          >
+            Clear filters
+          </button>
+        )}
+        <span style={{ marginLeft: 'auto', fontSize: t.font.sizeSm, color: t.color.textMuted }}>
+          Showing {filteredCampaigns.length} of {campaigns.length} campaigns
+        </span>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: t.space.md, marginBottom: t.space.xl }}>
@@ -281,11 +379,11 @@ export default function CampaignPerformance({ model, modelsReady }: CampaignPerf
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: t.space.lg, flexWrap: 'wrap', gap: t.space.md }}>
           <h3 style={{ margin: 0, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-            Campaign Detail
+            Campaign Detail {filteredCampaigns.length < campaigns.length ? `(${filteredCampaigns.length} shown)` : ''}
           </h3>
           <button
             type="button"
-            onClick={() => exportCampaignsCSV(campaigns)}
+            onClick={() => exportCampaignsCSV(filteredCampaigns)}
             style={{
               padding: `${t.space.sm}px ${t.space.lg}px`,
               fontSize: t.font.sizeSm,
@@ -397,6 +495,93 @@ export default function CampaignPerformance({ model, modelsReady }: CampaignPerf
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* Campaign-level budget: targets vs actual spend */}
+      <div
+        style={{
+          background: t.color.surface,
+          border: `1px solid ${t.color.borderLight}`,
+          borderRadius: t.radius.lg,
+          padding: t.space.xl,
+          marginTop: t.space.xl,
+          boxShadow: t.shadowSm,
+        }}
+      >
+        <h3 style={{ margin: '0 0 8px', fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+          Campaign budget targets
+        </h3>
+        <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.textSecondary, marginBottom: t.space.lg }}>
+          Set optional budget targets per campaign to compare vs actual spend (from channel expenses). Variance = actual − target.
+        </p>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: t.font.sizeSm }}>
+            <thead>
+              <tr style={{ borderBottom: `2px solid ${t.color.border}` }}>
+                <th style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'left', fontWeight: t.font.weightSemibold, color: t.color.textSecondary }}>Campaign</th>
+                <th style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontWeight: t.font.weightSemibold, color: t.color.textSecondary }}>Actual spend</th>
+                <th style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontWeight: t.font.weightSemibold, color: t.color.textSecondary }}>Target budget</th>
+                <th style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontWeight: t.font.weightSemibold, color: t.color.textSecondary }}>Variance</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredCampaigns.map((c, idx) => {
+                const target = campaignTargets[c.campaign]
+                const variance = target != null ? c.spend - target : null
+                return (
+                  <tr
+                    key={c.campaign}
+                    style={{
+                      borderBottom: `1px solid ${t.color.borderLight}`,
+                      backgroundColor: idx % 2 === 0 ? t.color.surface : t.color.bg,
+                    }}
+                  >
+                    <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, fontWeight: t.font.weightMedium, color: t.color.text }}>
+                      {c.campaign_name ? `${c.channel} / ${c.campaign_name}` : c.campaign}
+                    </td>
+                    <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                      {formatCurrency(c.spend)}
+                    </td>
+                    <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right' }}>
+                      <input
+                        type="number"
+                        min={0}
+                        step={100}
+                        placeholder="—"
+                        value={target ?? ''}
+                        onChange={(e) => {
+                          const v = parseFloat(e.target.value)
+                          setCampaignTarget(c.campaign, Number.isFinite(v) ? v : 0)
+                        }}
+                        style={{
+                          width: 100,
+                          padding: `${t.space.xs}px ${t.space.sm}px`,
+                          fontSize: t.font.sizeSm,
+                          border: `1px solid ${t.color.border}`,
+                          borderRadius: t.radius.sm,
+                          textAlign: 'right',
+                        }}
+                      />
+                    </td>
+                    <td style={{
+                      padding: `${t.space.md}px ${t.space.lg}px`,
+                      textAlign: 'right',
+                      fontVariantNumeric: 'tabular-nums',
+                      color: variance != null ? (variance > 0 ? t.color.danger : variance < 0 ? t.color.success : t.color.textMuted) : t.color.textMuted,
+                    }}>
+                      {variance != null ? `${variance >= 0 ? '+' : ''}${formatCurrency(variance)}` : '—'}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        {totalBudgetTarget > 0 && (
+          <p style={{ margin: `${t.space.md}px 0 0`, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+            Total target budget: {formatCurrency(totalBudgetTarget)} · Total actual (filtered): {formatCurrency(filteredTotalSpend)} · Variance: {formatCurrency(filteredTotalSpend - totalBudgetTarget)}
+          </p>
+        )}
       </div>
     </div>
   )

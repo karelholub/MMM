@@ -254,35 +254,54 @@ export default function App() {
       <main style={LAYOUT_STYLES.main}>
         {!journeysLoaded && page !== 'datasources' && page !== 'expenses' && page !== 'mmm' && page !== 'comparison' && page !== 'paths' && page !== 'campaigns' && (
           <div style={{
-            padding: 40, textAlign: 'center', backgroundColor: 'white',
-            borderRadius: 12, border: '1px solid #e9ecef',
+            padding: 40, maxWidth: 560, margin: '0 auto',
+            backgroundColor: tokens.color.surface,
+            borderRadius: tokens.radius.lg,
+            border: `1px solid ${tokens.color.border}`,
+            boxShadow: tokens.shadow,
           }}>
-            <h2 style={{ fontSize: '22px', color: '#495057', marginBottom: 12 }}>Welcome to the Attribution Dashboard</h2>
-            <p style={{ fontSize: '15px', color: '#6c757d', marginBottom: 24, maxWidth: 600, margin: '0 auto 24px' }}>
-              Load conversion path data to start analyzing channel performance.
-              You can load sample data to explore, upload your own JSON, or import from Meiro CDP.
+            <h2 style={{ fontSize: tokens.font.size2xl, color: tokens.color.text, marginBottom: tokens.space.sm, textAlign: 'center' }}>
+              Welcome to the Attribution Dashboard
+            </h2>
+            <p style={{ fontSize: tokens.font.sizeBase, color: tokens.color.textSecondary, textAlign: 'center', marginBottom: tokens.space.xl }}>
+              Get started in three steps:
             </p>
-            <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+            <ol style={{ fontSize: tokens.font.sizeMd, color: tokens.color.text, marginBottom: tokens.space.xl, paddingLeft: 24, lineHeight: 1.8 }}>
+              <li>Load conversion path data (sample, upload, or connect a data source).</li>
+              <li>Run attribution models from the header, then open Channel or Campaign Performance.</li>
+              <li>Use Conversion Paths for next-best-action and MMM for mix modeling.</li>
+            </ol>
+            <div style={{ display: 'flex', gap: tokens.space.md, justifyContent: 'center', flexWrap: 'wrap' }}>
               <button
                 onClick={() => loadSampleMutation.mutate()}
                 disabled={loadSampleMutation.isPending}
                 style={{
-                  padding: '14px 28px', fontSize: '15px', fontWeight: '600',
-                  backgroundColor: '#28a745', color: 'white', border: 'none',
-                  borderRadius: 8, cursor: 'pointer',
+                  padding: `${tokens.space.md}px ${tokens.space.xl}px`,
+                  fontSize: tokens.font.sizeBase,
+                  fontWeight: tokens.font.weightSemibold,
+                  backgroundColor: tokens.color.success,
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: tokens.radius.sm,
+                  cursor: loadSampleMutation.isPending ? 'wait' : 'pointer',
                 }}
               >
-                Load Sample Data
+                {loadSampleMutation.isPending ? 'Loading…' : 'Load sample data'}
               </button>
               <button
                 onClick={handleSetDatasources}
                 style={{
-                  padding: '14px 28px', fontSize: '15px', fontWeight: '600',
-                  backgroundColor: '#fd7e14', color: 'white', border: 'none',
-                  borderRadius: 8, cursor: 'pointer',
+                  padding: `${tokens.space.md}px ${tokens.space.xl}px`,
+                  fontSize: tokens.font.sizeBase,
+                  fontWeight: tokens.font.weightSemibold,
+                  backgroundColor: '#fd7e14',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: tokens.radius.sm,
+                  cursor: 'pointer',
                 }}
               >
-                Connect Data Sources
+                Connect data sources
               </button>
             </div>
           </div>
