@@ -1,5 +1,7 @@
 import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import ConfidenceBadge, { Confidence } from '../components/ConfidenceBadge'
+import ExplainabilityPanel from '../components/ExplainabilityPanel'
 import {
   BarChart,
   Bar,
@@ -19,6 +21,7 @@ interface ChannelPerformanceProps {
   model: string
   channels: string[]
   modelsReady: boolean
+  configId?: string | null
 }
 
 interface ChannelData {
@@ -30,6 +33,7 @@ interface ChannelData {
   roi: number
   roas: number
   cpa: number
+  confidence?: Confidence
 }
 
 interface PerformanceResponse {
@@ -38,6 +42,11 @@ interface PerformanceResponse {
   total_spend: number
   total_attributed_value: number
   total_conversions: number
+  config?: {
+    id: string
+    name: string
+    version: number
+  } | null
 }
 
 const MODEL_LABELS: Record<string, string> = {
@@ -90,14 +99,17 @@ function exportTableCSV(channels: ChannelData[]) {
 type SortKey = keyof ChannelData | 'attributed_share'
 type SortDir = 'asc' | 'desc'
 
-export default function ChannelPerformance({ model, modelsReady }: ChannelPerformanceProps) {
+export default function ChannelPerformance({ model, modelsReady, configId }: ChannelPerformanceProps) {
   const [sortKey, setSortKey] = useState<SortKey>('attributed_value')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
+  const [showWhy, setShowWhy] = useState(false)
 
   const perfQuery = useQuery<PerformanceResponse>({
-    queryKey: ['channel-performance', model],
+    queryKey: ['channel-performance', model, configId ?? 'default'],
     queryFn: async () => {
-      const res = await fetch(`/api/attribution/performance?model=${model}`)
+      const params = new URLSearchParams({ model })
+      if (configId) params.append('config_id', configId)
+      const res = await fetch(`/api/attribution/performance?${params.toString()}`)
       if (!res.ok) throw new Error('Failed to fetch performance')
       return res.json()
     },
@@ -197,7 +209,6 @@ export default function ChannelPerformance({ model, modelsReady }: ChannelPerfor
 
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto' }}>
-      {/* Page header */}
       <div
         style={{
           display: 'flex',
@@ -224,7 +235,30 @@ export default function ChannelPerformance({ model, modelsReady }: ChannelPerfor
             Attribution model: <strong style={{ color: t.color.accent }}>{MODEL_LABELS[model] || model}</strong>
           </p>
         </div>
+        <button
+          type="button"
+          onClick={() => setShowWhy((v) => !v)}
+          style={{
+            border: 'none',
+            backgroundColor: showWhy ? t.color.accentMuted : 'transparent',
+            color: t.color.accent,
+            padding: `${t.space.xs}px ${t.space.sm}px`,
+            borderRadius: t.radius.full,
+            fontSize: t.font.sizeXs,
+            fontWeight: t.font.weightSemibold,
+            cursor: 'pointer',
+            alignSelf: 'center',
+          }}
+        >
+          Why?
+        </button>
       </div>
+
+      {showWhy && (
+        <div style={{ marginBottom: t.space.lg }}>
+          <ExplainabilityPanel scope="channel" configId={configId ?? undefined} />
+        </div>
+      )}
 
       {/* Metrics strip */}
       <div
@@ -458,6 +492,17 @@ export default function ChannelPerformance({ model, modelsReady }: ChannelPerfor
                     {sortKey === col.key && (sortDir === 'asc' ? ' ↑' : ' ↓')}
                   </th>
                 ))}
+                <th
+                  style={{
+                    padding: `${t.space.md}px ${t.space.lg}px`,
+                    textAlign: 'right',
+                    fontWeight: t.font.weightSemibold,
+                    color: t.color.textSecondary,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  Confidence
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -488,6 +533,14 @@ export default function ChannelPerformance({ model, modelsReady }: ChannelPerfor
                       </td>
                     )
                   })}
+                  <td
+                    style={{
+                      padding: `${t.space.md}px ${t.space.lg}px`,
+                      textAlign: 'right',
+                    }}
+                  >
+                    <ConfidenceBadge confidence={ch.confidence} compact />
+                  </td>
                 </tr>
               ))}
             </tbody>

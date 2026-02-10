@@ -1,4 +1,4 @@
-from fastapi import FastAPI, BackgroundTasks, UploadFile, File, HTTPException, Query, Body, Request, Header
+from fastapi import FastAPI, BackgroundTasks, UploadFile, File, HTTPException, Query, Body, Request, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
@@ -16,6 +16,36 @@ from app.utils.encrypt import encrypt, decrypt
 from app.utils import datasource_config as ds_config
 from app.utils.taxonomy import load_taxonomy, save_taxonomy, Taxonomy
 from app.utils.kpi_config import load_kpi_config, save_kpi_config, KpiConfig, KpiDefinition
+from app.db import Base, engine, get_db
+from app.models_config_dq import (
+    ModelConfig as ORMModelConfig,
+    ModelConfigAudit,
+    DQSnapshot,
+    DQAlertRule,
+    DQAlert,
+    Experiment,
+    ExperimentAssignment,
+    ExperimentExposure,
+    ExperimentOutcome,
+    ExperimentResult,
+)
+from app.services_model_config import (
+    create_draft_config,
+    clone_config,
+    update_draft_config,
+    activate_config,
+    archive_config,
+    get_default_config_id,
+)
+from app.services_data_quality import compute_dq_snapshots, evaluate_alert_rules
+from app.services_conversions import apply_model_config_to_journeys
+from app.services_quality import (
+    load_config_and_meta,
+    get_latest_quality_for_scope,
+    summarize_config_changes,
+    compute_overall_quality_from_dq,
+)
+from app.services_paths import compute_path_archetypes, compute_path_anomalies
 from app.mmm_engine import fit_model as mmm_fit_model, engine_info
 from app.connectors import meiro_cdp
 from app.attribution_engine import (
@@ -30,7 +60,11 @@ from app.attribution_engine import (
     ATTRIBUTION_MODELS,
 )
 
-app = FastAPI(title="Meiro Attribution Dashboard API", version="0.2.0")
+# Create DB tables if a real database is configured. This is idempotent and cheap
+# for SQLite; in PostgreSQL you should run proper migrations from backend/migrations.
+Base.metadata.create_all(bind=engine)
+
+app = FastAPI(title="Meiro Attribution Dashboard API", version="0.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -315,6 +349,158 @@ def compute_campaign_trends(journeys: List[Dict]) -> Dict[str, Any]:
 
     return {"campaigns": campaigns, "dates": sorted_dates, "series": out_series}
 
+
+# ==================== Model Config Versioning API ====================
+
+
+class ModelConfigPayload(BaseModel):
+    """Payload for creating/updating a versioned attribution ModelConfig."""
+
+    name: str
+    config_json: Dict[str, Any]
+    change_note: Optional[str] = None
+    created_by: str = "system"
+
+
+class ModelConfigUpdatePayload(BaseModel):
+    config_json: Dict[str, Any]
+    change_note: Optional[str] = None
+    actor: str = "system"
+
+
+class ModelConfigActivatePayload(BaseModel):
+    actor: str = "system"
+    set_as_default: bool = True
+
+
+@app.get("/api/model-configs")
+def list_model_configs(db=Depends(get_db)):
+    """List all model configs (draft/active/archived)."""
+    rows = (
+        db.query(ORMModelConfig)
+        .order_by(ORMModelConfig.name.asc(), ORMModelConfig.version.desc())
+        .all()
+    )
+    return [
+        {
+            "id": r.id,
+            "name": r.name,
+            "status": r.status,
+            "version": r.version,
+            "parent_id": r.parent_id,
+            "created_at": r.created_at,
+            "updated_at": r.updated_at,
+            "created_by": r.created_by,
+            "change_note": r.change_note,
+            "activated_at": r.activated_at,
+        }
+        for r in rows
+    ]
+
+
+@app.post("/api/model-configs")
+def create_model_config(payload: ModelConfigPayload, db=Depends(get_db)):
+    """Create a new draft ModelConfig."""
+    cfg = create_draft_config(
+        db=db,
+        name=payload.name,
+        config_json=payload.config_json,
+        created_by=payload.created_by,
+        change_note=payload.change_note,
+    )
+    return {"id": cfg.id, "status": cfg.status, "version": cfg.version}
+
+
+@app.post("/api/model-configs/{cfg_id}/clone")
+def clone_model_config(cfg_id: str, actor: str = "system", db=Depends(get_db)):
+    """Clone an existing ModelConfig into a new draft."""
+    try:
+        cfg = clone_config(db=db, source_id=cfg_id, actor=actor)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"id": cfg.id, "status": cfg.status, "version": cfg.version, "parent_id": cfg.parent_id}
+
+
+@app.patch("/api/model-configs/{cfg_id}")
+def edit_model_config(cfg_id: str, payload: ModelConfigUpdatePayload, db=Depends(get_db)):
+    """Edit a draft ModelConfig."""
+    try:
+        cfg = update_draft_config(
+            db=db,
+            cfg_id=cfg_id,
+            new_config_json=payload.config_json,
+            actor=payload.actor,
+            change_note=payload.change_note,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"id": cfg.id, "status": cfg.status, "version": cfg.version}
+
+
+@app.post("/api/model-configs/{cfg_id}/activate")
+def activate_model_config(cfg_id: str, payload: ModelConfigActivatePayload, db=Depends(get_db)):
+    """Activate a ModelConfig and (optionally) set as default for reports."""
+    try:
+        cfg = activate_config(
+            db=db, cfg_id=cfg_id, actor=payload.actor, set_as_default=payload.set_as_default
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"id": cfg.id, "status": cfg.status, "version": cfg.version, "activated_at": cfg.activated_at}
+
+
+@app.post("/api/model-configs/{cfg_id}/archive")
+def archive_model_config(cfg_id: str, actor: str = "system", db=Depends(get_db)):
+    """Archive a ModelConfig (cannot be activated again)."""
+    try:
+        cfg = archive_config(db=db, cfg_id=cfg_id, actor=actor)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"id": cfg.id, "status": cfg.status, "version": cfg.version}
+
+
+@app.get("/api/model-configs/{cfg_id}")
+def get_model_config_detail(cfg_id: str, db=Depends(get_db)):
+    cfg = db.get(ORMModelConfig, cfg_id)
+    if not cfg:
+        raise HTTPException(status_code=404, detail="Config not found")
+    return {
+        "id": cfg.id,
+        "name": cfg.name,
+        "status": cfg.status,
+        "version": cfg.version,
+        "parent_id": cfg.parent_id,
+        "created_at": cfg.created_at,
+        "updated_at": cfg.updated_at,
+        "created_by": cfg.created_by,
+        "change_note": cfg.change_note,
+        "activated_at": cfg.activated_at,
+        "config_json": cfg.config_json,
+    }
+
+
+@app.get("/api/model-configs/{cfg_id}/audit")
+def get_model_config_audit(cfg_id: str, db=Depends(get_db)):
+    cfg = db.get(ORMModelConfig, cfg_id)
+    if not cfg:
+        raise HTTPException(status_code=404, detail="Config not found")
+    audits = (
+        db.query(ModelConfigAudit)
+        .filter(ModelConfigAudit.model_config_id == cfg_id)
+        .order_by(ModelConfigAudit.created_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": a.id,
+            "actor": a.actor,
+            "action": a.action,
+            "diff_json": a.diff_json,
+            "created_at": a.created_at,
+        }
+        for a in audits
+    ]
+
 # Initialize sample datasets
 DATASETS["sample-weekly-01"] = {"path": SAMPLE_DIR / "sample-weekly-01.csv", "type": "sales"}
 DATASETS["sample-weekly-realistic"] = {"path": SAMPLE_DIR / "sample-weekly-realistic.csv", "type": "sales"}
@@ -529,7 +715,11 @@ async def upload_journeys(file: UploadFile = File(...)):
     return {"count": len(JOURNEYS), "message": f"Loaded {len(JOURNEYS)} journeys"}
 
 @app.post("/api/attribution/journeys/from-cdp")
-def import_journeys_from_cdp(mapping: AttributionMappingConfig = AttributionMappingConfig()):
+def import_journeys_from_cdp(
+    mapping: AttributionMappingConfig = AttributionMappingConfig(),
+    config_id: Optional[str] = None,
+    db=Depends(get_db),
+):
     """Parse loaded CDP profiles into attribution journeys using configurable mapping."""
     global JOURNEYS
     cdp_json_path = DATA_DIR / "meiro_cdp_profiles.json"
@@ -544,7 +734,7 @@ def import_journeys_from_cdp(mapping: AttributionMappingConfig = AttributionMapp
     else:
         raise HTTPException(status_code=404, detail="No CDP data found. Fetch from Meiro CDP first.")
 
-    JOURNEYS = parse_conversion_paths(
+    journeys = parse_conversion_paths(
         profiles,
         touchpoint_attr=mapping.touchpoint_attr,
         value_attr=mapping.value_attr,
@@ -552,6 +742,14 @@ def import_journeys_from_cdp(mapping: AttributionMappingConfig = AttributionMapp
         channel_field=mapping.channel_field,
         timestamp_field=mapping.timestamp_field,
     )
+    # Apply model config if provided (windows + conversion key annotation)
+    effective_config_id = config_id or get_default_config_id()
+    if effective_config_id:
+        cfg = db.get(ORMModelConfig, effective_config_id)
+        if cfg:
+            journeys = apply_model_config_to_journeys(journeys, cfg.config_json or {})
+
+    JOURNEYS = journeys
     return {"count": len(JOURNEYS), "message": f"Parsed {len(JOURNEYS)} journeys from CDP data"}
 
 @app.post("/api/attribution/journeys/load-sample")
@@ -566,27 +764,49 @@ def load_sample_journeys():
     return {"count": len(JOURNEYS), "message": f"Loaded {len(JOURNEYS)} sample journeys"}
 
 @app.post("/api/attribution/run")
-def run_attribution_model(model: str = "linear"):
-    """Run a single attribution model on loaded journeys."""
+def run_attribution_model(model: str = "linear", config_id: Optional[str] = None, db=Depends(get_db)):
+    """Run a single attribution model on loaded journeys.
+
+    Optional config_id applies time windows and conversion keys before attribution.
+    """
     if not JOURNEYS:
         raise HTTPException(status_code=400, detail="No journeys loaded. Upload or import data first.")
     if model not in ATTRIBUTION_MODELS:
         raise HTTPException(status_code=400, detail=f"Unknown model: {model}. Available: {ATTRIBUTION_MODELS}")
+    resolved_cfg = None
+    effective_config_id = config_id or get_default_config_id()
+    journeys_for_model = JOURNEYS
+    if effective_config_id:
+        resolved_cfg = db.get(ORMModelConfig, effective_config_id)
+        if resolved_cfg:
+            journeys_for_model = apply_model_config_to_journeys(JOURNEYS, resolved_cfg.config_json or {})
+
     kwargs: Dict[str, Any] = {}
     if model == "time_decay":
         kwargs["half_life_days"] = SETTINGS.attribution.time_decay_half_life_days
     elif model == "position_based":
         kwargs["first_pct"] = SETTINGS.attribution.position_first_pct
         kwargs["last_pct"] = SETTINGS.attribution.position_last_pct
-    result = run_attribution(JOURNEYS, model=model, **kwargs)
+    result = run_attribution(journeys_for_model, model=model, **kwargs)
     ATTRIBUTION_RESULTS[model] = result
+    # Attach config metadata if used
+    if resolved_cfg:
+        result["config"] = {"id": resolved_cfg.id, "name": resolved_cfg.name, "version": resolved_cfg.version}
     return result
 
 @app.post("/api/attribution/run-all")
-def run_all_attribution_models():
+def run_all_attribution_models(config_id: Optional[str] = None, db=Depends(get_db)):
     """Run all attribution models on loaded journeys."""
     if not JOURNEYS:
         raise HTTPException(status_code=400, detail="No journeys loaded. Upload or import data first.")
+    resolved_cfg = None
+    effective_config_id = config_id or get_default_config_id()
+    journeys_for_model = JOURNEYS
+    if effective_config_id:
+        resolved_cfg = db.get(ORMModelConfig, effective_config_id)
+        if resolved_cfg:
+            journeys_for_model = apply_model_config_to_journeys(JOURNEYS, resolved_cfg.config_json or {})
+
     results = []
     for model in ATTRIBUTION_MODELS:
         try:
@@ -596,7 +816,9 @@ def run_all_attribution_models():
             elif model == "position_based":
                 kwargs["first_pct"] = SETTINGS.attribution.position_first_pct
                 kwargs["last_pct"] = SETTINGS.attribution.position_last_pct
-            result = run_attribution(JOURNEYS, model=model, **kwargs)
+            result = run_attribution(journeys_for_model, model=model, **kwargs)
+            if resolved_cfg:
+                result["config"] = {"id": resolved_cfg.id, "name": resolved_cfg.name, "version": resolved_cfg.version}
             results.append(result)
             ATTRIBUTION_RESULTS[model] = result
         except Exception as exc:
@@ -617,14 +839,23 @@ def get_attribution_result(model: str):
     return result
 
 @app.get("/api/attribution/paths")
-def get_path_analysis():
-    """Analyze conversion paths for common patterns and statistics. Includes next-best-action recommendations per path prefix (channel and optionally campaign level)."""
+def get_path_analysis(config_id: Optional[str] = None, db=Depends(get_db)):
+    """Analyze conversion paths for common patterns and statistics. Includes next-best-action recommendations per path prefix (channel and optionally campaign level).
+
+    Optional config_id pins to a specific model config; response includes config metadata.
+    """
     if not JOURNEYS:
         raise HTTPException(status_code=400, detail="No journeys loaded.")
-    path_analysis = analyze_paths(JOURNEYS)
+
+    resolved_cfg, meta = load_config_and_meta(db, config_id)
+    journeys_for_analysis = JOURNEYS
+    if resolved_cfg:
+        journeys_for_analysis = apply_model_config_to_journeys(JOURNEYS, resolved_cfg.config_json or {})
+
+    path_analysis = analyze_paths(journeys_for_analysis)
 
     # NBA recommendations (channel level)
-    nba_channel = compute_next_best_action(JOURNEYS, level="channel")
+    nba_channel = compute_next_best_action(journeys_for_analysis, level="channel")
     min_support = SETTINGS.nba.min_prefix_support
     min_rate = SETTINGS.nba.min_conversion_rate
     filtered_channel: Dict[str, Any] = {}
@@ -635,15 +866,41 @@ def get_path_analysis():
     path_analysis["next_best_by_prefix"] = filtered_channel
 
     # NBA recommendations (campaign level, optional)
-    if has_any_campaign(JOURNEYS):
-        nba_campaign = compute_next_best_action(JOURNEYS, level="campaign")
+    if has_any_campaign(journeys_for_analysis):
+        nba_campaign = compute_next_best_action(journeys_for_analysis, level="campaign")
         filtered_campaign: Dict[str, Any] = {}
         for prefix, recs in nba_campaign.items():
             kept = [r for r in recs if r["count"] >= min_support and r["conversion_rate"] >= min_rate]
             if kept:
                 filtered_campaign[prefix] = kept
         path_analysis["next_best_by_prefix_campaign"] = filtered_campaign
+    path_analysis["config"] = meta
     return path_analysis
+
+
+@app.get("/api/paths/archetypes")
+def get_path_archetypes(conversion_key: Optional[str] = None, config_id: Optional[str] = None, db=Depends(get_db)):
+    """Return simple path archetypes for current journeys."""
+    if not JOURNEYS:
+        raise HTTPException(status_code=400, detail="No journeys loaded.")
+    resolved_cfg, _meta = load_config_and_meta(db, config_id)
+    journeys_for_analysis = JOURNEYS
+    if resolved_cfg:
+        journeys_for_analysis = apply_model_config_to_journeys(JOURNEYS, resolved_cfg.config_json or {})
+    return compute_path_archetypes(journeys_for_analysis, conversion_key)
+
+
+@app.get("/api/paths/anomalies")
+def get_path_anomalies(conversion_key: Optional[str] = None, config_id: Optional[str] = None, db=Depends(get_db)):
+    """Return simple anomaly hints for current journeys' paths."""
+    if not JOURNEYS:
+        return {"anomalies": []}
+    resolved_cfg, _meta = load_config_and_meta(db, config_id)
+    journeys_for_analysis = JOURNEYS
+    if resolved_cfg:
+        journeys_for_analysis = apply_model_config_to_journeys(JOURNEYS, resolved_cfg.config_json or {})
+    anomalies = compute_path_anomalies(journeys_for_analysis, conversion_key)
+    return {"anomalies": anomalies}
 
 
 def _next_best_action_impl(path_so_far: str = "", level: str = "channel"):
@@ -669,8 +926,17 @@ def get_next_best_action(path_so_far: str = "", level: str = "channel"):
     return _next_best_action_impl(path_so_far=path_so_far, level=level)
 
 @app.get("/api/attribution/performance")
-def get_channel_performance(model: str = "linear"):
-    """Get channel performance metrics combining attribution with expenses."""
+def get_channel_performance(model: str = "linear", config_id: Optional[str] = None, db=Depends(get_db)):
+    """Get channel performance metrics combining attribution with expenses.
+
+    Optional config_id pins to a specific model config; response includes config metadata.
+    """
+    # Resolve config (for now only surfaced in metadata, attribution math unchanged)
+    resolved_cfg, meta = load_config_and_meta(db, config_id)
+    journeys_for_model = JOURNEYS
+    if resolved_cfg:
+        journeys_for_model = apply_model_config_to_journeys(JOURNEYS, resolved_cfg.config_json or {})
+
     result = ATTRIBUTION_RESULTS.get(model)
     if not result:
         if not JOURNEYS:
@@ -681,7 +947,7 @@ def get_channel_performance(model: str = "linear"):
         elif model == "position_based":
             kwargs["first_pct"] = SETTINGS.attribution.position_first_pct
             kwargs["last_pct"] = SETTINGS.attribution.position_last_pct
-        result = run_attribution(JOURNEYS, model=model, **kwargs)
+        result = run_attribution(journeys_for_model, model=model, **kwargs)
         ATTRIBUTION_RESULTS[model] = result
 
     expense_by_channel: Dict[str, float] = {}
@@ -689,17 +955,33 @@ def get_channel_performance(model: str = "linear"):
         expense_by_channel[exp.channel] = expense_by_channel.get(exp.channel, 0) + exp.amount
 
     performance = compute_channel_performance(result, expense_by_channel)
+
+    # Attach per-channel confidence from latest quality snapshot (if available)
+    for row in performance:
+        snap = get_latest_quality_for_scope(
+            db,
+            scope="channel",
+            scope_id=row["channel"],
+            conversion_key=meta["conversion_key"] if meta else None,
+        )
+        if snap:
+            row["confidence"] = {
+                "score": snap.confidence_score,
+                "label": snap.confidence_label,
+                "components": snap.components_json,
+            }
     return {
         "model": model,
         "channels": performance,
         "total_spend": sum(expense_by_channel.values()),
         "total_attributed_value": result.get("total_value", 0),
         "total_conversions": result.get("total_conversions", 0),
+        "config": meta,
     }
 
 
 @app.get("/api/attribution/campaign-performance")
-def get_campaign_performance(model: str = "linear"):
+def get_campaign_performance(model: str = "linear", config_id: Optional[str] = None, db=Depends(get_db)):
     """Campaign-level attribution (channel:campaign). Requires touchpoints with campaign. Returns campaigns with attributed value and optional suggested next (NBA)."""
     if not JOURNEYS:
         raise HTTPException(status_code=400, detail="No journeys loaded.")
@@ -711,13 +993,19 @@ def get_campaign_performance(model: str = "linear"):
             "total_value": 0,
             "message": "No campaign data in touchpoints. Add a 'campaign' field to use campaign performance.",
         }
+    # Resolve config and apply to journeys
+    resolved_cfg, meta = load_config_and_meta(db, config_id)
+    journeys_for_model = JOURNEYS
+    if resolved_cfg:
+        journeys_for_model = apply_model_config_to_journeys(JOURNEYS, resolved_cfg.config_json or {})
+
     kwargs: Dict[str, Any] = {}
     if model == "time_decay":
         kwargs["half_life_days"] = SETTINGS.attribution.time_decay_half_life_days
     elif model == "position_based":
         kwargs["first_pct"] = SETTINGS.attribution.position_first_pct
         kwargs["last_pct"] = SETTINGS.attribution.position_last_pct
-    result = run_attribution_campaign(JOURNEYS, model=model, **kwargs)
+    result = run_attribution_campaign(journeys_for_model, model=model, **kwargs)
     expense_by_channel: Dict[str, float] = {}
     for exp in EXPENSES.values():
         expense_by_channel[exp.channel] = expense_by_channel.get(exp.channel, 0) + exp.amount
@@ -748,7 +1036,7 @@ def get_campaign_performance(model: str = "linear"):
 
     # Attach NBA suggestion (campaign-level) and uplift vs synthetic holdout
     nba_campaign = compute_next_best_action(JOURNEYS, level="campaign")
-    uplift = compute_campaign_uplift(JOURNEYS)
+    uplift = compute_campaign_uplift(journeys_for_model)
     for c in campaigns_list:
         recs = nba_campaign.get(c["campaign"], [])
         c["suggested_next"] = recs[0] if recs else None
@@ -761,12 +1049,28 @@ def get_campaign_performance(model: str = "linear"):
             c["treatment_n"] = u["treatment_n"]
             c["holdout_n"] = u["holdout_n"]
 
+    # Attach campaign-level confidence where available
+    for c in campaigns_list:
+        snap = get_latest_quality_for_scope(
+            db,
+            scope="campaign",
+            scope_id=c["campaign"],
+            conversion_key=meta["conversion_key"] if meta else None,
+        )
+        if snap:
+            c["confidence"] = {
+                "score": snap.confidence_score,
+                "label": snap.confidence_label,
+                "components": snap.components_json,
+            }
+
     return {
         "model": model,
         "campaigns": campaigns_list,
         "total_conversions": result.get("total_conversions", 0),
         "total_value": result.get("total_value", 0),
         "total_spend": sum(expense_by_channel.values()),
+        "config": meta,
     }
 
 
@@ -947,6 +1251,688 @@ def start_oauth(platform: str):
             raise HTTPException(status_code=500, detail="LinkedIn OAuth not configured. Set credentials in Data Sources → Administration.")
         return RedirectResponse(url=f"https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope=r_ads_reporting,r_ads,r_organization_social")
     raise HTTPException(status_code=400, detail=f"Unknown platform: {platform}")
+
+
+# ==================== Data Quality API ====================
+
+
+@app.post("/api/data-quality/run")
+def run_data_quality(db=Depends(get_db)):
+    """Compute a new DQ snapshot bucket and evaluate alert rules."""
+    snaps = compute_dq_snapshots(db)
+    alerts = evaluate_alert_rules(db)
+    # Derive coarse confidence snapshots for channel/campaign scopes from latest DQ metrics
+    quality_snaps = compute_overall_quality_from_dq(db)
+    return {
+        "snapshots_created": len(snaps),
+        "alerts_created": len(alerts),
+        "latest_bucket": snaps[0].ts_bucket if snaps else None,
+        "quality_snapshots_created": len(quality_snaps),
+    }
+
+
+@app.get("/api/data-quality/snapshots")
+def list_data_quality_snapshots(
+    metric_key: Optional[str] = None,
+    source: Optional[str] = None,
+    limit: int = 100,
+    db=Depends(get_db),
+):
+    q = db.query(DQSnapshot).order_by(DQSnapshot.ts_bucket.desc())
+    if metric_key:
+        q = q.filter(DQSnapshot.metric_key == metric_key)
+    if source:
+        q = q.filter(DQSnapshot.source == source)
+    rows = q.limit(limit).all()
+    return [
+        {
+            "id": r.id,
+            "ts_bucket": r.ts_bucket,
+            "source": r.source,
+            "metric_key": r.metric_key,
+            "metric_value": r.metric_value,
+            "meta": r.meta_json,
+        }
+        for r in rows
+    ]
+
+
+@app.get("/api/data-quality/alerts")
+def list_data_quality_alerts(
+    status: Optional[str] = None,
+    severity: Optional[str] = None,
+    limit: int = 100,
+    db=Depends(get_db),
+):
+    q = db.query(DQAlert).order_by(DQAlert.triggered_at.desc())
+    if status:
+        q = q.filter(DQAlert.status == status)
+    rows = q.limit(limit).all()
+    # Note: severity is a property of the rule
+    rule_by_id = {
+        r.id: r
+        for r in db.query(DQAlertRule)
+        .filter(DQAlertRule.id.in_({a.rule_id for a in rows}))
+        .all()
+    }
+    out = []
+    for a in rows:
+        rule = rule_by_id.get(a.rule_id)
+        if severity and rule and rule.severity != severity:
+            continue
+        out.append(
+            {
+                "id": a.id,
+                "rule_id": a.rule_id,
+                "triggered_at": a.triggered_at,
+                "ts_bucket": a.ts_bucket,
+                "metric_value": a.metric_value,
+                "baseline_value": a.baseline_value,
+                "status": a.status,
+                "message": a.message,
+                "rule": {
+                    "name": rule.name if rule else None,
+                    "metric_key": rule.metric_key if rule else None,
+                    "source": rule.source if rule else None,
+                    "severity": rule.severity if rule else None,
+                }
+                if rule
+                else None,
+            }
+        )
+    return out
+
+
+class AlertStatusUpdate(BaseModel):
+    status: str  # open/acked/resolved
+
+
+@app.post("/api/data-quality/alerts/{alert_id}/status")
+def update_alert_status(alert_id: int, body: AlertStatusUpdate, db=Depends(get_db)):
+    alert = db.get(DQAlert, alert_id)
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    alert.status = body.status
+    db.add(alert)
+    db.commit()
+    db.refresh(alert)
+    return {"id": alert.id, "status": alert.status}
+
+
+# ==================== Explainability API ====================
+
+
+class ExplainabilityDriver(BaseModel):
+    metric: str
+    delta: float
+    current_value: float
+    previous_value: float
+    top_contributors: List[Dict[str, Any]] = []
+
+
+class ExplainabilitySummary(BaseModel):
+    period: Dict[str, Any]
+    drivers: List[ExplainabilityDriver]
+    data_health: Dict[str, Any]
+    config: Dict[str, Any]
+    mechanics: Dict[str, Any]
+
+
+def _filter_journeys_by_period(journeys: List[Dict[str, Any]], start: datetime, end: datetime) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for j in journeys:
+        tps = j.get("touchpoints", [])
+        if not tps:
+            continue
+        ts = tps[-1].get("timestamp")
+        if not ts:
+            continue
+        try:
+            dt = datetime.fromisoformat(ts)
+        except Exception:
+            try:
+                dt = datetime.fromisoformat(str(ts))
+            except Exception:
+                continue
+        if start <= dt <= end:
+            out.append(j)
+    return out
+
+
+@app.get("/api/explainability/summary", response_model=ExplainabilitySummary)
+def explainability_summary(
+    scope: str = Query(..., pattern="^(channel|campaign|paths)$"),
+    scope_id: Optional[str] = None,
+    from_: Optional[str] = Query(None, alias="from"),
+    to: Optional[str] = None,
+    config_id: Optional[str] = None,
+    conversion_key: Optional[str] = None,
+    db=Depends(get_db),
+):
+    """
+    Provide a lightweight explanation for changes in key metrics between two periods.
+
+    For now we support:
+      - scope=channel: total attributed value across channels
+      - scope=campaign: total attributed value across campaigns
+      - scope=paths: basic changes in average path length and time-to-convert
+    """
+    if not JOURNEYS:
+        raise HTTPException(status_code=400, detail="No journeys loaded.")
+
+    # Parse period
+    def _parse_iso(val: str) -> datetime:
+        # Support both plain ISO and ISO with trailing 'Z'
+        v = val.replace("Z", "+00:00")
+        return datetime.fromisoformat(v)
+
+    try:
+        if to:
+            end = _parse_iso(to)
+        else:
+            end = datetime.utcnow()
+        if from_:
+            start = _parse_iso(from_)
+        else:
+            # Default to last 30 days
+            from datetime import timedelta
+
+            start = end - timedelta(days=30)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid from/to: {exc}")
+
+    # Previous period of same length
+    delta = end - start
+    prev_end = start
+    prev_start = start - delta
+
+    resolved_cfg, meta = load_config_and_meta(db, config_id)
+    journeys = JOURNEYS
+    if resolved_cfg:
+        journeys = apply_model_config_to_journeys(journeys, resolved_cfg.config_json or {})
+
+    curr_j = _filter_journeys_by_period(journeys, start, end)
+    prev_j = _filter_journeys_by_period(journeys, prev_start, prev_end)
+
+    drivers: List[ExplainabilityDriver] = []
+    mechanics: Dict[str, Any] = {
+        "model": "linear",
+        "windows": meta["time_window"] if meta else None,
+        "eligibility": {
+            "uses_model_config": resolved_cfg is not None,
+        },
+    }
+
+    if scope in ("channel", "campaign"):
+        # Use attribution engine to get totals, but be defensive if there are no journeys in the period.
+        if not curr_j and not prev_j:
+            curr_val = 0.0
+            prev_val = 0.0
+            contrib_deltas: List[Dict[str, Any]] = []
+        else:
+            try:
+                if scope == "channel":
+                    curr_res = run_attribution(curr_j, model="linear") if curr_j else {"total_value": 0, "channels": []}
+                    prev_res = run_attribution(prev_j, model="linear") if prev_j else {"total_value": 0, "channels": []}
+                else:
+                    curr_res = (
+                        run_attribution_campaign(curr_j, model="linear")
+                        if curr_j
+                        else {"total_value": 0, "channels": []}
+                    )
+                    prev_res = (
+                        run_attribution_campaign(prev_j, model="linear")
+                        if prev_j
+                        else {"total_value": 0, "channels": []}
+                    )
+                curr_val = float(curr_res.get("total_value", 0.0) or 0.0)
+                prev_val = float(prev_res.get("total_value", 0.0) or 0.0)
+
+                # Top contributors by delta in value
+                def _to_map(res: Dict[str, Any]) -> Dict[str, float]:
+                    m: Dict[str, float] = {}
+                    for ch in res.get("channels", []):
+                        key = ch.get("channel")
+                        if key:
+                            m[key] = float(ch.get("attributed_value", 0.0) or 0.0)
+                    return m
+
+                curr_map = _to_map(curr_res)
+                prev_map = _to_map(prev_res)
+                contrib_deltas = []
+                keys = set(curr_map.keys()) | set(prev_map.keys())
+                for k in keys:
+                    cv = curr_map.get(k, 0.0)
+                    pv = prev_map.get(k, 0.0)
+                    contrib_deltas.append(
+                        {"id": k, "delta": cv - pv, "current_value": cv, "previous_value": pv}
+                    )
+                contrib_deltas.sort(key=lambda x: x["delta"], reverse=True)
+            except Exception:
+                # If anything goes wrong in attribution math, fall back to a safe, zeroed driver rather than 500.
+                curr_val = 0.0
+                prev_val = 0.0
+                contrib_deltas = []
+
+        delta_val = curr_val - prev_val
+
+        drivers.append(
+            ExplainabilityDriver(
+                metric="attributed_value",
+                delta=delta_val,
+                current_value=curr_val,
+                previous_value=prev_val,
+                top_contributors=contrib_deltas[:5],
+            )
+        )
+    elif scope == "paths":
+        # Summarise average path length and time-to-convert using existing analyze_paths,
+        # but be defensive: any error should degrade gracefully to zeros instead of 500.
+        curr_len = 0.0
+        prev_len = 0.0
+        curr_time_f = 0.0
+        prev_time_f = 0.0
+        try:
+            curr_pa = analyze_paths(curr_j) if curr_j else {}
+            prev_pa = analyze_paths(prev_j) if prev_j else {}
+            curr_len = float(curr_pa.get("avg_path_length") or 0.0)
+            prev_len = float(prev_pa.get("avg_path_length") or 0.0)
+            curr_time = curr_pa.get("avg_time_to_conversion_days")
+            prev_time = prev_pa.get("avg_time_to_conversion_days")
+            curr_time_f = float(curr_time or 0.0)
+            prev_time_f = float(prev_time or 0.0)
+        except Exception:
+            # If path analysis fails for any reason, fall back to neutral deltas.
+            curr_len = prev_len = 0.0
+            curr_time_f = prev_time_f = 0.0
+
+        drivers.append(
+            ExplainabilityDriver(
+                metric="avg_path_length",
+                delta=curr_len - prev_len,
+                current_value=curr_len,
+                previous_value=prev_len,
+                top_contributors=[],
+            )
+        )
+        drivers.append(
+            ExplainabilityDriver(
+                metric="avg_time_to_conversion_days",
+                delta=curr_time_f - prev_time_f,
+                current_value=curr_time_f,
+                previous_value=prev_time_f,
+                top_contributors=[],
+            )
+        )
+
+    # Data health: confidence + notes
+    health_notes: List[str] = []
+    conf = None
+    if scope == "channel":
+        conf_row = get_latest_quality_for_scope(db, "channel", scope_id, meta["conversion_key"] if meta else None)
+        if conf_row:
+            conf = {
+                "score": conf_row.confidence_score,
+                "label": conf_row.confidence_label,
+                "components": conf_row.components_json,
+            }
+            if conf_row.confidence_label == "low":
+                health_notes.append("Low confidence in channel attribution – check identity match and tracking completeness.")
+    elif scope == "campaign":
+        conf_row = get_latest_quality_for_scope(db, "campaign", scope_id, meta["conversion_key"] if meta else None)
+        if conf_row:
+            conf = {
+                "score": conf_row.confidence_score,
+                "label": conf_row.confidence_label,
+                "components": conf_row.components_json,
+            }
+            if conf_row.confidence_label == "low":
+                health_notes.append("Low confidence in campaign attribution – possible mapping or tracking gaps.")
+
+    data_health = {
+        "confidence": conf,
+        "notes": health_notes,
+    }
+
+    # Config changes
+    cfg_changes: List[Dict[str, Any]] = []
+    if meta and meta.get("config_id"):
+        cfg_changes = summarize_config_changes(db, meta["config_id"], prev_start)
+
+    config_info = {
+        "config_id": meta["config_id"] if meta else None,
+        "version": meta["config_version"] if meta else None,
+        "changes": cfg_changes,
+    }
+
+    return ExplainabilitySummary(
+        period={
+            "current": {"from": start, "to": end},
+            "previous": {"from": prev_start, "to": prev_end},
+        },
+        drivers=drivers,
+        data_health=data_health,
+        config=config_info,
+        mechanics=mechanics,
+    )
+
+
+# ==================== Incrementality Experiments API ====================
+
+
+class ExperimentCreate(BaseModel):
+    name: str
+    channel: str
+    start_at: datetime
+    end_at: datetime
+    conversion_key: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class ExperimentSummary(BaseModel):
+    id: int
+    name: str
+    channel: str
+    start_at: datetime
+    end_at: datetime
+    status: str
+    conversion_key: Optional[str] = None
+
+
+@app.get("/api/experiments", response_model=List[ExperimentSummary])
+def list_experiments(db=Depends(get_db)):
+    rows = db.query(Experiment).order_by(Experiment.created_at.desc()).all()
+    return [
+        ExperimentSummary(
+            id=r.id,
+            name=r.name,
+            channel=r.channel,
+            start_at=r.start_at,
+            end_at=r.end_at,
+            status=r.status,
+            conversion_key=r.conversion_key,
+        )
+        for r in rows
+    ]
+
+
+@app.post("/api/experiments", response_model=ExperimentSummary)
+def create_experiment(body: ExperimentCreate, db=Depends(get_db)):
+    exp = Experiment(
+        name=body.name,
+        channel=body.channel,
+        start_at=body.start_at,
+        end_at=body.end_at,
+        status="draft",
+        conversion_key=body.conversion_key,
+        notes=body.notes,
+        created_at=datetime.utcnow(),
+    )
+    db.add(exp)
+    db.commit()
+    db.refresh(exp)
+    return ExperimentSummary(
+        id=exp.id,
+        name=exp.name,
+        channel=exp.channel,
+        start_at=exp.start_at,
+        end_at=exp.end_at,
+        status=exp.status,
+        conversion_key=exp.conversion_key,
+    )
+
+
+@app.get("/api/experiments/{exp_id}")
+def get_experiment(exp_id: int, db=Depends(get_db)):
+    exp = db.get(Experiment, exp_id)
+    if not exp:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+    return {
+        "id": exp.id,
+        "name": exp.name,
+        "channel": exp.channel,
+        "start_at": exp.start_at,
+        "end_at": exp.end_at,
+        "status": exp.status,
+        "conversion_key": exp.conversion_key,
+        "notes": exp.notes,
+    }
+
+
+class ExperimentStatusUpdate(BaseModel):
+    status: str  # draft/running/completed
+
+
+@app.post("/api/experiments/{exp_id}/status", response_model=ExperimentSummary)
+def update_experiment_status(exp_id: int, body: ExperimentStatusUpdate, db=Depends(get_db)):
+    exp = db.get(Experiment, exp_id)
+    if not exp:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+    if body.status not in ("draft", "running", "completed"):
+        raise HTTPException(status_code=400, detail="Invalid status")
+    exp.status = body.status
+    db.add(exp)
+    db.commit()
+    db.refresh(exp)
+    return ExperimentSummary(
+        id=exp.id,
+        name=exp.name,
+        channel=exp.channel,
+        start_at=exp.start_at,
+        end_at=exp.end_at,
+        status=exp.status,
+        conversion_key=exp.conversion_key,
+    )
+
+
+class AssignmentRequest(BaseModel):
+    profile_ids: List[str]
+    treatment_rate: float = 0.5
+
+
+@app.post("/api/experiments/{exp_id}/assign")
+def assign_experiment(exp_id: int, body: AssignmentRequest, db=Depends(get_db)):
+    import random
+
+    exp = db.get(Experiment, exp_id)
+    if not exp:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+    if not body.profile_ids:
+        return {"assigned": 0, "treatment": 0, "control": 0}
+
+    ids = list(dict.fromkeys(body.profile_ids))  # de-duplicate while preserving order
+    random.shuffle(ids)
+    n_total = len(ids)
+    n_treat = max(1, int(round(n_total * body.treatment_rate)))
+    treatment_ids = set(ids[:n_treat])
+
+    existing = {
+        a.profile_id: a
+        for a in db.query(ExperimentAssignment)
+        .filter(ExperimentAssignment.experiment_id == exp_id)
+        .all()
+    }
+
+    assigned_t = 0
+    assigned_c = 0
+    for pid in ids:
+        group = "treatment" if pid in treatment_ids else "control"
+        if pid in existing:
+            existing[pid].group = group
+            existing[pid].assigned_at = datetime.utcnow()
+        else:
+            db.add(
+                ExperimentAssignment(
+                    experiment_id=exp_id,
+                    profile_id=pid,
+                    group=group,
+                    assigned_at=datetime.utcnow(),
+                )
+            )
+        if group == "treatment":
+            assigned_t += 1
+        else:
+            assigned_c += 1
+
+    db.commit()
+    return {"assigned": n_total, "treatment": assigned_t, "control": assigned_c}
+
+
+class OutcomePayload(BaseModel):
+    profile_id: str
+    conversion_ts: datetime
+    value: float = 0.0
+
+
+class OutcomesRequest(BaseModel):
+    outcomes: List[OutcomePayload]
+
+
+@app.post("/api/experiments/{exp_id}/outcomes")
+def record_outcomes(exp_id: int, body: OutcomesRequest, db=Depends(get_db)):
+    exp = db.get(Experiment, exp_id)
+    if not exp:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+    if not body.outcomes:
+        return {"inserted": 0}
+    count = 0
+    for o in body.outcomes:
+        db.add(
+            ExperimentOutcome(
+                experiment_id=exp_id,
+                profile_id=o.profile_id,
+                conversion_ts=o.conversion_ts,
+                value=o.value,
+            )
+        )
+        count += 1
+    db.commit()
+    return {"inserted": count}
+
+
+@app.get("/api/experiments/{exp_id}/results")
+def get_experiment_results(exp_id: int, db=Depends(get_db)):
+    import math
+
+    exp = db.get(Experiment, exp_id)
+    if not exp:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    assignments = db.query(ExperimentAssignment).filter(ExperimentAssignment.experiment_id == exp_id).all()
+    if not assignments:
+        return {"experiment_id": exp_id, "status": exp.status, "insufficient_data": True}
+
+    outcomes = {
+        o.profile_id: o
+        for o in db.query(ExperimentOutcome).filter(ExperimentOutcome.experiment_id == exp_id).all()
+    }
+
+    treat_n = 0
+    control_n = 0
+    treat_conv = 0
+    control_conv = 0
+    treat_value = 0.0
+    control_value = 0.0
+
+    for a in assignments:
+        out = outcomes.get(a.profile_id)
+        if a.group == "treatment":
+            treat_n += 1
+            if out is not None:
+                treat_conv += 1
+                treat_value += float(out.value or 0.0)
+        else:
+            control_n += 1
+            if out is not None:
+                control_conv += 1
+                control_value += float(out.value or 0.0)
+
+    if treat_n == 0 or control_n == 0:
+        return {"experiment_id": exp_id, "status": exp.status, "insufficient_data": True}
+
+    p_t = treat_conv / treat_n if treat_n > 0 else 0.0
+    p_c = control_conv / control_n if control_n > 0 else 0.0
+    diff = p_t - p_c
+    uplift_abs = diff
+    uplift_rel = diff / p_c if p_c > 0 else None
+
+    # Simple normal-approx CI for diff in proportions
+    se = math.sqrt(p_t * (1 - p_t) / treat_n + p_c * (1 - p_c) / control_n)
+    if se > 0:
+        z = 1.96
+        ci_low = diff - z * se
+        ci_high = diff + z * se
+        # Two-sided z-test p-value (approx)
+        z_score = diff / se
+        # approximate using complementary error function
+        from math import erf
+
+        p_value = 2 * (1 - 0.5 * (1 + erf(abs(z_score) / math.sqrt(2))))
+    else:
+        ci_low = None
+        ci_high = None
+        p_value = None
+
+    # Upsert ExperimentResult
+    res = db.query(ExperimentResult).filter(ExperimentResult.experiment_id == exp_id).first()
+    if res is None:
+        res = ExperimentResult(
+            experiment_id=exp_id,
+            computed_at=datetime.utcnow(),
+            uplift_abs=uplift_abs,
+            uplift_rel=uplift_rel,
+            ci_low=ci_low,
+            ci_high=ci_high,
+            p_value=p_value,
+            treatment_size=treat_n,
+            control_size=control_n,
+            meta_json={
+                "treatment_conversions": treat_conv,
+                "control_conversions": control_conv,
+                "treatment_value": treat_value,
+                "control_value": control_value,
+            },
+        )
+        db.add(res)
+    else:
+        res.computed_at = datetime.utcnow()
+        res.uplift_abs = uplift_abs
+        res.uplift_rel = uplift_rel
+        res.ci_low = ci_low
+        res.ci_high = ci_high
+        res.p_value = p_value
+        res.treatment_size = treat_n
+        res.control_size = control_n
+        res.meta_json = {
+            "treatment_conversions": treat_conv,
+            "control_conversions": control_conv,
+            "treatment_value": treat_value,
+            "control_value": control_value,
+        }
+    db.commit()
+
+    return {
+        "experiment_id": exp_id,
+        "status": exp.status,
+        "treatment": {
+            "n": treat_n,
+            "conversions": treat_conv,
+            "conversion_rate": p_t,
+            "total_value": treat_value,
+        },
+        "control": {
+            "n": control_n,
+            "conversions": control_conv,
+            "conversion_rate": p_c,
+            "total_value": control_value,
+        },
+        "uplift_abs": uplift_abs,
+        "uplift_rel": uplift_rel,
+        "ci_low": ci_low,
+        "ci_high": ci_high,
+        "p_value": p_value,
+        "insufficient_data": False,
+    }
 
 # ==================== Dataset Routes ====================
 

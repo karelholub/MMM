@@ -46,5 +46,5 @@
       "lookback_days": null
     }
   ],
-  "primary_kpi_id": "add_to_cart"
+  "primary_kpi_id": "purchase"
 }

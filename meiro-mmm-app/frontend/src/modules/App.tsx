@@ -12,8 +12,21 @@ const MMMDashboard = lazy(() => import('./MMMDashboard'))
 const BudgetOptimizer = lazy(() => import('./BudgetOptimizer'))
 const CampaignPerformance = lazy(() => import('./CampaignPerformance'))
 const SettingsPage = lazy(() => import('./Settings'))
+const DataQuality = lazy(() => import('./DataQuality'))
+const IncrementalityPage = lazy(() => import('./Incrementality'))
+const PathArchetypes = lazy(() => import('./PathArchetypes'))
 
-type Page = 'dashboard' | 'comparison' | 'paths' | 'campaigns' | 'expenses' | 'datasources' | 'mmm' | 'settings'
+type Page =
+  | 'dashboard'
+  | 'comparison'
+  | 'paths'
+  | 'campaigns'
+  | 'expenses'
+  | 'datasources'
+  | 'mmm'
+  | 'settings'
+  | 'dq'
+  | 'incrementality'
 
 const PAGE_FALLBACK = (
   <div style={{ padding: 48, textAlign: 'center', color: '#64748b', fontSize: 14 }}>
@@ -30,6 +43,8 @@ const NAV_ITEMS: { key: Page; label: string; color: string }[] = [
   { key: 'datasources', label: 'Data Sources', color: '#fd7e14' },
   { key: 'mmm', label: 'MMM (Advanced)', color: '#6c757d' },
   { key: 'settings', label: 'Settings', color: '#0f172a' },
+  { key: 'dq', label: 'Data Quality', color: '#b91c1c' },
+  { key: 'incrementality', label: 'Incrementality', color: '#16a34a' },
 ]
 
 const ATTRIBUTION_MODELS = [
@@ -53,6 +68,7 @@ export default function App() {
   const [selectedModel, setSelectedModel] = useState('linear')
   const [mmmRunId, setMmmRunId] = useState<string | null>(null)
   const [mmmDatasetId, setMmmDatasetId] = useState<string | null>(null)
+  const [selectedConfigId, setSelectedConfigId] = useState<string | null>(null)
 
   const journeysQuery = useQuery({
     queryKey: ['journeys-summary'],
@@ -62,6 +78,17 @@ export default function App() {
       return res.json()
     },
     refetchInterval: 15 * 1000,
+  })
+
+  const modelConfigsQuery = useQuery({
+    queryKey: ['model-configs'],
+    queryFn: async () => {
+      const res = await fetch('/api/model-configs')
+      if (!res.ok) throw new Error('Failed to load model configs')
+      return res.json() as Promise<
+        { id: string; name: string; status: string; version: number; activated_at?: string | null }[]
+      >
+    },
   })
 
   const loadSampleMutation = useMutation({
@@ -240,7 +267,7 @@ export default function App() {
         ))}
 
         {(page === 'dashboard' || page === 'comparison' || page === 'campaigns') && (
-          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <label style={{ fontSize: '13px', fontWeight: '600', color: '#6c757d' }}>Model:</label>
             <select
               value={selectedModel}
@@ -254,13 +281,32 @@ export default function App() {
                 <option key={m.id} value={m.id}>{m.label}</option>
               ))}
             </select>
+            <label style={{ fontSize: '13px', fontWeight: '600', color: '#6c757d', marginLeft: 12 }}>Config:</label>
+            <select
+              value={selectedConfigId ?? ''}
+              onChange={(e) => setSelectedConfigId(e.target.value || null)}
+              style={{
+                padding: '8px 12px', fontSize: '13px', border: '1px solid #0f172a',
+                borderRadius: 6, fontWeight: '500', color: '#0f172a', cursor: 'pointer',
+                maxWidth: 260,
+              }}
+            >
+              <option value="">Default active</option>
+              {(modelConfigsQuery.data ?? [])
+                .filter((c) => c.status === 'active' || c.status === 'draft')
+                .map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} v{c.version} {c.status === 'active' ? '• active' : '(draft)'}
+                  </option>
+                ))}
+            </select>
           </div>
         )}
       </nav>
 
       {/* Main Content */}
       <main style={LAYOUT_STYLES.main}>
-        {!journeysLoaded && page !== 'datasources' && page !== 'expenses' && page !== 'mmm' && page !== 'comparison' && page !== 'paths' && page !== 'campaigns' && page !== 'settings' && (
+        {!journeysLoaded && page !== 'datasources' && page !== 'expenses' && page !== 'mmm' && page !== 'comparison' && page !== 'paths' && page !== 'campaigns' && page !== 'settings' && page !== 'dq' && page !== 'incrementality' && (
           <div style={{
             padding: 40, maxWidth: 560, margin: '0 auto',
             backgroundColor: tokens.color.surface,
@@ -315,13 +361,13 @@ export default function App() {
           </div>
         )}
 
-        {(journeysLoaded || page === 'datasources' || page === 'expenses' || page === 'mmm' || page === 'comparison' || page === 'paths' || page === 'campaigns' || page === 'settings') && (
+        {(journeysLoaded || page === 'datasources' || page === 'expenses' || page === 'mmm' || page === 'comparison' || page === 'paths' || page === 'campaigns' || page === 'settings' || page === 'dq' || page === 'incrementality') && (
           <Suspense fallback={PAGE_FALLBACK}>
             {page === 'dashboard' && (
-              <ChannelPerformance model={selectedModel} channels={channels} modelsReady={!!runAllMutation.data} />
+              <ChannelPerformance model={selectedModel} channels={channels} modelsReady={!!runAllMutation.data} configId={selectedConfigId} />
             )}
             {page === 'campaigns' && (
-              <CampaignPerformance model={selectedModel} modelsReady={!!runAllMutation.data} />
+              <CampaignPerformance model={selectedModel} modelsReady={!!runAllMutation.data} configId={selectedConfigId} />
             )}
             {page === 'comparison' && (
               <AttributionComparison selectedModel={selectedModel} onSelectModel={setSelectedModel} />
@@ -332,6 +378,9 @@ export default function App() {
               <DataSources onJourneysImported={onJourneysImported} />
             )}
             {page === 'settings' && <SettingsPage />}
+            {page === 'dq' && <DataQuality />}
+            {page === 'incrementality' && <IncrementalityPage />}
+            {/* PathArchetypes can be linked from ConversionPaths via URL hash or future nav item */}
             {page === 'mmm' && (
               <div style={{ maxWidth: 1400, margin: '0 auto' }}>
                 {!mmmRunId ? (

@@ -56,6 +56,68 @@ interface KpiConfig {
   primary_kpi_id?: string | null
 }
 
+interface ModelConfigSummary {
+  id: string
+  name: string
+  status: string
+  version: number
+  parent_id?: string | null
+  created_at?: string
+  updated_at?: string
+  activated_at?: string | null
+}
+
+interface ModelConfigDetail extends ModelConfigSummary {
+  config_json: Record<string, any>
+}
+
+const DEFAULT_MODEL_CONFIG_JSON: Record<string, any> = {
+  attribution: {
+    eligible_touchpoints: {
+      include_channels: ['paid_search', 'paid_social', 'email', 'affiliate'],
+      exclude_channels: ['direct'],
+      include_event_types: ['ad_click', 'ad_impression', 'email_click', 'site_visit'],
+      exclude_event_types: [],
+    },
+    dedup_rules: {
+      prefer_server_over_client: true,
+      dedup_key_fields: ['event_id', 'platform_event_id', 'meiro_event_hash'],
+    },
+  },
+  windows: {
+    click_lookback_days: 30,
+    impression_lookback_days: 7,
+    session_timeout_minutes: 30,
+    conversion_latency_days: 7,
+  },
+  conversions: {
+    primary_conversion_key: 'purchase',
+    conversion_definitions: [
+      {
+        key: 'purchase',
+        name: 'Purchase',
+        event_name: 'order_completed',
+        filters: [
+          { field: 'currency', op: 'in', value: ['EUR', 'CZK'] },
+          { field: 'revenue', op: '>', value: 0 },
+        ],
+        value_field: 'revenue',
+        dedup_mode: 'order_id',
+        attribution_model_default: 'data_driven',
+      },
+      {
+        key: 'lead',
+        name: 'Qualified Lead',
+        event_name: 'lead_submitted',
+        filters: [{ field: 'lead_quality', op: '>=', value: 60 }],
+        value_field: null,
+        dedup_mode: 'lead_id',
+        attribution_model_default: 'position_based',
+      },
+    ],
+  },
+}
+
 const DEFAULT_SETTINGS: Settings = {
   attribution: {
     lookback_window_days: 30,
@@ -114,6 +176,9 @@ export default function SettingsPage() {
   })
 
   const [kpiLocal, setKpiLocal] = useState<KpiConfig>({ definitions: [], primary_kpi_id: undefined })
+  const [modelConfigs, setModelConfigs] = useState<ModelConfigSummary[]>([])
+  const [selectedModelConfigId, setSelectedModelConfigId] = useState<string | null>(null)
+  const [modelConfigJson, setModelConfigJson] = useState<string>('')
 
   useEffect(() => {
     if (kpiQuery.data) {
@@ -132,6 +197,33 @@ export default function SettingsPage() {
       setLocal(settingsQuery.data)
     }
   }, [settingsQuery.data])
+
+  const modelConfigsQuery = useQuery<ModelConfigSummary[]>({
+    queryKey: ['model-configs'],
+    queryFn: async () => {
+      const res = await fetch('/api/model-configs')
+      if (!res.ok) throw new Error('Failed to load model configs')
+      return res.json()
+    },
+  })
+
+  useEffect(() => {
+    if (modelConfigsQuery.data) {
+      setModelConfigs(modelConfigsQuery.data)
+    }
+  }, [modelConfigsQuery.data])
+
+  const loadModelConfigDetail = async (id: string) => {
+    setSelectedModelConfigId(id)
+    try {
+      const res = await fetch(`/api/model-configs/${id}`)
+      if (!res.ok) throw new Error('Failed to load config detail')
+      const data: ModelConfigDetail = await res.json()
+      setModelConfigJson(JSON.stringify(data.config_json, null, 2))
+    } catch {
+      // leave as-is on error
+    }
+  }
 
   const saveMutation = useMutation({
     mutationFn: async (settings: Settings) => {
@@ -1088,6 +1180,250 @@ export default function SettingsPage() {
             >
               {saveTaxonomyMutation.isPending ? 'Saving…' : 'Save taxonomy'}
             </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Measurement model configs (versioned attribution model configs) */}
+      <div
+        style={{
+          background: t.color.surface,
+          border: `1px solid ${t.color.borderLight}`,
+          borderRadius: t.radius.lg,
+          padding: t.space.xl,
+          boxShadow: t.shadowSm,
+          marginBottom: t.space.xl,
+        }}
+      >
+        <h2
+          style={{
+            margin: '0 0 8px',
+            fontSize: t.font.sizeMd,
+            fontWeight: t.font.weightSemibold,
+            color: t.color.text,
+          }}
+        >
+          Measurement model configs
+        </h2>
+        <p style={{ margin: '0 0 16px', fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+          Versioned attribution configurations that define eligible touchpoints, conversion definitions, and time windows. Draft
+          configs can be edited and then activated to become the default for new reports.
+        </p>
+
+        {modelConfigsQuery.isError && (
+          <p style={{ margin: '0 0 12px', fontSize: t.font.sizeSm, color: t.color.danger }}>
+            Failed to load model configs: {(modelConfigsQuery.error as Error)?.message}
+          </p>
+        )}
+
+        {modelConfigs.length === 0 && !modelConfigsQuery.isLoading && (
+          <div
+            style={{
+              marginBottom: t.space.md,
+              padding: t.space.md,
+              borderRadius: t.radius.md,
+              background: t.color.bg,
+              border: `1px dashed ${t.color.borderLight}`,
+            }}
+          >
+            <p style={{ margin: `0 0 ${t.space.sm}px`, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              No measurement configs yet. Create a default paid media config based on the recommended template.
+            </p>
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  const res = await fetch('/api/model-configs', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      name: 'Default Paid Media Config',
+                      created_by: 'ui',
+                      change_note: 'Initial default config from Settings UI',
+                      config_json: DEFAULT_MODEL_CONFIG_JSON,
+                    }),
+                  })
+                  if (!res.ok) throw new Error('Failed to create config')
+                  const created = await res.json()
+                  await modelConfigsQuery.refetch()
+                  if (created?.id) {
+                    void loadModelConfigDetail(created.id)
+                  }
+                } catch (err) {
+                  // Fallback simple notification
+                  alert((err as Error).message)
+                }
+              }}
+              style={{
+                padding: `${t.space.sm}px ${t.space.lg}px`,
+                fontSize: t.font.sizeSm,
+                fontWeight: t.font.weightMedium,
+                color: t.color.surface,
+                backgroundColor: t.color.accent,
+                border: 'none',
+                borderRadius: t.radius.sm,
+                cursor: 'pointer',
+              }}
+            >
+              Create default config
+            </button>
+          </div>
+        )}
+
+        <div style={{ display: 'grid', gridTemplateColumns: '260px 1fr', gap: t.space.lg, alignItems: 'stretch' }}>
+          <div
+            style={{
+              borderRight: `1px solid ${t.color.borderLight}`,
+              paddingRight: t.space.lg,
+              maxHeight: 360,
+              overflowY: 'auto',
+            }}
+          >
+            <h3
+              style={{
+                margin: `0 0 ${t.space.sm}px`,
+                fontSize: t.font.sizeSm,
+                fontWeight: t.font.weightSemibold,
+                color: t.color.text,
+              }}
+            >
+              Config versions
+            </h3>
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+              {modelConfigs.map((cfg) => (
+                <li key={cfg.id}>
+                  <button
+                    type="button"
+                    onClick={() => loadModelConfigDetail(cfg.id)}
+                    style={{
+                      display: 'block',
+                      width: '100%',
+                      textAlign: 'left',
+                      padding: `${t.space.sm}px ${t.space.sm}px`,
+                      marginBottom: t.space.xs,
+                      borderRadius: t.radius.sm,
+                      border:
+                        selectedModelConfigId === cfg.id
+                          ? `1px solid ${t.color.accent}`
+                          : '1px solid transparent',
+                      backgroundColor:
+                        selectedModelConfigId === cfg.id ? t.color.accentMuted : 'transparent',
+                      cursor: 'pointer',
+                      fontSize: t.font.sizeSm,
+                      color: t.color.text,
+                    }}
+                  >
+                    <div style={{ fontWeight: t.font.weightMedium }}>
+                      {cfg.name} <span style={{ color: t.color.textMuted }}>v{cfg.version}</span>
+                    </div>
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                      {cfg.status}{' '}
+                      {cfg.activated_at ? `• activated ${new Date(cfg.activated_at).toLocaleDateString()}` : ''}
+                    </div>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div>
+            {selectedModelConfigId ? (
+              <>
+                <p
+                  style={{
+                    margin: '0 0 8px',
+                    fontSize: t.font.sizeSm,
+                    color: t.color.textSecondary,
+                  }}
+                >
+                  Edit the JSON config for the selected draft. For most setups you can start from the template below and adjust
+                  channels, conversion definitions, and windows.
+                </p>
+                <textarea
+                  value={modelConfigJson}
+                  onChange={(e) => setModelConfigJson(e.target.value)}
+                  rows={18}
+                  style={{
+                    width: '100%',
+                    fontFamily: 'monospace',
+                    fontSize: t.font.sizeXs,
+                    border: `1px solid ${t.color.border}`,
+                    borderRadius: t.radius.sm,
+                    padding: t.space.sm,
+                    marginBottom: t.space.md,
+                    whiteSpace: 'pre',
+                  }}
+                />
+                <div style={{ display: 'flex', gap: t.space.md, flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!selectedModelConfigId) return
+                      let parsed: any
+                      try {
+                        parsed = JSON.parse(modelConfigJson || '{}')
+                      } catch {
+                        alert('Config JSON is not valid JSON.')
+                        return
+                      }
+                      await fetch(`/api/model-configs/${selectedModelConfigId}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ config_json: parsed, actor: 'ui' }),
+                      })
+                      modelConfigsQuery.refetch()
+                    }}
+                    style={{
+                      padding: `${t.space.sm}px ${t.space.lg}px`,
+                      fontSize: t.font.sizeSm,
+                      fontWeight: t.font.weightMedium,
+                      color: t.color.surface,
+                      backgroundColor: t.color.accent,
+                      border: 'none',
+                      borderRadius: t.radius.sm,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Save draft
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!selectedModelConfigId) return
+                      await fetch(`/api/model-configs/${selectedModelConfigId}/activate`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ actor: 'ui', set_as_default: true }),
+                      })
+                      modelConfigsQuery.refetch()
+                    }}
+                    style={{
+                      padding: `${t.space.sm}px ${t.space.lg}px`,
+                      fontSize: t.font.sizeSm,
+                      fontWeight: t.font.weightMedium,
+                      color: t.color.surface,
+                      backgroundColor: t.color.success,
+                      border: 'none',
+                      borderRadius: t.radius.sm,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Activate & set as default
+                  </button>
+                </div>
+              </>
+            ) : (
+              <p
+                style={{
+                  margin: 0,
+                  fontSize: t.font.sizeSm,
+                  color: t.color.textSecondary,
+                }}
+              >
+                Select a config on the left to view and edit its JSON definition. Use the KPI & taxonomy sections above to define
+                which events and channels feed into these configs.
+              </p>
+            )}
           </div>
         </div>
       </div>

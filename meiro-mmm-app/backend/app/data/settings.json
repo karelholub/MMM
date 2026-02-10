@@ -13,7 +13,7 @@
   },
   "nba": {
     "min_prefix_support": 5,
-    "min_conversion_rate": 0.01,
-    "max_prefix_depth": 5
+    "min_conversion_rate": 0.005,
+    "max_prefix_depth": 2
   }
 }

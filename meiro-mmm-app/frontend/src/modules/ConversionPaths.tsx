@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { tokens } from '../theme/tokens'
+import ExplainabilityPanel from '../components/ExplainabilityPanel'
 
 interface NextBestRec {
   channel: string
@@ -22,6 +23,14 @@ interface PathAnalysis {
   path_length_distribution: { min: number; max: number; median: number }
   next_best_by_prefix?: Record<string, NextBestRec[]>
   next_best_by_prefix_campaign?: Record<string, NextBestRec[]>
+}
+
+interface PathAnomaly {
+  type: string
+  severity: 'info' | 'warn' | 'critical' | string
+  metric_key: string
+  metric_value: number
+  message: string
 }
 
 const METRIC_DEFINITIONS: Record<string, string> = {
@@ -66,12 +75,22 @@ export default function ConversionPaths() {
   const [tryPathResult, setTryPathResult] = useState<{ path_so_far: string; level: string; recommendations: NextBestRec[] } | null>(null)
   const [tryPathLoading, setTryPathLoading] = useState(false)
   const [tryPathError, setTryPathError] = useState<string | null>(null)
+  const [showWhy, setShowWhy] = useState(false)
 
   const pathsQuery = useQuery<PathAnalysis>({
     queryKey: ['path-analysis'],
     queryFn: async () => {
       const res = await fetch('/api/attribution/paths')
       if (!res.ok) throw new Error('Failed to fetch path analysis')
+      return res.json()
+    },
+  })
+
+  const anomaliesQuery = useQuery<{ anomalies: PathAnomaly[] }>({
+    queryKey: ['path-anomalies'],
+    queryFn: async () => {
+      const res = await fetch('/api/paths/anomalies')
+      if (!res.ok) throw new Error('Failed to fetch path anomalies')
       return res.json()
     },
   })
@@ -177,20 +196,91 @@ export default function ConversionPaths() {
 
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto' }}>
-      <h1
+      <div
         style={{
-          margin: 0,
-          fontSize: t.font.size2xl,
-          fontWeight: t.font.weightBold,
-          color: t.color.text,
-          letterSpacing: '-0.02em',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'flex-start',
+          gap: t.space.md,
+          marginBottom: t.space.sm,
+          flexWrap: 'wrap',
         }}
       >
-        Conversion Path Analysis
-      </h1>
-      <p style={{ margin: `${t.space.xs}px 0 ${t.space.xl}px`, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-        How customers interact with channels before converting.
-      </p>
+        <div>
+          <h1
+            style={{
+              margin: 0,
+              fontSize: t.font.size2xl,
+              fontWeight: t.font.weightBold,
+              color: t.color.text,
+              letterSpacing: '-0.02em',
+            }}
+          >
+            Conversion Path Analysis
+          </h1>
+          <p style={{ margin: `${t.space.xs}px 0 0`, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+            How customers interact with channels before converting.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowWhy((v) => !v)}
+          style={{
+            border: 'none',
+            backgroundColor: showWhy ? t.color.accentMuted : 'transparent',
+            color: t.color.accent,
+            padding: `${t.space.xs}px ${t.space.sm}px`,
+            borderRadius: t.radius.full,
+            fontSize: t.font.sizeXs,
+            fontWeight: t.font.weightSemibold,
+            cursor: 'pointer',
+            alignSelf: 'center',
+          }}
+        >
+          Why?
+        </button>
+      </div>
+
+      {showWhy && (
+        <div style={{ marginBottom: t.space.lg }}>
+          <ExplainabilityPanel scope="paths" />
+        </div>
+      )}
+
+      {anomaliesQuery.data && anomaliesQuery.data.anomalies.length > 0 && (
+        <div
+          style={{
+            marginBottom: t.space.xl,
+            padding: t.space.md,
+            borderRadius: t.radius.lg,
+            border: `1px solid ${t.color.warning}`,
+            background: t.color.warningMuted,
+          }}
+        >
+          <strong
+            style={{
+              display: 'block',
+              fontSize: t.font.sizeSm,
+              color: t.color.warning,
+              marginBottom: t.space.xs,
+            }}
+          >
+            Path anomalies detected
+          </strong>
+          <ul
+            style={{
+              margin: 0,
+              paddingLeft: 20,
+              fontSize: t.font.sizeSm,
+              color: t.color.textSecondary,
+            }}
+          >
+            {anomaliesQuery.data.anomalies.map((a, idx) => (
+              <li key={`${a.type}-${idx}`}>{a.message}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* KPI strip */}
       <div

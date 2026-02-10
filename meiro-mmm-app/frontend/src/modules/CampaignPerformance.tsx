@@ -2,10 +2,13 @@ import { useState, useMemo, useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LineChart, Line } from 'recharts'
 import { tokens } from '../theme/tokens'
+import ConfidenceBadge, { Confidence } from '../components/ConfidenceBadge'
+import ExplainabilityPanel from '../components/ExplainabilityPanel'
 
 interface CampaignPerformanceProps {
   model: string
   modelsReady: boolean
+  configId?: string | null
 }
 
 interface SuggestedNext {
@@ -34,6 +37,7 @@ interface CampaignData {
   uplift_rel?: number | null
   treatment_n?: number
   holdout_n?: number
+  confidence?: Confidence
 }
 
 interface CampaignPerformanceResponse {
@@ -43,6 +47,11 @@ interface CampaignPerformanceResponse {
   total_value: number
   total_spend?: number
   message?: string
+  config?: {
+    id: string
+    name: string
+    version: number
+  } | null
 }
 
 interface CampaignTrendPoint {
@@ -106,18 +115,21 @@ function exportCampaignsCSV(campaigns: CampaignData[]) {
 type SortKey = keyof CampaignData
 type SortDir = 'asc' | 'desc'
 
-export default function CampaignPerformance({ model, modelsReady }: CampaignPerformanceProps) {
+export default function CampaignPerformance({ model, modelsReady, configId }: CampaignPerformanceProps) {
   const [sortKey, setSortKey] = useState<SortKey>('attributed_value')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [search, setSearch] = useState('')
   const [channelFilter, setChannelFilter] = useState<string>('')
   const [campaignTargets, setCampaignTargets] = useState<Record<string, number>>({})
   const [selectedCampaign, setSelectedCampaign] = useState<string | null>(null)
+  const [showWhy, setShowWhy] = useState(false)
 
   const perfQuery = useQuery<CampaignPerformanceResponse>({
-    queryKey: ['campaign-performance', model],
+    queryKey: ['campaign-performance', model, configId ?? 'default'],
     queryFn: async () => {
-      const res = await fetch(`/api/attribution/campaign-performance?model=${model}`)
+      const params = new URLSearchParams({ model })
+      if (configId) params.append('config_id', configId)
+      const res = await fetch(`/api/attribution/campaign-performance?${params.toString()}`)
       if (!res.ok) throw new Error('Failed to fetch campaign performance')
       return res.json()
     },
@@ -286,7 +298,30 @@ export default function CampaignPerformance({ model, modelsReady }: CampaignPerf
             Attribution model: <strong style={{ color: t.color.accent }}>{MODEL_LABELS[model] || model}</strong>. Search and filter below; set budget targets to compare vs actual spend.
           </p>
         </div>
+        <button
+          type="button"
+          onClick={() => setShowWhy((v) => !v)}
+          style={{
+            border: 'none',
+            backgroundColor: showWhy ? t.color.accentMuted : 'transparent',
+            color: t.color.accent,
+            padding: `${t.space.xs}px ${t.space.sm}px`,
+            borderRadius: t.radius.full,
+            fontSize: t.font.sizeXs,
+            fontWeight: t.font.weightSemibold,
+            cursor: 'pointer',
+            alignSelf: 'center',
+          }}
+        >
+          Why?
+        </button>
       </div>
+
+      {showWhy && (
+        <div style={{ marginBottom: t.space.lg }}>
+          <ExplainabilityPanel scope="campaign" configId={configId ?? undefined} />
+        </div>
+      )}
 
       {/* Search and filter */}
       <div
@@ -546,6 +581,17 @@ export default function CampaignPerformance({ model, modelsReady }: CampaignPerf
                     {sortKey === col.key && col.key !== 'suggested_next' && (sortDir === 'asc' ? ' ↑' : ' ↓')}
                   </th>
                 ))}
+                <th
+                  style={{
+                    padding: `${t.space.md}px ${t.space.lg}px`,
+                    textAlign: 'right',
+                    fontWeight: t.font.weightSemibold,
+                    color: t.color.textSecondary,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  Confidence
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -619,6 +665,9 @@ export default function CampaignPerformance({ model, modelsReady }: CampaignPerf
                     ) : (
                       <span style={{ color: t.color.textMuted, fontSize: t.font.sizeXs }}>—</span>
                     )}
+                  </td>
+                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right' }}>
+                    <ConfidenceBadge confidence={c.confidence} compact />
                   </td>
                 </tr>
               ))}
