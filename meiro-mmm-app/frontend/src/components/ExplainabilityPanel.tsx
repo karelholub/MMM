@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
 import { tokens as t } from '../theme/tokens'
 
 interface ExplainabilityDriver {
@@ -47,10 +48,14 @@ interface Props {
 }
 
 export default function ExplainabilityPanel({ scope, scopeId, configId }: Props) {
-  const now = new Date()
-  const endIso = now.toISOString()
-  const start = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
-  const startIso = start.toISOString()
+  // Compute the comparison window once per mount so the query key stays stable
+  const [windowRange] = useState(() => {
+    const now = new Date()
+    const endIso = now.toISOString()
+    const startIso = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString()
+    return { startIso, endIso }
+  })
+  const { startIso, endIso } = windowRange
 
   const query = useQuery<ExplainabilitySummary>({
     queryKey: ['explainability', scope, scopeId ?? '', configId ?? '', startIso, endIso],

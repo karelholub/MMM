@@ -1422,9 +1422,13 @@ def explainability_summary(
 
     # Parse period
     def _parse_iso(val: str) -> datetime:
-        # Support both plain ISO and ISO with trailing 'Z'
+        # Support both plain ISO and ISO with trailing 'Z', and normalize to naive UTC.
         v = val.replace("Z", "+00:00")
-        return datetime.fromisoformat(v)
+        dt = datetime.fromisoformat(v)
+        # Drop tzinfo so we consistently compare naive datetimes everywhere.
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(tz=None).replace(tzinfo=None)
+        return dt
 
     try:
         if to:
