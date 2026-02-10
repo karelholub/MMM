@@ -6,7 +6,7 @@ and transforms it into an MMM-compatible weekly aggregated CSV.
 
 Meiro CDP REST API reference:
   - GET  /api/v1/customers          – list / search customers
-  - GET  /api/v1/attributes         – list available attributes
+  - GET  /api/attributes         – list available attributes
   - GET  /api/v1/events             – list event types
   - POST /api/v1/exports            – create a data export
   - GET  /api/v1/exports/{id}       – poll export status & download

@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LineChart, Line } from 'recharts'
 import { tokens } from '../theme/tokens'
 
 interface CampaignPerformanceProps {
@@ -28,6 +28,12 @@ interface CampaignData {
   roas: number | null
   cpa: number | null
   suggested_next: SuggestedNext | null
+  treatment_rate?: number
+  holdout_rate?: number
+  uplift_abs?: number
+  uplift_rel?: number | null
+  treatment_n?: number
+  holdout_n?: number
 }
 
 interface CampaignPerformanceResponse {
@@ -37,6 +43,18 @@ interface CampaignPerformanceResponse {
   total_value: number
   total_spend?: number
   message?: string
+}
+
+interface CampaignTrendPoint {
+  date: string
+  transactions: number
+  revenue: number
+}
+
+interface CampaignTrendsResponse {
+  campaigns: string[]
+  dates: string[]
+  series: Record<string, CampaignTrendPoint[]>
 }
 
 const MODEL_LABELS: Record<string, string> = {
@@ -94,6 +112,7 @@ export default function CampaignPerformance({ model, modelsReady }: CampaignPerf
   const [search, setSearch] = useState('')
   const [channelFilter, setChannelFilter] = useState<string>('')
   const [campaignTargets, setCampaignTargets] = useState<Record<string, number>>({})
+  const [selectedCampaign, setSelectedCampaign] = useState<string | null>(null)
 
   const perfQuery = useQuery<CampaignPerformanceResponse>({
     queryKey: ['campaign-performance', model],
@@ -109,6 +128,17 @@ export default function CampaignPerformance({ model, modelsReady }: CampaignPerf
   const data = perfQuery.data
   const loading = perfQuery.isLoading || !modelsReady
   const campaigns = data?.campaigns ?? []
+
+  const trendsQuery = useQuery<CampaignTrendsResponse>({
+    queryKey: ['campaign-performance-trends'],
+    queryFn: async () => {
+      const res = await fetch('/api/attribution/campaign-performance/trends')
+      if (!res.ok) throw new Error('Failed to fetch campaign trends')
+      return res.json()
+    },
+    enabled: !!campaigns.length,
+    refetchInterval: false,
+  })
 
   const filteredCampaigns = useMemo(() => {
     if (!campaigns.length) return []
@@ -141,6 +171,18 @@ export default function CampaignPerformance({ model, modelsReady }: CampaignPerf
   }, [])
 
   const totalBudgetTarget = useMemo(() => Object.values(campaignTargets).reduce((s, v) => s + v, 0), [campaignTargets])
+
+  const activeCampaignKey = useMemo(() => {
+    if (selectedCampaign && filteredCampaigns.some((c) => c.campaign === selectedCampaign)) {
+      return selectedCampaign
+    }
+    return filteredCampaigns[0]?.campaign ?? null
+  }, [selectedCampaign, filteredCampaigns])
+
+  const activeTrendSeries: CampaignTrendPoint[] =
+    activeCampaignKey && trendsQuery.data?.series?.[activeCampaignKey]
+      ? trendsQuery.data.series[activeCampaignKey]
+      : []
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
@@ -344,28 +386,97 @@ export default function CampaignPerformance({ model, modelsReady }: CampaignPerf
 
       <div
         style={{
-          background: t.color.surface,
-          border: `1px solid ${t.color.borderLight}`,
-          borderRadius: t.radius.lg,
-          padding: t.space.xl,
+          display: 'grid',
+          gridTemplateColumns: '2fr 1.5fr',
+          gap: t.space.xl,
           marginBottom: t.space.xl,
-          boxShadow: t.shadowSm,
         }}
       >
-        <h3 style={{ margin: `0 0 ${t.space.lg}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-          Spend vs. Attributed Revenue by Campaign
-        </h3>
-        <ResponsiveContainer width="100%" height={320}>
-          <BarChart data={chartData} layout="vertical" margin={{ left: 8, right: 16 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
-            <XAxis type="number" tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }} tickFormatter={(v) => formatCurrency(v)} />
-            <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: t.font.sizeSm, fill: t.color.text }} />
-            <Tooltip formatter={(value: number) => formatCurrency(value)} contentStyle={{ fontSize: t.font.sizeSm, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
-            <Legend wrapperStyle={{ fontSize: t.font.sizeSm }} />
-            <Bar dataKey="spend" fill={t.color.danger} name="Spend" radius={[0, 4, 4, 0]} />
-            <Bar dataKey="attributed_value" fill={t.color.success} name="Attributed Revenue" radius={[0, 4, 4, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
+        <div
+          style={{
+            background: t.color.surface,
+            border: `1px solid ${t.color.borderLight}`,
+            borderRadius: t.radius.lg,
+            padding: t.space.xl,
+            boxShadow: t.shadowSm,
+          }}
+        >
+          <h3 style={{ margin: `0 0 ${t.space.lg}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+            Spend vs. Attributed Revenue by Campaign
+          </h3>
+          <ResponsiveContainer width="100%" height={320}>
+            <BarChart data={chartData} layout="vertical" margin={{ left: 8, right: 16 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
+              <XAxis type="number" tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }} tickFormatter={(v) => formatCurrency(v)} />
+              <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: t.font.sizeSm, fill: t.color.text }} />
+              <Tooltip formatter={(value: number) => formatCurrency(value)} contentStyle={{ fontSize: t.font.sizeSm, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+              <Legend wrapperStyle={{ fontSize: t.font.sizeSm }} />
+              <Bar dataKey="spend" fill={t.color.danger} name="Spend" radius={[0, 4, 4, 0]} />
+              <Bar dataKey="attributed_value" fill={t.color.success} name="Attributed Revenue" radius={[0, 4, 4, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div
+          style={{
+            background: t.color.surface,
+            border: `1px solid ${t.color.borderLight}`,
+            borderRadius: t.radius.lg,
+            padding: t.space.xl,
+            boxShadow: t.shadowSm,
+          }}
+        >
+          <h3 style={{ margin: `0 0 ${t.space.lg}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+            {activeCampaignKey ? `Trend for ${activeCampaignKey}` : 'Campaign trend'}
+          </h3>
+          {trendsQuery.isLoading && (
+            <p style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary, margin: 0 }}>Loading trends…</p>
+          )}
+          {!trendsQuery.isLoading && !activeCampaignKey && (
+            <p style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary, margin: 0 }}>Select a campaign from the table below to see its trend.</p>
+          )}
+          {!trendsQuery.isLoading && activeCampaignKey && activeTrendSeries.length === 0 && (
+            <p style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary, margin: 0 }}>No trend data for this campaign.</p>
+          )}
+          {!trendsQuery.isLoading && activeCampaignKey && activeTrendSeries.length > 0 && (
+            <ResponsiveContainer width="100%" height={320}>
+              <LineChart data={activeTrendSeries} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
+                <XAxis dataKey="date" tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }} />
+                <YAxis yAxisId="left" tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }} />
+                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }} />
+                <Tooltip
+                  contentStyle={{ fontSize: t.font.sizeSm, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                  labelFormatter={(label) => `Date: ${label}`}
+                  formatter={(value: number, name) =>
+                    name === 'transactions'
+                      ? [value.toFixed(0), 'Transactions']
+                      : [formatCurrency(value), 'Revenue']
+                  }
+                />
+                <Legend wrapperStyle={{ fontSize: t.font.sizeSm }} />
+                <Line
+                  yAxisId="left"
+                  type="monotone"
+                  dataKey="transactions"
+                  name="Transactions"
+                  stroke={t.color.chart[0]}
+                  strokeWidth={2}
+                  dot={{ r: 3 }}
+                />
+                <Line
+                  yAxisId="right"
+                  type="monotone"
+                  dataKey="revenue"
+                  name="Revenue"
+                  stroke={t.color.chart[2]}
+                  strokeWidth={2}
+                  dot={{ r: 3 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
+        </div>
       </div>
 
       <div
@@ -412,6 +523,9 @@ export default function CampaignPerformance({ model, modelsReady }: CampaignPerf
                   { key: 'roi' as SortKey, label: 'ROI', align: 'right' },
                   { key: 'roas' as SortKey, label: 'ROAS', align: 'right' },
                   { key: 'cpa' as SortKey, label: 'CPA', align: 'right' },
+                  { key: 'treatment_rate' as SortKey, label: 'Conv rate (treated)', align: 'right' },
+                  { key: 'holdout_rate' as SortKey, label: 'Conv rate (holdout)', align: 'right' },
+                  { key: 'uplift_abs' as SortKey, label: 'Uplift', align: 'right' },
                   { key: 'suggested_next' as SortKey, label: 'Suggested next', align: 'left' },
                 ].map((col) => (
                   <th
@@ -440,8 +554,15 @@ export default function CampaignPerformance({ model, modelsReady }: CampaignPerf
                   key={c.campaign}
                   style={{
                     borderBottom: `1px solid ${t.color.borderLight}`,
-                    backgroundColor: idx % 2 === 0 ? t.color.surface : t.color.bg,
+                    backgroundColor:
+                      activeCampaignKey === c.campaign
+                        ? t.color.accentMuted
+                        : idx % 2 === 0
+                        ? t.color.surface
+                        : t.color.bg,
+                    cursor: 'pointer',
                   }}
+                  onClick={() => setSelectedCampaign(c.campaign)}
                 >
                   <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, fontWeight: t.font.weightMedium, color: t.color.text }}>
                     {c.campaign_name ? `${c.channel} / ${c.campaign_name}` : c.campaign}
@@ -467,6 +588,15 @@ export default function CampaignPerformance({ model, modelsReady }: CampaignPerf
                   </td>
                   <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
                     {c.cpa != null ? formatCurrency(c.cpa) : '—'}
+                  </td>
+                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                    {c.treatment_rate != null ? `${(c.treatment_rate * 100).toFixed(1)}%` : '—'}
+                  </td>
+                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                    {c.holdout_rate != null ? `${(c.holdout_rate * 100).toFixed(1)}%` : '—'}
+                  </td>
+                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: c.uplift_abs != null && c.uplift_abs > 0 ? t.color.success : c.uplift_abs != null && c.uplift_abs < 0 ? t.color.danger : t.color.textMuted }}>
+                    {c.uplift_abs != null ? `${(c.uplift_abs * 100).toFixed(1)}%` : '—'}
                   </td>
                   <td style={{ padding: `${t.space.md}px ${t.space.lg}px` }}>
                     {c.suggested_next ? (

@@ -10,15 +10,22 @@ import json
 import os
 import time
 import requests
+from datetime import datetime
 from app.utils.token_store import save_token, get_token, delete_token, get_all_connected_platforms
 from app.utils.encrypt import encrypt, decrypt
 from app.utils import datasource_config as ds_config
 from app.mmm_engine import fit_model as mmm_fit_model, engine_info
 from app.connectors import meiro_cdp
 from app.attribution_engine import (
-    run_attribution, run_all_models as run_all_attribution,
-    run_attribution_campaign, compute_channel_performance, parse_conversion_paths,
-    analyze_paths, compute_next_best_action, has_any_campaign, ATTRIBUTION_MODELS,
+    run_attribution,
+    run_all_models as run_all_attribution,
+    run_attribution_campaign,
+    compute_channel_performance,
+    parse_conversion_paths,
+    analyze_paths,
+    compute_next_best_action,
+    has_any_campaign,
+    ATTRIBUTION_MODELS,
 )
 
 app = FastAPI(title="Meiro Attribution Dashboard API", version="0.2.0")
@@ -129,6 +136,179 @@ SAMPLE_DIR = Path(__file__).parent / "sample_data"
 DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+
+# ==================== Settings ====================
+
+
+class AttributionSettings(BaseModel):
+    """Configurable knobs for attribution models and path analysis."""
+
+    lookback_window_days: int = 30
+    use_converted_flag: bool = True
+    min_conversion_value: float = 0.0
+
+    time_decay_half_life_days: float = 7.0
+    position_first_pct: float = 0.4
+    position_last_pct: float = 0.4
+    markov_min_paths: int = 5
+
+
+class MMMSettings(BaseModel):
+    """High-level MMM configuration (used as defaults when starting new runs)."""
+
+    frequency: str = "W"  # "W" or "M"
+
+
+class NBASettings(BaseModel):
+    """Next-best-action configuration."""
+
+    min_prefix_support: int = 5
+    min_conversion_rate: float = 0.01  # 1%
+    max_prefix_depth: int = 5
+
+
+class Settings(BaseModel):
+    attribution: AttributionSettings = AttributionSettings()
+    mmm: MMMSettings = MMMSettings()
+    nba: NBASettings = NBASettings()
+
+
+SETTINGS_PATH = DATA_DIR / "settings.json"
+
+
+def _load_settings() -> Settings:
+    if SETTINGS_PATH.exists():
+        try:
+            data = json.loads(SETTINGS_PATH.read_text())
+            return Settings(**data)
+        except Exception:
+            # Fallback to defaults if file is corrupted
+            pass
+    settings = Settings()
+    SETTINGS_PATH.write_text(settings.model_dump_json(indent=2))
+    return settings
+
+
+SETTINGS: Settings = _load_settings()
+
+
+def _save_settings() -> None:
+    SETTINGS_PATH.write_text(SETTINGS.model_dump_json(indent=2))
+
+
+def compute_campaign_uplift(journeys: List[Dict]) -> Dict[str, Dict[str, Any]]:
+    """
+    For each campaign step (channel:campaign or channel), estimate uplift by comparing
+    journeys that include the campaign vs. journeys that do not.
+
+    Uplift is purely observational here (not a causal experiment):
+      - treatment group: journeys that touched the campaign at least once
+      - holdout group: journeys that never touched the campaign
+    """
+    if not journeys:
+        return {}
+
+    total_n = len(journeys)
+    total_conv = 0
+
+    treat_stats: Dict[str, Dict[str, Any]] = {}
+
+    for j in journeys:
+        converted = j.get("converted", True)
+        if converted:
+            total_conv += 1
+        # Build set of campaign steps in this journey
+        steps = set()
+        for tp in j.get("touchpoints", []):
+            channel = tp.get("channel", "unknown")
+            campaign = tp.get("campaign")
+            step = f"{channel}:{campaign}" if campaign else channel
+            steps.add(step)
+        for step in steps:
+            st = treat_stats.setdefault(step, {"n": 0, "conv": 0})
+            st["n"] += 1
+            if converted:
+                st["conv"] += 1
+
+    uplift: Dict[str, Dict[str, Any]] = {}
+    for step, st in treat_stats.items():
+        treat_n = st["n"]
+        treat_conv = st["conv"]
+        control_n = total_n - treat_n
+        control_conv = total_conv - treat_conv
+
+        treat_rate = treat_conv / treat_n if treat_n > 0 else 0.0
+        control_rate = control_conv / control_n if control_n > 0 else 0.0
+        abs_uplift = treat_rate - control_rate
+        rel_uplift = abs_uplift / control_rate if control_rate > 0 else None
+
+        uplift[step] = {
+            "treatment_n": treat_n,
+            "treatment_conversions": treat_conv,
+            "treatment_rate": treat_rate,
+            "holdout_n": control_n,
+            "holdout_conversions": control_conv,
+            "holdout_rate": control_rate,
+            "uplift_abs": abs_uplift,
+            "uplift_rel": rel_uplift,
+        }
+
+    return uplift
+
+
+def compute_campaign_trends(journeys: List[Dict]) -> Dict[str, Any]:
+    """
+    Build simple time series per campaign step (channel:campaign or channel):
+      - transactions: number of converted journeys attributed to that campaign (last touch)
+      - revenue: sum of conversion_value for those journeys
+
+    Conversion date is taken as the timestamp of the last touchpoint.
+    """
+    if not journeys:
+        return {"campaigns": [], "dates": [], "series": {}}
+
+    series: Dict[str, Dict[str, Dict[str, float]]] = {}
+    all_dates: set[str] = set()
+
+    for j in journeys:
+        if not j.get("converted", True):
+            continue
+        tps = j.get("touchpoints", [])
+        if not tps:
+            continue
+        last_tp = tps[-1]
+        ts = last_tp.get("timestamp")
+        if not ts:
+            continue
+        try:
+            dt = datetime.fromisoformat(ts)
+            date_key = dt.date().isoformat()
+        except Exception:
+            date_key = str(ts)
+
+        channel = last_tp.get("channel", "unknown")
+        campaign = last_tp.get("campaign")
+        step = f"{channel}:{campaign}" if campaign else channel
+
+        all_dates.add(date_key)
+        step_series = series.setdefault(step, {})
+        entry = step_series.setdefault(date_key, {"transactions": 0.0, "revenue": 0.0})
+        entry["transactions"] += 1.0
+        entry["revenue"] += float(j.get("conversion_value", 0.0) or 0.0)
+
+    sorted_dates = sorted(all_dates)
+    campaigns = sorted(series.keys())
+
+    out_series: Dict[str, List[Dict[str, Any]]] = {}
+    for step, date_map in series.items():
+        points = []
+        for d in sorted_dates:
+            val = date_map.get(d, {"transactions": 0.0, "revenue": 0.0})
+            points.append({"date": d, "transactions": int(val["transactions"]), "revenue": val["revenue"]})
+        out_series[step] = points
+
+    return {"campaigns": campaigns, "dates": sorted_dates, "series": out_series}
+
 # Initialize sample datasets
 DATASETS["sample-weekly-01"] = {"path": SAMPLE_DIR / "sample-weekly-01.csv", "type": "sales"}
 DATASETS["sample-weekly-realistic"] = {"path": SAMPLE_DIR / "sample-weekly-realistic.csv", "type": "sales"}
@@ -155,6 +335,24 @@ if _sample_paths_file.exists():
 
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+
+# ==================== Settings API ====================
+
+
+@app.get("/api/settings")
+def get_settings():
+    """Return current configuration for attribution, MMM, and NBA."""
+    return SETTINGS
+
+
+@app.post("/api/settings")
+def update_settings(new_settings: Settings):
+    """Update global configuration. Overwrites previous settings."""
+    global SETTINGS
+    SETTINGS = new_settings
+    _save_settings()
+    return SETTINGS
+
 
 # ==================== Health ====================
 
@@ -254,7 +452,13 @@ def run_attribution_model(model: str = "linear"):
         raise HTTPException(status_code=400, detail="No journeys loaded. Upload or import data first.")
     if model not in ATTRIBUTION_MODELS:
         raise HTTPException(status_code=400, detail=f"Unknown model: {model}. Available: {ATTRIBUTION_MODELS}")
-    result = run_attribution(JOURNEYS, model=model)
+    kwargs: Dict[str, Any] = {}
+    if model == "time_decay":
+        kwargs["half_life_days"] = SETTINGS.attribution.time_decay_half_life_days
+    elif model == "position_based":
+        kwargs["first_pct"] = SETTINGS.attribution.position_first_pct
+        kwargs["last_pct"] = SETTINGS.attribution.position_last_pct
+    result = run_attribution(JOURNEYS, model=model, **kwargs)
     ATTRIBUTION_RESULTS[model] = result
     return result
 
@@ -263,10 +467,20 @@ def run_all_attribution_models():
     """Run all attribution models on loaded journeys."""
     if not JOURNEYS:
         raise HTTPException(status_code=400, detail="No journeys loaded. Upload or import data first.")
-    results = run_all_attribution(JOURNEYS)
-    for r in results:
-        if "model" in r and "error" not in r:
-            ATTRIBUTION_RESULTS[r["model"]] = r
+    results = []
+    for model in ATTRIBUTION_MODELS:
+        try:
+            kwargs: Dict[str, Any] = {}
+            if model == "time_decay":
+                kwargs["half_life_days"] = SETTINGS.attribution.time_decay_half_life_days
+            elif model == "position_based":
+                kwargs["first_pct"] = SETTINGS.attribution.position_first_pct
+                kwargs["last_pct"] = SETTINGS.attribution.position_last_pct
+            result = run_attribution(JOURNEYS, model=model, **kwargs)
+            results.append(result)
+            ATTRIBUTION_RESULTS[model] = result
+        except Exception as exc:
+            results.append({"model": model, "error": str(exc)})
     return {"results": results}
 
 @app.get("/api/attribution/results")
@@ -288,9 +502,27 @@ def get_path_analysis():
     if not JOURNEYS:
         raise HTTPException(status_code=400, detail="No journeys loaded.")
     path_analysis = analyze_paths(JOURNEYS)
-    path_analysis["next_best_by_prefix"] = compute_next_best_action(JOURNEYS, level="channel")
+
+    # NBA recommendations (channel level)
+    nba_channel = compute_next_best_action(JOURNEYS, level="channel")
+    min_support = SETTINGS.nba.min_prefix_support
+    min_rate = SETTINGS.nba.min_conversion_rate
+    filtered_channel: Dict[str, Any] = {}
+    for prefix, recs in nba_channel.items():
+        kept = [r for r in recs if r["count"] >= min_support and r["conversion_rate"] >= min_rate]
+        if kept:
+            filtered_channel[prefix] = kept
+    path_analysis["next_best_by_prefix"] = filtered_channel
+
+    # NBA recommendations (campaign level, optional)
     if has_any_campaign(JOURNEYS):
-        path_analysis["next_best_by_prefix_campaign"] = compute_next_best_action(JOURNEYS, level="campaign")
+        nba_campaign = compute_next_best_action(JOURNEYS, level="campaign")
+        filtered_campaign: Dict[str, Any] = {}
+        for prefix, recs in nba_campaign.items():
+            kept = [r for r in recs if r["count"] >= min_support and r["conversion_rate"] >= min_rate]
+            if kept:
+                filtered_campaign[prefix] = kept
+        path_analysis["next_best_by_prefix_campaign"] = filtered_campaign
     return path_analysis
 
 
@@ -300,8 +532,11 @@ def _next_best_action_impl(path_so_far: str = "", level: str = "channel"):
     prefix = path_so_far.strip().replace(",", " > ").replace("  ", " ").strip()
     use_level = "campaign" if level == "campaign" and has_any_campaign(JOURNEYS) else "channel"
     nba = compute_next_best_action(JOURNEYS, level=use_level)
-    recommendations = nba.get(prefix, [])
-    return {"path_so_far": prefix or "(start)", "level": use_level, "recommendations": recommendations[:10]}
+    min_support = SETTINGS.nba.min_prefix_support
+    min_rate = SETTINGS.nba.min_conversion_rate
+    recs = nba.get(prefix, [])
+    filtered = [r for r in recs if r["count"] >= min_support and r["conversion_rate"] >= min_rate][:10]
+    return {"path_so_far": prefix or "(start)", "level": use_level, "recommendations": filtered}
 
 
 @app.get("/api/attribution/next-best-action")
@@ -320,7 +555,13 @@ def get_channel_performance(model: str = "linear"):
     if not result:
         if not JOURNEYS:
             raise HTTPException(status_code=400, detail="No journeys loaded.")
-        result = run_attribution(JOURNEYS, model=model)
+        kwargs: Dict[str, Any] = {}
+        if model == "time_decay":
+            kwargs["half_life_days"] = SETTINGS.attribution.time_decay_half_life_days
+        elif model == "position_based":
+            kwargs["first_pct"] = SETTINGS.attribution.position_first_pct
+            kwargs["last_pct"] = SETTINGS.attribution.position_last_pct
+        result = run_attribution(JOURNEYS, model=model, **kwargs)
         ATTRIBUTION_RESULTS[model] = result
 
     expense_by_channel: Dict[str, float] = {}
@@ -350,7 +591,13 @@ def get_campaign_performance(model: str = "linear"):
             "total_value": 0,
             "message": "No campaign data in touchpoints. Add a 'campaign' field to use campaign performance.",
         }
-    result = run_attribution_campaign(JOURNEYS, model=model)
+    kwargs: Dict[str, Any] = {}
+    if model == "time_decay":
+        kwargs["half_life_days"] = SETTINGS.attribution.time_decay_half_life_days
+    elif model == "position_based":
+        kwargs["first_pct"] = SETTINGS.attribution.position_first_pct
+        kwargs["last_pct"] = SETTINGS.attribution.position_last_pct
+    result = run_attribution_campaign(JOURNEYS, model=model, **kwargs)
     expense_by_channel: Dict[str, float] = {}
     for exp in EXPENSES.values():
         expense_by_channel[exp.channel] = expense_by_channel.get(exp.channel, 0) + exp.amount
@@ -379,10 +626,20 @@ def get_campaign_performance(model: str = "linear"):
             "cpa": round(cpa, 2) if cpa is not None else None,
         })
 
+    # Attach NBA suggestion (campaign-level) and uplift vs synthetic holdout
     nba_campaign = compute_next_best_action(JOURNEYS, level="campaign")
+    uplift = compute_campaign_uplift(JOURNEYS)
     for c in campaigns_list:
         recs = nba_campaign.get(c["campaign"], [])
         c["suggested_next"] = recs[0] if recs else None
+        u = uplift.get(c["campaign"])
+        if u:
+            c["treatment_rate"] = u["treatment_rate"]
+            c["holdout_rate"] = u["holdout_rate"]
+            c["uplift_abs"] = u["uplift_abs"]
+            c["uplift_rel"] = u["uplift_rel"]
+            c["treatment_n"] = u["treatment_n"]
+            c["holdout_n"] = u["holdout_n"]
 
     return {
         "model": model,
@@ -391,6 +648,28 @@ def get_campaign_performance(model: str = "linear"):
         "total_value": result.get("total_value", 0),
         "total_spend": sum(expense_by_channel.values()),
     }
+
+
+@app.get("/api/attribution/campaign-performance/trends")
+def get_campaign_performance_trends():
+    """
+    Time series for campaign performance:
+      - transactions: number of converted journeys (last-touch attribution)
+      - revenue: sum of conversion_value for those journeys
+
+    Output:
+      {
+        \"campaigns\": [\"google_ads:Brand\", ...],
+        \"dates\": [\"2024-01-01\", ...],
+        \"series\": {
+          \"google_ads:Brand\": [{\"date\": \"2024-01-01\", \"transactions\": 3, \"revenue\": 540.0}, ...],
+          ...
+        }
+      }
+    """
+    if not JOURNEYS:
+        raise HTTPException(status_code=400, detail="No journeys loaded.")
+    return compute_campaign_trends(JOURNEYS)
 
 
 # ==================== Expense Management ====================
@@ -626,6 +905,9 @@ def validate_dataset(dataset_id: str):
 def run_model(cfg: ModelConfig, tasks: BackgroundTasks):
     if cfg.dataset_id not in DATASETS:
         raise HTTPException(status_code=404, detail="dataset_id not found")
+    # Apply MMM settings default frequency when user leaves it at the default
+    if cfg.frequency == "W" and SETTINGS.mmm.frequency != "W":
+        cfg.frequency = SETTINGS.mmm.frequency
     kpi_mode = cfg.kpi_mode if hasattr(cfg, 'kpi_mode') else 'conversions'
     run_id = f"{kpi_mode}_{len(RUNS)+1:04d}"
     RUNS[run_id] = {"status": "queued", "config": json.loads(cfg.model_dump_json()), "kpi_mode": kpi_mode}

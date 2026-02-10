@@ -11,8 +11,9 @@ const DatasetUploader = lazy(() => import('./DatasetUploader'))
 const MMMDashboard = lazy(() => import('./MMMDashboard'))
 const BudgetOptimizer = lazy(() => import('./BudgetOptimizer'))
 const CampaignPerformance = lazy(() => import('./CampaignPerformance'))
+const SettingsPage = lazy(() => import('./Settings'))
 
-type Page = 'dashboard' | 'comparison' | 'paths' | 'campaigns' | 'expenses' | 'datasources' | 'mmm'
+type Page = 'dashboard' | 'comparison' | 'paths' | 'campaigns' | 'expenses' | 'datasources' | 'mmm' | 'settings'
 
 const PAGE_FALLBACK = (
   <div style={{ padding: 48, textAlign: 'center', color: '#64748b', fontSize: 14 }}>
@@ -28,6 +29,7 @@ const NAV_ITEMS: { key: Page; label: string; color: string }[] = [
   { key: 'expenses', label: 'Expenses', color: '#28a745' },
   { key: 'datasources', label: 'Data Sources', color: '#fd7e14' },
   { key: 'mmm', label: 'MMM (Advanced)', color: '#6c757d' },
+  { key: 'settings', label: 'Settings', color: '#0f172a' },
 ]
 
 const ATTRIBUTION_MODELS = [
@@ -252,7 +254,7 @@ export default function App() {
 
       {/* Main Content */}
       <main style={LAYOUT_STYLES.main}>
-        {!journeysLoaded && page !== 'datasources' && page !== 'expenses' && page !== 'mmm' && page !== 'comparison' && page !== 'paths' && page !== 'campaigns' && (
+        {!journeysLoaded && page !== 'datasources' && page !== 'expenses' && page !== 'mmm' && page !== 'comparison' && page !== 'paths' && page !== 'campaigns' && page !== 'settings' && (
           <div style={{
             padding: 40, maxWidth: 560, margin: '0 auto',
             backgroundColor: tokens.color.surface,
@@ -307,7 +309,7 @@ export default function App() {
           </div>
         )}
 
-        {(journeysLoaded || page === 'datasources' || page === 'expenses' || page === 'mmm' || page === 'comparison' || page === 'paths' || page === 'campaigns') && (
+        {(journeysLoaded || page === 'datasources' || page === 'expenses' || page === 'mmm' || page === 'comparison' || page === 'paths' || page === 'campaigns' || page === 'settings') && (
           <Suspense fallback={PAGE_FALLBACK}>
             {page === 'dashboard' && (
               <ChannelPerformance model={selectedModel} channels={channels} modelsReady={!!runAllMutation.data} />
@@ -323,6 +325,7 @@ export default function App() {
             {page === 'datasources' && (
               <DataSources onJourneysImported={onJourneysImported} />
             )}
+            {page === 'settings' && <SettingsPage />}
             {page === 'mmm' && (
               <div style={{ maxWidth: 1400, margin: '0 auto' }}>
                 {!mmmRunId ? (
