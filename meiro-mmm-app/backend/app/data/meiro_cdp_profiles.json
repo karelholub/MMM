@@ -1,0 +1,23 @@
+[
+  {
+    "customer_id": "c003",
+    "touchpoints": [
+      {
+        "channel": "google_ads",
+        "campaign": "Xmass",
+        "timestamp": "2024-01-02"
+      },
+      {
+        "channel": "email",
+        "campaign": "Newsletter",
+        "timestamp": "2024-01-05"
+      },
+      {
+        "channel": "direct",
+        "timestamp": "2024-01-07"
+      }
+    ],
+    "conversion_value": 120.0,
+    "converted": true
+  }
+]

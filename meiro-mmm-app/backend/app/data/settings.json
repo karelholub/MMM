@@ -1,0 +1,19 @@
+{
+  "attribution": {
+    "lookback_window_days": 30,
+    "use_converted_flag": true,
+    "min_conversion_value": 0.0,
+    "time_decay_half_life_days": 7.0,
+    "position_first_pct": 0.4,
+    "position_last_pct": 0.4,
+    "markov_min_paths": 5
+  },
+  "mmm": {
+    "frequency": "W"
+  },
+  "nba": {
+    "min_prefix_support": 5,
+    "min_conversion_rate": 0.01,
+    "max_prefix_depth": 5
+  }
+}

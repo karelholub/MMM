@@ -1,0 +1,37 @@
+{
+  "channel_rules": [
+    {
+      "name": "Paid Search",
+      "channel": "paid_search",
+      "source_regex": "google|bing|baidu",
+      "medium_regex": "cpc|ppc|paid_search"
+    },
+    {
+      "name": "Paid Social",
+      "channel": "paid_social",
+      "source_regex": "facebook|meta|instagram|linkedin|twitter|tiktok",
+      "medium_regex": "cpc|paid_social|social"
+    },
+    {
+      "name": "Email",
+      "channel": "email",
+      "source_regex": null,
+      "medium_regex": "email"
+    },
+    {
+      "name": "Direct",
+      "channel": "direct",
+      "source_regex": null,
+      "medium_regex": "(none|direct)"
+    }
+  ],
+  "source_aliases": {
+    "fb": "facebook",
+    "ig": "instagram",
+    "g": "google"
+  },
+  "medium_aliases": {
+    "paid": "cpc",
+    "cpm": "display"
+  }
+}

@@ -22,6 +22,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from app.utils.taxonomy import normalize_touchpoint, load_taxonomy
+
 logger = logging.getLogger(__name__)
 
 
@@ -463,6 +465,7 @@ def parse_conversion_paths(
     - flat attributes like last_touch_channel, first_touch_channel
     """
     journeys = []
+    taxonomy = load_taxonomy()
 
     for profile in profiles:
         customer_id = profile.get(id_attr, profile.get("id", "unknown"))
@@ -475,10 +478,21 @@ def parse_conversion_paths(
             touchpoints = []
             for tp in touchpoints_raw:
                 if isinstance(tp, dict):
-                    touchpoints.append({
+                    raw_tp = {
                         "channel": tp.get(channel_field, tp.get("source", tp.get("utm_source", "unknown"))),
+                        "source": tp.get("source"),
+                        "medium": tp.get("medium"),
+                        "utm_source": tp.get("utm_source"),
+                        "utm_medium": tp.get("utm_medium"),
+                        "utm_campaign": tp.get("utm_campaign"),
+                        "utm_content": tp.get("utm_content"),
+                        "campaign": tp.get("campaign"),
+                        "adset": tp.get("adset"),
+                        "ad": tp.get("ad"),
+                        "creative": tp.get("creative"),
                         "timestamp": tp.get(timestamp_field, tp.get("date", tp.get("event_date", ""))),
-                    })
+                    }
+                    touchpoints.append(normalize_touchpoint(raw_tp, taxonomy))
                 elif isinstance(tp, str):
                     # Simple list of channel names
                     touchpoints.append({"channel": tp, "timestamp": ""})
@@ -489,10 +503,23 @@ def parse_conversion_paths(
                 parsed = json.loads(touchpoints_raw)
                 if isinstance(parsed, list):
                     touchpoints = [
-                        {
-                            "channel": tp.get(channel_field, "unknown") if isinstance(tp, dict) else str(tp),
-                            "timestamp": tp.get(timestamp_field, "") if isinstance(tp, dict) else "",
-                        }
+                        normalize_touchpoint(
+                            {
+                                "channel": tp.get(channel_field, "unknown") if isinstance(tp, dict) else str(tp),
+                                "source": tp.get("source") if isinstance(tp, dict) else None,
+                                "medium": tp.get("medium") if isinstance(tp, dict) else None,
+                                "utm_source": tp.get("utm_source") if isinstance(tp, dict) else None,
+                                "utm_medium": tp.get("utm_medium") if isinstance(tp, dict) else None,
+                                "utm_campaign": tp.get("utm_campaign") if isinstance(tp, dict) else None,
+                                "utm_content": tp.get("utm_content") if isinstance(tp, dict) else None,
+                                "campaign": tp.get("campaign") if isinstance(tp, dict) else None,
+                                "adset": tp.get("adset") if isinstance(tp, dict) else None,
+                                "ad": tp.get("ad") if isinstance(tp, dict) else None,
+                                "creative": tp.get("creative") if isinstance(tp, dict) else None,
+                                "timestamp": tp.get(timestamp_field, "") if isinstance(tp, dict) else "",
+                            },
+                            taxonomy,
+                        )
                         for tp in parsed
                     ]
                 else:
@@ -504,7 +531,25 @@ def parse_conversion_paths(
             touchpoints = []
             for key in ("first_touch_channel", "last_touch_channel", "channel", "source"):
                 if key in profile and profile[key]:
-                    touchpoints.append({"channel": str(profile[key]), "timestamp": ""})
+                    touchpoints.append(
+                        normalize_touchpoint(
+                            {
+                                "channel": str(profile[key]),
+                                "source": profile.get("source"),
+                                "medium": profile.get("medium"),
+                                "utm_source": profile.get("utm_source"),
+                                "utm_medium": profile.get("utm_medium"),
+                                "utm_campaign": profile.get("utm_campaign"),
+                                "utm_content": profile.get("utm_content"),
+                                "campaign": profile.get("campaign"),
+                                "adset": profile.get("adset"),
+                                "ad": profile.get("ad"),
+                                "creative": profile.get("creative"),
+                                "timestamp": "",
+                            },
+                            taxonomy,
+                        )
+                    )
 
         if not touchpoints:
             continue

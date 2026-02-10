@@ -135,6 +135,8 @@ export default function App() {
   const journeysLoaded = journeysQuery.data?.loaded ?? false
   const journeyCount = journeysQuery.data?.count ?? 0
   const convertedCount = journeysQuery.data?.converted ?? 0
+  const primaryKpiLabel: string | undefined = journeysQuery.data?.primary_kpi_label
+  const primaryKpiCount: number | undefined = journeysQuery.data?.primary_kpi_count
   const channels = useMemo(() => journeysQuery.data?.channels ?? [], [journeysQuery.data?.channels])
 
   const handleSetPage = useCallback((p: Page) => setPage(p), [])
@@ -181,7 +183,11 @@ export default function App() {
             color: journeysLoaded ? '#82e89f' : '#ffc107',
             border: `1px solid ${journeysLoaded ? 'rgba(40,167,69,0.4)' : 'rgba(255,193,7,0.4)'}`,
           }}>
-            {journeysLoaded ? `${journeyCount} journeys (${convertedCount} converted)` : 'No data loaded'}
+            {journeysLoaded
+              ? primaryKpiLabel
+                ? `${journeyCount} journeys (${primaryKpiLabel}: ${primaryKpiCount ?? convertedCount})`
+                : `${journeyCount} journeys (${convertedCount} converted)`
+              : 'No data loaded'}
           </div>
           {!journeysLoaded && (
             <button

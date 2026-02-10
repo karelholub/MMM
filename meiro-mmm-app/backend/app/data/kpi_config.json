@@ -1,0 +1,50 @@
+{
+  "definitions": [
+    {
+      "id": "purchase",
+      "label": "Purchase",
+      "type": "primary",
+      "event_name": "purchase",
+      "value_field": "revenue",
+      "weight": 1.0,
+      "lookback_days": null
+    },
+    {
+      "id": "lead",
+      "label": "Lead",
+      "type": "primary",
+      "event_name": "lead_submitted",
+      "value_field": null,
+      "weight": 0.5,
+      "lookback_days": null
+    },
+    {
+      "id": "signup",
+      "label": "Sign-up",
+      "type": "primary",
+      "event_name": "signup",
+      "value_field": null,
+      "weight": 0.5,
+      "lookback_days": null
+    },
+    {
+      "id": "add_to_cart",
+      "label": "Add to cart",
+      "type": "micro",
+      "event_name": "add_to_cart",
+      "value_field": null,
+      "weight": 1.0,
+      "lookback_days": null
+    },
+    {
+      "id": "product_view",
+      "label": "Product view",
+      "type": "micro",
+      "event_name": "product_view",
+      "value_field": null,
+      "weight": 1.0,
+      "lookback_days": null
+    }
+  ],
+  "primary_kpi_id": "add_to_cart"
+}

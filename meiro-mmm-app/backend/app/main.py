@@ -14,6 +14,8 @@ from datetime import datetime
 from app.utils.token_store import save_token, get_token, delete_token, get_all_connected_platforms
 from app.utils.encrypt import encrypt, decrypt
 from app.utils import datasource_config as ds_config
+from app.utils.taxonomy import load_taxonomy, save_taxonomy, Taxonomy
+from app.utils.kpi_config import load_kpi_config, save_kpi_config, KpiConfig, KpiDefinition
 from app.mmm_engine import fit_model as mmm_fit_model, engine_info
 from app.connectors import meiro_cdp
 from app.attribution_engine import (
@@ -196,6 +198,10 @@ def _save_settings() -> None:
     SETTINGS_PATH.write_text(SETTINGS.model_dump_json(indent=2))
 
 
+# KPI configuration (separate JSON file)
+KPI_CONFIG: KpiConfig = load_kpi_config()
+
+
 def compute_campaign_uplift(journeys: List[Dict]) -> Dict[str, Dict[str, Any]]:
     """
     For each campaign step (channel:campaign or channel), estimate uplift by comparing
@@ -354,6 +360,99 @@ def update_settings(new_settings: Settings):
     return SETTINGS
 
 
+# ==================== Taxonomy API ====================
+
+
+@app.get("/api/taxonomy")
+def get_taxonomy():
+    """Return current channel/source/medium/campaign taxonomy rules."""
+    tax = load_taxonomy()
+    return {
+        "channel_rules": [
+            {
+                "name": r.name,
+                "channel": r.channel,
+                "source_regex": r.source_regex,
+                "medium_regex": r.medium_regex,
+            }
+            for r in tax.channel_rules
+        ],
+        "source_aliases": tax.source_aliases,
+        "medium_aliases": tax.medium_aliases,
+    }
+
+
+@app.post("/api/taxonomy")
+def update_taxonomy(payload: Dict[str, Any]):
+    """Replace taxonomy rules and aliases."""
+    rules = []
+    for r in payload.get("channel_rules", []):
+        rules.append(
+            {
+                "name": r.get("name", ""),
+                "channel": r.get("channel", ""),
+                "source_regex": r.get("source_regex"),
+                "medium_regex": r.get("medium_regex"),
+            }
+        )
+    tax = Taxonomy(
+        channel_rules=[Taxonomy.default().channel_rules[0]].__class__(  # create empty then replace below
+        )
+    )
+    tax.channel_rules = [Taxonomy.default().channel_rules[0]]
+    tax.channel_rules = [
+        type(Taxonomy.default().channel_rules[0])(
+            name=r["name"],
+            channel=r["channel"],
+            source_regex=r.get("source_regex"),
+            medium_regex=r.get("medium_regex"),
+        )
+        for r in rules
+    ]
+    tax.source_aliases = payload.get("source_aliases", {})
+    tax.medium_aliases = payload.get("medium_aliases", {})
+    save_taxonomy(tax)
+    return get_taxonomy()
+
+
+# ==================== KPI / Conversion API ====================
+
+
+class KpiDefinitionModel(BaseModel):
+    id: str
+    label: str
+    type: str  # "primary" or "micro"
+    event_name: str
+    value_field: Optional[str] = None
+    weight: float = 1.0
+    lookback_days: Optional[int] = None
+
+
+class KpiConfigModel(BaseModel):
+    definitions: List[KpiDefinitionModel]
+    primary_kpi_id: Optional[str] = None
+
+
+@app.get("/api/kpis", response_model=KpiConfigModel)
+def get_kpis():
+    """Return configured KPI and micro-conversion definitions."""
+    cfg = KPI_CONFIG
+    return KpiConfigModel(
+        definitions=[KpiDefinitionModel(**d.__dict__) for d in cfg.definitions],
+        primary_kpi_id=cfg.primary_kpi_id,
+    )
+
+
+@app.post("/api/kpis", response_model=KpiConfigModel)
+def update_kpis(cfg: KpiConfigModel):
+    """Replace KPI configuration."""
+    global KPI_CONFIG
+    defs = [KpiDefinition(**d.dict()) for d in cfg.definitions]
+    KPI_CONFIG = KpiConfig(definitions=defs, primary_kpi_id=cfg.primary_kpi_id)
+    save_kpi_config(KPI_CONFIG)
+    return get_kpis()
+
+
 # ==================== Health ====================
 
 @app.get("/api/health")
@@ -377,11 +476,28 @@ def get_journeys_summary():
     """Get summary of currently loaded conversion journeys."""
     if not JOURNEYS:
         return {"loaded": False, "count": 0}
+
     converted = [j for j in JOURNEYS if j.get("converted", True)]
     channels: set = set()
     for j in JOURNEYS:
         for tp in j.get("touchpoints", []):
             channels.add(tp.get("channel", "unknown"))
+
+    # KPI breakdown by configured definitions (journey-level kpi_type if present)
+    kpi_counts: Dict[str, int] = {}
+    for j in JOURNEYS:
+        ktype = j.get("kpi_type")
+        if isinstance(ktype, str):
+            kpi_counts[ktype] = kpi_counts.get(ktype, 0) + 1
+
+    primary_kpi_id = KPI_CONFIG.primary_kpi_id
+    primary_kpi_label = None
+    if primary_kpi_id:
+        for d in KPI_CONFIG.definitions:
+            if d.id == primary_kpi_id:
+                primary_kpi_label = d.label
+                break
+    primary_count = kpi_counts.get(primary_kpi_id, len(converted) if primary_kpi_id else len(converted))
     return {
         "loaded": True,
         "count": len(JOURNEYS),
@@ -389,6 +505,10 @@ def get_journeys_summary():
         "non_converted": len(JOURNEYS) - len(converted),
         "channels": sorted(channels),
         "total_value": sum(j.get("conversion_value", 0) for j in converted),
+        "primary_kpi_id": primary_kpi_id,
+        "primary_kpi_label": primary_kpi_label,
+        "primary_kpi_count": primary_count,
+        "kpi_counts": kpi_counts,
     }
 
 @app.post("/api/attribution/journeys/upload")
