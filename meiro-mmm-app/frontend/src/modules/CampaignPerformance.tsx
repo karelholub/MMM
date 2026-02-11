@@ -11,6 +11,19 @@ interface CampaignPerformanceProps {
   configId?: string | null
 }
 
+interface JourneysSummary {
+  loaded: boolean
+  count: number
+  converted: number
+  non_converted: number
+  channels: string[]
+  total_value: number
+  primary_kpi_id?: string | null
+  primary_kpi_label?: string | null
+  primary_kpi_count?: number
+  kpi_counts?: Record<string, number>
+}
+
 interface SuggestedNext {
   channel: string
   campaign?: string
@@ -38,6 +51,7 @@ interface CampaignData {
   treatment_n?: number
   holdout_n?: number
   confidence?: Confidence
+  confidence_score?: number
 }
 
 interface CampaignPerformanceResponse {
@@ -48,9 +62,23 @@ interface CampaignPerformanceResponse {
   total_spend?: number
   message?: string
   config?: {
-    id: string
-    name: string
-    version: number
+    config_id?: string
+    config_version?: number
+    conversion_key?: string | null
+    time_window?: {
+      click_lookback_days?: number | null
+      impression_lookback_days?: number | null
+      session_timeout_minutes?: number | null
+      conversion_latency_days?: number | null
+    }
+  } | null
+  mapping_coverage?: {
+    spend_mapped_pct: number
+    value_mapped_pct: number
+    spend_mapped: number
+    spend_total: number
+    value_mapped: number
+    value_total: number
   } | null
 }
 
@@ -88,8 +116,31 @@ function formatCurrency(val: number): string {
   return `$${val.toFixed(0)}`
 }
 
-function exportCampaignsCSV(campaigns: CampaignData[]) {
-  const headers = ['Campaign', 'Channel', 'Attributed Revenue', 'Share %', 'Conversions', 'Spend', 'ROI %', 'ROAS', 'CPA', 'Suggested next']
+function exportCampaignsCSV(
+  campaigns: CampaignData[],
+  opts: {
+    conversionKey?: string
+    configVersion?: number | null
+    directMode: 'include' | 'exclude'
+  },
+) {
+  const headers = [
+    'Campaign',
+    'Channel',
+    'Attributed Revenue',
+    'Share %',
+    'Conversions',
+    'Spend',
+    'ROI %',
+    'ROAS',
+    'CPA',
+    'Suggested next',
+    'Period label',
+    'Conversion key',
+    'Config version',
+    'Direct handling',
+  ]
+  const periodLabel = 'current_dataset'
   const rows = campaigns.map((c) => [
     c.campaign,
     c.channel,
@@ -101,6 +152,10 @@ function exportCampaignsCSV(campaigns: CampaignData[]) {
     c.roas != null ? c.roas.toFixed(2) : '',
     c.cpa != null ? c.cpa.toFixed(2) : '',
     c.suggested_next ? (c.suggested_next.campaign != null ? `${c.suggested_next.channel}/${c.suggested_next.campaign}` : c.suggested_next.channel) : '',
+    periodLabel,
+    opts.conversionKey || '',
+    opts.configVersion != null ? String(opts.configVersion) : '',
+    opts.directMode,
   ])
   const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
@@ -123,12 +178,25 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
   const [campaignTargets, setCampaignTargets] = useState<Record<string, number>>({})
   const [selectedCampaign, setSelectedCampaign] = useState<string | null>(null)
   const [showWhy, setShowWhy] = useState(false)
+  const [conversionKey, setConversionKey] = useState<string | ''>('')
+  const [directMode, setDirectMode] = useState<'include' | 'exclude'>('include')
+  const [comparePrevious, setComparePrevious] = useState(false)
+
+  const journeysQuery = useQuery<JourneysSummary>({
+    queryKey: ['journeys-summary-for-campaigns'],
+    queryFn: async () => {
+      const res = await fetch('/api/attribution/journeys')
+      if (!res.ok) throw new Error('Failed to load journeys summary')
+      return res.json()
+    },
+  })
 
   const perfQuery = useQuery<CampaignPerformanceResponse>({
-    queryKey: ['campaign-performance', model, configId ?? 'default'],
+    queryKey: ['campaign-performance', model, configId ?? 'default', conversionKey || 'all'],
     queryFn: async () => {
       const params = new URLSearchParams({ model })
       if (configId) params.append('config_id', configId)
+      if (conversionKey) params.append('conversion_key', conversionKey)
       const res = await fetch(`/api/attribution/campaign-performance?${params.toString()}`)
       if (!res.ok) throw new Error('Failed to fetch campaign performance')
       return res.json()
@@ -157,11 +225,18 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
     const q = search.trim().toLowerCase()
     const byChannel = channelFilter.trim()
     return campaigns.filter((c) => {
-      const matchSearch = !q || c.campaign.toLowerCase().includes(q) || c.channel.toLowerCase().includes(q) || (c.campaign_name ?? '').toLowerCase().includes(q)
+      if (directMode === 'exclude' && c.channel === 'direct') {
+        return false
+      }
+      const matchSearch =
+        !q ||
+        c.campaign.toLowerCase().includes(q) ||
+        c.channel.toLowerCase().includes(q) ||
+        (c.campaign_name ?? '').toLowerCase().includes(q)
       const matchChannel = !byChannel || c.channel === byChannel
       return matchSearch && matchChannel
     })
-  }, [campaigns, search, channelFilter])
+  }, [campaigns, search, channelFilter, directMode])
 
   const channelsList = useMemo(() => Array.from(new Set(campaigns.map((c) => c.channel))).sort(), [campaigns])
 
@@ -205,6 +280,15 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
   }
 
   const t = tokens
+
+  const journeysKpis = journeysQuery.data?.kpi_counts ?? {}
+  const availableKpis = Object.keys(journeysKpis)
+  const primaryKpiId = journeysQuery.data?.primary_kpi_id ?? null
+
+  // Initialise conversion key lazily from primary KPI when both are loaded
+  if (!conversionKey && primaryKpiId && availableKpis.length && !perfQuery.isLoading && journeysQuery.isSuccess) {
+    setConversionKey(primaryKpiId)
+  }
 
   if (loading) {
     return (
@@ -281,6 +365,8 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
     { label: 'Avg CPA', value: formatCurrency(avgCPA), def: '' },
   ]
 
+  const coverage = data.mapping_coverage
+
   const chartData = filteredCampaigns.map((c) => ({
     name: c.campaign_name ? `${c.channel} / ${c.campaign_name}` : c.campaign,
     spend: c.spend,
@@ -289,13 +375,47 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
 
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: t.space.md, flexWrap: 'wrap', gap: t.space.md }}>
+      {/* Page title + measurement context bar */}
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'flex-start',
+          marginBottom: t.space.sm,
+          flexWrap: 'wrap',
+          gap: t.space.md,
+        }}
+      >
         <div>
-          <h1 style={{ margin: 0, fontSize: t.font.size2xl, fontWeight: t.font.weightBold, color: t.color.text, letterSpacing: '-0.02em' }}>
+          <h1
+            style={{
+              margin: 0,
+              fontSize: t.font.size2xl,
+              fontWeight: t.font.weightBold,
+              color: t.color.text,
+              letterSpacing: '-0.02em',
+            }}
+          >
             Campaign Performance
           </h1>
-          <p style={{ margin: `${t.space.xs}px 0 0`, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-            Attribution model: <strong style={{ color: t.color.accent }}>{MODEL_LABELS[model] || model}</strong>. Search and filter below; set budget targets to compare vs actual spend.
+          <p
+            style={{
+              margin: `${t.space.xs}px 0 0`,
+              fontSize: t.font.sizeSm,
+              color: t.color.textSecondary,
+            }}
+          >
+            Attribution model:{' '}
+            <strong style={{ color: t.color.accent }}>{MODEL_LABELS[model] || model}</strong>
+            {data.config?.conversion_key && (
+              <>
+                {' '}
+                · Conversion:{' '}
+                <strong>
+                  {data.config.conversion_key}
+                </strong>
+              </>
+            )}
           </p>
         </div>
         <button
@@ -315,6 +435,246 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
         >
           Why?
         </button>
+      </div>
+
+      {/* Measurement context controls */}
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: t.space.md,
+          alignItems: 'center',
+          marginBottom: t.space.lg,
+          background: t.color.surface,
+          border: `1px solid ${t.color.borderLight}`,
+          borderRadius: t.radius.lg,
+          padding: t.space.md,
+          boxShadow: t.shadowSm,
+        }}
+      >
+        {/* Conversion selector */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <span
+            style={{
+              fontSize: t.font.sizeXs,
+              fontWeight: t.font.weightMedium,
+              color: t.color.textSecondary,
+            }}
+          >
+            Conversion
+          </span>
+          <select
+            value={conversionKey}
+            onChange={(e) => setConversionKey(e.target.value)}
+            style={{
+              padding: `${t.space.xs}px ${t.space.sm}px`,
+              fontSize: t.font.sizeSm,
+              border: `1px solid ${t.color.border}`,
+              borderRadius: t.radius.sm,
+              minWidth: 140,
+            }}
+          >
+            {availableKpis.length === 0 && <option value="">Primary KPI</option>}
+            {availableKpis.map((k) => (
+              <option key={k} value={k}>
+                {k}
+                {k === primaryKpiId ? ' (primary)' : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Direct handling */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <span
+            style={{
+              fontSize: t.font.sizeXs,
+              fontWeight: t.font.weightMedium,
+              color: t.color.textSecondary,
+            }}
+          >
+            Direct handling
+          </span>
+          <div
+            style={{
+              display: 'inline-flex',
+              borderRadius: t.radius.full,
+              border: `1px solid ${t.color.border}`,
+              overflow: 'hidden',
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setDirectMode('include')}
+              style={{
+                padding: `${t.space.xs}px ${t.space.sm}px`,
+                fontSize: t.font.sizeXs,
+                border: 'none',
+                cursor: 'pointer',
+                backgroundColor: directMode === 'include' ? t.color.accent : 'transparent',
+                color: directMode === 'include' ? t.color.surface : t.color.textSecondary,
+              }}
+            >
+              Include Direct
+            </button>
+            <button
+              type="button"
+              onClick={() => setDirectMode('exclude')}
+              style={{
+                padding: `${t.space.xs}px ${t.space.sm}px`,
+                fontSize: t.font.sizeXs,
+                border: 'none',
+                cursor: 'pointer',
+                backgroundColor: directMode === 'exclude' ? t.color.accent : 'transparent',
+                color: directMode === 'exclude' ? t.color.surface : t.color.textSecondary,
+              }}
+            >
+              Exclude Direct
+            </button>
+          </div>
+        </div>
+
+        {/* Compare vs previous period toggle (UI only for now) */}
+        <label
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            fontSize: t.font.sizeSm,
+            color: t.color.textSecondary,
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={comparePrevious}
+            onChange={(e) => setComparePrevious(e.target.checked)}
+          />
+          Compare to previous period
+        </label>
+
+        {/* Lookback / eligibility summary */}
+        <div
+          style={{
+            marginLeft: 'auto',
+            fontSize: t.font.sizeXs,
+            color: t.color.textMuted,
+            maxWidth: 360,
+          }}
+        >
+          {data.config?.time_window ? (
+            <>
+              Click lookback:{' '}
+              {data.config.time_window.click_lookback_days ?? '—'}d · Impression lookback:{' '}
+              {data.config.time_window.impression_lookback_days ?? '—'}d · Session timeout:{' '}
+              {data.config.time_window.session_timeout_minutes ?? '—'}min
+            </>
+          ) : (
+            <>Measurement windows not configured for this model.</>
+          )}
+        </div>
+      </div>
+
+      {/* KPI strip + mapping coverage */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+          gap: t.space.md,
+          marginBottom: t.space.xl,
+        }}
+      >
+        {kpis.map((kpi) => (
+          <div
+            key={kpi.label}
+            style={{
+              background: t.color.surface,
+              border: `1px solid ${t.color.borderLight}`,
+              borderRadius: t.radius.md,
+              padding: `${t.space.lg}px ${t.space.xl}px`,
+              boxShadow: t.shadowSm,
+            }}
+          >
+            <div
+              style={{
+                fontSize: t.font.sizeXs,
+                fontWeight: t.font.weightMedium,
+                color: t.color.textMuted,
+                textTransform: 'uppercase',
+                letterSpacing: '0.04em',
+              }}
+              title={kpi.def}
+            >
+              {kpi.label}
+            </div>
+            <div
+              style={{
+                fontSize: t.font.sizeXl,
+                fontWeight: t.font.weightBold,
+                color: t.color.text,
+                marginTop: t.space.xs,
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              {kpi.value}
+            </div>
+          </div>
+        ))}
+        <div
+          style={{
+            background: t.color.surface,
+            border: `1px solid ${t.color.borderLight}`,
+            borderRadius: t.radius.md,
+            padding: `${t.space.lg}px ${t.space.xl}px`,
+            boxShadow: t.shadowSm,
+          }}
+        >
+          <div
+            style={{
+              fontSize: t.font.sizeXs,
+              fontWeight: t.font.weightMedium,
+              color: t.color.textMuted,
+              textTransform: 'uppercase',
+              letterSpacing: '0.04em',
+            }}
+          >
+            Mapping coverage
+          </div>
+          <div
+            style={{
+              marginTop: t.space.xs,
+              fontSize: t.font.sizeSm,
+              color: t.color.textSecondary,
+            }}
+          >
+            Spend mapped:{' '}
+            <strong style={{ color: coverage && coverage.spend_mapped_pct < 95 ? t.color.warning : t.color.success }}>
+              {coverage ? `${coverage.spend_mapped_pct.toFixed(1)}%` : '—'}
+            </strong>
+          </div>
+          <div
+            style={{
+              marginTop: 2,
+              fontSize: t.font.sizeSm,
+              color: t.color.textSecondary,
+            }}
+          >
+            Value mapped:{' '}
+            <strong style={{ color: coverage && coverage.value_mapped_pct < 95 ? t.color.warning : t.color.success }}>
+              {coverage ? `${coverage.value_mapped_pct.toFixed(1)}%` : '—'}
+            </strong>
+          </div>
+          {coverage && (coverage.spend_mapped_pct < 99.5 || coverage.value_mapped_pct < 99.5) && (
+            <div
+              style={{
+                marginTop: t.space.xs,
+                fontSize: t.font.sizeXs,
+                color: t.color.textMuted,
+              }}
+            >
+              Some spend or conversions are not mapped to campaigns. Check Data Quality to fix taxonomy and UTM mappings.
+            </div>
+          )}
+        </div>
       </div>
 
       {showWhy && (
@@ -529,7 +889,13 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
           </h3>
           <button
             type="button"
-            onClick={() => exportCampaignsCSV(filteredCampaigns)}
+            onClick={() =>
+              exportCampaignsCSV(filteredCampaigns, {
+                conversionKey,
+                configVersion: data.config?.config_version ?? null,
+                directMode,
+              })
+            }
             style={{
               padding: `${t.space.sm}px ${t.space.lg}px`,
               fontSize: t.font.sizeSm,

@@ -293,6 +293,152 @@ def markov(journeys: List[Dict]) -> Dict[str, float]:
     return credit
 
 
+def compute_markov_diagnostics(
+    journeys: List[Dict],
+    credit: Dict[str, float],
+) -> Dict[str, Any]:
+    """
+    Lightweight diagnostics for Markov reliability.
+
+    Uses the same transition-building intuition as the markov() function but
+    does NOT change attribution math. Intended for UI warnings only.
+    """
+    diagnostics: Dict[str, Any] = {}
+
+    total_journeys = len(journeys)
+    converted_journeys = sum(1 for j in journeys if j.get("converted", True))
+
+    # Rebuild transition counts (mirrors markov() logic, simplified)
+    transitions: Dict[Tuple[str, str], int] = defaultdict(int)
+    for j in journeys:
+        tps = j.get("touchpoints", [])
+        converted = j.get("converted", True)
+        channels = ["__start__"] + [tp.get("channel", "unknown") for tp in tps]
+        if converted:
+            channels.append("__conversion__")
+        else:
+            channels.append("__null__")
+        for i in range(len(channels) - 1):
+            transitions[(channels[i], channels[i + 1])] += 1
+
+    # States / transitions summary
+    all_states = set()
+    for (a, b) in transitions:
+        all_states.add(a)
+        all_states.add(b)
+
+    marketing_states = sorted(
+        s for s in all_states if s not in ("__start__", "__conversion__", "__null__")
+    )
+    unique_states = len(marketing_states)
+    unique_transitions = len(transitions)
+
+    # Top transitions (excluding purely technical states where possible)
+    top_transitions: List[Dict[str, Any]] = []
+    if transitions:
+        sorted_trans = sorted(transitions.items(), key=lambda x: -x[1])
+        total_transitions = sum(count for (_edge, count) in sorted_trans) or 1
+        for (a, b), count in sorted_trans[:10]:
+            top_transitions.append(
+                {
+                    "from": a,
+                    "to": b,
+                    "count": count,
+                    "share": round(count / total_transitions, 4),
+                }
+            )
+
+    # Credit distribution heuristics
+    total_credit = sum(credit.values()) or 0.0
+    credit_shares: Dict[str, float] = {}
+    max_share = 0.0
+    direct_share = 0.0
+    if total_credit > 0:
+        for ch, val in credit.items():
+            share = float(val) / float(total_credit)
+            credit_shares[ch] = share
+            if share > max_share:
+                max_share = share
+            if ch.lower() == "direct":
+                direct_share = share
+
+    shares_list = list(credit_shares.values())
+    share_std = float(np.std(shares_list)) if shares_list else 0.0
+
+    # Heuristics for reliability
+    warnings: List[str] = []
+    reliability = "ok"
+    insufficient_data = False
+
+    # Very low sample sizes -> unreliable
+    if converted_journeys < 20 or total_journeys < 50 or unique_transitions < 3:
+        warnings.append(
+            "Very low journey volume or too few unique paths for stable Markov estimates."
+        )
+        reliability = "unreliable"
+        insufficient_data = True
+
+    # Limited journeys but not catastrophic
+    elif converted_journeys < 100 or total_journeys < 200:
+        warnings.append(
+            "Limited journey volume; treat Markov results as directional rather than precise."
+        )
+        reliability = "warning"
+
+    # Too few distinct states
+    if unique_states <= 2 and not insufficient_data:
+        warnings.append(
+            "Too few distinct marketing states observed; Markov chain is almost degenerate."
+        )
+        reliability = "unreliable"
+
+    # Extreme credit concentration
+    if max_share >= 0.7:
+        warnings.append(
+            "Markov credit is highly concentrated in a single channel (70%+). Check tracking and source mapping."
+        )
+        reliability = "warning" if reliability != "unreliable" else reliability
+
+    # Suspiciously uniform splits
+    if share_std < 0.02 and len(shares_list) >= 4 and total_credit > 0:
+        warnings.append(
+            "Credit is split almost uniformly across channels, which can indicate noisy or uninformative paths."
+        )
+        reliability = "warning" if reliability == "ok" else reliability
+
+    # Direct dominance
+    if direct_share >= 0.6:
+        warnings.append(
+            "Direct receives an unusually large share of Markov credit (60%+). Consider using a Direct view filter and validating source tagging."
+        )
+        reliability = "unreliable"
+
+    diagnostics.update(
+        {
+            "journeys_used": total_journeys,
+            "converted_journeys": converted_journeys,
+            "unique_states": unique_states,
+            "unique_transitions": unique_transitions,
+            "top_transitions": top_transitions,
+            "credit_shares": credit_shares,
+            "max_credit_share": round(max_share, 4),
+            "direct_share": round(direct_share, 4),
+            "share_std": round(share_std, 4),
+            "warnings": warnings,
+            "reliability": reliability,
+            "insufficient_data": insufficient_data,
+            "what_to_do_next": [
+                "Increase the data window or volume so more journeys are included.",
+                "Check join rate and campaign mapping; fix missing or 'direct' heavy traffic where possible.",
+                "Toggle the Direct view filter in the UI and compare deltas across models.",
+                "Prefer simpler attribution models (e.g. Linear or Position-based) until data quality improves.",
+            ],
+        }
+    )
+
+    return diagnostics
+
+
 # ---------------------------------------------------------------------------
 # Unified entry point
 # ---------------------------------------------------------------------------
@@ -343,6 +489,13 @@ def run_attribution(
     total_value = sum(j.get("conversion_value", 1.0) for j in converted_journeys)
 
     credit = fn(converted_journeys, **kwargs) if kwargs else fn(converted_journeys)
+    diagnostics: Optional[Dict[str, Any]] = None
+    if model == "markov":
+        try:
+            diagnostics = compute_markov_diagnostics(converted_journeys, credit)
+        except Exception as exc:
+            # Diagnostics are best-effort; never break attribution if they fail.
+            logger.warning("Failed to compute Markov diagnostics: %s", exc)
 
     # Build per-channel detail
     total_credit = sum(credit.values()) or 1.0
@@ -355,13 +508,16 @@ def run_attribution(
             "attributed_conversions": round(val / (total_value / total_conversions) if total_value > 0 else 0, 2),
         })
 
-    return {
+    result: Dict[str, Any] = {
         "model": model,
         "channel_credit": {ch: round(v, 2) for ch, v in credit.items()},
         "total_conversions": total_conversions,
         "total_value": round(total_value, 2),
         "channels": channels,
     }
+    if diagnostics is not None:
+        result["diagnostics"] = diagnostics
+    return result
 
 
 def run_all_models(journeys: List[Dict]) -> List[Dict[str, Any]]:

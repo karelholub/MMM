@@ -9,6 +9,7 @@ import io
 import json
 import os
 import time
+import uuid
 import requests
 from datetime import datetime
 from app.utils.token_store import save_token, get_token, delete_token, get_all_connected_platforms
@@ -164,10 +165,48 @@ class MeiroCDPExportRequest(BaseModel):
     segment_id: Optional[str] = None
 
 class ExpenseEntry(BaseModel):
+    # Core classification
     channel: str
-    amount: float
-    period: Optional[str] = None  # e.g. "2024-01"
+    cost_type: str = "Media Spend"  # Media Spend, Platform Fees, etc.
+
+    # Amounts & currencies
+    amount: float  # original amount
+    currency: str = "USD"  # original currency code
+    reporting_currency: str = "USD"
+    converted_amount: Optional[float] = None
+    fx_rate: Optional[float] = None
+    fx_date: Optional[str] = None  # label only, e.g. "2024-01-15"
+
+    # Periods
+    period: Optional[str] = None  # legacy field kept for compatibility (YYYY-MM)
+    service_period_start: Optional[str] = None  # ISO date
+    service_period_end: Optional[str] = None  # ISO date
+    entry_date: Optional[str] = None  # invoice/entry date (ISO date)
+
+    # References & notes
+    invoice_ref: Optional[str] = None
+    external_link: Optional[str] = None
     notes: Optional[str] = None
+
+    # Provenance & status
+    source_type: str = "manual"  # manual | import
+    source_name: Optional[str] = None  # e.g. "google_ads", "meta_ads"
+    status: str = "active"  # active | deleted
+
+    # Audit trail (shallow, no user system)
+    created_at: Optional[str] = None  # ISO timestamp
+    updated_at: Optional[str] = None  # ISO timestamp
+    deleted_at: Optional[str] = None  # ISO timestamp
+    actor_type: str = "manual"  # manual | system | import
+    change_note: Optional[str] = None
+
+
+class ExpenseChangeEvent(BaseModel):
+    expense_id: str
+    timestamp: str
+    event_type: str  # created | updated | deleted | restored
+    actor_type: str  # manual | system | import
+    note: Optional[str] = None
 
 class AttributionMappingConfig(BaseModel):
     touchpoint_attr: str = "touchpoints"
@@ -180,7 +219,13 @@ class AttributionMappingConfig(BaseModel):
 
 RUNS: Dict[str, Any] = {}
 DATASETS: Dict[str, Dict[str, Any]] = {}
-EXPENSES: Dict[str, ExpenseEntry] = {}  # key: "{channel}_{period}"
+EXPENSES: Dict[str, ExpenseEntry] = {}  # key: arbitrary unique id
+EXPENSE_AUDIT_LOG: List[ExpenseChangeEvent] = []
+
+# Import health & reconciliation (per-source sync state)
+IMPORT_SYNC_STATE: Dict[str, Dict[str, Any]] = {}  # source -> { last_success_at, last_attempt_at, status, last_error, action_hint, records_imported, platform_total, period_start, period_end }
+SYNC_IN_PROGRESS: set = set()  # source names currently syncing
+
 JOURNEYS: List[Dict] = []  # Current loaded journeys
 ATTRIBUTION_RESULTS: Dict[str, Any] = {}  # Cached attribution results
 
@@ -523,13 +568,118 @@ DATASETS["sample-weekly-realistic"] = {"path": SAMPLE_DIR / "sample-weekly-reali
 DATASETS["sample-attribution-weekly"] = {"path": SAMPLE_DIR / "sample-attribution-weekly.csv", "type": "attribution"}
 DATASETS["sample-weekly-campaigns"] = {"path": SAMPLE_DIR / "sample-weekly-campaigns.csv", "type": "sales"}
 
+def _now_iso() -> str:
+    return datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+
+def _default_reporting_currency() -> str:
+    # For now, we treat USD as the default reporting currency.
+    # This could later be made configurable without changing the API shape.
+    return "USD"
+
+
+def _with_converted_amount(entry: ExpenseEntry) -> ExpenseEntry:
+    """
+    Ensure converted_amount is populated.
+    For now we assume reporting_currency == currency and fx_rate == 1.0 by default.
+    This keeps behaviour predictable while surfacing FX metadata in the UI.
+    """
+    if entry.reporting_currency is None:
+        entry.reporting_currency = _default_reporting_currency()
+    if entry.converted_amount is None:
+        # If no explicit FX information, assume 1:1 conversion for now.
+        entry.fx_rate = entry.fx_rate or 1.0
+        entry.converted_amount = entry.amount * (entry.fx_rate or 1.0)
+    return entry
+
+
 # Load sample expenses
 EXPENSES = {
-    "google_ads_2024-01": ExpenseEntry(channel="google_ads", amount=12500.00, period="2024-01", notes="Google Ads Jan 2024"),
-    "meta_ads_2024-01": ExpenseEntry(channel="meta_ads", amount=8200.00, period="2024-01", notes="Meta Ads Jan 2024"),
-    "linkedin_ads_2024-01": ExpenseEntry(channel="linkedin_ads", amount=3500.00, period="2024-01", notes="LinkedIn Ads Jan 2024"),
-    "email_2024-01": ExpenseEntry(channel="email", amount=450.00, period="2024-01", notes="Email platform cost Jan 2024"),
-    "whatsapp_2024-01": ExpenseEntry(channel="whatsapp", amount=280.00, period="2024-01", notes="WhatsApp Business Jan 2024"),
+    "google_ads_2024-01": _with_converted_amount(
+        ExpenseEntry(
+            channel="google_ads",
+            cost_type="Media Spend",
+            amount=12500.00,
+            currency="USD",
+            reporting_currency=_default_reporting_currency(),
+            period="2024-01",
+            service_period_start="2024-01-01",
+            service_period_end="2024-01-31",
+            notes="Google Ads Jan 2024",
+            source_type="import",
+            source_name="google_ads",
+            actor_type="import",
+            created_at=_now_iso(),
+        )
+    ),
+    "meta_ads_2024-01": _with_converted_amount(
+        ExpenseEntry(
+            channel="meta_ads",
+            cost_type="Media Spend",
+            amount=8200.00,
+            currency="USD",
+            reporting_currency=_default_reporting_currency(),
+            period="2024-01",
+            service_period_start="2024-01-01",
+            service_period_end="2024-01-31",
+            notes="Meta Ads Jan 2024",
+            source_type="import",
+            source_name="meta_ads",
+            actor_type="import",
+            created_at=_now_iso(),
+        )
+    ),
+    "linkedin_ads_2024-01": _with_converted_amount(
+        ExpenseEntry(
+            channel="linkedin_ads",
+            cost_type="Media Spend",
+            amount=3500.00,
+            currency="USD",
+            reporting_currency=_default_reporting_currency(),
+            period="2024-01",
+            service_period_start="2024-01-01",
+            service_period_end="2024-01-31",
+            notes="LinkedIn Ads Jan 2024",
+            source_type="import",
+            source_name="linkedin_ads",
+            actor_type="import",
+            created_at=_now_iso(),
+        )
+    ),
+    "email_2024-01": _with_converted_amount(
+        ExpenseEntry(
+            channel="email",
+            cost_type="Tools/Software",
+            amount=450.00,
+            currency="USD",
+            reporting_currency=_default_reporting_currency(),
+            period="2024-01",
+            service_period_start="2024-01-01",
+            service_period_end="2024-01-31",
+            notes="Email platform cost Jan 2024",
+            source_type="manual",
+            source_name=None,
+            actor_type="manual",
+            created_at=_now_iso(),
+        )
+    ),
+    "whatsapp_2024-01": _with_converted_amount(
+        ExpenseEntry(
+            channel="whatsapp",
+            cost_type="Tools/Software",
+            amount=280.00,
+            currency="USD",
+            reporting_currency=_default_reporting_currency(),
+            period="2024-01",
+            service_period_start="2024-01-01",
+            service_period_end="2024-01-31",
+            notes="WhatsApp Business Jan 2024",
+            source_type="manual",
+            source_name=None,
+            actor_type="manual",
+            created_at=_now_iso(),
+        )
+    ),
 }
 
 # Load sample journeys at startup
@@ -850,9 +1000,25 @@ def get_journeys_summary(db=Depends(get_db)):
 
     converted = [j for j in JOURNEYS if j.get("converted", True)]
     channels: set = set()
+    # Derive simple date range from touchpoint timestamps for measurement context.
+    first_ts = None
+    last_ts = None
     for j in JOURNEYS:
         for tp in j.get("touchpoints", []):
             channels.add(tp.get("channel", "unknown"))
+            ts = tp.get("timestamp")
+            if not ts:
+                continue
+            try:
+                dt = pd.to_datetime(ts, errors="coerce")
+            except Exception:
+                dt = None
+            if dt is None or pd.isna(dt):
+                continue
+            if first_ts is None or dt < first_ts:
+                first_ts = dt
+            if last_ts is None or dt > last_ts:
+                last_ts = dt
 
     # KPI breakdown by configured definitions (journey-level kpi_type if present)
     kpi_counts: Dict[str, int] = {}
@@ -880,6 +1046,8 @@ def get_journeys_summary(db=Depends(get_db)):
         "primary_kpi_label": primary_kpi_label,
         "primary_kpi_count": primary_count,
         "kpi_counts": kpi_counts,
+        "date_min": first_ts.isoformat() if first_ts is not None else None,
+        "date_max": last_ts.isoformat() if last_ts is not None else None,
     }
 
 @app.post("/api/attribution/journeys/upload")
@@ -968,13 +1136,10 @@ def run_attribution_model(model: str = "linear", config_id: Optional[str] = None
         raise HTTPException(status_code=400, detail="No journeys loaded. Upload, import, or persist data first.")
     if model not in ATTRIBUTION_MODELS:
         raise HTTPException(status_code=400, detail=f"Unknown model: {model}. Available: {ATTRIBUTION_MODELS}")
-    resolved_cfg = None
-    effective_config_id = config_id or get_default_config_id()
+    resolved_cfg, meta = load_config_and_meta(db, config_id)
     journeys_for_model = JOURNEYS
-    if effective_config_id:
-        resolved_cfg = db.get(ORMModelConfig, effective_config_id)
-        if resolved_cfg:
-            journeys_for_model = apply_model_config_to_journeys(JOURNEYS, resolved_cfg.config_json or {})
+    if resolved_cfg:
+        journeys_for_model = apply_model_config_to_journeys(JOURNEYS, resolved_cfg.config_json or {})
 
     kwargs: Dict[str, Any] = {}
     if model == "time_decay":
@@ -983,10 +1148,10 @@ def run_attribution_model(model: str = "linear", config_id: Optional[str] = None
         kwargs["first_pct"] = SETTINGS.attribution.position_first_pct
         kwargs["last_pct"] = SETTINGS.attribution.position_last_pct
     result = run_attribution(journeys_for_model, model=model, **kwargs)
+    # Attach config metadata for measurement context if available
+    if meta:
+        result["config"] = meta
     ATTRIBUTION_RESULTS[model] = result
-    # Attach config metadata if used
-    if resolved_cfg:
-        result["config"] = {"id": resolved_cfg.id, "name": resolved_cfg.name, "version": resolved_cfg.version}
     return result
 
 @app.post("/api/attribution/run-all")
@@ -997,13 +1162,10 @@ def run_all_attribution_models(config_id: Optional[str] = None, db=Depends(get_d
         JOURNEYS = load_journeys_from_db(db)
     if not JOURNEYS:
         raise HTTPException(status_code=400, detail="No journeys loaded. Upload, import, or persist data first.")
-    resolved_cfg = None
-    effective_config_id = config_id or get_default_config_id()
+    resolved_cfg, meta = load_config_and_meta(db, config_id)
     journeys_for_model = JOURNEYS
-    if effective_config_id:
-        resolved_cfg = db.get(ORMModelConfig, effective_config_id)
-        if resolved_cfg:
-            journeys_for_model = apply_model_config_to_journeys(JOURNEYS, resolved_cfg.config_json or {})
+    if resolved_cfg:
+        journeys_for_model = apply_model_config_to_journeys(JOURNEYS, resolved_cfg.config_json or {})
 
     results = []
     for model in ATTRIBUTION_MODELS:
@@ -1015,8 +1177,8 @@ def run_all_attribution_models(config_id: Optional[str] = None, db=Depends(get_d
                 kwargs["first_pct"] = SETTINGS.attribution.position_first_pct
                 kwargs["last_pct"] = SETTINGS.attribution.position_last_pct
             result = run_attribution(journeys_for_model, model=model, **kwargs)
-            if resolved_cfg:
-                result["config"] = {"id": resolved_cfg.id, "name": resolved_cfg.name, "version": resolved_cfg.version}
+            if meta:
+                result["config"] = meta
             results.append(result)
             ATTRIBUTION_RESULTS[model] = result
         except Exception as exc:
@@ -1184,7 +1346,10 @@ def get_channel_performance(model: str = "linear", config_id: Optional[str] = No
 
     expense_by_channel: Dict[str, float] = {}
     for exp in EXPENSES.values():
-        expense_by_channel[exp.channel] = expense_by_channel.get(exp.channel, 0) + exp.amount
+        if getattr(exp, "status", "active") == "deleted":
+            continue
+        converted = exp.converted_amount if getattr(exp, "converted_amount", None) is not None else exp.amount
+        expense_by_channel[exp.channel] = expense_by_channel.get(exp.channel, 0) + converted
 
     performance = compute_channel_performance(result, expense_by_channel)
 
@@ -1213,7 +1378,12 @@ def get_channel_performance(model: str = "linear", config_id: Optional[str] = No
 
 
 @app.get("/api/attribution/campaign-performance")
-def get_campaign_performance(model: str = "linear", config_id: Optional[str] = None, db=Depends(get_db)):
+def get_campaign_performance(
+    model: str = "linear",
+    config_id: Optional[str] = None,
+    conversion_key: Optional[str] = None,
+    db=Depends(get_db),
+):
     """Campaign-level attribution (channel:campaign). Requires touchpoints with campaign. Returns campaigns with attributed value and optional suggested next (NBA)."""
     global JOURNEYS
     if not JOURNEYS:
@@ -1234,6 +1404,14 @@ def get_campaign_performance(model: str = "linear", config_id: Optional[str] = N
     if resolved_cfg:
         journeys_for_model = apply_model_config_to_journeys(JOURNEYS, resolved_cfg.config_json or {})
 
+    # Optional filter by conversion key (kpi_type on journeys).
+    # If no explicit conversion_key is provided, fall back to model config's primary conversion when present.
+    effective_conv = conversion_key or (meta.get("conversion_key") if meta else None)
+    if effective_conv:
+        journeys_for_model = [
+            j for j in journeys_for_model if j.get("kpi_type") == effective_conv
+        ]
+
     kwargs: Dict[str, Any] = {}
     if model == "time_decay":
         kwargs["half_life_days"] = SETTINGS.attribution.time_decay_half_life_days
@@ -1243,7 +1421,16 @@ def get_campaign_performance(model: str = "linear", config_id: Optional[str] = N
     result = run_attribution_campaign(journeys_for_model, model=model, **kwargs)
     expense_by_channel: Dict[str, float] = {}
     for exp in EXPENSES.values():
-        expense_by_channel[exp.channel] = expense_by_channel.get(exp.channel, 0) + exp.amount
+        if getattr(exp, "status", "active") == "deleted":
+            continue
+        converted = exp.converted_amount if getattr(exp, "converted_amount", None) is not None else exp.amount
+        expense_by_channel[exp.channel] = expense_by_channel.get(exp.channel, 0) + converted
+
+    # Mapping coverage: how much spend / value is mapped to known campaigns
+    total_spend = sum(expense_by_channel.values())
+    total_attributed_value = float(result.get("total_value", 0) or 0.0)
+    mapped_spend = 0.0
+    mapped_value = 0.0
 
     campaigns_list = []
     for ch in result.get("channels", []):
@@ -1251,8 +1438,10 @@ def get_campaign_performance(model: str = "linear", config_id: Optional[str] = N
         channel_name = step.split(":", 1)[0] if ":" in step else step
         campaign_name = step.split(":", 1)[1] if ":" in step else None
         spend = expense_by_channel.get(channel_name, 0)
+        mapped_spend += spend
         attr_val = ch["attributed_value"]
         attr_conv = ch.get("attributed_conversions", 0)
+        mapped_value += attr_val
         roi = ((attr_val - spend) / spend) if spend and spend > 0 else None  # ratio, e.g. 1.5 = 150%
         roas = (attr_val / spend) if spend and spend > 0 else None
         cpa = (spend / attr_conv) if spend and attr_conv and attr_conv > 0 else None
@@ -1298,14 +1487,26 @@ def get_campaign_performance(model: str = "linear", config_id: Optional[str] = N
                 "label": snap.confidence_label,
                 "components": snap.components_json,
             }
+            c["confidence_score"] = snap.confidence_score
+
+    coverage_spend_pct = (mapped_spend / total_spend * 100.0) if total_spend > 0 else 0.0
+    coverage_value_pct = (mapped_value / total_attributed_value * 100.0) if total_attributed_value > 0 else 0.0
 
     return {
         "model": model,
         "campaigns": campaigns_list,
         "total_conversions": result.get("total_conversions", 0),
-        "total_value": result.get("total_value", 0),
-        "total_spend": sum(expense_by_channel.values()),
+        "total_value": total_attributed_value,
+        "total_spend": total_spend,
         "config": meta,
+        "mapping_coverage": {
+            "spend_mapped_pct": coverage_spend_pct,
+            "value_mapped_pct": coverage_value_pct,
+            "spend_mapped": mapped_spend,
+            "spend_total": total_spend,
+            "value_mapped": mapped_value,
+            "value_total": total_attributed_value,
+        },
     }
 
 
@@ -1337,36 +1538,443 @@ def get_campaign_performance_trends(db=Depends(get_db)):
 # ==================== Expense Management ====================
 
 @app.get("/api/expenses")
-def list_expenses():
-    """List all expense entries."""
-    return [{"id": k, **v.model_dump()} for k, v in EXPENSES.items()]
+def list_expenses(
+    include_deleted: bool = Query(False),
+    channel: Optional[str] = None,
+    cost_type: Optional[str] = None,
+    source_type: Optional[str] = None,
+    currency: Optional[str] = None,
+    status: Optional[str] = None,
+    service_period_start: Optional[str] = None,
+    service_period_end: Optional[str] = None,
+    search: Optional[str] = None,
+):
+    """
+    List expense entries with basic filtering.
+    Soft-deleted records are excluded by default unless include_deleted=true.
+    """
+    items = []
+    for expense_id, exp in EXPENSES.items():
+        if not include_deleted and exp.status == "deleted":
+            continue
+        if channel and exp.channel != channel:
+            continue
+        if cost_type and exp.cost_type != cost_type:
+            continue
+        if source_type and exp.source_type != source_type:
+            continue
+        if currency and exp.currency != currency:
+            continue
+        if status and exp.status != status:
+            continue
+        if service_period_start and exp.service_period_start and exp.service_period_start < service_period_start:
+            continue
+        if service_period_end and exp.service_period_end and exp.service_period_end > service_period_end:
+            continue
+        if search:
+            haystack = " ".join(
+                filter(
+                    None,
+                    [
+                        exp.notes,
+                        exp.invoice_ref,
+                        exp.external_link,
+                    ],
+                )
+            ).lower()
+            if search.lower() not in haystack:
+                continue
+        items.append({"id": expense_id, **exp.model_dump()})
+    return items
+
 
 @app.post("/api/expenses")
 def add_expense(entry: ExpenseEntry):
-    """Add or update an expense entry."""
-    key = f"{entry.channel}_{entry.period or 'all'}"
-    EXPENSES[key] = entry
-    return {"id": key, **entry.model_dump()}
+    """
+    Create a new expense entry.
+    Optional change_note can be set on the entry for the audit trail.
+    """
+    expense_id = str(uuid.uuid4())
+    now = _now_iso()
+    entry.created_at = now
+    entry.updated_at = now
+    entry.actor_type = entry.actor_type or "manual"
+    change_note = entry.change_note
+    entry = _with_converted_amount(entry)
+    EXPENSES[expense_id] = entry
 
-@app.delete("/api/expenses/{expense_id}")
-def delete_expense(expense_id: str):
-    """Delete an expense entry."""
+    EXPENSE_AUDIT_LOG.append(
+        ExpenseChangeEvent(
+            expense_id=expense_id,
+            timestamp=now,
+            event_type="created",
+            actor_type=entry.actor_type,
+            note=change_note,
+        )
+    )
+    return {"id": expense_id, **entry.model_dump()}
+
+
+@app.patch("/api/expenses/{expense_id}")
+def update_expense(expense_id: str, entry: ExpenseEntry):
+    """
+    Update an existing expense entry while preserving its audit history.
+    Optional change_note can be set on the entry.
+    """
     if expense_id not in EXPENSES:
         raise HTTPException(status_code=404, detail="Expense not found")
-    del EXPENSES[expense_id]
-    return {"message": f"Deleted expense {expense_id}"}
+    existing = EXPENSES[expense_id]
+    now = _now_iso()
+    # Preserve created_at if already set
+    entry.created_at = existing.created_at or now
+    entry.updated_at = now
+    entry.actor_type = entry.actor_type or "manual"
+    change_note = entry.change_note
+    entry = _with_converted_amount(entry)
+    EXPENSES[expense_id] = entry
+
+    EXPENSE_AUDIT_LOG.append(
+        ExpenseChangeEvent(
+            expense_id=expense_id,
+            timestamp=now,
+            event_type="updated",
+            actor_type=entry.actor_type,
+            note=change_note,
+        )
+    )
+    return {"id": expense_id, **entry.model_dump()}
+
+
+@app.delete("/api/expenses/{expense_id}")
+def delete_expense(expense_id: str, change_note: Optional[str] = Query(None)):
+    """
+    Soft-delete an expense entry.
+    """
+    if expense_id not in EXPENSES:
+        raise HTTPException(status_code=404, detail="Expense not found")
+    entry = EXPENSES[expense_id]
+    if entry.status == "deleted":
+        return {"id": expense_id, **entry.model_dump()}
+
+    now = _now_iso()
+    entry.status = "deleted"
+    entry.deleted_at = now
+    entry.updated_at = now
+    entry.change_note = change_note
+    EXPENSES[expense_id] = entry
+
+    EXPENSE_AUDIT_LOG.append(
+        ExpenseChangeEvent(
+            expense_id=expense_id,
+            timestamp=now,
+            event_type="deleted",
+            actor_type=entry.actor_type or "manual",
+            note=change_note,
+        )
+    )
+    return {"id": expense_id, **entry.model_dump()}
+
+
+@app.post("/api/expenses/{expense_id}/restore")
+def restore_expense(expense_id: str, change_note: Optional[str] = Query(None)):
+    """
+    Restore a soft-deleted expense entry.
+    """
+    if expense_id not in EXPENSES:
+        raise HTTPException(status_code=404, detail="Expense not found")
+    entry = EXPENSES[expense_id]
+    if entry.status != "deleted":
+        return {"id": expense_id, **entry.model_dump()}
+
+    now = _now_iso()
+    entry.status = "active"
+    entry.deleted_at = None
+    entry.updated_at = now
+    entry.change_note = change_note
+    EXPENSES[expense_id] = entry
+
+    EXPENSE_AUDIT_LOG.append(
+        ExpenseChangeEvent(
+            expense_id=expense_id,
+            timestamp=now,
+            event_type="restored",
+            actor_type=entry.actor_type or "manual",
+            note=change_note,
+        )
+    )
+    return {"id": expense_id, **entry.model_dump()}
+
+
+@app.get("/api/expenses/{expense_id}/audit")
+def get_expense_audit(expense_id: str):
+    """
+    Return audit trail events for a single expense.
+    """
+    events = [e.model_dump() for e in EXPENSE_AUDIT_LOG if e.expense_id == expense_id]
+    # Sort by timestamp ascending for timeline display
+    events.sort(key=lambda e: e["timestamp"])
+    return events
+
 
 @app.get("/api/expenses/summary")
-def expense_summary():
-    """Get aggregated expense summary by channel."""
+def expense_summary(
+    include_deleted: bool = Query(False),
+    service_period_start: Optional[str] = None,
+    service_period_end: Optional[str] = None,
+):
+    """
+    Get aggregated expense summary by channel.
+    Uses converted_amount in reporting currency and can be filtered by service period.
+    """
     by_channel: Dict[str, float] = {}
+    total_manual = 0.0
+    total_imported = 0.0
+    total_unknown = 0.0
+    reporting_currency = _default_reporting_currency()
+
     for exp in EXPENSES.values():
-        by_channel[exp.channel] = by_channel.get(exp.channel, 0) + exp.amount
+        if not include_deleted and getattr(exp, "status", "active") == "deleted":
+            continue
+        if service_period_start and exp.service_period_start and exp.service_period_start < service_period_start:
+            continue
+        if service_period_end and exp.service_period_end and exp.service_period_end > service_period_end:
+            continue
+
+        converted = exp.converted_amount if exp.converted_amount is not None else exp.amount
+        by_channel[exp.channel] = by_channel.get(exp.channel, 0.0) + converted
+
+        source_type = getattr(exp, "source_type", "manual")
+        if source_type == "import":
+            total_imported += converted
+        elif source_type == "manual":
+            total_manual += converted
+        else:
+            total_unknown += converted
+
+    total = sum(by_channel.values())
+    imported_share_pct = (total_imported / total * 100.0) if total > 0 else 0.0
+
     return {
         "by_channel": by_channel,
-        "total": sum(by_channel.values()),
+        "total": total,
         "channels": sorted(by_channel.keys()),
+        "reporting_currency": reporting_currency,
+        "imported_share_pct": imported_share_pct,
+        "manual_total": total_manual,
+        "imported_total": total_imported,
+        "unknown_total": total_unknown,
     }
+
+
+# ==================== Import Health & Reconciliation ====================
+
+# Known expense sources that can be synced (aligned with connectors)
+IMPORT_SOURCES = ["google_ads", "meta_ads", "linkedin_ads"]
+
+
+def _import_status_from_state(state: Dict[str, Any]) -> str:
+    """Derive Healthy / Stale / Broken / Partial from sync state."""
+    if not state:
+        return "unknown"
+    status = state.get("status") or "unknown"
+    if status in ("Healthy", "Stale", "Broken", "Partial"):
+        return status
+    # Infer from last success / attempt
+    last_ok = state.get("last_success_at")
+    last_attempt = state.get("last_attempt_at")
+    err = state.get("last_error")
+    if err:
+        return "Broken"
+    if last_ok:
+        return "Healthy"
+    if last_attempt:
+        return "Partial"
+    return "unknown"
+
+
+@app.get("/api/imports/health")
+def get_import_health():
+    """
+    Return import health per source: status, last sync times, records, error hint.
+    Overall freshness is computed from worst source status.
+    """
+    result = []
+    for source in IMPORT_SOURCES:
+        state = IMPORT_SYNC_STATE.get(source, {})
+        status = _import_status_from_state(state)
+        result.append({
+            "source": source,
+            "status": status,
+            "last_success_at": state.get("last_success_at"),
+            "last_attempt_at": state.get("last_attempt_at"),
+            "records_imported": state.get("records_imported"),
+            "period_start": state.get("period_start"),
+            "period_end": state.get("period_end"),
+            "last_error": state.get("last_error"),
+            "action_hint": state.get("action_hint"),
+            "syncing": source in SYNC_IN_PROGRESS,
+        })
+    # Overall freshness: worst status among sources that have been attempted
+    status_order = {"Broken": 3, "Stale": 2, "Partial": 1, "Healthy": 0, "unknown": -1}
+    attempted = [r for r in result if r["last_attempt_at"]]
+    overall = "Healthy"
+    if attempted:
+        worst = max(attempted, key=lambda r: status_order.get(r["status"], -1))
+        overall = worst["status"] if worst["status"] != "unknown" else "Stale"
+    return {"sources": result, "overall_freshness": overall}
+
+
+@app.post("/api/imports/sync/{source}")
+def trigger_sync(
+    source: str,
+    since: Optional[str] = Query(None),
+    until: Optional[str] = Query(None),
+):
+    """
+    Trigger a manual sync for the given source. Uses default date range if not provided.
+    Returns 409 if a sync for this source is already running.
+    """
+    if source not in IMPORT_SOURCES:
+        raise HTTPException(status_code=404, detail=f"Unknown source: {source}")
+    if source in SYNC_IN_PROGRESS:
+        raise HTTPException(status_code=409, detail="Sync already in progress for this source")
+
+    from datetime import timedelta
+    today = datetime.utcnow().date()
+    if not since:
+        since = (today - timedelta(days=30)).isoformat()
+    if not until:
+        until = today.isoformat()
+
+    SYNC_IN_PROGRESS.add(source)
+    now_iso = _now_iso()
+    IMPORT_SYNC_STATE.setdefault(source, {})["last_attempt_at"] = now_iso
+    IMPORT_SYNC_STATE[source]["period_start"] = since
+    IMPORT_SYNC_STATE[source]["period_end"] = until
+    IMPORT_SYNC_STATE[source]["last_error"] = None
+    IMPORT_SYNC_STATE[source]["action_hint"] = None
+
+    try:
+        if source == "meta_ads":
+            token_data = get_token("meta")
+            access_token = token_data.get("access_token") if token_data else None
+            if not access_token:
+                raise HTTPException(status_code=401, detail="No Meta access token. Connect your Meta account first.")
+            # Need ad_account_id - use first from config or a placeholder
+            ad_account_id = ds_config.get_effective("meta", "ad_account_id") or "me"
+            r = fetch_meta(ad_account_id=ad_account_id, since=since, until=until, access_token=access_token)
+        elif source == "google_ads":
+            r = fetch_google(segments_date_from=since, segments_date_to=until)
+        elif source == "linkedin_ads":
+            token_data = get_token("linkedin")
+            access_token = token_data.get("access_token") if token_data else None
+            if not access_token:
+                raise HTTPException(status_code=401, detail="No LinkedIn access token. Connect your account first.")
+            r = fetch_linkedin(since=since, until=until, access_token=access_token)
+        else:
+            r = {"rows": 0, "path": ""}
+
+        rows = r.get("rows", 0)
+        IMPORT_SYNC_STATE[source]["last_success_at"] = _now_iso()
+        IMPORT_SYNC_STATE[source]["status"] = "Healthy"
+        IMPORT_SYNC_STATE[source]["records_imported"] = rows
+        platform_total = 0.0
+        csv_name = {"meta_ads": "meta_ads.csv", "google_ads": "google_ads.csv", "linkedin_ads": "linkedin_ads.csv"}.get(source)
+        if csv_name and DATA_DIR.joinpath(csv_name).exists():
+            try:
+                df = pd.read_csv(DATA_DIR / csv_name)
+                platform_total = float(df["spend"].sum()) if "spend" in df.columns else 0.0
+            except Exception:
+                pass
+        IMPORT_SYNC_STATE[source]["platform_total"] = platform_total
+        return {"source": source, "status": "success", "rows": rows, "platform_total": platform_total}
+    except HTTPException:
+        raise
+    except Exception as e:
+        IMPORT_SYNC_STATE[source]["status"] = "Broken"
+        IMPORT_SYNC_STATE[source]["last_error"] = str(e)
+        IMPORT_SYNC_STATE[source]["action_hint"] = "Reconnect credentials or check connection."
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        SYNC_IN_PROGRESS.discard(source)
+
+
+@app.get("/api/imports/reconciliation")
+def get_reconciliation(
+    service_period_start: Optional[str] = Query(None),
+    service_period_end: Optional[str] = Query(None),
+):
+    """
+    Per-source reconciliation for the selected service period: platform total, app normalized total, delta, status.
+    """
+    period_start = service_period_start or ""
+    period_end = service_period_end or ""
+
+    rows = []
+    for source in IMPORT_SOURCES:
+        state = IMPORT_SYNC_STATE.get(source, {})
+        platform_total = state.get("platform_total") or 0.0
+        # App normalized total = sum of expenses from this source in period (converted amount, active only)
+        app_total = 0.0
+        for exp in EXPENSES.values():
+            if getattr(exp, "status", "active") == "deleted":
+                continue
+            if getattr(exp, "source_name", None) != source:
+                continue
+            if period_start and getattr(exp, "service_period_start", None) and exp.service_period_start < period_start:
+                continue
+            if period_end and getattr(exp, "service_period_end", None) and exp.service_period_end > period_end:
+                continue
+            app_total += exp.converted_amount if getattr(exp, "converted_amount", None) is not None else exp.amount
+
+        delta = platform_total - app_total
+        delta_pct = (delta / platform_total * 100.0) if platform_total else 0.0
+        # Status: OK if delta within 1%, Warning 1-5%, Critical >5%
+        if abs(delta_pct) <= 1.0:
+            rec_status = "OK"
+        elif abs(delta_pct) <= 5.0:
+            rec_status = "Warning"
+        else:
+            rec_status = "Critical"
+
+        rows.append({
+            "source": source,
+            "platform_total": platform_total,
+            "app_normalized_total": app_total,
+            "delta": delta,
+            "delta_pct": delta_pct,
+            "status": rec_status,
+        })
+    return {"period_start": period_start, "period_end": period_end, "rows": rows}
+
+
+@app.get("/api/imports/reconciliation/drilldown")
+def get_reconciliation_drilldown(
+    source: str,
+    service_period_start: Optional[str] = Query(None),
+    service_period_end: Optional[str] = Query(None),
+):
+    """
+    Lightweight drilldown: top missing days or campaigns (from stored CSV if available).
+    """
+    if source not in IMPORT_SOURCES:
+        raise HTTPException(status_code=404, detail="Unknown source")
+    out = {"source": source, "missing_days": [], "missing_campaigns": []}
+    csv_name = f"{source}.csv".replace("google_ads", "google_ads").replace("meta_ads", "meta_ads").replace("linkedin_ads", "linkedin_ads")
+    path = DATA_DIR / csv_name
+    if path.exists():
+        try:
+            df = pd.read_csv(path)
+            if "date" in df.columns and service_period_start and service_period_end:
+                in_range = df[df["date"].astype(str).between(service_period_start, service_period_end)]
+                if not in_range.empty:
+                    out["missing_days"] = in_range["date"].astype(str).unique().tolist()[:10]
+            if "campaign" in df.columns:
+                out["missing_campaigns"] = df["campaign"].dropna().unique().tolist()[:20]
+        except Exception:
+            pass
+    return out
+
 
 # ==================== OAuth Routes ====================
 
@@ -1625,6 +2233,32 @@ class NarrativeBlock(BaseModel):
     data_notes: List[str] = []
 
 
+class ChangeDecompositionBucket(BaseModel):
+    key: str  # "volume" | "mix" | "rate"
+    label: str
+    contribution: float
+    pct_of_total: Optional[float] = None
+    is_estimated: bool = False
+
+
+class ChangeDecomposition(BaseModel):
+    total_delta: float
+    buckets: List[ChangeDecompositionBucket] = []
+    basis: str = "journeys"  # journeys / conversions
+    is_estimated: bool = True
+
+
+class ComparabilityWarning(BaseModel):
+    severity: str  # info | warn | critical
+    message: str
+    action: Optional[str] = None
+
+
+class ComparabilitySummary(BaseModel):
+    rating: str  # high | medium | low
+    warnings: List[ComparabilityWarning] = []
+
+
 class ExplainabilitySummary(BaseModel):
     period: Dict[str, Any]
     drivers: List[ExplainabilityDriver]
@@ -1633,6 +2267,12 @@ class ExplainabilitySummary(BaseModel):
     mechanics: Dict[str, Any]
     feature_importance: List[FeatureImportanceItem] = []
     narrative: Optional[NarrativeBlock] = None
+    change_decomposition: Optional[ChangeDecomposition] = None
+    comparability: Optional[ComparabilitySummary] = None
+    config_diff: Dict[str, Any] = {}
+    data_quality_delta: Dict[str, Any] = {}
+    timeline: List[Dict[str, Any]] = []
+    channel_breakdowns: Dict[str, Any] = {}
 
 
 def _filter_journeys_by_period(journeys: List[Dict[str, Any]], start: datetime, end: datetime) -> List[Dict[str, Any]]:
@@ -1741,6 +2381,85 @@ def _build_explainability_narrative(
     )
 
 
+def _compute_change_decomposition(
+    curr_val: float,
+    prev_val: float,
+    curr_j_count: int,
+    prev_j_count: int,
+) -> Optional[ChangeDecomposition]:
+    """
+    Best-effort decomposition of attributed value delta into
+    volume vs mix vs rate/value effects.
+
+    We treat journey count as the volume proxy and value per journey
+    as the rate/value proxy. Mix is the residual.
+    """
+    delta_val = curr_val - prev_val
+    if abs(delta_val) < 1e-9:
+        return ChangeDecomposition(
+            total_delta=0.0,
+            buckets=[],
+            basis="journeys",
+            is_estimated=True,
+        )
+
+    # If we do not have both journey counts, we cannot decompose reliably.
+    if curr_j_count <= 0 or prev_j_count <= 0:
+        bucket = ChangeDecompositionBucket(
+            key="rate",
+            label="Rate / value",
+            contribution=delta_val,
+            pct_of_total=100.0,
+            is_estimated=True,
+        )
+        return ChangeDecomposition(
+            total_delta=delta_val,
+            buckets=[bucket],
+            basis="journeys",
+            is_estimated=True,
+        )
+
+    prev_avg = prev_val / prev_j_count if prev_j_count > 0 else 0.0
+    curr_avg = curr_val / curr_j_count if curr_j_count > 0 else 0.0
+
+    # Simple two-factor volume × rate decomposition, treat mix as residual.
+    volume_effect = (curr_j_count - prev_j_count) * prev_avg
+    rate_effect = curr_j_count * (curr_avg - prev_avg)
+    mix_effect = delta_val - volume_effect - rate_effect
+
+    buckets = [
+        ChangeDecompositionBucket(
+            key="volume",
+            label="Volume (journeys / conversions)",
+            contribution=round(volume_effect, 2),
+            is_estimated=True,
+        ),
+        ChangeDecompositionBucket(
+            key="mix",
+            label="Mix (channel share shift)",
+            contribution=round(mix_effect, 2),
+            is_estimated=True,
+        ),
+        ChangeDecompositionBucket(
+            key="rate",
+            label="Rate / value per journey",
+            contribution=round(rate_effect, 2),
+            is_estimated=True,
+        ),
+    ]
+
+    # Compute contribution % of each bucket.
+    for b in buckets:
+        b.pct_of_total = (b.contribution / delta_val * 100.0) if abs(delta_val) > 1e-9 else None
+
+    return ChangeDecomposition(
+        total_delta=round(delta_val, 2),
+        buckets=buckets,
+        basis="journeys",
+        is_estimated=True,
+    )
+
+
 @app.get("/api/explainability/summary", response_model=ExplainabilitySummary)
 def explainability_summary(
     scope: str = Query(..., pattern="^(channel|campaign|paths)$"),
@@ -1816,6 +2535,7 @@ def explainability_summary(
     curr_res: Dict[str, Any] = {}
     prev_res: Dict[str, Any] = {}
     contrib_deltas: List[Dict[str, Any]] = []
+    channel_breakdowns: Dict[str, Any] = {}
 
     if scope in ("channel", "campaign"):
         # Use attribution engine to get totals, but be defensive if there are no journeys in the period.
@@ -1883,6 +2603,91 @@ def explainability_summary(
                 contribution_pct=contribution_pct,
             )
         )
+
+        # Build per-channel breakdowns for drill-down (scope=channel only).
+        if scope == "channel":
+            # Helper maps for quick lookup.
+            curr_channels: Dict[str, Any] = {ch.get("channel"): ch for ch in curr_res.get("channels", []) if ch.get("channel")}
+            prev_channels: Dict[str, Any] = {ch.get("channel"): ch for ch in prev_res.get("channels", []) if ch.get("channel")}
+            contrib_map: Dict[str, Any] = {c["id"]: c for c in contrib_deltas}
+
+            # Simple expense aggregation by period for spend deltas (best-effort, marked estimated in UI).
+            def _parse_date(d: Optional[str]) -> Optional[datetime]:
+                if not d:
+                    return None
+                try:
+                    return datetime.fromisoformat(d)
+                except Exception:
+                    try:
+                        return datetime.fromisoformat(d.split("T")[0])
+                    except Exception:
+                        return None
+
+            curr_spend: Dict[str, float] = {}
+            prev_spend: Dict[str, float] = {}
+            for exp in EXPENSES.values():
+                if getattr(exp, "status", "active") == "deleted":
+                    continue
+                ch_name = exp.channel
+                # Prefer service period if available, fall back to entry_date.
+                d_start = _parse_date(exp.service_period_start or exp.entry_date or exp.period)
+                if not d_start:
+                    continue
+                amount = exp.converted_amount if exp.converted_amount is not None else exp.amount
+                if start.date() <= d_start.date() <= end.date():
+                    curr_spend[ch_name] = curr_spend.get(ch_name, 0.0) + float(amount or 0.0)
+                elif prev_start.date() <= d_start.date() <= prev_end.date():
+                    prev_spend[ch_name] = prev_spend.get(ch_name, 0.0) + float(amount or 0.0)
+
+            all_channels = set(curr_channels.keys()) | set(prev_channels.keys()) | set(contrib_map.keys())
+            for cid in all_channels:
+                c_curr = curr_channels.get(cid, {})
+                c_prev = prev_channels.get(cid, {})
+                contrib = contrib_map.get(cid, {})
+
+                curr_val_ch = float(c_curr.get("attributed_value", 0.0) or 0.0)
+                prev_val_ch = float(c_prev.get("attributed_value", 0.0) or 0.0)
+                curr_conv_ch = float(c_curr.get("attributed_conversions", 0.0) or 0.0)
+                prev_conv_ch = float(c_prev.get("attributed_conversions", 0.0) or 0.0)
+                curr_spend_ch = float(curr_spend.get(cid, 0.0) or 0.0)
+                prev_spend_ch = float(prev_spend.get(cid, 0.0) or 0.0)
+
+                def _safe_ratio(num: float, den: float) -> Optional[float]:
+                    return num / den if den > 0 else None
+
+                curr_roas = _safe_ratio(curr_val_ch, curr_spend_ch)
+                prev_roas = _safe_ratio(prev_val_ch, prev_spend_ch)
+                curr_cpa = _safe_ratio(curr_spend_ch, curr_conv_ch)
+                prev_cpa = _safe_ratio(prev_spend_ch, prev_conv_ch)
+
+                channel_breakdowns[cid] = {
+                    "channel": cid,
+                    "spend": {
+                        "current": round(curr_spend_ch, 2),
+                        "previous": round(prev_spend_ch, 2),
+                        "delta": round(curr_spend_ch - prev_spend_ch, 2),
+                    },
+                    "conversions": {
+                        "current": round(curr_conv_ch, 2),
+                        "previous": round(prev_conv_ch, 2),
+                        "delta": round(curr_conv_ch - prev_conv_ch, 2),
+                    },
+                    "attributed_value": {
+                        "current": round(curr_val_ch, 2),
+                        "previous": round(prev_val_ch, 2),
+                        "delta": round(contrib.get("delta", curr_val_ch - prev_val_ch), 2),
+                    },
+                    "roas": {
+                        "current": round(curr_roas, 4) if curr_roas is not None else None,
+                        "previous": round(prev_roas, 4) if prev_roas is not None else None,
+                        "delta": round((curr_roas - prev_roas), 4) if curr_roas is not None and prev_roas is not None else None,
+                    },
+                    "cpa": {
+                        "current": round(curr_cpa, 4) if curr_cpa is not None else None,
+                        "previous": round(prev_cpa, 4) if prev_cpa is not None else None,
+                        "delta": round((curr_cpa - prev_cpa), 4) if curr_cpa is not None and prev_cpa is not None else None,
+                    },
+                }
     elif scope == "paths":
         # Summarise average path length and time-to-convert using existing analyze_paths,
         # but be defensive: any error should degrade gracefully to zeros instead of 500.
@@ -1952,6 +2757,54 @@ def explainability_summary(
         "notes": health_notes,
     }
 
+    # Data quality delta (current vs previous snapshot) for comparability & table.
+    dq_delta: Dict[str, Any] = {"metrics": []}
+    try:
+        # For now, use global channel scope (scope_id=None) as the backbone for deltas.
+        q = (
+            db.query(AttributionQualitySnapshot)
+            .filter(AttributionQualitySnapshot.scope == "channel")
+            .order_by(AttributionQualitySnapshot.ts_bucket.desc())
+            .limit(2)
+            .all()
+        )
+        if q:
+            current_snap = q[0]
+            prev_snap = q[1] if len(q) > 1 else None
+            comp_curr = current_snap.components_json or {}
+            comp_prev = prev_snap.components_json if prev_snap else {}
+
+            def _metric_row(key: str, label: str, unit: str = "") -> Dict[str, Any]:
+                curr_v = None
+                prev_v = None
+                if key == "confidence_score":
+                    curr_v = current_snap.confidence_score
+                    prev_v = prev_snap.confidence_score if prev_snap else None
+                else:
+                    curr_v = comp_curr.get(key)
+                    prev_v = comp_prev.get(key) if prev_snap else None
+                delta_v = None
+                if curr_v is not None and prev_v is not None:
+                    delta_v = curr_v - prev_v
+                return {
+                    "key": key,
+                    "label": label,
+                    "unit": unit,
+                    "current": curr_v,
+                    "previous": prev_v,
+                    "delta": delta_v,
+                }
+
+            dq_delta["metrics"] = [
+                _metric_row("confidence_score", "Confidence score", "/100"),
+                _metric_row("join_rate", "Join rate", ""),
+                _metric_row("missing_rate", "Missing IDs / UTMs rate", ""),
+                _metric_row("freshness_lag_minutes", "Freshness lag (minutes)", "min"),
+                _metric_row("dedup_rate", "Duplication rate", ""),
+            ]
+    except Exception:
+        dq_delta = {"metrics": []}
+
     # Config changes
     cfg_changes: List[Dict[str, Any]] = []
     if meta and meta.get("config_id"):
@@ -1962,6 +2815,32 @@ def explainability_summary(
         "version": meta["config_version"] if meta else None,
         "changes": cfg_changes,
     }
+
+    # Human-readable config diff summary for inline display.
+    config_diff: Dict[str, Any] = {
+        "has_changes": bool(cfg_changes),
+        "changes_count": len(cfg_changes),
+        "lines": [],
+    }
+    if resolved_cfg:
+        cfg_json = resolved_cfg.config_json or {}
+        windows = cfg_json.get("windows", {})
+        eligibility = cfg_json.get("eligible_touchpoints", {})
+        conversions = cfg_json.get("conversions", {})
+        lines: List[str] = []
+        if "click_lookback_days" in windows:
+            lines.append(f"Click lookback: {windows.get('click_lookback_days')}d (current)")
+        if "impression_lookback_days" in windows:
+            lines.append(f"Impression lookback: {windows.get('impression_lookback_days')}d (current)")
+        if "conversion_latency_days" in windows:
+            lines.append(f"Conversion latency: {windows.get('conversion_latency_days')}d (current)")
+        if conversions.get("primary_key"):
+            lines.append(f"Conversion key: {conversions.get('primary_key')}")
+        if eligibility:
+            lines.append("Eligibility rules updated (touchpoint filters applied).")
+        if not lines and cfg_changes:
+            lines.append("Config changed recently; see Settings → Measurement model configs for full details.")
+        config_diff["lines"] = lines
 
     # Feature importance: share of attributed value in current period + direction of change
     feature_importance: List[FeatureImportanceItem] = []
@@ -2014,6 +2893,100 @@ def explainability_summary(
         "previous": {"from": _dt_iso(prev_start), "to": _dt_iso(prev_end)},
     }
 
+    # Change decomposition (volume vs mix vs rate/value)
+    total_curr_val = float(curr_res.get("total_value", 0.0) or 0.0) if curr_res else 0.0
+    total_prev_val = float(prev_res.get("total_value", 0.0) or 0.0) if prev_res else 0.0
+    change_decomposition = _compute_change_decomposition(
+        curr_val=total_curr_val,
+        prev_val=total_prev_val,
+        curr_j_count=len(curr_j),
+        prev_j_count=len(prev_j),
+    )
+
+    # Comparability rating based on config changes, journey shifts, and data health.
+    comparability_rating = "high"
+    comp_warnings: List[ComparabilityWarning] = []
+
+    # Journey volume shift
+    if len(prev_j) == 0 or len(curr_j) == 0:
+        comparability_rating = "low"
+        comp_warnings.append(
+            ComparabilityWarning(
+                severity="critical",
+                message="One of the periods has no journeys; results are not comparable.",
+                action="Use a period with sufficient volume or adjust filters.",
+            )
+        )
+    else:
+        vol_ratio = len(curr_j) / float(len(prev_j))
+        if vol_ratio > 2.0 or vol_ratio < 0.5:
+            if comparability_rating != "low":
+                comparability_rating = "medium"
+            comp_warnings.append(
+                ComparabilityWarning(
+                    severity="warn",
+                    message=f"Journey volume shifted significantly between periods (current {len(curr_j):,}, previous {len(prev_j):,}).",
+                    action="Confirm no major tracking changes or seasonality explain this shift.",
+                )
+            )
+
+    # Config changes
+    if cfg_changes:
+        if comparability_rating == "high":
+            comparability_rating = "medium"
+        comp_warnings.append(
+            ComparabilityWarning(
+                severity="warn",
+                message=f"Model configuration changed {len(cfg_changes)} time(s) in the comparison window.",
+                action="Pin analysis to a specific config version in Settings → Measurement model configs.",
+            )
+        )
+
+    # Data quality issues
+    if data_health.get("confidence"):
+        conf_score = data_health["confidence"].get("score") or 0.0
+        conf_label = data_health["confidence"].get("label", "unknown")
+        if conf_label == "low" or conf_score < 60:
+            comparability_rating = "low"
+            comp_warnings.append(
+                ComparabilityWarning(
+                    severity="critical",
+                    message=f"Data quality confidence is {conf_label} ({conf_score:.0f}/100).",
+                    action="Investigate identifier completeness, join rate, and deduplication metrics in Data Quality.",
+                )
+            )
+        elif conf_label == "medium" or conf_score < 80:
+            if comparability_rating == "high":
+                comparability_rating = "medium"
+            comp_warnings.append(
+                ComparabilityWarning(
+                    severity="warn",
+                    message=f"Data quality confidence is {conf_label} ({conf_score:.0f}/100).",
+                    action="Review recent data quality alerts and fix ingestion issues before acting on fine-grained changes.",
+                )
+            )
+
+    comparability = ComparabilitySummary(rating=comparability_rating, warnings=comp_warnings[:3])
+
+    # Simple timeline: daily attributed value in current period (optionally used for "When did it change?")
+    timeline: List[Dict[str, Any]] = []
+    daily_values: Dict[str, float] = {}
+    for j in curr_j:
+        tps = j.get("touchpoints", [])
+        if not tps:
+            continue
+        ts = tps[-1].get("timestamp")
+        if not ts:
+            continue
+        try:
+            dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        except Exception:
+            continue
+        day_str = dt.date().isoformat()
+        daily_values[day_str] = daily_values.get(day_str, 0.0) + float(j.get("conversion_value", 0.0) or 0.0)
+    for day in sorted(daily_values.keys()):
+        timeline.append({"date": day, "attributed_value": round(daily_values[day], 2)})
+
     return ExplainabilitySummary(
         period=period_serialized,
         drivers=drivers,
@@ -2022,6 +2995,12 @@ def explainability_summary(
         mechanics=mechanics,
         feature_importance=feature_importance,
         narrative=narrative,
+        change_decomposition=change_decomposition,
+        comparability=comparability,
+        config_diff=config_diff,
+        data_quality_delta=dq_delta,
+        timeline=timeline,
+        channel_breakdowns=channel_breakdowns,
     )
 
 
@@ -2842,7 +3821,36 @@ def fetch_meta(ad_account_id: str, since: str, until: str, avg_aov: float = 0.0,
     pd.DataFrame(rows).to_csv(out_path, index=False)
     total_spend = sum(r.get("spend", 0) for r in rows)
     if total_spend > 0:
-        EXPENSES[f"meta_ads_{since[:7]}"] = ExpenseEntry(channel="meta_ads", amount=total_spend, period=since[:7], notes="Auto-imported from Meta Ads API")
+        expense_id = f"meta_ads_{since[:7]}"
+        EXPENSES[expense_id] = _with_converted_amount(
+            ExpenseEntry(
+                channel="meta_ads",
+                cost_type="Media Spend",
+                amount=total_spend,
+                currency="USD",
+                reporting_currency=_default_reporting_currency(),
+                period=since[:7],
+                service_period_start=since,
+                service_period_end=until,
+                notes="Auto-imported from Meta Ads API",
+                source_type="import",
+                source_name="meta_ads",
+                actor_type="import",
+                created_at=_now_iso(),
+            )
+        )
+    now_iso = _now_iso()
+    IMPORT_SYNC_STATE["meta_ads"] = {
+        "last_success_at": now_iso,
+        "last_attempt_at": now_iso,
+        "status": "Healthy",
+        "records_imported": len(rows),
+        "period_start": since,
+        "period_end": until,
+        "platform_total": total_spend,
+        "last_error": None,
+        "action_hint": None,
+    }
     return {"rows": len(rows), "path": str(out_path)}
 
 @app.post("/api/connectors/google")
@@ -2850,7 +3858,20 @@ def fetch_google(segments_date_from: str, segments_date_to: str):
     out_path = DATA_DIR / "google_ads.csv"
     if not out_path.exists():
         pd.DataFrame([], columns=["date", "channel", "campaign", "spend", "impressions", "clicks", "conversions", "revenue"]).to_csv(out_path, index=False)
-    return {"rows": int(pd.read_csv(out_path).shape[0]), "path": str(out_path)}
+    rows = int(pd.read_csv(out_path).shape[0])
+    now_iso = _now_iso()
+    IMPORT_SYNC_STATE["google_ads"] = {
+        "last_success_at": now_iso,
+        "last_attempt_at": now_iso,
+        "status": "Healthy",
+        "records_imported": rows,
+        "period_start": segments_date_from,
+        "period_end": segments_date_to,
+        "platform_total": None,
+        "last_error": None,
+        "action_hint": None,
+    }
+    return {"rows": rows, "path": str(out_path)}
 
 @app.post("/api/connectors/linkedin")
 def fetch_linkedin(since: str, until: str, access_token: Optional[str] = None):
@@ -2872,7 +3893,36 @@ def fetch_linkedin(since: str, until: str, access_token: Optional[str] = None):
     pd.DataFrame(rows).to_csv(out_path, index=False)
     total_spend = sum(r.get("spend", 0) for r in rows)
     if total_spend > 0:
-        EXPENSES[f"linkedin_ads_{since[:7]}"] = ExpenseEntry(channel="linkedin_ads", amount=total_spend, period=since[:7], notes="Auto-imported from LinkedIn Ads API")
+        expense_id = f"linkedin_ads_{since[:7]}"
+        EXPENSES[expense_id] = _with_converted_amount(
+            ExpenseEntry(
+                channel="linkedin_ads",
+                cost_type="Media Spend",
+                amount=total_spend,
+                currency="USD",
+                reporting_currency=_default_reporting_currency(),
+                period=since[:7],
+                service_period_start=since,
+                service_period_end=until,
+                notes="Auto-imported from LinkedIn Ads API",
+                source_type="import",
+                source_name="linkedin_ads",
+                actor_type="import",
+                created_at=_now_iso(),
+            )
+        )
+    now_iso = _now_iso()
+    IMPORT_SYNC_STATE["linkedin_ads"] = {
+        "last_success_at": now_iso,
+        "last_attempt_at": now_iso,
+        "status": "Healthy",
+        "records_imported": len(rows),
+        "period_start": since,
+        "period_end": until,
+        "platform_total": total_spend,
+        "last_error": None,
+        "action_hint": None,
+    }
     return {"rows": len(rows), "path": str(out_path)}
 
 @app.post("/api/connectors/merge")

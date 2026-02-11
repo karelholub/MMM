@@ -232,8 +232,10 @@ def load_config_and_meta(
     cfg = db.get(ModelConfig, effective_id)
     if not cfg:
         return None, None
-    conversions = (cfg.config_json or {}).get("conversions", {})
-    windows = (cfg.config_json or {}).get("windows", {})
+    cfg_json = cfg.config_json or {}
+    conversions = cfg_json.get("conversions", {}) or {}
+    windows = cfg_json.get("windows", {}) or {}
+    attribution = cfg_json.get("attribution", {}) or {}
     conversion_key = conversions.get("primary_conversion_key")
     time_window = {
         "click_lookback_days": windows.get("click_lookback_days"),
@@ -241,11 +243,19 @@ def load_config_and_meta(
         "session_timeout_minutes": windows.get("session_timeout_minutes"),
         "conversion_latency_days": windows.get("conversion_latency_days"),
     }
+    elig = attribution.get("eligible_touchpoints", {}) or {}
+    eligible_touchpoints = {
+        "include_channels": elig.get("include_channels"),
+        "exclude_channels": elig.get("exclude_channels"),
+        "include_event_types": elig.get("include_event_types"),
+        "exclude_event_types": elig.get("exclude_event_types"),
+    }
     meta = {
         "config_id": cfg.id,
         "config_version": cfg.version,
         "conversion_key": conversion_key,
         "time_window": time_window,
+        "eligible_touchpoints": eligible_touchpoints,
     }
     return cfg, meta
 

@@ -36,6 +36,39 @@ interface ChannelData {
   confidence?: Confidence
 }
 
+interface JourneysSummary {
+  loaded: boolean
+  count: number
+  converted: number
+  non_converted: number
+  total_value: number
+  primary_kpi_id?: string | null
+  primary_kpi_label?: string | null
+  primary_kpi_count?: number
+  kpi_counts?: Record<string, number>
+  date_min?: string | null
+  date_max?: string | null
+}
+
+interface ExplainabilityDriver {
+  metric: string
+  delta: number
+  current_value: number
+  previous_value: number
+}
+
+interface ExplainabilitySummaryLite {
+  data_health: {
+    confidence?: {
+      score: number
+      label: string
+      components?: Record<string, number>
+    } | null
+    notes: string[]
+  }
+  drivers: ExplainabilityDriver[]
+}
+
 interface PerformanceResponse {
   model: string
   channels: ChannelData[]
@@ -43,9 +76,15 @@ interface PerformanceResponse {
   total_attributed_value: number
   total_conversions: number
   config?: {
-    id: string
-    name: string
-    version: number
+    config_id?: string
+    config_version?: number
+    conversion_key?: string | null
+    time_window?: {
+      click_lookback_days?: number | null
+      impression_lookback_days?: number | null
+      session_timeout_minutes?: number | null
+      conversion_latency_days?: number | null
+    }
   } | null
 }
 
@@ -74,8 +113,31 @@ function formatCurrency(val: number): string {
   return `$${val.toFixed(0)}`
 }
 
-function exportTableCSV(channels: ChannelData[]) {
-  const headers = ['Channel', 'Spend', 'Attributed Revenue', 'Conversions', 'Share %', 'ROI %', 'ROAS', 'CPA']
+function exportTableCSV(
+  channels: ChannelData[],
+  opts: {
+    model: string
+    periodLabel: string
+    conversionKey?: string | null
+    configVersion?: number | null
+    directMode: 'include' | 'exclude'
+  },
+) {
+  const headers = [
+    'Channel',
+    'Spend',
+    'Attributed Revenue',
+    'Conversions',
+    'Share %',
+    'ROI %',
+    'ROAS',
+    'CPA',
+    'Period label',
+    'Conversion key',
+    'Model',
+    'Config version',
+    'Direct handling',
+  ]
   const rows = channels.map((ch) => [
     ch.channel,
     ch.spend.toFixed(2),
@@ -85,6 +147,11 @@ function exportTableCSV(channels: ChannelData[]) {
     (ch.roi * 100).toFixed(1),
     ch.roas.toFixed(2),
     ch.cpa > 0 ? ch.cpa.toFixed(2) : '',
+    opts.periodLabel,
+    opts.conversionKey || '',
+    opts.model,
+    opts.configVersion != null ? String(opts.configVersion) : '',
+    opts.directMode,
   ])
   const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
@@ -104,6 +171,22 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [showWhy, setShowWhy] = useState(false)
 
+  const [directMode, setDirectMode] = useState<'include' | 'exclude'>('include')
+  const [comparePrevious, setComparePrevious] = useState(false)
+  const [chartSortBy, setChartSortBy] = useState<'spend' | 'attributed_value' | 'roas'>('attributed_value')
+  const [channelSearch, setChannelSearch] = useState('')
+  const [onlyLowConfidence, setOnlyLowConfidence] = useState(false)
+  const [selectedChannel, setSelectedChannel] = useState<ChannelData | null>(null)
+
+  const journeysQuery = useQuery<JourneysSummary>({
+    queryKey: ['journeys-summary-for-channels'],
+    queryFn: async () => {
+      const res = await fetch('/api/attribution/journeys')
+      if (!res.ok) throw new Error('Failed to load journeys summary')
+      return res.json()
+    },
+  })
+
   const perfQuery = useQuery<PerformanceResponse>({
     queryKey: ['channel-performance', model, configId ?? 'default'],
     queryFn: async () => {
@@ -117,19 +200,56 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     refetchInterval: false,
   })
 
+  const explainabilityQuery = useQuery<ExplainabilitySummaryLite>({
+    queryKey: ['explainability-lite-channel', model, configId ?? 'default'],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        scope: 'channel',
+        model,
+      })
+      if (configId) params.append('config_id', configId)
+      const res = await fetch(`/api/explainability/summary?${params.toString()}`)
+      if (!res.ok) throw new Error('Failed to load explainability summary')
+      return res.json()
+    },
+    enabled: modelsReady,
+    refetchInterval: false,
+  })
+
   const data = perfQuery.data
   const loading = perfQuery.isLoading || !modelsReady
 
   const sortedChannels = useMemo(() => {
     if (!data?.channels?.length) return []
+    const q = channelSearch.trim().toLowerCase()
+    const base = data.channels.filter((ch) => {
+      if (directMode === 'exclude' && ch.channel === 'direct') return false
+      if (onlyLowConfidence && (!ch.confidence || ch.confidence.score >= 70)) return false
+      if (!q) return true
+      return ch.channel.toLowerCase().includes(q)
+    })
     const key = sortKey === 'attributed_share' ? 'attributed_share' : sortKey
-    return [...data.channels].sort((a, b) => {
+    return [...base].sort((a, b) => {
       const va = a[key as keyof ChannelData] as number
       const vb = b[key as keyof ChannelData] as number
       const cmp = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb))
       return sortDir === 'asc' ? cmp : -cmp
     })
-  }, [data?.channels, sortKey, sortDir])
+  }, [data?.channels, sortKey, sortDir, directMode, channelSearch, onlyLowConfidence])
+
+  const filteredForCharts = useMemo(
+    () => (data?.channels ?? []).filter((ch) => (directMode === 'exclude' && ch.channel === 'direct' ? false : true)),
+    [data?.channels, directMode],
+  )
+
+  const chartData = useMemo(() => {
+    if (!filteredForCharts.length) return []
+    const clone = [...filteredForCharts]
+    if (chartSortBy === 'spend') clone.sort((a, b) => a.spend - b.spend)
+    else if (chartSortBy === 'roas') clone.sort((a, b) => a.roas - b.roas)
+    else clone.sort((a, b) => a.attributed_value - b.attributed_value)
+    return clone
+  }, [filteredForCharts, chartSortBy])
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
@@ -184,14 +304,51 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     )
   }
 
-  const totalROI = data.total_spend > 0 ? (data.total_attributed_value - data.total_spend) / data.total_spend : 0
-  const totalROAS = data.total_spend > 0 ? data.total_attributed_value / data.total_spend : 0
-  const avgCPA = data.total_conversions > 0 ? data.total_spend / data.total_conversions : 0
+  const totalSpend = filteredForCharts.reduce((s, ch) => s + ch.spend, 0)
+  const totalValue = filteredForCharts.reduce((s, ch) => s + ch.attributed_value, 0)
+  const totalConversions = filteredForCharts.reduce((s, ch) => s + ch.attributed_conversions, 0)
+
+  const totalROI = totalSpend > 0 ? (totalValue - totalSpend) / totalSpend : 0
+  const totalROAS = totalSpend > 0 ? totalValue / totalSpend : 0
+  const avgCPA = totalConversions > 0 ? totalSpend / totalConversions : 0
+
+  const journeys = journeysQuery.data
+  const periodLabel =
+    journeys?.date_min && journeys?.date_max
+      ? `${journeys.date_min.slice(0, 10)} – ${journeys.date_max.slice(0, 10)}`
+      : 'current dataset'
+
+  const conversionLabel =
+    journeys?.primary_kpi_label ||
+    journeys?.primary_kpi_id ||
+    (journeys?.kpi_counts && Object.keys(journeys.kpi_counts)[0]) ||
+    'All conversions'
+
+  const exp = explainabilityQuery.data
+  const revDriver = exp?.drivers?.find((d) => d.metric === 'attributed_value')
+  const revDelta = revDriver?.delta ?? null
+  const revPrev = revDriver?.previous_value ?? null
+  const revPct = revDelta != null && revPrev && Math.abs(revPrev) > 1e-9 ? (revDelta / revPrev) * 100 : null
+
+  const kpiDeltas = comparePrevious
+    ? {
+        totalSpend: null as number | null,
+        totalSpendPct: null as number | null,
+        totalValue: revDelta,
+        totalValuePct: revPct,
+        totalConversions: null as number | null,
+        totalConversionsPct: null as number | null,
+        totalROAS: null as number | null,
+        totalROASPct: null as number | null,
+        avgCPA: null as number | null,
+        avgCPAPct: null as number | null,
+      }
+    : null
 
   const kpis = [
-    { label: 'Total Spend', value: formatCurrency(data.total_spend), def: METRIC_DEFINITIONS['Total Spend'] },
-    { label: 'Attributed Revenue', value: formatCurrency(data.total_attributed_value), def: METRIC_DEFINITIONS['Attributed Revenue'] },
-    { label: 'Conversions', value: data.total_conversions.toLocaleString(), def: METRIC_DEFINITIONS['Conversions'] },
+    { label: 'Total Spend', value: formatCurrency(totalSpend), def: METRIC_DEFINITIONS['Total Spend'] },
+    { label: 'Attributed Revenue', value: formatCurrency(totalValue), def: METRIC_DEFINITIONS['Attributed Revenue'] },
+    { label: 'Conversions', value: totalConversions.toLocaleString(), def: METRIC_DEFINITIONS['Conversions'] },
     { label: 'ROAS', value: `${totalROAS.toFixed(2)}×`, def: METRIC_DEFINITIONS['ROAS'] },
     { label: 'Avg CPA', value: formatCurrency(avgCPA), def: METRIC_DEFINITIONS['CPA'] },
   ]
@@ -235,23 +392,86 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
             Attribution model: <strong style={{ color: t.color.accent }}>{MODEL_LABELS[model] || model}</strong>
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowWhy((v) => !v)}
+        <div
           style={{
-            border: 'none',
-            backgroundColor: showWhy ? t.color.accentMuted : 'transparent',
-            color: t.color.accent,
-            padding: `${t.space.xs}px ${t.space.sm}px`,
-            borderRadius: t.radius.full,
-            fontSize: t.font.sizeXs,
-            fontWeight: t.font.weightSemibold,
-            cursor: 'pointer',
-            alignSelf: 'center',
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: t.space.sm,
+            alignItems: 'center',
+            justifyContent: 'flex-end',
           }}
         >
-          Why?
-        </button>
+          <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+            <strong>Period:</strong> {periodLabel}
+          </div>
+          <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+            <strong>Conversion:</strong> {conversionLabel} (read‑only)
+          </div>
+          {data.config?.time_window && (
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+              <strong>Config:</strong>{' '}
+              {[
+                data.config.time_window.click_lookback_days != null
+                  ? `Click ${data.config.time_window.click_lookback_days}d`
+                  : null,
+                data.config.time_window.impression_lookback_days != null
+                  ? `Impr. ${data.config.time_window.impression_lookback_days}d`
+                  : null,
+                data.config.time_window.session_timeout_minutes != null
+                  ? `Session ${data.config.time_window.session_timeout_minutes}m`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+            </div>
+          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: t.font.sizeXs }}>
+            <span style={{ color: t.color.textSecondary }}>Direct handling:</span>
+            <button
+              type="button"
+              onClick={() => setDirectMode((m) => (m === 'include' ? 'exclude' : 'include'))}
+              style={{
+                border: `1px solid ${t.color.borderLight}`,
+                borderRadius: t.radius.full,
+                padding: '2px 8px',
+                fontSize: t.font.sizeXs,
+                backgroundColor: t.color.bg,
+                cursor: 'pointer',
+              }}
+              title="View filter only; underlying attribution is unchanged."
+            >
+              View filter: {directMode === 'include' ? 'Include Direct' : 'Exclude Direct'}
+            </button>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: t.font.sizeXs }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', color: t.color.textSecondary }}>
+              <input
+                type="checkbox"
+                checked={comparePrevious}
+                onChange={(e) => setComparePrevious(e.target.checked)}
+                style={{ margin: 0 }}
+              />
+              Compare to previous period (KPI deltas)
+            </label>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowWhy((v) => !v)}
+            style={{
+              border: 'none',
+              backgroundColor: showWhy ? t.color.accentMuted : 'transparent',
+              color: t.color.accent,
+              padding: `${t.space.xs}px ${t.space.sm}px`,
+              borderRadius: t.radius.full,
+              fontSize: t.font.sizeXs,
+              fontWeight: t.font.weightSemibold,
+              cursor: 'pointer',
+              alignSelf: 'center',
+            }}
+          >
+            Why?
+          </button>
+        </div>
       </div>
 
       {showWhy && (
@@ -307,8 +527,63 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
             >
               {kpi.value}
             </div>
+            {comparePrevious && (
+              <div style={{ marginTop: 2, fontSize: t.font.sizeXs, color: t.color.textSecondary, fontVariantNumeric: 'tabular-nums' }}>
+                {(() => {
+                  if (!kpiDeltas) return null
+                  if (kpi.label === 'Total Spend') {
+                    return 'Δ N/A'
+                  }
+                  if (kpi.label === 'Attributed Revenue') {
+                    if (kpiDeltas.totalValue == null) return 'Δ N/A'
+                    const abs = kpiDeltas.totalValue
+                    const pct = kpiDeltas.totalValuePct
+                    const absLabel = formatCurrency(Math.abs(abs))
+                    return `${abs >= 0 ? '+' : '-'}${absLabel} ${pct != null ? `/ ${pct.toFixed(1)}%` : ''}`
+                  }
+                  return 'Δ N/A'
+                })()}
+              </div>
+            )}
           </div>
         ))}
+      </div>
+
+      {/* Data health mini indicator */}
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: t.space.lg,
+          gap: t.space.sm,
+          flexWrap: 'wrap',
+          fontSize: t.font.sizeXs,
+        }}
+      >
+        <div style={{ color: t.color.textSecondary }}>Measurement context reflects the currently loaded journeys and active attribution config.</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {exp?.data_health?.confidence ? (
+            <span title={exp.data_health.notes?.slice(0, 2).join('\n') || 'Open Why? for full details.'}>
+              <ConfidenceBadge confidence={exp.data_health.confidence} compact />
+            </span>
+          ) : (
+            <span style={{ color: t.color.textMuted }}>Data health: N/A</span>
+          )}
+          <button
+            type="button"
+            onClick={() => setShowWhy(true)}
+            style={{
+              border: 'none',
+              background: 'transparent',
+              color: t.color.accent,
+              cursor: 'pointer',
+              padding: 0,
+            }}
+          >
+            See Why?
+          </button>
+        </div>
       </div>
 
       {/* Charts */}
@@ -340,8 +615,38 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
           >
             Spend vs. Attributed Revenue by Channel
           </h3>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: t.space.sm,
+              fontSize: t.font.sizeXs,
+              color: t.color.textSecondary,
+            }}
+          >
+            <div>
+              Sorted by:{' '}
+              <select
+                value={chartSortBy}
+                onChange={(e) => setChartSortBy(e.target.value as 'spend' | 'attributed_value' | 'roas')}
+                style={{
+                  fontSize: t.font.sizeXs,
+                  padding: '2px 6px',
+                  borderRadius: t.radius.sm,
+                  border: `1px solid ${t.color.borderLight}`,
+                  backgroundColor: t.color.surface,
+                  color: t.color.text,
+                }}
+              >
+                <option value="spend">Spend</option>
+                <option value="attributed_value">Attributed Revenue</option>
+                <option value="roas">ROAS</option>
+              </select>
+            </div>
+          </div>
           <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={data.channels} layout="vertical" margin={{ left: 8, right: 16 }}>
+            <BarChart data={chartData} layout="vertical" margin={{ left: 8, right: 16 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
               <XAxis type="number" tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }} tickFormatter={(v) => formatCurrency(v)} />
               <YAxis type="category" dataKey="channel" width={100} tick={{ fontSize: t.font.sizeSm, fill: t.color.text }} />
@@ -354,6 +659,11 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
               <Bar dataKey="attributed_value" fill={t.color.success} name="Attributed Revenue" radius={[0, 4, 4, 0]} />
             </BarChart>
           </ResponsiveContainer>
+          {directMode === 'include' && filteredForCharts.some((ch) => ch.channel === 'direct') && (
+            <p style={{ marginTop: t.space.sm, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+              Direct can represent true direct or unattributed/unknown referrer. See Why? for details.
+            </p>
+          )}
         </div>
 
         <div
@@ -378,7 +688,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
           <ResponsiveContainer width="100%" height={300}>
             <PieChart>
               <Pie
-                data={data.channels}
+                data={filteredForCharts}
                 dataKey="attributed_share"
                 nameKey="channel"
                 cx="50%"
@@ -388,7 +698,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
                 paddingAngle={1}
                 label={({ channel, attributed_share }) => `${channel} ${(attributed_share * 100).toFixed(0)}%`}
               >
-                {data.channels.map((_, i) => (
+                {filteredForCharts.map((_, i) => (
                   <Cell key={`cell-${i}`} fill={t.color.chart[i % t.color.chart.length]} />
                 ))}
               </Pie>
@@ -450,7 +760,15 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
           </h3>
           <button
             type="button"
-            onClick={() => exportTableCSV(data.channels)}
+            onClick={() =>
+              exportTableCSV(filteredForCharts, {
+                model,
+                periodLabel,
+                conversionKey: data.config?.conversion_key ?? null,
+                configVersion: data.config?.config_version ?? null,
+                directMode,
+              })
+            }
             style={{
               padding: `${t.space.sm}px ${t.space.lg}px`,
               fontSize: t.font.sizeSm,
@@ -472,6 +790,50 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
         <div style={{ overflowX: 'auto' }}>
           <table className="cp-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: t.font.sizeSm }}>
             <thead>
+              <tr style={{ borderBottom: `2px solid ${t.color.border}` }}>
+                <th
+                  colSpan={3}
+                  style={{
+                    padding: `${t.space.sm}px ${t.space.lg}px`,
+                    textAlign: 'left',
+                    fontWeight: t.font.weightNormal,
+                  }}
+                >
+                  <input
+                    type="text"
+                    value={channelSearch}
+                    onChange={(e) => setChannelSearch(e.target.value)}
+                    placeholder="Search channels…"
+                    style={{
+                      width: '100%',
+                      padding: `${t.space.xs}px ${t.space.sm}px`,
+                      borderRadius: t.radius.sm,
+                      border: `1px solid ${t.color.borderLight}`,
+                      fontSize: t.font.sizeXs,
+                    }}
+                  />
+                </th>
+                <th
+                  colSpan={5}
+                  style={{
+                    padding: `${t.space.sm}px ${t.space.lg}px`,
+                    textAlign: 'right',
+                    fontWeight: t.font.weightNormal,
+                    color: t.color.textSecondary,
+                  }}
+                >
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={onlyLowConfidence}
+                      onChange={(e) => setOnlyLowConfidence(e.target.checked)}
+                      style={{ margin: 0 }}
+                    />
+                    Show only low confidence (Conf. &lt; 70)
+                  </label>
+                </th>
+                <th />
+              </tr>
               <tr style={{ borderBottom: `2px solid ${t.color.border}` }}>
                 {tableColumns.map((col) => (
                   <th
@@ -513,6 +875,8 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
                     borderBottom: `1px solid ${t.color.borderLight}`,
                     backgroundColor: idx % 2 === 0 ? t.color.surface : t.color.bg,
                   }}
+                  onClick={() => setSelectedChannel(ch)}
+                  title="Click to see channel drilldown"
                 >
                   {tableColumns.map((col) => {
                     const isChannel = col.key === 'channel'
@@ -525,11 +889,24 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
                           padding: `${t.space.md}px ${t.space.lg}px`,
                           textAlign: col.align,
                           fontWeight: isChannel || isValue || isRoi ? t.font.weightMedium : t.font.weightNormal,
-                          color: isValue ? t.color.success : isRoi ? (ch.roi >= 0 ? t.color.success : t.color.danger) : t.color.text,
+                          color:
+                            col.key === 'cpa' && ch.spend === 0
+                              ? t.color.textSecondary
+                              : isValue
+                              ? t.color.success
+                              : isRoi
+                              ? ch.roi >= 0
+                                ? t.color.success
+                                : t.color.danger
+                              : t.color.text,
                           fontVariantNumeric: col.align === 'right' ? 'tabular-nums' : undefined,
                         }}
                       >
-                        {col.format(ch)}
+                        {(() => {
+                          if (col.key === 'roas' && ch.spend === 0) return 'N/A'
+                          if (col.key === 'cpa' && ch.spend === 0) return 'N/A'
+                          return col.format(ch)
+                        })()}
                       </td>
                     )
                   })}

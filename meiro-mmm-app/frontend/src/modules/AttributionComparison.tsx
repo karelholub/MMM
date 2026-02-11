@@ -8,6 +8,35 @@ interface AttributionComparisonProps {
   onSelectModel: (model: string) => void
 }
 
+interface JourneysSummary {
+  loaded: boolean
+  count: number
+  converted: number
+  non_converted: number
+  channels: string[]
+  total_value: number
+  primary_kpi_id?: string | null
+  primary_kpi_label?: string | null
+  primary_kpi_count?: number
+  kpi_counts?: Record<string, number>
+  date_min?: string | null
+  date_max?: string | null
+}
+
+type Reliability = 'ok' | 'warning' | 'unreliable'
+
+interface MarkovDiagnostics {
+  journeys_used?: number
+  converted_journeys?: number
+  unique_states?: number
+  unique_transitions?: number
+  top_transitions?: { from: string; to: string; count: number; share?: number }[]
+  warnings?: string[]
+  reliability?: Reliability
+  insufficient_data?: boolean
+  what_to_do_next?: string[]
+}
+
 interface ModelResult {
   model: string
   channel_credit: Record<string, number>
@@ -15,6 +44,24 @@ interface ModelResult {
   total_value: number
   channels: { channel: string; attributed_value: number; attributed_share: number; attributed_conversions: number }[]
   error?: string
+  config?: {
+    config_id?: string
+    config_version?: number
+    conversion_key?: string | null
+    time_window?: {
+      click_lookback_days?: number | null
+      impression_lookback_days?: number | null
+      session_timeout_minutes?: number | null
+      conversion_latency_days?: number | null
+    }
+    eligible_touchpoints?: {
+      include_channels?: string[] | null
+      exclude_channels?: string[] | null
+      include_event_types?: string[] | null
+      exclude_event_types?: string[] | null
+    }
+  } | null
+  diagnostics?: MarkovDiagnostics
 }
 
 const MODEL_LABELS: Record<string, string> = {
@@ -44,11 +91,31 @@ function formatCurrency(v: number): string {
 function exportComparisonCSV(
   comparisonData: Record<string, unknown>[],
   models: string[],
+  opts: {
+    mode: 'absolute' | 'delta'
+    baselineModel?: string | null
+    conversionKey?: string | null
+    configVersion?: number | null
+    directMode: 'include' | 'exclude_view'
+  },
 ) {
-  const headers = ['Channel', ...models.map((m) => `${MODEL_LABELS[m] || m} (%)`)]
+  const headers = [
+    'Channel',
+    ...models.map((m) => `${MODEL_LABELS[m] || m} (%)`),
+    'Mode',
+    'Baseline model',
+    'Conversion key',
+    'Config version',
+    'Direct handling',
+  ]
   const rows = comparisonData.map((row) => [
     row.channel,
     ...models.map((m) => ((row[`${m}_share`] as number) || 0) * 100).map((v) => v.toFixed(1)),
+    opts.mode,
+    opts.mode === 'delta' && opts.baselineModel ? MODEL_LABELS[opts.baselineModel] || opts.baselineModel : '',
+    opts.conversionKey || '',
+    opts.configVersion != null ? String(opts.configVersion) : '',
+    opts.directMode,
   ])
   const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
@@ -63,6 +130,11 @@ function exportComparisonCSV(
 export default function AttributionComparison({ selectedModel, onSelectModel }: AttributionComparisonProps) {
   const [sortBy, setSortBy] = useState<'channel' | string>('channel')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+  const [comparisonMode, setComparisonMode] = useState<'absolute' | 'delta'>('absolute')
+  const [baselineModel, setBaselineModel] = useState<string>('linear')
+  const [showDeltaRow, setShowDeltaRow] = useState(false)
+  const [directMode, setDirectMode] = useState<'include' | 'exclude_view'>('include')
+  const [showMarkovDiagnostics, setShowMarkovDiagnostics] = useState(false)
 
   const resultsQuery = useQuery<Record<string, ModelResult>>({
     queryKey: ['attribution-results'],
@@ -78,10 +150,35 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
   const models = Object.keys(results).filter((k) => !results[k].error)
   const t = tokens
 
+  const journeysQuery = useQuery<JourneysSummary>({
+    queryKey: ['attribution-journeys-summary'],
+    queryFn: async () => {
+      const res = await fetch('/api/attribution/journeys')
+      if (!res.ok) throw new Error('Failed to load journeys summary')
+      return res.json()
+    },
+  })
+
+  const anyResult: ModelResult | undefined = models.length ? results[models[0]] : undefined
+  const configMeta = anyResult?.config ?? null
+  const conversionKey = configMeta?.conversion_key ?? journeysQuery.data?.primary_kpi_id ?? null
+  const configVersion = configMeta?.config_version ?? null
+
+  const baselineKey = useMemo(() => {
+    if (models.includes(baselineModel)) return baselineModel
+    if (models.includes('linear')) return 'linear'
+    return models[0] || ''
+  }, [baselineModel, models])
+
   const allChannels = new Set<string>()
   for (const model of models) {
     const r = results[model]
-    if (r?.channels) for (const ch of r.channels) allChannels.add(ch.channel)
+    if (r?.channels) {
+      for (const ch of r.channels) {
+        if (directMode === 'exclude_view' && ch.channel.toLowerCase() === 'direct') continue
+        allChannels.add(ch.channel)
+      }
+    }
   }
   const comparisonData = Array.from(allChannels).map((channel) => {
     const row: Record<string, unknown> = { channel }
@@ -94,8 +191,24 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
     return row
   })
 
+  const deltaData = useMemo(() => {
+    if (!baselineKey || comparisonMode === 'absolute') return comparisonData
+    return comparisonData.map((row) => {
+      const baseVal = Number(row[baselineKey] ?? 0)
+      const next: Record<string, unknown> = { channel: row.channel }
+      for (const m of models) {
+        const v = Number(row[m] ?? 0)
+        next[m] = v - baseVal
+        next[`${m}_share`] = row[`${m}_share`]
+      }
+      return next
+    })
+  }, [baselineKey, comparisonMode, comparisonData, models])
+
+  const chartData = comparisonMode === 'absolute' ? comparisonData : deltaData
+
   const sortedData = useMemo(() => {
-    return [...comparisonData].sort((a, b) => {
+    return [...comparisonMode === 'absolute' ? comparisonData : deltaData].sort((a, b) => {
       let va: number | string = a[sortBy] as number | string
       let vb: number | string = b[sortBy] as number | string
       if (sortBy === 'channel') {
@@ -107,9 +220,37 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
       vb = Number(vb ?? 0)
       return sortDir === 'asc' ? va - vb : vb - va
     })
-  }, [comparisonData, sortBy, sortDir])
+  }, [comparisonData, deltaData, comparisonMode, sortBy, sortDir])
 
   const selectedResult = results[selectedModel]
+
+  const markovResult: ModelResult | undefined = results['markov']
+  const markovDiagnostics: MarkovDiagnostics | undefined = markovResult?.diagnostics
+
+  const winnersLosers = useMemo(() => {
+    if (comparisonMode !== 'delta' || !baselineKey || !models.length || !comparisonData.length) {
+      return { winners: [] as { channel: string; delta: number }[], losers: [] as { channel: string; delta: number }[] }
+    }
+    if (!models.includes(selectedModel)) {
+      return { winners: [], losers: [] }
+    }
+    const winners: { channel: string; delta: number }[] = []
+    const losers: { channel: string; delta: number }[] = []
+    for (const row of comparisonData) {
+      const ch = String(row.channel)
+      const baseVal = Number(row[baselineKey] ?? 0)
+      const val = Number(row[selectedModel] ?? 0)
+      const delta = val - baseVal
+      if (delta > 0) winners.push({ channel: ch, delta })
+      else if (delta < 0) losers.push({ channel: ch, delta })
+    }
+    winners.sort((a, b) => b.delta - a.delta)
+    losers.sort((a, b) => a.delta - b.delta)
+    return {
+      winners: winners.slice(0, 3),
+      losers: losers.slice(0, 3),
+    }
+  }, [baselineKey, comparisonData, comparisonMode, models, selectedModel])
 
   if (resultsQuery.isError) {
     return (
@@ -189,6 +330,139 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
         Compare how different attribution models distribute credit across channels.
       </p>
 
+      {/* Measurement context header */}
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: t.space.md,
+          alignItems: 'center',
+          marginBottom: t.space.lg,
+          background: t.color.surface,
+          border: `1px solid ${t.color.borderLight}`,
+          borderRadius: t.radius.lg,
+          padding: t.space.md,
+          boxShadow: t.shadowSm,
+        }}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <span
+            style={{
+              fontSize: t.font.sizeXs,
+              fontWeight: t.font.weightMedium,
+              color: t.color.textSecondary,
+            }}
+          >
+            Conversion
+          </span>
+          <span style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+            {conversionKey ? `Conversion: ${conversionKey}` : 'Conversion: N/A'}
+          </span>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <span
+            style={{
+              fontSize: t.font.sizeXs,
+              fontWeight: t.font.weightMedium,
+              color: t.color.textSecondary,
+            }}
+          >
+            Date range
+          </span>
+          <span style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+            {journeysQuery.data?.date_min && journeysQuery.data?.date_max
+              ? `${new Date(journeysQuery.data.date_min).toLocaleDateString()} – ${new Date(
+                  journeysQuery.data.date_max,
+                ).toLocaleDateString()}`
+              : 'Current dataset (range not configured)'}
+          </span>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <span
+            style={{
+              fontSize: t.font.sizeXs,
+              fontWeight: t.font.weightMedium,
+              color: t.color.textSecondary,
+            }}
+          >
+            Direct handling (view filter)
+          </span>
+          <div
+            style={{
+              display: 'inline-flex',
+              borderRadius: t.radius.full,
+              border: `1px solid ${t.color.border}`,
+              overflow: 'hidden',
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setDirectMode('include')}
+              style={{
+                padding: `${t.space.xs}px ${t.space.sm}px`,
+                fontSize: t.font.sizeXs,
+                border: 'none',
+                cursor: 'pointer',
+                backgroundColor: directMode === 'include' ? t.color.accent : 'transparent',
+                color: directMode === 'include' ? t.color.surface : t.color.textSecondary,
+              }}
+            >
+              Include Direct
+            </button>
+            <button
+              type="button"
+              onClick={() => setDirectMode('exclude_view')}
+              style={{
+                padding: `${t.space.xs}px ${t.space.sm}px`,
+                fontSize: t.font.sizeXs,
+                border: 'none',
+                cursor: 'pointer',
+                backgroundColor: directMode === 'exclude_view' ? t.color.accent : 'transparent',
+                color: directMode === 'exclude_view' ? t.color.surface : t.color.textSecondary,
+              }}
+            >
+              Exclude Direct
+            </button>
+          </div>
+        </div>
+
+        <div
+          style={{
+            marginLeft: 'auto',
+            fontSize: t.font.sizeXs,
+            color: t.color.textMuted,
+            maxWidth: 380,
+          }}
+        >
+          {configMeta?.time_window ? (
+            <>
+              Click lookback: {configMeta.time_window.click_lookback_days ?? '—'}d · Impression lookback:{' '}
+              {configMeta.time_window.impression_lookback_days ?? '—'}d · Session timeout:{' '}
+              {configMeta.time_window.session_timeout_minutes ?? '—'}min
+            </>
+          ) : (
+            <>Measurement windows not configured for this model.</>
+          )}
+          {configMeta?.eligible_touchpoints && (
+            <div style={{ marginTop: 2 }}>
+              Touchpoints:{' '}
+              {[
+                configMeta.eligible_touchpoints.include_channels?.length
+                  ? `+${configMeta.eligible_touchpoints.include_channels.join(', ')}`
+                  : null,
+                configMeta.eligible_touchpoints.exclude_channels?.length
+                  ? `excl. ${configMeta.eligible_touchpoints.exclude_channels.join(', ')}`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Summary strip */}
       <div
         style={{
@@ -262,15 +536,132 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
           marginBottom: t.space.xl,
           boxShadow: t.shadowSm,
         }}
-      >
-        <h3 style={{ margin: `0 0 ${t.space.lg}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-          Attributed Revenue by Model & Channel
-        </h3>
-        <ResponsiveContainer width="100%" height={360}>
-          <BarChart data={comparisonData} margin={{ top: 8, right: 16, left: 8 }}>
+        >
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: t.space.md,
+              gap: t.space.md,
+              flexWrap: 'wrap',
+            }}
+          >
+            <h3 style={{ margin: 0, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+              {comparisonMode === 'absolute' ? 'Attributed Revenue by Model & Channel' : 'Delta vs Baseline by Channel'}
+            </h3>
+            <div style={{ display: 'flex', alignItems: 'center', gap: t.space.md, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>Comparison mode</span>
+                <div
+                  style={{
+                    display: 'inline-flex',
+                    borderRadius: t.radius.full,
+                    border: `1px solid ${t.color.border}`,
+                    overflow: 'hidden',
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setComparisonMode('absolute')}
+                    style={{
+                      padding: `${t.space.xs}px ${t.space.sm}px`,
+                      fontSize: t.font.sizeXs,
+                      border: 'none',
+                      cursor: 'pointer',
+                      backgroundColor: comparisonMode === 'absolute' ? t.color.accent : 'transparent',
+                      color: comparisonMode === 'absolute' ? t.color.surface : t.color.textSecondary,
+                    }}
+                  >
+                    Absolute
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setComparisonMode('delta')}
+                    style={{
+                      padding: `${t.space.xs}px ${t.space.sm}px`,
+                      fontSize: t.font.sizeXs,
+                      border: 'none',
+                      cursor: 'pointer',
+                      backgroundColor: comparisonMode === 'delta' ? t.color.accent : 'transparent',
+                      color: comparisonMode === 'delta' ? t.color.surface : t.color.textSecondary,
+                    }}
+                  >
+                    Delta vs baseline
+                  </button>
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>Baseline</span>
+                <select
+                  value={baselineKey}
+                  onChange={(e) => setBaselineModel(e.target.value)}
+                  style={{
+                    padding: `${t.space.xs}px ${t.space.sm}px`,
+                    fontSize: t.font.sizeXs,
+                    borderRadius: t.radius.sm,
+                    border: `1px solid ${t.color.border}`,
+                    background: t.color.surface,
+                    color: t.color.text,
+                  }}
+                >
+                  {models.map((m) => (
+                    <option key={m} value={m}>
+                      {MODEL_LABELS[m] || m}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {comparisonMode === 'delta' && winnersLosers.winners.length + winnersLosers.losers.length > 0 && (
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                gap: t.space.md,
+                marginBottom: t.space.md,
+                fontSize: t.font.sizeXs,
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: t.font.weightSemibold, color: t.color.success, marginBottom: 4 }}>
+                  Winners vs baseline (selected model)
+                </div>
+                {winnersLosers.winners.length === 0 && (
+                  <div style={{ color: t.color.textMuted }}>No channels gaining material credit.</div>
+                )}
+                {winnersLosers.winners.map((w) => (
+                  <div key={w.channel} style={{ color: t.color.text }}>
+                    {w.channel}: <span style={{ color: t.color.success }}>{formatCurrency(w.delta)}</span>
+                  </div>
+                ))}
+              </div>
+              <div>
+                <div style={{ fontWeight: t.font.weightSemibold, color: t.color.danger, marginBottom: 4 }}>
+                  Losers vs baseline (selected model)
+                </div>
+                {winnersLosers.losers.length === 0 && (
+                  <div style={{ color: t.color.textMuted }}>No channels losing material credit.</div>
+                )}
+                {winnersLosers.losers.map((l) => (
+                  <div key={l.channel} style={{ color: t.color.text }}>
+                    {l.channel}: <span style={{ color: t.color.danger }}>{formatCurrency(l.delta)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <ResponsiveContainer width="100%" height={360}>
+            <BarChart data={chartData} margin={{ top: 8, right: 16, left: 8 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
             <XAxis dataKey="channel" tick={{ fontSize: t.font.sizeSm, fill: t.color.text }} />
-            <YAxis tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }} tickFormatter={(v) => formatCurrency(v)} />
+            <YAxis
+              tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }}
+              tickFormatter={(v) => formatCurrency(v)}
+            />
             <Tooltip formatter={(value: number) => formatCurrency(value)} contentStyle={{ fontSize: t.font.sizeSm, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
             <Legend wrapperStyle={{ fontSize: t.font.sizeSm }} />
             {models.map((model) => (
@@ -313,9 +704,37 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: t.space.md }}>
-                <h4 style={{ margin: 0, fontSize: t.font.sizeBase, fontWeight: t.font.weightBold, color: MODEL_COLORS[model] }}>
-                  {MODEL_LABELS[model] || model}
-                </h4>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <h4 style={{ margin: 0, fontSize: t.font.sizeBase, fontWeight: t.font.weightBold, color: MODEL_COLORS[model] }}>
+                    {MODEL_LABELS[model] || model}
+                  </h4>
+                  {model === 'markov' && r.diagnostics && (
+                    <span
+                      style={{
+                        alignSelf: 'flex-start',
+                        padding: '2px 8px',
+                        borderRadius: 999,
+                        fontSize: t.font.sizeXs,
+                        fontWeight: t.font.weightSemibold,
+                        color:
+                          r.diagnostics.reliability === 'unreliable'
+                            ? t.color.danger
+                            : r.diagnostics.reliability === 'warning'
+                            ? t.color.warning
+                            : t.color.success,
+                        backgroundColor:
+                          r.diagnostics.reliability === 'unreliable'
+                            ? `${t.color.danger}18`
+                            : r.diagnostics.reliability === 'warning'
+                            ? `${t.color.warning}18`
+                            : `${t.color.success}18`,
+                      }}
+                    >
+                      Reliability:{' '}
+                      {(r.diagnostics.reliability || 'ok').toUpperCase()}
+                    </span>
+                  )}
+                </div>
                 {isSelected && (
                   <span
                     style={{
@@ -332,9 +751,62 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
                 )}
               </div>
               <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                <div style={{ marginBottom: 4 }}>Conversions: <strong style={{ color: t.color.text }}>{r.total_conversions}</strong></div>
-                <div style={{ marginBottom: 8 }}>Total value: <strong style={{ color: t.color.text }}>{formatCurrency(r.total_value)}</strong></div>
+                <div style={{ marginBottom: 4 }}>
+                  Conversions:{' '}
+                  <strong style={{ color: t.color.text }}>{r.total_conversions}</strong>
+                </div>
+                <div style={{ marginBottom: 4 }}>
+                  Total value:{' '}
+                  <strong style={{ color: t.color.text }}>{formatCurrency(r.total_value)}</strong>
+                </div>
+                {model === 'markov' && r.diagnostics?.insufficient_data && (
+                  <div style={{ marginTop: 4, fontSize: t.font.sizeXs, color: t.color.danger }}>
+                    Insufficient data for stable Markov. Treat results as unreliable.
+                  </div>
+                )}
               </div>
+              {model === 'markov' && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setShowMarkovDiagnostics(true)
+                  }}
+                  style={{
+                    marginTop: t.space.sm,
+                    padding: `${t.space.xs}px ${t.space.sm}px`,
+                    fontSize: t.font.sizeXs,
+                    color: t.color.accent,
+                    background: 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    textDecoration: 'underline',
+                  }}
+                >
+                  View diagnostics
+                </button>
+              )}
+              {model !== baselineKey && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setBaselineModel(model)
+                  }}
+                  style={{
+                    marginTop: t.space.xs,
+                    padding: `${t.space.xs}px ${t.space.sm}px`,
+                    fontSize: t.font.sizeXs,
+                    color: t.color.textSecondary,
+                    background: 'transparent',
+                    border: `1px dashed ${t.color.borderLight}`,
+                    borderRadius: t.radius.full,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Set as baseline
+                </button>
+              )}
               {r.channels && (
                 <div style={{ fontSize: t.font.sizeSm }}>
                   {r.channels.slice(0, 4).map((ch) => (
@@ -367,9 +839,34 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
           <h3 style={{ margin: 0, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
             Attribution Share by Model (%)
           </h3>
+          <label
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: t.font.sizeSm,
+              color: t.color.textSecondary,
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={showDeltaRow}
+              onChange={(e) => setShowDeltaRow(e.target.checked)}
+              disabled={comparisonMode !== 'delta' || !baselineKey}
+            />
+            Show delta vs baseline
+          </label>
           <button
             type="button"
-            onClick={() => exportComparisonCSV(comparisonData, models)}
+          onClick={() =>
+              exportComparisonCSV(comparisonData, models, {
+                mode: comparisonMode,
+                baselineModel: comparisonMode === 'delta' ? baselineKey : null,
+                conversionKey,
+                configVersion,
+                directMode,
+              })
+            }
             style={{
               padding: `${t.space.sm}px ${t.space.lg}px`,
               fontSize: t.font.sizeSm,
@@ -443,6 +940,14 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
                     const share = ((row[`${model}_share`] as number) || 0) * 100
                     const maxShare = Math.max(...models.map((m) => ((row[`${m}_share`] as number) || 0) * 100))
                     const isMax = share > 0 && share === maxShare
+                    const baseShare =
+                      comparisonMode === 'delta' && baselineKey
+                        ? (((row[`${baselineKey}_share`] as number) || 0) * 100)
+                        : null
+                    const deltaShare =
+                      comparisonMode === 'delta' && baselineKey && baseShare != null
+                        ? share - baseShare
+                        : null
                     return (
                       <td
                         key={model}
@@ -455,7 +960,18 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
                           fontVariantNumeric: 'tabular-nums',
                         }}
                       >
-                        {share.toFixed(1)}%
+                        <div>{share.toFixed(1)}%</div>
+                        {showDeltaRow && deltaShare != null && (
+                          <div
+                            style={{
+                              fontSize: t.font.sizeXs,
+                              color: deltaShare > 0 ? t.color.success : deltaShare < 0 ? t.color.danger : t.color.textMuted,
+                            }}
+                          >
+                            {deltaShare > 0 ? '+' : ''}
+                            {deltaShare.toFixed(1)}pp
+                          </div>
+                        )}
                       </td>
                     )
                   })}
@@ -465,6 +981,211 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
           </table>
         </div>
       </div>
+
+      {/* Markov diagnostics drawer */}
+      {showMarkovDiagnostics && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: '#00000055',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 40,
+          }}
+          onClick={() => setShowMarkovDiagnostics(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              maxWidth: 520,
+              width: '100%',
+              maxHeight: '80vh',
+              overflowY: 'auto',
+              background: t.color.surface,
+              borderRadius: t.radius.lg,
+              border: `1px solid ${t.color.border}`,
+              padding: t.space.lg,
+              boxShadow: t.shadowLg,
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: t.space.sm,
+              }}
+            >
+              <h3
+                style={{
+                  margin: 0,
+                  fontSize: t.font.sizeMd,
+                  fontWeight: t.font.weightSemibold,
+                  color: t.color.text,
+                }}
+              >
+                Data-Driven (Markov) diagnostics
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowMarkovDiagnostics(false)}
+                style={{
+                  border: 'none',
+                  background: 'transparent',
+                  cursor: 'pointer',
+                  fontSize: t.font.sizeBase,
+                  color: t.color.textSecondary,
+                }}
+              >
+                ✕
+              </button>
+            </div>
+            {!markovDiagnostics && (
+              <p style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary, margin: 0 }}>
+                Diagnostics are not available for this Markov run.
+              </p>
+            )}
+            {markovDiagnostics && (
+              <>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                    gap: t.space.md,
+                    marginBottom: t.space.md,
+                    fontSize: t.font.sizeSm,
+                    color: t.color.textSecondary,
+                  }}
+                >
+                  <div>
+                    <div style={{ fontWeight: t.font.weightMedium }}>Journeys used</div>
+                    <div style={{ fontVariantNumeric: 'tabular-nums', color: t.color.text }}>
+                      {markovDiagnostics.journeys_used ?? 'N/A'}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontWeight: t.font.weightMedium }}>Converted journeys</div>
+                    <div style={{ fontVariantNumeric: 'tabular-nums', color: t.color.text }}>
+                      {markovDiagnostics.converted_journeys ?? 'N/A'}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontWeight: t.font.weightMedium }}>Unique states</div>
+                    <div style={{ fontVariantNumeric: 'tabular-nums', color: t.color.text }}>
+                      {markovDiagnostics.unique_states ?? 'N/A'}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontWeight: t.font.weightMedium }}>Unique transitions</div>
+                    <div style={{ fontVariantNumeric: 'tabular-nums', color: t.color.text }}>
+                      {markovDiagnostics.unique_transitions ?? 'N/A'}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ marginBottom: t.space.md }}>
+                  <div
+                    style={{
+                      fontSize: t.font.sizeSm,
+                      fontWeight: t.font.weightMedium,
+                      color: t.color.textSecondary,
+                      marginBottom: 4,
+                    }}
+                  >
+                    Top transitions
+                  </div>
+                  {!markovDiagnostics.top_transitions || markovDiagnostics.top_transitions.length === 0 ? (
+                    <div style={{ fontSize: t.font.sizeSm, color: t.color.textMuted }}>Not available.</div>
+                  ) : (
+                    <ul
+                      style={{
+                        listStyle: 'none',
+                        padding: 0,
+                        margin: 0,
+                        fontSize: t.font.sizeSm,
+                        color: t.color.text,
+                      }}
+                    >
+                      {markovDiagnostics.top_transitions.map((tr, idx) => (
+                        <li key={`${tr.from}-${tr.to}-${idx}`} style={{ marginBottom: 2 }}>
+                          {tr.from} → {tr.to}{' '}
+                          <span style={{ color: t.color.textSecondary }}>
+                            ({tr.count} paths{tr.share != null ? ` • ${(tr.share * 100).toFixed(1)}%` : ''})
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+
+                <div style={{ marginBottom: t.space.md }}>
+                  <div
+                    style={{
+                      fontSize: t.font.sizeSm,
+                      fontWeight: t.font.weightMedium,
+                      color: t.color.textSecondary,
+                      marginBottom: 4,
+                    }}
+                  >
+                    Triggered warnings
+                  </div>
+                  {!markovDiagnostics.warnings || markovDiagnostics.warnings.length === 0 ? (
+                    <div style={{ fontSize: t.font.sizeSm, color: t.color.textMuted }}>No warnings triggered.</div>
+                  ) : (
+                    <ul
+                      style={{
+                        margin: 0,
+                        paddingLeft: t.space.lg,
+                        fontSize: t.font.sizeSm,
+                        color: t.color.text,
+                      }}
+                    >
+                      {markovDiagnostics.warnings.map((w, idx) => (
+                        <li key={idx}>{w}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+
+                <div>
+                  <div
+                    style={{
+                      fontSize: t.font.sizeSm,
+                      fontWeight: t.font.weightMedium,
+                      color: t.color.textSecondary,
+                      marginBottom: 4,
+                    }}
+                  >
+                    What to do next
+                  </div>
+                  <ul
+                    style={{
+                      margin: 0,
+                      paddingLeft: t.space.lg,
+                      fontSize: t.font.sizeSm,
+                      color: t.color.text,
+                    }}
+                  >
+                    {(markovDiagnostics.what_to_do_next && markovDiagnostics.what_to_do_next.length
+                      ? markovDiagnostics.what_to_do_next
+                      : [
+                          'Increase data window or volume to include more journeys.',
+                          'Improve source and campaign mapping, especially for Direct-heavy traffic.',
+                          'Compare Markov deltas against simpler models (Linear, Position-based).',
+                          'Use simpler models until Markov reliability improves.',
+                        ]
+                    ).map((item, idx) => (
+                      <li key={idx}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
