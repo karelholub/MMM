@@ -1,0 +1,27 @@
+# Git and IDE
+.git
+.gitignore
+.cursor
+.codex
+.mypy_cache
+.pytest_cache
+*.pyc
+*.pyo
+*.pyd
+__pycache__
+.DS_Store
+
+# Virtual envs
+venv
+.venv
+env
+.env
+
+# Tests and local DBs (not needed in image)
+tests
+*.db
+meiro_mmm.db
+
+# Docs / examples (optional: remove if you need in image)
+crontab.example
+*.md

@@ -256,7 +256,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
 
       {showWhy && (
         <div style={{ marginBottom: t.space.lg }}>
-          <ExplainabilityPanel scope="channel" configId={configId ?? undefined} />
+          <ExplainabilityPanel scope="channel" configId={configId ?? undefined} model={model} />
         </div>
       )}
 

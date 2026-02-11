@@ -38,7 +38,11 @@ from app.services_model_config import (
     get_default_config_id,
 )
 from app.services_data_quality import compute_dq_snapshots, evaluate_alert_rules
-from app.services_conversions import apply_model_config_to_journeys
+from app.services_conversions import (
+    apply_model_config_to_journeys,
+    load_journeys_from_db,
+    persist_journeys_as_conversion_paths,
+)
 from app.services_quality import (
     load_config_and_meta,
     get_latest_quality_for_scope,
@@ -46,6 +50,18 @@ from app.services_quality import (
     compute_overall_quality_from_dq,
 )
 from app.services_paths import compute_path_archetypes, compute_path_anomalies
+from app.services_incrementality import (
+    assign_profiles_deterministic,
+    record_exposure,
+    record_exposures_batch,
+    record_outcome,
+    record_outcomes_batch,
+    compute_experiment_results,
+    estimate_sample_size,
+    run_nightly_report,
+    get_experiment_time_series,
+    auto_assign_from_conversion_paths,
+)
 from app.mmm_engine import fit_model as mmm_fit_model, engine_info
 from app.connectors import meiro_cdp
 from app.attribution_engine import (
@@ -601,6 +617,171 @@ def update_taxonomy(payload: Dict[str, Any]):
     return get_taxonomy()
 
 
+@app.post("/api/taxonomy/validate-utm")
+def validate_utm_endpoint(params: Dict[str, Any]):
+    """
+    Validate UTM parameters and return normalized values with warnings/errors.
+    
+    Example: {"utm_source": "google", "utm_medium": "cpc", "utm_campaign": "brand"}
+    """
+    from app.services_taxonomy import validate_utm_params
+    
+    result = validate_utm_params(params)
+    return {
+        "is_valid": result.is_valid,
+        "warnings": result.warnings,
+        "errors": result.errors,
+        "normalized": result.normalized,
+        "confidence": result.confidence,
+    }
+
+
+@app.post("/api/taxonomy/map-channel")
+def map_channel_endpoint(body: Dict[str, Any]):
+    """
+    Map source/medium to channel with confidence score.
+    
+    Example: {"source": "google", "medium": "cpc"}
+    """
+    from app.services_taxonomy import map_to_channel
+    
+    source = body.get("source")
+    medium = body.get("medium")
+    
+    mapping = map_to_channel(source, medium)
+    return {
+        "channel": mapping.channel,
+        "matched_rule": mapping.matched_rule,
+        "confidence": mapping.confidence,
+        "source": mapping.source,
+        "medium": mapping.medium,
+        "fallback_reason": mapping.fallback_reason,
+    }
+
+
+@app.get("/api/taxonomy/unknown-share")
+def get_unknown_share(limit: int = 20, db=Depends(get_db)):
+    """
+    Get unknown/unmapped traffic report.
+    
+    Returns unknown share, breakdowns by source/medium, and sample unmapped touchpoints.
+    """
+    from app.services_taxonomy import compute_unknown_share
+    from app.services_conversions import load_journeys_from_db
+    
+    journeys = load_journeys_from_db(db, limit=10000)
+    if not journeys:
+        return {
+            "total_touchpoints": 0,
+            "unknown_count": 0,
+            "unknown_share": 0.0,
+            "by_source": {},
+            "by_medium": {},
+            "top_unmapped_patterns": [],
+            "sample_unmapped": [],
+        }
+    
+    report = compute_unknown_share(journeys, sample_size=limit)
+    
+    # Convert tuple keys to strings for JSON
+    top_patterns = sorted(
+        [(k, v) for k, v in report.by_source_medium.items()],
+        key=lambda x: -x[1]
+    )[:limit]
+    
+    return {
+        "total_touchpoints": report.total_touchpoints,
+        "unknown_count": report.unknown_count,
+        "unknown_share": report.unknown_share,
+        "by_source": report.by_source,
+        "by_medium": report.by_medium,
+        "top_unmapped_patterns": [
+            {"source": s, "medium": m, "count": count}
+            for (s, m), count in top_patterns
+        ],
+        "sample_unmapped": report.sample_unmapped,
+    }
+
+
+@app.get("/api/taxonomy/coverage")
+def get_taxonomy_coverage(db=Depends(get_db)):
+    """
+    Get taxonomy coverage report.
+    
+    Returns channel distribution, source/medium coverage, rule usage, and top unmapped patterns.
+    """
+    from app.services_taxonomy import compute_taxonomy_coverage
+    from app.services_conversions import load_journeys_from_db
+    
+    journeys = load_journeys_from_db(db, limit=10000)
+    if not journeys:
+        return {
+            "channel_distribution": {},
+            "source_coverage": 0.0,
+            "medium_coverage": 0.0,
+            "rule_usage": {},
+            "top_unmapped_patterns": [],
+        }
+    
+    coverage = compute_taxonomy_coverage(journeys)
+    return coverage
+
+
+@app.get("/api/taxonomy/channel-confidence")
+def get_channel_confidence(channel: str, db=Depends(get_db)):
+    """
+    Get confidence metrics for a specific channel.
+    
+    Returns mean confidence, touchpoint count, low-confidence share, and samples.
+    """
+    from app.services_taxonomy import compute_channel_confidence
+    from app.services_conversions import load_journeys_from_db
+    
+    journeys = load_journeys_from_db(db, limit=10000)
+    if not journeys:
+        return {
+            "mean_confidence": 0.0,
+            "touchpoint_count": 0,
+            "low_confidence_count": 0,
+            "low_confidence_share": 0.0,
+            "sample_low_confidence": [],
+        }
+    
+    confidence = compute_channel_confidence(journeys, channel)
+    return confidence
+
+
+@app.post("/api/taxonomy/compute-dq")
+def compute_taxonomy_dq(db=Depends(get_db)):
+    """
+    Compute and persist taxonomy-specific DQ snapshots.
+    
+    Metrics: unknown_channel_share, mean_touchpoint_confidence, mean_journey_confidence,
+    source_coverage, medium_coverage, low_confidence_touchpoint_share.
+    """
+    from app.services_taxonomy import persist_taxonomy_dq_snapshots
+    from app.services_conversions import load_journeys_from_db
+    
+    journeys = load_journeys_from_db(db, limit=10000)
+    if not journeys:
+        return {"computed": 0, "message": "No journeys found"}
+    
+    snapshots = persist_taxonomy_dq_snapshots(db, journeys)
+    
+    return {
+        "computed": len(snapshots),
+        "metrics": [
+            {
+                "source": s.source,
+                "metric_key": s.metric_key,
+                "metric_value": s.metric_value,
+                "ts_bucket": s.ts_bucket,
+            }
+            for s in snapshots
+        ],
+    }
+
+
 # ==================== KPI / Conversion API ====================
 
 
@@ -658,8 +839,12 @@ def list_attribution_models():
     return {"models": ATTRIBUTION_MODELS}
 
 @app.get("/api/attribution/journeys")
-def get_journeys_summary():
+def get_journeys_summary(db=Depends(get_db)):
     """Get summary of currently loaded conversion journeys."""
+    global JOURNEYS
+    if not JOURNEYS:
+        # Attempt to hydrate in-memory journeys from the normalised store.
+        JOURNEYS = load_journeys_from_db(db)
     if not JOURNEYS:
         return {"loaded": False, "count": 0}
 
@@ -698,7 +883,7 @@ def get_journeys_summary():
     }
 
 @app.post("/api/attribution/journeys/upload")
-async def upload_journeys(file: UploadFile = File(...)):
+async def upload_journeys(file: UploadFile = File(...), db=Depends(get_db)):
     """Upload conversion path data as JSON."""
     global JOURNEYS
     content = await file.read()
@@ -712,6 +897,8 @@ async def upload_journeys(file: UploadFile = File(...)):
             raise ValueError("Expected a JSON array of journeys")
     except (json.JSONDecodeError, ValueError) as e:
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+    # Persist into normalised conversion path storage for reuse by DQ and other APIs.
+    persist_journeys_as_conversion_paths(db, JOURNEYS, replace=True)
     return {"count": len(JOURNEYS), "message": f"Loaded {len(JOURNEYS)} journeys"}
 
 @app.post("/api/attribution/journeys/from-cdp")
@@ -750,10 +937,12 @@ def import_journeys_from_cdp(
             journeys = apply_model_config_to_journeys(journeys, cfg.config_json or {})
 
     JOURNEYS = journeys
+    # Persist parsed journeys into the normalised ConversionPath table.
+    persist_journeys_as_conversion_paths(db, JOURNEYS, replace=True)
     return {"count": len(JOURNEYS), "message": f"Parsed {len(JOURNEYS)} journeys from CDP data"}
 
 @app.post("/api/attribution/journeys/load-sample")
-def load_sample_journeys():
+def load_sample_journeys(db=Depends(get_db)):
     """Load the built-in sample conversion paths."""
     global JOURNEYS
     sample_file = SAMPLE_DIR / "sample-conversion-paths.json"
@@ -761,6 +950,8 @@ def load_sample_journeys():
         raise HTTPException(status_code=404, detail="Sample data not found")
     with open(sample_file) as f:
         JOURNEYS = json.load(f)
+    # Persist sample journeys so downstream APIs can operate on a consistent store.
+    persist_journeys_as_conversion_paths(db, JOURNEYS, replace=True)
     return {"count": len(JOURNEYS), "message": f"Loaded {len(JOURNEYS)} sample journeys"}
 
 @app.post("/api/attribution/run")
@@ -769,8 +960,12 @@ def run_attribution_model(model: str = "linear", config_id: Optional[str] = None
 
     Optional config_id applies time windows and conversion keys before attribution.
     """
+    global JOURNEYS
     if not JOURNEYS:
-        raise HTTPException(status_code=400, detail="No journeys loaded. Upload or import data first.")
+        # Lazy-load from normalised storage if nothing is in memory yet.
+        JOURNEYS = load_journeys_from_db(db)
+    if not JOURNEYS:
+        raise HTTPException(status_code=400, detail="No journeys loaded. Upload, import, or persist data first.")
     if model not in ATTRIBUTION_MODELS:
         raise HTTPException(status_code=400, detail=f"Unknown model: {model}. Available: {ATTRIBUTION_MODELS}")
     resolved_cfg = None
@@ -797,8 +992,11 @@ def run_attribution_model(model: str = "linear", config_id: Optional[str] = None
 @app.post("/api/attribution/run-all")
 def run_all_attribution_models(config_id: Optional[str] = None, db=Depends(get_db)):
     """Run all attribution models on loaded journeys."""
+    global JOURNEYS
     if not JOURNEYS:
-        raise HTTPException(status_code=400, detail="No journeys loaded. Upload or import data first.")
+        JOURNEYS = load_journeys_from_db(db)
+    if not JOURNEYS:
+        raise HTTPException(status_code=400, detail="No journeys loaded. Upload, import, or persist data first.")
     resolved_cfg = None
     effective_config_id = config_id or get_default_config_id()
     journeys_for_model = JOURNEYS
@@ -844,6 +1042,9 @@ def get_path_analysis(config_id: Optional[str] = None, db=Depends(get_db)):
 
     Optional config_id pins to a specific model config; response includes config metadata.
     """
+    global JOURNEYS
+    if not JOURNEYS:
+        JOURNEYS = load_journeys_from_db(db)
     if not JOURNEYS:
         raise HTTPException(status_code=400, detail="No journeys loaded.")
 
@@ -879,20 +1080,41 @@ def get_path_analysis(config_id: Optional[str] = None, db=Depends(get_db)):
 
 
 @app.get("/api/paths/archetypes")
-def get_path_archetypes(conversion_key: Optional[str] = None, config_id: Optional[str] = None, db=Depends(get_db)):
+def get_path_archetypes(
+    conversion_key: Optional[str] = None,
+    config_id: Optional[str] = None,
+    k_mode: str = "auto",
+    k: Optional[int] = None,
+    k_min: int = 3,
+    k_max: int = 10,
+    db=Depends(get_db),
+):
     """Return simple path archetypes for current journeys."""
+    global JOURNEYS
+    if not JOURNEYS:
+        JOURNEYS = load_journeys_from_db(db)
     if not JOURNEYS:
         raise HTTPException(status_code=400, detail="No journeys loaded.")
     resolved_cfg, _meta = load_config_and_meta(db, config_id)
     journeys_for_analysis = JOURNEYS
     if resolved_cfg:
         journeys_for_analysis = apply_model_config_to_journeys(JOURNEYS, resolved_cfg.config_json or {})
-    return compute_path_archetypes(journeys_for_analysis, conversion_key)
+    return compute_path_archetypes(
+        journeys_for_analysis,
+        conversion_key,
+        k_mode=k_mode,
+        k=k,
+        k_min=k_min,
+        k_max=k_max,
+    )
 
 
 @app.get("/api/paths/anomalies")
 def get_path_anomalies(conversion_key: Optional[str] = None, config_id: Optional[str] = None, db=Depends(get_db)):
     """Return simple anomaly hints for current journeys' paths."""
+    global JOURNEYS
+    if not JOURNEYS:
+        JOURNEYS = load_journeys_from_db(db)
     if not JOURNEYS:
         return {"anomalies": []}
     resolved_cfg, _meta = load_config_and_meta(db, config_id)
@@ -918,11 +1140,16 @@ def _next_best_action_impl(path_so_far: str = "", level: str = "channel"):
 
 @app.get("/api/attribution/next-best-action")
 @app.get("/api/attribution/next_best_action")
-def get_next_best_action(path_so_far: str = "", level: str = "channel"):
+def get_next_best_action(path_so_far: str = "", level: str = "channel", db=Depends(get_db)):
     """
     Given a path prefix (e.g. 'google_ads' or 'google_ads > email'), return recommended next channels
     (or channel:campaign when level=campaign and data has campaign). Use comma or ' > ' to separate steps.
     """
+    global JOURNEYS
+    if not JOURNEYS:
+        JOURNEYS = load_journeys_from_db(db)
+    if not JOURNEYS:
+        raise HTTPException(status_code=400, detail="No journeys loaded.")
     return _next_best_action_impl(path_so_far=path_so_far, level=level)
 
 @app.get("/api/attribution/performance")
@@ -933,12 +1160,17 @@ def get_channel_performance(model: str = "linear", config_id: Optional[str] = No
     """
     # Resolve config (for now only surfaced in metadata, attribution math unchanged)
     resolved_cfg, meta = load_config_and_meta(db, config_id)
+    global JOURNEYS
+    if not JOURNEYS:
+        JOURNEYS = load_journeys_from_db(db)
     journeys_for_model = JOURNEYS
     if resolved_cfg:
         journeys_for_model = apply_model_config_to_journeys(JOURNEYS, resolved_cfg.config_json or {})
 
     result = ATTRIBUTION_RESULTS.get(model)
     if not result:
+        if not JOURNEYS:
+            JOURNEYS = load_journeys_from_db(db)
         if not JOURNEYS:
             raise HTTPException(status_code=400, detail="No journeys loaded.")
         kwargs: Dict[str, Any] = {}
@@ -983,6 +1215,9 @@ def get_channel_performance(model: str = "linear", config_id: Optional[str] = No
 @app.get("/api/attribution/campaign-performance")
 def get_campaign_performance(model: str = "linear", config_id: Optional[str] = None, db=Depends(get_db)):
     """Campaign-level attribution (channel:campaign). Requires touchpoints with campaign. Returns campaigns with attributed value and optional suggested next (NBA)."""
+    global JOURNEYS
+    if not JOURNEYS:
+        JOURNEYS = load_journeys_from_db(db)
     if not JOURNEYS:
         raise HTTPException(status_code=400, detail="No journeys loaded.")
     if not has_any_campaign(JOURNEYS):
@@ -1075,7 +1310,7 @@ def get_campaign_performance(model: str = "linear", config_id: Optional[str] = N
 
 
 @app.get("/api/attribution/campaign-performance/trends")
-def get_campaign_performance_trends():
+def get_campaign_performance_trends(db=Depends(get_db)):
     """
     Time series for campaign performance:
       - transactions: number of converted journeys (last-touch attribution)
@@ -1091,6 +1326,9 @@ def get_campaign_performance_trends():
         }
       }
     """
+    global JOURNEYS
+    if not JOURNEYS:
+        JOURNEYS = load_journeys_from_db(db)
     if not JOURNEYS:
         raise HTTPException(status_code=400, detail="No journeys loaded.")
     return compute_campaign_trends(JOURNEYS)
@@ -1368,6 +1606,23 @@ class ExplainabilityDriver(BaseModel):
     current_value: float
     previous_value: float
     top_contributors: List[Dict[str, Any]] = []
+    contribution_pct: Optional[float] = None  # For attributed_value: this driver's share of total change
+
+
+class FeatureImportanceItem(BaseModel):
+    id: str
+    name: str
+    importance: float  # 0–1 share in current period
+    share_pct: float
+    delta: float
+    direction: str  # "up" | "down" | "neutral"
+
+
+class NarrativeBlock(BaseModel):
+    summary: str
+    period_notes: List[str] = []
+    config_notes: List[str] = []
+    data_notes: List[str] = []
 
 
 class ExplainabilitySummary(BaseModel):
@@ -1376,6 +1631,8 @@ class ExplainabilitySummary(BaseModel):
     data_health: Dict[str, Any]
     config: Dict[str, Any]
     mechanics: Dict[str, Any]
+    feature_importance: List[FeatureImportanceItem] = []
+    narrative: Optional[NarrativeBlock] = None
 
 
 def _filter_journeys_by_period(journeys: List[Dict[str, Any]], start: datetime, end: datetime) -> List[Dict[str, Any]]:
@@ -1399,6 +1656,91 @@ def _filter_journeys_by_period(journeys: List[Dict[str, Any]], start: datetime, 
     return out
 
 
+def _build_explainability_narrative(
+    scope: str,
+    drivers: List[ExplainabilityDriver],
+    curr_j_count: int,
+    prev_j_count: int,
+    config_info: Dict[str, Any],
+    data_health: Dict[str, Any],
+    mechanics: Dict[str, Any],
+) -> NarrativeBlock:
+    """Build human-readable narrative tied to config and data changes."""
+    period_notes: List[str] = []
+    if prev_j_count > 0 and curr_j_count != prev_j_count:
+        pct = ((curr_j_count - prev_j_count) / prev_j_count) * 100.0
+        period_notes.append(
+            f"Journey count: current period {curr_j_count:,}, previous {prev_j_count:,} ({pct:+.1f}% change). "
+            "Large volume shifts can affect attribution comparability."
+        )
+    elif curr_j_count == 0:
+        period_notes.append("No journeys in the current period; metrics are not comparable.")
+    else:
+        period_notes.append(f"Current period: {curr_j_count:,} journeys; previous: {prev_j_count:,}.")
+
+    config_notes: List[str] = []
+    cfg_id = config_info.get("config_id")
+    version = config_info.get("version")
+    changes = config_info.get("changes") or []
+    if cfg_id and version is not None:
+        config_notes.append(f"Using measurement config '{cfg_id}' (version {version}).")
+        if changes:
+            config_notes.append(
+                f"{len(changes)} config change(s) in the comparison window – "
+                "recent changes to windows or conversion keys may affect period comparability."
+            )
+    else:
+        config_notes.append("No versioned model config; global attribution settings apply.")
+
+    windows = (mechanics.get("windows") or {}) or {}
+    if windows.get("click_lookback_days") is not None:
+        config_notes.append(f"Click lookback: {windows['click_lookback_days']} days.")
+
+    data_notes: List[str] = []
+    conf = (data_health or {}).get("confidence")
+    if conf:
+        data_notes.append(f"Data confidence: {conf.get('label', '—')} ({conf.get('score', 0):.0f}/100).")
+    for note in (data_health or {}).get("notes") or []:
+        data_notes.append(note)
+
+    summary_parts: List[str] = []
+    if scope in ("channel", "campaign") and drivers:
+        d = drivers[0]
+        delta_val = d.delta
+        curr_val = d.current_value
+        prev_val = d.previous_value
+        if prev_val != 0:
+            pct_change = (delta_val / prev_val) * 100.0
+            summary_parts.append(
+                f"Attributed value {'increased' if delta_val >= 0 else 'decreased'} by "
+                f"{abs(delta_val):,.0f} ({pct_change:+.1f}%) from the previous period "
+                f"(from {prev_val:,.0f} to {curr_val:,.0f})."
+            )
+        else:
+            summary_parts.append(f"Attributed value is {curr_val:,.0f} (previous period had no value).")
+        if getattr(d, "top_contributors", None) and len(d.top_contributors) > 0:
+            top = d.top_contributors[0]
+            summary_parts.append(f" Top positive driver: {top.get('id', '—')} (+{top.get('delta', 0):,.0f}).")
+    elif scope == "paths" and drivers:
+        parts = []
+        for d in drivers:
+            if abs(d.delta) > 0.01:
+                parts.append(f"{d.metric}: {d.delta:+.2f} (now {d.current_value:.2f})")
+        if parts:
+            summary_parts.append("Path metrics changed: " + "; ".join(parts) + ".")
+        else:
+            summary_parts.append("Path metrics are stable between periods.")
+    else:
+        summary_parts.append("Compare the two periods above; narrative is based on journey volume and config.")
+
+    return NarrativeBlock(
+        summary=" ".join(summary_parts).strip() or "No summary available.",
+        period_notes=period_notes,
+        config_notes=config_notes,
+        data_notes=data_notes,
+    )
+
+
 @app.get("/api/explainability/summary", response_model=ExplainabilitySummary)
 def explainability_summary(
     scope: str = Query(..., pattern="^(channel|campaign|paths)$"),
@@ -1407,16 +1749,20 @@ def explainability_summary(
     to: Optional[str] = None,
     config_id: Optional[str] = None,
     conversion_key: Optional[str] = None,
+    model: str = "linear",
     db=Depends(get_db),
 ):
     """
-    Provide a lightweight explanation for changes in key metrics between two periods.
+    Explainability: period-over-period drivers, feature importance, and narrative.
 
-    For now we support:
-      - scope=channel: total attributed value across channels
-      - scope=campaign: total attributed value across campaigns
-      - scope=paths: basic changes in average path length and time-to-convert
+    - scope=channel: attributed value by channel; feature importance = share of value + delta.
+    - scope=campaign: attributed value by campaign; same.
+    - scope=paths: path length and time-to-convert drivers.
+    Narrative ties explanations to config and data changes.
     """
+    global JOURNEYS
+    if not JOURNEYS:
+        JOURNEYS = load_journeys_from_db(db)
     if not JOURNEYS:
         raise HTTPException(status_code=400, detail="No journeys loaded.")
 
@@ -1460,39 +1806,42 @@ def explainability_summary(
 
     drivers: List[ExplainabilityDriver] = []
     mechanics: Dict[str, Any] = {
-        "model": "linear",
+        "model": model,
         "windows": meta["time_window"] if meta else None,
         "eligibility": {
             "uses_model_config": resolved_cfg is not None,
         },
     }
 
+    curr_res: Dict[str, Any] = {}
+    prev_res: Dict[str, Any] = {}
+    contrib_deltas: List[Dict[str, Any]] = []
+
     if scope in ("channel", "campaign"):
         # Use attribution engine to get totals, but be defensive if there are no journeys in the period.
         if not curr_j and not prev_j:
             curr_val = 0.0
             prev_val = 0.0
-            contrib_deltas: List[Dict[str, Any]] = []
         else:
             try:
                 if scope == "channel":
-                    curr_res = run_attribution(curr_j, model="linear") if curr_j else {"total_value": 0, "channels": []}
-                    prev_res = run_attribution(prev_j, model="linear") if prev_j else {"total_value": 0, "channels": []}
+                    curr_res = run_attribution(curr_j, model=model) if curr_j else {"total_value": 0, "channels": []}
+                    prev_res = run_attribution(prev_j, model=model) if prev_j else {"total_value": 0, "channels": []}
                 else:
                     curr_res = (
-                        run_attribution_campaign(curr_j, model="linear")
+                        run_attribution_campaign(curr_j, model=model)
                         if curr_j
                         else {"total_value": 0, "channels": []}
                     )
                     prev_res = (
-                        run_attribution_campaign(prev_j, model="linear")
+                        run_attribution_campaign(prev_j, model=model)
                         if prev_j
                         else {"total_value": 0, "channels": []}
                     )
                 curr_val = float(curr_res.get("total_value", 0.0) or 0.0)
                 prev_val = float(prev_res.get("total_value", 0.0) or 0.0)
 
-                # Top contributors by delta in value
+                # Per-entity driver breakdown: all channels/campaigns with deltas
                 def _to_map(res: Dict[str, Any]) -> Dict[str, float]:
                     m: Dict[str, float] = {}
                     for ch in res.get("channels", []):
@@ -1513,12 +1862,16 @@ def explainability_summary(
                     )
                 contrib_deltas.sort(key=lambda x: x["delta"], reverse=True)
             except Exception:
-                # If anything goes wrong in attribution math, fall back to a safe, zeroed driver rather than 500.
                 curr_val = 0.0
                 prev_val = 0.0
                 contrib_deltas = []
 
         delta_val = curr_val - prev_val
+        # Contribution % of each top contributor to total change (for narrative)
+        contribution_pct: Optional[float] = None
+        if abs(delta_val) > 1e-9 and contrib_deltas:
+            top_delta = contrib_deltas[0].get("delta", 0.0)
+            contribution_pct = (top_delta / delta_val) * 100.0
 
         drivers.append(
             ExplainabilityDriver(
@@ -1526,7 +1879,8 @@ def explainability_summary(
                 delta=delta_val,
                 current_value=curr_val,
                 previous_value=prev_val,
-                top_contributors=contrib_deltas[:5],
+                top_contributors=contrib_deltas[:10],
+                contribution_pct=contribution_pct,
             )
         )
     elif scope == "paths":
@@ -1609,15 +1963,65 @@ def explainability_summary(
         "changes": cfg_changes,
     }
 
+    # Feature importance: share of attributed value in current period + direction of change
+    feature_importance: List[FeatureImportanceItem] = []
+    if scope in ("channel", "campaign") and curr_res.get("channels"):
+        total_curr = float(curr_res.get("total_value", 0.0) or 0.0)
+        delta_val_total = 0.0
+        if drivers and drivers[0].metric == "attributed_value":
+            delta_val_total = drivers[0].delta
+        contrib_by_id = {c["id"]: c for c in contrib_deltas}
+        for ch in curr_res.get("channels", []):
+            cid = ch.get("channel")
+            if not cid:
+                continue
+            share = float(ch.get("attributed_share", 0.0) or 0.0)
+            contrib = contrib_by_id.get(cid, {})
+            d = contrib.get("delta", 0.0)
+            if abs(d) < 1e-9:
+                direction = "neutral"
+            else:
+                direction = "up" if d > 0 else "down"
+            feature_importance.append(
+                FeatureImportanceItem(
+                    id=cid,
+                    name=cid,
+                    importance=share,
+                    share_pct=round(share * 100.0, 2),
+                    delta=round(d, 2),
+                    direction=direction,
+                )
+            )
+        feature_importance.sort(key=lambda x: -x.importance)
+
+    # Narrative tied to config and data changes
+    narrative = _build_explainability_narrative(
+        scope=scope,
+        drivers=drivers,
+        curr_j_count=len(curr_j),
+        prev_j_count=len(prev_j),
+        config_info=config_info,
+        data_health=data_health,
+        mechanics=mechanics,
+    )
+
+    # Serialize period datetimes for JSON
+    def _dt_iso(d: datetime) -> str:
+        return d.isoformat() + "Z" if d.tzinfo is None else d.isoformat()
+
+    period_serialized = {
+        "current": {"from": _dt_iso(start), "to": _dt_iso(end)},
+        "previous": {"from": _dt_iso(prev_start), "to": _dt_iso(prev_end)},
+    }
+
     return ExplainabilitySummary(
-        period={
-            "current": {"from": start, "to": end},
-            "previous": {"from": prev_start, "to": prev_end},
-        },
+        period=period_serialized,
         drivers=drivers,
         data_health=data_health,
         config=config_info,
         mechanics=mechanics,
+        feature_importance=feature_importance,
+        narrative=narrative,
     )
 
 
@@ -1736,50 +2140,29 @@ class AssignmentRequest(BaseModel):
 
 @app.post("/api/experiments/{exp_id}/assign")
 def assign_experiment(exp_id: int, body: AssignmentRequest, db=Depends(get_db)):
-    import random
-
+    """
+    Assign profiles to treatment/control using deterministic hashing.
+    
+    This ensures stable, reproducible assignments across calls.
+    """
     exp = db.get(Experiment, exp_id)
     if not exp:
         raise HTTPException(status_code=404, detail="Experiment not found")
     if not body.profile_ids:
         return {"assigned": 0, "treatment": 0, "control": 0}
 
-    ids = list(dict.fromkeys(body.profile_ids))  # de-duplicate while preserving order
-    random.shuffle(ids)
-    n_total = len(ids)
-    n_treat = max(1, int(round(n_total * body.treatment_rate)))
-    treatment_ids = set(ids[:n_treat])
+    counts = assign_profiles_deterministic(
+        db=db,
+        experiment_id=exp_id,
+        profile_ids=body.profile_ids,
+        treatment_rate=body.treatment_rate,
+    )
 
-    existing = {
-        a.profile_id: a
-        for a in db.query(ExperimentAssignment)
-        .filter(ExperimentAssignment.experiment_id == exp_id)
-        .all()
+    return {
+        "assigned": len(body.profile_ids),
+        "treatment": counts["treatment"],
+        "control": counts["control"],
     }
-
-    assigned_t = 0
-    assigned_c = 0
-    for pid in ids:
-        group = "treatment" if pid in treatment_ids else "control"
-        if pid in existing:
-            existing[pid].group = group
-            existing[pid].assigned_at = datetime.utcnow()
-        else:
-            db.add(
-                ExperimentAssignment(
-                    experiment_id=exp_id,
-                    profile_id=pid,
-                    group=group,
-                    assigned_at=datetime.utcnow(),
-                )
-            )
-        if group == "treatment":
-            assigned_t += 1
-        else:
-            assigned_c += 1
-
-    db.commit()
-    return {"assigned": n_total, "treatment": assigned_t, "control": assigned_c}
 
 
 class OutcomePayload(BaseModel):
@@ -1937,6 +2320,194 @@ def get_experiment_results(exp_id: int, db=Depends(get_db)):
         "p_value": p_value,
         "insufficient_data": False,
     }
+
+
+class ExposurePayload(BaseModel):
+    profile_id: str
+    exposure_ts: Optional[datetime] = None
+    campaign_id: Optional[str] = None
+    message_id: Optional[str] = None
+
+
+class ExposuresRequest(BaseModel):
+    exposures: List[ExposurePayload]
+
+
+@app.post("/api/experiments/{exp_id}/exposures")
+def record_experiment_exposures(exp_id: int, body: ExposuresRequest, db=Depends(get_db)):
+    """
+    Record exposures (e.g., message sent) for an experiment.
+    
+    Exposures track when treatment was actually delivered, separate from assignment.
+    """
+    exp = db.get(Experiment, exp_id)
+    if not exp:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+    
+    if not body.exposures:
+        return {"recorded": 0}
+    
+    exposures = [
+        {
+            "profile_id": e.profile_id,
+            "exposure_ts": e.exposure_ts,
+            "campaign_id": e.campaign_id,
+            "message_id": e.message_id,
+        }
+        for e in body.exposures
+    ]
+    
+    count = record_exposures_batch(db, exp_id, exposures)
+    return {"recorded": count}
+
+
+@app.get("/api/experiments/{exp_id}/exposures")
+def get_experiment_exposures(exp_id: int, limit: int = 100, db=Depends(get_db)):
+    """Get recent exposures for an experiment."""
+    exp = db.get(Experiment, exp_id)
+    if not exp:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+    
+    exposures = (
+        db.query(ExperimentExposure)
+        .filter(ExperimentExposure.experiment_id == exp_id)
+        .order_by(ExperimentExposure.exposure_ts.desc())
+        .limit(limit)
+        .all()
+    )
+    
+    return [
+        {
+            "profile_id": e.profile_id,
+            "exposure_ts": e.exposure_ts,
+            "campaign_id": e.campaign_id,
+            "message_id": e.message_id,
+        }
+        for e in exposures
+    ]
+
+
+@app.get("/api/experiments/{exp_id}/time-series")
+def get_experiment_time_series_endpoint(exp_id: int, freq: str = "D", db=Depends(get_db)):
+    """
+    Get daily/weekly time series of experiment metrics.
+    
+    Returns cumulative metrics over time for visualization.
+    """
+    exp = db.get(Experiment, exp_id)
+    if not exp:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+    
+    df = get_experiment_time_series(db, exp_id, freq=freq)
+    
+    if df.empty:
+        return {"data": []}
+    
+    return {"data": df.to_dict(orient="records")}
+
+
+class PowerAnalysisRequest(BaseModel):
+    baseline_rate: float
+    mde: float
+    alpha: float = 0.05
+    power: float = 0.8
+    treatment_rate: float = 0.5
+
+
+@app.post("/api/experiments/power-analysis")
+def power_analysis(body: PowerAnalysisRequest):
+    """
+    Estimate required sample size for an experiment.
+    
+    Parameters:
+    - baseline_rate: control group conversion rate (e.g., 0.05 = 5%)
+    - mde: minimum detectable effect (absolute, e.g., 0.01 = 1pp)
+    - alpha: significance level (default 0.05)
+    - power: statistical power (default 0.8)
+    - treatment_rate: fraction in treatment (default 0.5)
+    
+    Returns total sample size needed.
+    """
+    if not (0 < body.baseline_rate < 1):
+        raise HTTPException(status_code=400, detail="baseline_rate must be between 0 and 1")
+    if not (0 < body.mde < 1):
+        raise HTTPException(status_code=400, detail="mde must be between 0 and 1")
+    if not (0 < body.alpha < 1):
+        raise HTTPException(status_code=400, detail="alpha must be between 0 and 1")
+    if not (0 < body.power < 1):
+        raise HTTPException(status_code=400, detail="power must be between 0 and 1")
+    if not (0 < body.treatment_rate < 1):
+        raise HTTPException(status_code=400, detail="treatment_rate must be between 0 and 1")
+    
+    total_n = estimate_sample_size(
+        baseline_rate=body.baseline_rate,
+        mde=body.mde,
+        alpha=body.alpha,
+        power=body.power,
+        treatment_rate=body.treatment_rate,
+    )
+    
+    n_treatment = int(total_n * body.treatment_rate)
+    n_control = total_n - n_treatment
+    
+    return {
+        "total_sample_size": total_n,
+        "treatment_size": n_treatment,
+        "control_size": n_control,
+        "baseline_rate": body.baseline_rate,
+        "mde": body.mde,
+        "alpha": body.alpha,
+        "power": body.power,
+    }
+
+
+@app.post("/api/experiments/nightly-report")
+def run_nightly_report_endpoint(db=Depends(get_db)):
+    """
+    Run nightly report for all active experiments.
+    
+    Computes results and generates alerts. Intended for scheduled execution.
+    """
+    report = run_nightly_report(db)
+    return report
+
+
+class AutoAssignRequest(BaseModel):
+    channel: str
+    start_date: datetime
+    end_date: datetime
+    treatment_rate: float = 0.5
+
+
+@app.post("/api/experiments/{exp_id}/auto-assign")
+def auto_assign_experiment(exp_id: int, body: AutoAssignRequest, db=Depends(get_db)):
+    """
+    Automatically assign profiles based on conversion paths.
+    
+    Finds all profiles who had touchpoints in the specified channel during
+    the experiment period and assigns them deterministically.
+    
+    Useful for post-hoc analysis of historical data.
+    """
+    exp = db.get(Experiment, exp_id)
+    if not exp:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+    
+    counts = auto_assign_from_conversion_paths(
+        db=db,
+        experiment_id=exp_id,
+        channel=body.channel,
+        start_date=body.start_date,
+        end_date=body.end_date,
+        treatment_rate=body.treatment_rate,
+    )
+    
+    return {
+        "treatment": counts["treatment"],
+        "control": counts["control"],
+        "total": counts["treatment"] + counts["control"],
+    }
+
 
 # ==================== Dataset Routes ====================
 

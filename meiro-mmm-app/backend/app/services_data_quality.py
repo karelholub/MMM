@@ -11,7 +11,13 @@ from pathlib import Path
 import pandas as pd
 from sqlalchemy.orm import Session
 
-from .models_config_dq import DQSnapshot, DQAlertRule, DQAlert, NotificationEndpoint
+from .models_config_dq import (
+    ConversionPath,
+    DQSnapshot,
+    DQAlertRule,
+    DQAlert,
+    NotificationEndpoint,
+)
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 
@@ -20,8 +26,28 @@ def _now() -> datetime:
     return datetime.utcnow()
 
 
-def _load_journeys() -> List[Dict[str, Any]]:
-    """Best-effort load of journeys from the JSON file used at startup (for DQ worker)."""
+def _load_journeys(db: Session) -> List[Dict[str, Any]]:
+    """Load journeys for DQ checks, preferring the normalised ConversionPath store.
+
+    Fallback to the legacy JSON file if no ConversionPath rows exist yet.
+    """
+    # Primary source: normalised conversion paths
+    rows = (
+        db.query(ConversionPath)
+        .order_by(ConversionPath.conversion_ts.desc())
+        .limit(10000)
+        .all()
+    )
+    if rows:
+        journeys: List[Dict[str, Any]] = []
+        for r in rows:
+            payload = r.path_json
+            if isinstance(payload, dict):
+                journeys.append(payload)
+        if journeys:
+            return journeys
+
+    # Legacy fallback: raw profiles pushed from Meiro CDP webhook
     sample_file = DATA_DIR / "meiro_cdp_profiles.json"
     # This file contains raw profiles; for DQ we only need basic fields, so we can treat it as events.
     if not sample_file.exists():
@@ -140,13 +166,13 @@ def compute_journeys_completeness(journeys: List[Dict[str, Any]]) -> List[Tuple[
     return metrics
 
 
-def compute_dq_snapshots(db: Session, journeys_override: Optional[List[Dict[str, Any]]] = None) -> List[DQSnapshot]:
+def compute_dq_snapshots(db: Session, journeys_override: Optional[List[Dict[str, Any]]] = None, include_taxonomy: bool = True) -> List[DQSnapshot]:
     """Compute and persist DQ snapshots for the current time bucket."""
     ts_bucket = _now().replace(minute=0, second=0, microsecond=0)
     metrics: List[Tuple[str, str, float, Dict[str, Any]]] = []
 
     metrics.extend(compute_freshness())
-    journeys = journeys_override if journeys_override is not None else _load_journeys()
+    journeys = journeys_override if journeys_override is not None else _load_journeys(db)
     metrics.extend(compute_journeys_completeness(journeys))
 
     snapshots: List[DQSnapshot] = []
@@ -160,6 +186,18 @@ def compute_dq_snapshots(db: Session, journeys_override: Optional[List[Dict[str,
         )
         db.add(snap)
         snapshots.append(snap)
+    
+    # Add taxonomy-specific DQ metrics
+    if include_taxonomy and journeys:
+        try:
+            from .services_taxonomy import persist_taxonomy_dq_snapshots
+            taxonomy_snapshots = persist_taxonomy_dq_snapshots(db, journeys)
+            snapshots.extend(taxonomy_snapshots)
+        except Exception as e:
+            # Don't fail entire DQ computation if taxonomy fails
+            import logging
+            logging.getLogger(__name__).error(f"Failed to compute taxonomy DQ snapshots: {e}")
+    
     db.commit()
     return snapshots
 

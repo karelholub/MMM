@@ -27,6 +27,7 @@ type Page =
   | 'settings'
   | 'dq'
   | 'incrementality'
+  | 'path_archetypes'
 
 const PAGE_FALLBACK = (
   <div style={{ padding: 48, textAlign: 'center', color: '#64748b', fontSize: 14 }}>
@@ -34,17 +35,18 @@ const PAGE_FALLBACK = (
   </div>
 )
 
-const NAV_ITEMS: { key: Page; label: string; color: string }[] = [
-  { key: 'dashboard', label: 'Channel Performance', color: '#007bff' },
-  { key: 'campaigns', label: 'Campaign Performance', color: '#0d9488' },
-  { key: 'comparison', label: 'Attribution Models', color: '#6f42c1' },
-  { key: 'paths', label: 'Conversion Paths', color: '#17a2b8' },
-  { key: 'expenses', label: 'Expenses', color: '#28a745' },
-  { key: 'datasources', label: 'Data Sources', color: '#fd7e14' },
-  { key: 'mmm', label: 'MMM (Advanced)', color: '#6c757d' },
-  { key: 'settings', label: 'Settings', color: '#0f172a' },
-  { key: 'dq', label: 'Data Quality', color: '#b91c1c' },
-  { key: 'incrementality', label: 'Incrementality', color: '#16a34a' },
+const NAV_ITEMS: { key: Page; label: string }[] = [
+  { key: 'dashboard', label: 'Channel performance' },
+  { key: 'campaigns', label: 'Campaign performance' },
+  { key: 'comparison', label: 'Attribution models' },
+  { key: 'paths', label: 'Conversion paths' },
+  { key: 'path_archetypes', label: 'Path archetypes' },
+  { key: 'mmm', label: 'MMM (advanced)' },
+  { key: 'incrementality', label: 'Incrementality' },
+  { key: 'dq', label: 'Data quality' },
+  { key: 'expenses', label: 'Expenses' },
+  { key: 'datasources', label: 'Data sources' },
+  { key: 'settings', label: 'Settings' },
 ]
 
 const ATTRIBUTION_MODELS = [
@@ -57,10 +59,35 @@ const ATTRIBUTION_MODELS = [
 ]
 
 const LAYOUT_STYLES = {
-  root: { fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', minHeight: '100vh', backgroundColor: '#f4f6f9' as const },
-  header: { background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)', color: 'white', padding: '20px 32px', display: 'flex' as const, justifyContent: 'space-between' as const, alignItems: 'center' as const },
-  nav: { display: 'flex' as const, flexWrap: 'wrap' as const, gap: 8, padding: '12px 32px', alignItems: 'center' as const, backgroundColor: 'white', borderBottom: '1px solid #e9ecef', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' },
-  main: { padding: '24px 32px', maxWidth: 1400, margin: '0 auto' as const },
+  root: {
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    minHeight: '100vh',
+    backgroundColor: tokens.color.bg as const,
+  },
+  header: {
+    background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 40%, #1d4ed8 100%)',
+    color: '#ffffff',
+    padding: '16px 32px',
+    display: 'flex' as const,
+    justifyContent: 'space-between' as const,
+    alignItems: 'center' as const,
+    borderBottom: `1px solid rgba(148,163,184,0.4)`,
+  },
+  nav: {
+    display: 'flex' as const,
+    flexWrap: 'wrap' as const,
+    gap: 8,
+    padding: '10px 32px',
+    alignItems: 'center' as const,
+    backgroundColor: tokens.color.surface,
+    borderBottom: `1px solid ${tokens.color.borderLight}`,
+    boxShadow: tokens.shadowSm,
+  },
+  main: {
+    padding: '24px 32px',
+    maxWidth: 1400,
+    margin: '0 auto' as const,
+  },
 } as const
 
 export default function App() {
@@ -193,41 +220,62 @@ export default function App() {
       {/* Header */}
       <header style={LAYOUT_STYLES.header}>
         <div>
-          <h1 style={{ margin: 0, fontSize: '24px', fontWeight: '700', letterSpacing: '-0.5px' }}>
-            Meiro Attribution Dashboard
+          <h1
+            style={{
+              margin: 0,
+              fontSize: tokens.font.size2xl,
+              fontWeight: tokens.font.weightBold,
+              letterSpacing: '-0.04em',
+            }}
+          >
+            Meiro measurement workspace
           </h1>
-          <p style={{ margin: '4px 0 0', fontSize: '13px', color: 'rgba(255,255,255,0.6)' }}>
-            Multi-touch attribution & channel performance analytics
+          <p
+            style={{
+              margin: '4px 0 0',
+              fontSize: tokens.font.sizeSm,
+              color: 'rgba(226,232,240,0.8)',
+            }}
+          >
+            Unified attribution, incrementality, and MMM for Meiro CDP data.
           </p>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <div style={{
-            padding: '6px 14px',
-            borderRadius: 20,
-            fontSize: '13px',
-            fontWeight: '600',
-            backgroundColor: journeysLoaded ? 'rgba(40,167,69,0.2)' : 'rgba(255,193,7,0.2)',
-            color: journeysLoaded ? '#82e89f' : '#ffc107',
-            border: `1px solid ${journeysLoaded ? 'rgba(40,167,69,0.4)' : 'rgba(255,193,7,0.4)'}`,
-          }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <div
+            style={{
+              padding: '6px 14px',
+              borderRadius: 999,
+              fontSize: tokens.font.sizeSm,
+              fontWeight: tokens.font.weightSemibold,
+              backgroundColor: journeysLoaded ? 'rgba(22,163,74,0.18)' : 'rgba(234,179,8,0.16)',
+              color: journeysLoaded ? '#bbf7d0' : '#facc15',
+              border: `1px solid ${journeysLoaded ? 'rgba(34,197,94,0.5)' : 'rgba(234,179,8,0.5)'}`,
+              whiteSpace: 'nowrap',
+            }}
+          >
             {journeysLoaded
               ? primaryKpiLabel
-                ? `${journeyCount} journeys (${primaryKpiLabel}: ${primaryKpiCount ?? convertedCount})`
-                : `${journeyCount} journeys (${convertedCount} converted)`
-              : 'No data loaded'}
+                ? `${journeyCount} journeys · ${primaryKpiLabel}: ${primaryKpiCount ?? convertedCount}`
+                : `${journeyCount} journeys · ${convertedCount} converted`
+              : 'No journeys loaded'}
           </div>
           {!journeysLoaded && (
             <button
               onClick={() => loadSampleMutation.mutate()}
               disabled={loadSampleMutation.isPending}
               style={{
-                padding: '8px 16px', borderRadius: 6, fontSize: '13px', fontWeight: '600',
-                backgroundColor: '#28a745', color: 'white', border: 'none',
+                padding: '8px 16px',
+                borderRadius: 999,
+                fontSize: tokens.font.sizeSm,
+                fontWeight: tokens.font.weightSemibold,
+                backgroundColor: tokens.color.accent,
+                color: '#ffffff',
+                border: 'none',
                 cursor: loadSampleMutation.isPending ? 'wait' : 'pointer',
                 opacity: loadSampleMutation.isPending ? 0.7 : 1,
               }}
             >
-              {loadSampleMutation.isPending ? 'Loading...' : 'Load Sample Data'}
+              {loadSampleMutation.isPending ? 'Loading sample…' : 'Load sample journeys'}
             </button>
           )}
           {journeysLoaded && (
@@ -235,13 +283,18 @@ export default function App() {
               onClick={() => runAllMutation.mutate()}
               disabled={runAllMutation.isPending}
               style={{
-                padding: '8px 16px', borderRadius: 6, fontSize: '13px', fontWeight: '600',
-                backgroundColor: '#6f42c1', color: 'white', border: 'none',
+                padding: '8px 16px',
+                borderRadius: 999,
+                fontSize: tokens.font.sizeSm,
+                fontWeight: tokens.font.weightSemibold,
+                backgroundColor: 'rgba(15,23,42,0.6)',
+                color: '#e5e7eb',
+                border: '1px solid rgba(148,163,184,0.6)',
                 cursor: runAllMutation.isPending ? 'wait' : 'pointer',
                 opacity: runAllMutation.isPending ? 0.7 : 1,
               }}
             >
-              {runAllMutation.isPending ? 'Running...' : 'Re-run All Models'}
+              {runAllMutation.isPending ? 'Running models…' : 'Re-run attribution models'}
             </button>
           )}
         </div>
@@ -249,46 +302,97 @@ export default function App() {
 
       {/* Navigation */}
       <nav style={LAYOUT_STYLES.nav}>
-        {NAV_ITEMS.map(item => (
-          <button
-            key={item.key}
-            onClick={() => handleSetPage(item.key)}
-            style={{
-              padding: '10px 20px', fontSize: '14px',
-              fontWeight: page === item.key ? '700' : '500',
-              backgroundColor: page === item.key ? item.color : 'transparent',
-              color: page === item.key ? 'white' : '#495057',
-              border: page === item.key ? 'none' : '1px solid #dee2e6',
-              borderRadius: 6, cursor: 'pointer', transition: 'all 0.2s',
-            }}
-          >
-            {item.label}
-          </button>
-        ))}
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 6,
+            alignItems: 'center',
+          }}
+        >
+          {NAV_ITEMS.map((item) => (
+            <button
+              key={item.key}
+              onClick={() => handleSetPage(item.key)}
+              style={{
+                padding: '8px 14px',
+                fontSize: tokens.font.sizeSm,
+                fontWeight: page === item.key ? tokens.font.weightSemibold : tokens.font.weightMedium,
+                backgroundColor: page === item.key ? tokens.color.accent : 'transparent',
+                color: page === item.key ? '#ffffff' : tokens.color.textSecondary,
+                borderRadius: tokens.radius.sm,
+                border: page === item.key ? 'none' : `1px solid ${tokens.color.borderLight}`,
+                cursor: 'pointer',
+                transition: 'background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease',
+              }}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
 
         {(page === 'dashboard' || page === 'comparison' || page === 'campaigns') && (
-          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <label style={{ fontSize: '13px', fontWeight: '600', color: '#6c757d' }}>Model:</label>
+          <div
+            style={{
+              marginLeft: 'auto',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              flexWrap: 'wrap',
+            }}
+          >
+            <label
+              style={{
+                fontSize: tokens.font.sizeSm,
+                fontWeight: tokens.font.weightMedium,
+                color: tokens.color.textSecondary,
+              }}
+            >
+              Model
+            </label>
             <select
               value={selectedModel}
               onChange={(e) => setSelectedModel(e.target.value)}
               style={{
-                padding: '8px 12px', fontSize: '13px', border: '2px solid #6f42c1',
-                borderRadius: 6, fontWeight: '600', color: '#6f42c1', cursor: 'pointer',
+                padding: '6px 10px',
+                fontSize: tokens.font.sizeSm,
+                border: `1px solid ${tokens.color.border}`,
+                borderRadius: tokens.radius.sm,
+                fontWeight: tokens.font.weightMedium,
+                color: tokens.color.text,
+                cursor: 'pointer',
+                backgroundColor: '#ffffff',
               }}
             >
-              {ATTRIBUTION_MODELS.map(m => (
-                <option key={m.id} value={m.id}>{m.label}</option>
+              {ATTRIBUTION_MODELS.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
               ))}
             </select>
-            <label style={{ fontSize: '13px', fontWeight: '600', color: '#6c757d', marginLeft: 12 }}>Config:</label>
+            <label
+              style={{
+                fontSize: tokens.font.sizeSm,
+                fontWeight: tokens.font.weightMedium,
+                color: tokens.color.textSecondary,
+                marginLeft: 4,
+              }}
+            >
+              Config
+            </label>
             <select
               value={selectedConfigId ?? ''}
               onChange={(e) => setSelectedConfigId(e.target.value || null)}
               style={{
-                padding: '8px 12px', fontSize: '13px', border: '1px solid #0f172a',
-                borderRadius: 6, fontWeight: '500', color: '#0f172a', cursor: 'pointer',
+                padding: '6px 10px',
+                fontSize: tokens.font.sizeSm,
+                border: `1px solid ${tokens.color.border}`,
+                borderRadius: tokens.radius.sm,
+                fontWeight: tokens.font.weightMedium,
+                color: tokens.color.text,
+                cursor: 'pointer',
                 maxWidth: 260,
+                backgroundColor: '#ffffff',
               }}
             >
               <option value="">Default active</option>
@@ -373,6 +477,7 @@ export default function App() {
               <AttributionComparison selectedModel={selectedModel} onSelectModel={setSelectedModel} />
             )}
             {page === 'paths' && <ConversionPaths />}
+            {page === 'path_archetypes' && <PathArchetypes />}
             {page === 'expenses' && <ExpenseManager />}
             {page === 'datasources' && (
               <DataSources onJourneysImported={onJourneysImported} />

@@ -30,6 +30,10 @@ interface PathAnomaly {
   severity: 'info' | 'warn' | 'critical' | string
   metric_key: string
   metric_value: number
+  baseline_value?: number | null
+  z_score?: number | null
+  details?: Record<string, any> | null
+  suggestion?: string | null
   message: string
 }
 
@@ -76,6 +80,7 @@ export default function ConversionPaths() {
   const [tryPathLoading, setTryPathLoading] = useState(false)
   const [tryPathError, setTryPathError] = useState<string | null>(null)
   const [showWhy, setShowWhy] = useState(false)
+  const [showAnomalies, setShowAnomalies] = useState(true)
 
   const pathsQuery = useQuery<PathAnalysis>({
     queryKey: ['path-analysis'],
@@ -257,28 +262,101 @@ export default function ConversionPaths() {
             background: t.color.warningMuted,
           }}
         >
-          <strong
-            style={{
-              display: 'block',
-              fontSize: t.font.sizeSm,
-              color: t.color.warning,
-              marginBottom: t.space.xs,
-            }}
-          >
-            Path anomalies detected
-          </strong>
-          <ul
-            style={{
-              margin: 0,
-              paddingLeft: 20,
-              fontSize: t.font.sizeSm,
-              color: t.color.textSecondary,
-            }}
-          >
-            {anomaliesQuery.data.anomalies.map((a, idx) => (
-              <li key={`${a.type}-${idx}`}>{a.message}</li>
-            ))}
-          </ul>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.md, flexWrap: 'wrap' }}>
+            <strong
+              style={{
+                display: 'block',
+                fontSize: t.font.sizeSm,
+                color: t.color.warning,
+              }}
+            >
+              Path anomalies detected
+            </strong>
+            <button
+              type="button"
+              onClick={() => setShowAnomalies((v) => !v)}
+              style={{
+                padding: `${t.space.xs}px ${t.space.md}px`,
+                fontSize: t.font.sizeXs,
+                fontWeight: t.font.weightMedium,
+                color: t.color.warning,
+                backgroundColor: 'transparent',
+                border: `1px solid ${t.color.warning}`,
+                borderRadius: t.radius.sm,
+                cursor: 'pointer',
+              }}
+            >
+              {showAnomalies ? 'Hide' : 'Show'} details
+            </button>
+          </div>
+
+          {showAnomalies ? (
+            <div style={{ marginTop: t.space.sm, overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: t.font.sizeSm }}>
+                <thead>
+                  <tr style={{ borderBottom: `2px solid ${t.color.border}` }}>
+                    <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Severity</th>
+                    <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Issue</th>
+                    <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right' }}>Value</th>
+                    <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right' }}>Baseline</th>
+                    <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right' }}>z</th>
+                    <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Suggestion</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {anomaliesQuery.data.anomalies.map((a, idx) => {
+                    const sevColor =
+                      a.severity === 'critical' ? t.color.danger : a.severity === 'warn' ? t.color.warning : t.color.textSecondary
+                    const formatValue = (v: number) => {
+                      const isShare = /share|pct|rate/i.test(a.metric_key)
+                      return isShare ? `${(v * 100).toFixed(1)}%` : v.toFixed(2)
+                    }
+                    return (
+                      <tr key={`${a.type}-${idx}`} style={{ borderBottom: `1px solid ${t.color.borderLight}` }}>
+                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, color: sevColor, fontWeight: t.font.weightSemibold }}>
+                          {a.severity}
+                        </td>
+                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, color: t.color.text }}>
+                          <div style={{ fontWeight: t.font.weightMedium }}>{a.type}</div>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>{a.message}</div>
+                          {a.details && (
+                            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, marginTop: 4 }}>
+                              {JSON.stringify(a.details)}
+                            </div>
+                          )}
+                        </td>
+                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                          {formatValue(a.metric_value)}
+                        </td>
+                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: t.color.textSecondary }}>
+                          {a.baseline_value != null ? formatValue(a.baseline_value) : '—'}
+                        </td>
+                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: t.color.textSecondary }}>
+                          {a.z_score != null ? a.z_score.toFixed(1) : '—'}
+                        </td>
+                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, color: t.color.textSecondary }}>
+                          {a.suggestion ?? '—'}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <ul
+              style={{
+                margin: `${t.space.sm}px 0 0`,
+                paddingLeft: 20,
+                fontSize: t.font.sizeSm,
+                color: t.color.textSecondary,
+              }}
+            >
+              {anomaliesQuery.data.anomalies.map((a, idx) => (
+                <li key={`${a.type}-${idx}`}>{a.message}</li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 

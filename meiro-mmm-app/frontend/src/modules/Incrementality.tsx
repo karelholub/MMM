@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { tokens as t } from '../theme/tokens'
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 
 interface ExperimentSummary {
   id: number
@@ -39,8 +40,32 @@ interface ExperimentResults {
   insufficient_data?: boolean
 }
 
+interface TimeSeriesPoint {
+  date: string
+  treatment_n: number
+  treatment_conversions: number
+  treatment_rate: number
+  control_n: number
+  control_conversions: number
+  control_rate: number
+  uplift_abs: number
+  uplift_rel: number | null
+}
+
+interface PowerAnalysisResult {
+  total_sample_size: number
+  treatment_size: number
+  control_size: number
+  baseline_rate: number
+  mde: number
+  alpha: number
+  power: number
+}
+
 export default function IncrementalityPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [showPowerCalc, setShowPowerCalc] = useState(false)
+  const [showTimeSeries, setShowTimeSeries] = useState(false)
   const [form, setForm] = useState({
     name: '',
     channel: '',
@@ -48,6 +73,13 @@ export default function IncrementalityPage() {
     start_at: '',
     end_at: '',
     notes: '',
+  })
+  const [powerForm, setPowerForm] = useState({
+    baseline_rate: 0.05,
+    mde: 0.01,
+    alpha: 0.05,
+    power: 0.8,
+    treatment_rate: 0.5,
   })
 
   const experimentsQuery = useQuery<ExperimentSummary[]>({
@@ -79,6 +111,28 @@ export default function IncrementalityPage() {
     enabled: selectedId != null,
   })
 
+  const timeSeriesQuery = useQuery<{ data: TimeSeriesPoint[] }>({
+    queryKey: ['experiment-timeseries', selectedId],
+    queryFn: async () => {
+      const res = await fetch(`/api/experiments/${selectedId}/time-series?freq=D`)
+      if (!res.ok) throw new Error('Failed to load time series')
+      return res.json()
+    },
+    enabled: selectedId != null && showTimeSeries,
+  })
+
+  const powerMutation = useMutation<PowerAnalysisResult>({
+    mutationFn: async () => {
+      const res = await fetch('/api/experiments/power-analysis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(powerForm),
+      })
+      if (!res.ok) throw new Error('Failed to compute power analysis')
+      return res.json()
+    },
+  })
+
   const createMutation = useMutation({
     mutationFn: async () => {
       if (!form.name || !form.channel || !form.start_at || !form.end_at) {
@@ -103,6 +157,14 @@ export default function IncrementalityPage() {
     onSuccess: (data) => {
       experimentsQuery.refetch()
       setSelectedId(data.id)
+      setForm({
+        name: '',
+        channel: '',
+        conversion_key: '',
+        start_at: '',
+        end_at: '',
+        notes: '',
+      })
     },
   })
 
@@ -139,7 +201,154 @@ export default function IncrementalityPage() {
             Define simple holdout tests for owned channels (e.g. email or push) and monitor uplift in conversion rate.
           </p>
         </div>
+        <button
+          type="button"
+          onClick={() => setShowPowerCalc(!showPowerCalc)}
+          style={{
+            padding: `${tkn.space.sm}px ${tkn.space.lg}px`,
+            fontSize: tkn.font.sizeSm,
+            fontWeight: tkn.font.weightMedium,
+            color: tkn.color.accent,
+            backgroundColor: tkn.color.surface,
+            border: `1px solid ${tkn.color.accent}`,
+            borderRadius: tkn.radius.sm,
+            cursor: 'pointer',
+          }}
+        >
+          {showPowerCalc ? 'Hide' : 'Show'} power calculator
+        </button>
       </div>
+
+      {showPowerCalc && (
+        <div
+          style={{
+            background: tkn.color.surface,
+            border: `1px solid ${tkn.color.borderLight}`,
+            borderRadius: tkn.radius.lg,
+            padding: tkn.space.xl,
+            boxShadow: tkn.shadowSm,
+            marginBottom: tkn.space.lg,
+          }}
+        >
+          <h2
+            style={{
+              margin: '0 0 8px',
+              fontSize: tkn.font.sizeMd,
+              fontWeight: tkn.font.weightSemibold,
+              color: tkn.color.text,
+            }}
+          >
+            Power analysis
+          </h2>
+          <p style={{ margin: '0 0 12px', fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+            Estimate required sample size to detect a given effect size with statistical confidence.
+          </p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: tkn.space.md }}>
+            <label style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+              Baseline rate (e.g., 0.05 = 5%)
+              <input
+                type="number"
+                step="0.001"
+                value={powerForm.baseline_rate}
+                onChange={(e) => setPowerForm((f) => ({ ...f, baseline_rate: parseFloat(e.target.value) || 0 }))}
+                style={{
+                  width: '100%',
+                  marginTop: 4,
+                  padding: `${tkn.space.sm}px ${tkn.space.md}px`,
+                  border: `1px solid ${tkn.color.border}`,
+                  borderRadius: tkn.radius.sm,
+                  fontSize: tkn.font.sizeSm,
+                }}
+              />
+            </label>
+            <label style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+              MDE (e.g., 0.01 = 1pp)
+              <input
+                type="number"
+                step="0.001"
+                value={powerForm.mde}
+                onChange={(e) => setPowerForm((f) => ({ ...f, mde: parseFloat(e.target.value) || 0 }))}
+                style={{
+                  width: '100%',
+                  marginTop: 4,
+                  padding: `${tkn.space.sm}px ${tkn.space.md}px`,
+                  border: `1px solid ${tkn.color.border}`,
+                  borderRadius: tkn.radius.sm,
+                  fontSize: tkn.font.sizeSm,
+                }}
+              />
+            </label>
+            <label style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+              Significance (α)
+              <input
+                type="number"
+                step="0.01"
+                value={powerForm.alpha}
+                onChange={(e) => setPowerForm((f) => ({ ...f, alpha: parseFloat(e.target.value) || 0 }))}
+                style={{
+                  width: '100%',
+                  marginTop: 4,
+                  padding: `${tkn.space.sm}px ${tkn.space.md}px`,
+                  border: `1px solid ${tkn.color.border}`,
+                  borderRadius: tkn.radius.sm,
+                  fontSize: tkn.font.sizeSm,
+                }}
+              />
+            </label>
+            <label style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+              Power (1-β)
+              <input
+                type="number"
+                step="0.01"
+                value={powerForm.power}
+                onChange={(e) => setPowerForm((f) => ({ ...f, power: parseFloat(e.target.value) || 0 }))}
+                style={{
+                  width: '100%',
+                  marginTop: 4,
+                  padding: `${tkn.space.sm}px ${tkn.space.md}px`,
+                  border: `1px solid ${tkn.color.border}`,
+                  borderRadius: tkn.radius.sm,
+                  fontSize: tkn.font.sizeSm,
+                }}
+              />
+            </label>
+          </div>
+          <button
+            type="button"
+            onClick={() => powerMutation.mutate()}
+            disabled={powerMutation.isPending}
+            style={{
+              marginTop: tkn.space.md,
+              padding: `${tkn.space.sm}px ${tkn.space.lg}px`,
+              fontSize: tkn.font.sizeSm,
+              fontWeight: tkn.font.weightMedium,
+              color: tkn.color.surface,
+              backgroundColor: tkn.color.accent,
+              border: 'none',
+              borderRadius: tkn.radius.sm,
+              cursor: powerMutation.isPending ? 'wait' : 'pointer',
+            }}
+          >
+            {powerMutation.isPending ? 'Computing…' : 'Calculate sample size'}
+          </button>
+          {powerMutation.data && (
+            <div
+              style={{
+                marginTop: tkn.space.md,
+                padding: tkn.space.md,
+                background: tkn.color.accentMuted,
+                borderRadius: tkn.radius.sm,
+                fontSize: tkn.font.sizeSm,
+                color: tkn.color.text,
+              }}
+            >
+              <strong>Required sample size: {powerMutation.data.total_sample_size.toLocaleString()}</strong>
+              <br />
+              Treatment: {powerMutation.data.treatment_size.toLocaleString()} | Control: {powerMutation.data.control_size.toLocaleString()}
+            </div>
+          )}
+        </div>
+      )}
 
       <div
         style={{
@@ -447,18 +656,37 @@ export default function IncrementalityPage() {
                   borderRadius: tkn.radius.lg,
                   padding: tkn.space.xl,
                   boxShadow: tkn.shadowSm,
+                  marginBottom: tkn.space.lg,
                 }}
               >
-                <h3
-                  style={{
-                    margin: '0 0 8px',
-                    fontSize: tkn.font.sizeMd,
-                    fontWeight: tkn.font.weightSemibold,
-                    color: tkn.color.text,
-                  }}
-                >
-                  Uplift results
-                </h3>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: tkn.space.md }}>
+                  <h3
+                    style={{
+                      margin: 0,
+                      fontSize: tkn.font.sizeMd,
+                      fontWeight: tkn.font.weightSemibold,
+                      color: tkn.color.text,
+                    }}
+                  >
+                    Uplift results
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setShowTimeSeries(!showTimeSeries)}
+                    style={{
+                      padding: `${tkn.space.xs}px ${tkn.space.md}px`,
+                      fontSize: tkn.font.sizeXs,
+                      fontWeight: tkn.font.weightMedium,
+                      color: tkn.color.accent,
+                      backgroundColor: 'transparent',
+                      border: `1px solid ${tkn.color.accent}`,
+                      borderRadius: tkn.radius.sm,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {showTimeSeries ? 'Hide' : 'Show'} time series
+                  </button>
+                </div>
                 {resultsQuery.isLoading ? (
                   <p style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>Computing results…</p>
                 ) : resultsQuery.data?.insufficient_data ? (
@@ -531,6 +759,103 @@ export default function IncrementalityPage() {
                   </p>
                 )}
               </div>
+
+              {showTimeSeries && (
+                <div
+                  style={{
+                    background: tkn.color.surface,
+                    border: `1px solid ${tkn.color.borderLight}`,
+                    borderRadius: tkn.radius.lg,
+                    padding: tkn.space.xl,
+                    boxShadow: tkn.shadowSm,
+                  }}
+                >
+                  <h3
+                    style={{
+                      margin: '0 0 12px',
+                      fontSize: tkn.font.sizeMd,
+                      fontWeight: tkn.font.weightSemibold,
+                      color: tkn.color.text,
+                    }}
+                  >
+                    Cumulative metrics over time
+                  </h3>
+                  {timeSeriesQuery.isLoading ? (
+                    <p style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>Loading time series…</p>
+                  ) : timeSeriesQuery.data && timeSeriesQuery.data.data.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={300}>
+                      <LineChart data={timeSeriesQuery.data.data}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={tkn.color.borderLight} />
+                        <XAxis dataKey="date" tick={{ fontSize: 11 }} stroke={tkn.color.textSecondary} />
+                        <YAxis
+                          yAxisId="left"
+                          tick={{ fontSize: 11 }}
+                          stroke={tkn.color.textSecondary}
+                          label={{ value: 'Conversion rate', angle: -90, position: 'insideLeft', style: { fontSize: 11 } }}
+                        />
+                        <YAxis
+                          yAxisId="right"
+                          orientation="right"
+                          tick={{ fontSize: 11 }}
+                          stroke={tkn.color.textSecondary}
+                          label={{ value: 'Sample size', angle: 90, position: 'insideRight', style: { fontSize: 11 } }}
+                        />
+                        <Tooltip
+                          contentStyle={{
+                            background: tkn.color.surface,
+                            border: `1px solid ${tkn.color.border}`,
+                            borderRadius: tkn.radius.sm,
+                            fontSize: 12,
+                          }}
+                        />
+                        <Legend wrapperStyle={{ fontSize: 12 }} />
+                        <Line
+                          yAxisId="left"
+                          type="monotone"
+                          dataKey="treatment_rate"
+                          stroke={tkn.color.success}
+                          name="Treatment rate"
+                          strokeWidth={2}
+                          dot={false}
+                        />
+                        <Line
+                          yAxisId="left"
+                          type="monotone"
+                          dataKey="control_rate"
+                          stroke={tkn.color.textSecondary}
+                          name="Control rate"
+                          strokeWidth={2}
+                          dot={false}
+                        />
+                        <Line
+                          yAxisId="right"
+                          type="monotone"
+                          dataKey="treatment_n"
+                          stroke={tkn.color.accent}
+                          name="Treatment n"
+                          strokeWidth={1}
+                          strokeDasharray="5 5"
+                          dot={false}
+                        />
+                        <Line
+                          yAxisId="right"
+                          type="monotone"
+                          dataKey="control_n"
+                          stroke={tkn.color.warning}
+                          name="Control n"
+                          strokeWidth={1}
+                          strokeDasharray="5 5"
+                          dot={false}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <p style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                      No time series data available yet.
+                    </p>
+                  )}
+                </div>
+              )}
             </>
           )}
         </div>

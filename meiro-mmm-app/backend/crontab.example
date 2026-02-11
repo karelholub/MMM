@@ -1,0 +1,17 @@
+# Example crontab for Meiro MMM scheduled tasks
+#
+# Installation:
+#   1. Copy this file: cp crontab.example crontab.local
+#   2. Edit paths to match your deployment
+#   3. Install: crontab crontab.local
+#
+# Or add these lines to your existing crontab with: crontab -e
+
+# Nightly incrementality experiment report (runs at 2 AM daily)
+0 2 * * * cd /path/to/meiro-mmm-app/backend && /path/to/python -m app.scheduler --task nightly-report >> /var/log/mmm-nightly-report.log 2>&1
+
+# Weekly data quality snapshots (runs at 3 AM every Monday)
+# 0 3 * * 1 cd /path/to/meiro-mmm-app/backend && /path/to/python -m app.tasks --task weekly-dq-snapshot >> /var/log/mmm-dq-snapshot.log 2>&1
+
+# Daily backup (optional, runs at 4 AM daily)
+# 0 4 * * * cd /path/to/meiro-mmm-app/backend && /path/to/python -m app.tasks --task backup-db >> /var/log/mmm-backup.log 2>&1

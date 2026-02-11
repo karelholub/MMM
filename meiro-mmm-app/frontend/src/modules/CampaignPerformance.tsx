@@ -319,7 +319,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
 
       {showWhy && (
         <div style={{ marginBottom: t.space.lg }}>
-          <ExplainabilityPanel scope="campaign" configId={configId ?? undefined} />
+          <ExplainabilityPanel scope="campaign" configId={configId ?? undefined} model={model} />
         </div>
       )}
 
