@@ -11,7 +11,10 @@ import os
 import time
 import uuid
 import requests
+import logging
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 from app.utils.token_store import save_token, get_token, delete_token, get_all_connected_platforms
 from app.utils.encrypt import encrypt, decrypt
 from app.utils import datasource_config as ds_config
@@ -52,6 +55,24 @@ from app.services_import_runs import (
     get_runs as get_import_runs,
     get_run as get_import_run,
     get_last_successful_run,
+)
+from app.models_overview_alerts import AlertEvent, AlertRule, NotificationChannel, UserNotificationPref
+from app.services_alerts import (
+    list_alerts,
+    get_alert_by_id,
+    ack_alert,
+    snooze_alert,
+    resolve_alert,
+    list_alert_rules,
+    get_alert_rule_by_id,
+    create_alert_rule,
+    update_alert_rule,
+    delete_alert_rule,
+)
+from app.services_overview import (
+    get_overview_summary,
+    get_overview_drivers,
+    get_overview_alerts,
 )
 from app.services_quality import (
     load_config_and_meta,
@@ -105,6 +126,32 @@ from app.attribution_engine import (
 # Create DB tables if a real database is configured. This is idempotent and cheap
 # for SQLite; in PostgreSQL you should run proper migrations from backend/migrations.
 Base.metadata.create_all(bind=engine)
+
+# Ensure alert_events / alert_rules have columns from migrations 005/006 (SQLite doesn't run migrations).
+# If the DB predates these, SELECTs would raise OperationalError; we add columns if missing.
+def _ensure_alert_tables_columns():
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            for stmt in (
+                "ALTER TABLE alert_events ADD COLUMN fingerprint VARCHAR(64)",
+                "ALTER TABLE alert_events ADD COLUMN snooze_until TIMESTAMP",
+                "ALTER TABLE alert_events ADD COLUMN updated_by VARCHAR(255)",
+                "ALTER TABLE alert_rules ADD COLUMN updated_by VARCHAR(255)",
+            ):
+                try:
+                    conn.execute(text(stmt))
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+    except Exception as e:
+        logger.debug("Alert table column check skipped (e.g. not SQLite or tables missing): %s", e)
+
+if "sqlite" in (os.getenv("DATABASE_URL") or "").lower() or not os.getenv("DATABASE_URL"):
+    try:
+        _ensure_alert_tables_columns()
+    except Exception:
+        pass
 
 app = FastAPI(title="Meiro Attribution Dashboard API", version="0.3.0")
 
@@ -1194,6 +1241,165 @@ def update_settings(new_settings: Settings):
     SETTINGS = new_settings
     _save_settings()
     return SETTINGS
+
+
+# ---- Notification settings (channels + user prefs) ----
+from app.services_notifications import (
+    list_channels as list_notification_channels,
+    create_channel as create_notification_channel,
+    get_channel as get_notification_channel,
+    update_channel as update_notification_channel,
+    delete_channel as delete_notification_channel,
+    list_prefs as list_notification_prefs,
+    get_pref as get_notification_pref,
+    upsert_pref as upsert_notification_pref,
+    update_pref as update_notification_pref,
+    delete_pref as delete_notification_pref,
+)
+
+
+def _current_user_id(request: Request) -> str:
+    """Resolve current user for notification prefs; default when no auth."""
+    return request.headers.get("X-User-Id") or request.query_params.get("user_id") or "default"
+
+
+class NotificationChannelCreate(BaseModel):
+    type: str  # email | slack_webhook
+    config: Dict[str, Any] = Field(default_factory=dict)
+    slack_webhook_url: Optional[str] = None  # only for type=slack_webhook; stored securely
+
+
+class NotificationChannelUpdate(BaseModel):
+    config: Optional[Dict[str, Any]] = None
+    slack_webhook_url: Optional[str] = None
+
+
+class NotificationPrefUpdate(BaseModel):
+    severities: Optional[List[str]] = None
+    digest_mode: Optional[str] = None  # realtime | daily
+    quiet_hours: Optional[Dict[str, Any]] = None  # { start, end, timezone }
+    is_enabled: Optional[bool] = None
+
+
+class NotificationPrefUpsert(BaseModel):
+    channel_id: int
+    severities: List[str] = Field(default_factory=list)
+    digest_mode: str = "realtime"
+    quiet_hours: Optional[Dict[str, Any]] = None
+    is_enabled: bool = False
+
+
+@app.get("/api/settings/notification-channels")
+def api_list_notification_channels(db=Depends(get_db)):
+    """List notification channels. Slack webhook URLs are never returned."""
+    return list_notification_channels(db)
+
+
+@app.post("/api/settings/notification-channels")
+def api_create_notification_channel(
+    body: NotificationChannelCreate,
+    db=Depends(get_db),
+):
+    """Create a channel. For slack_webhook, provide slack_webhook_url; it is stored securely."""
+    try:
+        return create_notification_channel(
+            db,
+            body.type,
+            body.config,
+            slack_webhook_url=body.slack_webhook_url if body.type == "slack_webhook" else None,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/settings/notification-channels/{channel_id}")
+def api_get_notification_channel(channel_id: int, db=Depends(get_db)):
+    out = get_notification_channel(db, channel_id)
+    if out is None:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    return out
+
+
+@app.put("/api/settings/notification-channels/{channel_id}")
+def api_update_notification_channel(
+    channel_id: int,
+    body: NotificationChannelUpdate,
+    db=Depends(get_db),
+):
+    out = update_notification_channel(
+        db,
+        channel_id,
+        config=body.config,
+        slack_webhook_url=body.slack_webhook_url,
+    )
+    if out is None:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    return out
+
+
+@app.delete("/api/settings/notification-channels/{channel_id}")
+def api_delete_notification_channel(channel_id: int, db=Depends(get_db)):
+    if not delete_notification_channel(db, channel_id):
+        raise HTTPException(status_code=404, detail="Channel not found")
+    return {"ok": True}
+
+
+@app.get("/api/settings/notification-preferences")
+def api_list_notification_preferences(request: Request, db=Depends(get_db)):
+    user_id = _current_user_id(request)
+    return list_notification_prefs(db, user_id)
+
+
+@app.post("/api/settings/notification-preferences")
+def api_upsert_notification_preference(
+    body: NotificationPrefUpsert,
+    request: Request,
+    db=Depends(get_db),
+):
+    user_id = _current_user_id(request)
+    return upsert_notification_pref(
+        db,
+        user_id,
+        body.channel_id,
+        severities=body.severities,
+        digest_mode=body.digest_mode,
+        quiet_hours=body.quiet_hours,
+        is_enabled=body.is_enabled,
+    )
+
+
+@app.get("/api/settings/notification-preferences/{pref_id}")
+def api_get_notification_preference(pref_id: int, db=Depends(get_db)):
+    out = get_notification_pref(db, pref_id)
+    if out is None:
+        raise HTTPException(status_code=404, detail="Preference not found")
+    return out
+
+
+@app.put("/api/settings/notification-preferences/{pref_id}")
+def api_update_notification_preference(
+    pref_id: int,
+    body: NotificationPrefUpdate,
+    db=Depends(get_db),
+):
+    out = update_notification_pref(
+        db,
+        pref_id,
+        severities=body.severities,
+        digest_mode=body.digest_mode,
+        quiet_hours=body.quiet_hours,
+        is_enabled=body.is_enabled,
+    )
+    if out is None:
+        raise HTTPException(status_code=404, detail="Preference not found")
+    return out
+
+
+@app.delete("/api/settings/notification-preferences/{pref_id}")
+def api_delete_notification_preference(pref_id: int, db=Depends(get_db)):
+    if not delete_notification_pref(db, pref_id):
+        raise HTTPException(status_code=404, detail="Preference not found")
+    return {"ok": True}
 
 
 @app.post(
@@ -3985,6 +4191,336 @@ def update_alert_note(alert_id: int, body: AlertNoteUpdate, db=Depends(get_db)):
     db.commit()
     db.refresh(alert)
     return {"id": alert.id, "note": alert.note}
+
+
+# ==================== Overview (Cover) Dashboard ====================
+
+
+@app.get("/api/overview/summary")
+def overview_summary(
+    date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
+    date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
+    timezone: str = Query("UTC", description="Timezone for display"),
+    currency: Optional[str] = Query(None, description="Filter/display currency"),
+    workspace: Optional[str] = Query(None, description="Workspace filter"),
+    account: Optional[str] = Query(None, description="Account filter"),
+    model_id: Optional[str] = Query(None, description="Optional model config id (for metadata only)"),
+    db=Depends(get_db),
+):
+    """
+    Overview summary: KPI tiles, highlights (what changed), freshness.
+    Does not block on MMM/Incrementality; robust to missing data.
+    """
+    return get_overview_summary(
+        db=db,
+        date_from=date_from,
+        date_to=date_to,
+        timezone=timezone,
+        currency=currency,
+        workspace=workspace,
+        account=account,
+        model_id=model_id,
+        expenses=EXPENSES,
+        import_runs_get_last_successful=get_last_successful_run,
+    )
+
+
+@app.get("/api/overview/drivers")
+def overview_drivers(
+    date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
+    date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
+    top_campaigns_n: int = Query(10, ge=1, le=50, description="Top N campaigns"),
+    conversion_key: Optional[str] = Query(None, description="Filter by conversion key"),
+    db=Depends(get_db),
+):
+    """
+    Top drivers: by_channel (spend, conversions, revenue, delta), by_campaign (top N), biggest_movers.
+    Uses raw paths + expenses; does not require MMM.
+    """
+    return get_overview_drivers(
+        db=db,
+        date_from=date_from,
+        date_to=date_to,
+        expenses=EXPENSES,
+        top_campaigns_n=top_campaigns_n,
+        conversion_key=conversion_key,
+    )
+
+
+@app.get("/api/overview/alerts")
+def overview_alerts(
+    scope: Optional[str] = Query(None, description="Filter by workspace/account scope"),
+    status: Optional[str] = Query(None, description="Filter: open, resolved, ack"),
+    limit: int = Query(50, ge=1, le=200, description="Max alerts to return"),
+    db=Depends(get_db),
+):
+    """
+    Latest alert events (open + recent resolved) with deep links to drilldown.
+    """
+    try:
+        return get_overview_alerts(db=db, scope=scope, status_filter=status, limit=limit)
+    except Exception as e:
+        logger.warning("Overview alerts failed (tables or schema may be missing): %s", e, exc_info=True)
+        return {"alerts": [], "total": 0}
+
+
+class OverviewAlertStatusUpdate(BaseModel):
+    status: str = Field(..., description="open | ack | snoozed | resolved")
+    snooze_until: Optional[str] = Field(None, description="ISO datetime when snooze expires (for status=snoozed)")
+
+
+@app.post("/api/overview/alerts/{alert_id}/status")
+def overview_alert_update_status(
+    alert_id: int,
+    body: OverviewAlertStatusUpdate,
+    db=Depends(get_db),
+):
+    """Update overview alert event status (ack / snooze / resolve)."""
+    ev = db.get(AlertEvent, alert_id)
+    if not ev:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    status = (body.status or "").strip().lower()
+    if status not in ("open", "ack", "snoozed", "resolved"):
+        raise HTTPException(status_code=400, detail="status must be one of: open, ack, snoozed, resolved")
+    ev.status = status
+    if status == "snoozed" and body.snooze_until:
+        try:
+            ev.snooze_until = datetime.fromisoformat(body.snooze_until.replace("Z", "+00:00"))
+        except Exception:
+            pass
+    elif status != "snoozed":
+        ev.snooze_until = None
+    db.add(ev)
+    db.commit()
+    db.refresh(ev)
+    return {"id": ev.id, "status": ev.status, "snooze_until": ev.snooze_until.isoformat() if ev.snooze_until else None}
+
+
+# ==================== Alerts API (events + rules) ====================
+# RBAC: only permitted roles (admin, editor) can edit rules and ack/snooze/resolve alerts.
+# All can view alerts and rules. User identity from X-User-Id, role from X-User-Role.
+
+ALERT_EDIT_ROLES = ("admin", "editor")
+
+
+def get_alert_user(x_user_id: Optional[str] = Header(None, alias="X-User-Id"), x_user_role: Optional[str] = Header(None, alias="X-User-Role")):
+    """Dependency: (user_id, can_edit). can_edit=True if X-User-Role in admin/editor."""
+    user_id = x_user_id or "system"
+    can_edit = (x_user_role or "").strip().lower() in ALERT_EDIT_ROLES
+    return user_id, can_edit
+
+
+class AlertSnoozeBody(BaseModel):
+    duration_minutes: int = Field(..., ge=1, le=10080, description="Snooze duration in minutes (max 7 days)")
+
+
+class AlertRuleCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = None
+    is_enabled: bool = True
+    scope: str = Field(..., min_length=1, max_length=64)
+    severity: str = Field(..., pattern="^(info|warn|critical)$")
+    rule_type: str = Field(..., pattern="^(anomaly_kpi|threshold|data_freshness|pipeline_health)$")
+    kpi_key: Optional[str] = Field(None, max_length=128)
+    dimension_filters_json: Optional[Dict[str, Any]] = None
+    params_json: Optional[Dict[str, Any]] = None
+    schedule: str = Field(..., pattern="^(hourly|daily)$")
+
+
+class AlertRuleUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    description: Optional[str] = None
+    is_enabled: Optional[bool] = None
+    severity: Optional[str] = Field(None, pattern="^(info|warn|critical)$")
+    kpi_key: Optional[str] = Field(None, max_length=128)
+    dimension_filters_json: Optional[Dict[str, Any]] = None
+    params_json: Optional[Dict[str, Any]] = None
+    schedule: Optional[str] = Field(None, pattern="^(hourly|daily)$")
+
+
+@app.get("/api/alerts")
+def api_list_alerts(
+    status: str = Query("open", description="open | all"),
+    severity: Optional[str] = Query(None, description="Filter by severity"),
+    rule_type: Optional[str] = Query(None, description="Filter by rule type"),
+    search: Optional[str] = Query(None, description="Search in title, message, rule name"),
+    page: int = Query(1, ge=1, description="Page number"),
+    per_page: int = Query(20, ge=1, le=100, description="Items per page"),
+    scope: Optional[str] = Query(None, description="Filter by scope (workspace/account)"),
+    db=Depends(get_db),
+):
+    """List alerts with pagination and filters. All roles can view."""
+    try:
+        return list_alerts(db=db, status=status, severity=severity, rule_type=rule_type, search=search, page=page, per_page=per_page, scope=scope)
+    except Exception as e:
+        logger.warning("List alerts failed (tables or schema may be missing): %s", e, exc_info=True)
+        return {"items": [], "total": 0, "page": page, "per_page": per_page}
+
+
+@app.get("/api/alerts/{alert_id}")
+def api_get_alert(
+    alert_id: int,
+    db=Depends(get_db),
+):
+    """Alert detail including context_json, related_entities, deep_link (entity_type, entity_id, url)."""
+    out = get_alert_by_id(db=db, alert_id=alert_id)
+    if not out:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return out
+
+
+@app.post("/api/alerts/{alert_id}/ack")
+def api_ack_alert(
+    alert_id: int,
+    db=Depends(get_db),
+    user_info: Tuple[str, bool] = Depends(get_alert_user),
+):
+    """Acknowledge alert. Requires edit role (X-User-Role: admin or editor)."""
+    user_id, can_edit = user_info
+    if not can_edit:
+        raise HTTPException(status_code=403, detail="Only admin or editor can acknowledge alerts")
+    ev = ack_alert(db=db, alert_id=alert_id, user_id=user_id)
+    if not ev:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return {"id": ev.id, "status": ev.status}
+
+
+@app.post("/api/alerts/{alert_id}/snooze")
+def api_snooze_alert(
+    alert_id: int,
+    body: AlertSnoozeBody,
+    db=Depends(get_db),
+    user_info: Tuple[str, bool] = Depends(get_alert_user),
+):
+    """Snooze alert for duration_minutes. Requires edit role."""
+    user_id, can_edit = user_info
+    if not can_edit:
+        raise HTTPException(status_code=403, detail="Only admin or editor can snooze alerts")
+    ev = snooze_alert(db=db, alert_id=alert_id, duration_minutes=body.duration_minutes, user_id=user_id)
+    if not ev:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return {"id": ev.id, "status": ev.status, "snooze_until": ev.snooze_until.isoformat() if getattr(ev, "snooze_until", None) and ev.snooze_until else None}
+
+
+@app.post("/api/alerts/{alert_id}/resolve")
+def api_resolve_alert(
+    alert_id: int,
+    db=Depends(get_db),
+    user_info: Tuple[str, bool] = Depends(get_alert_user),
+):
+    """Manually resolve alert. Requires edit role."""
+    user_id, can_edit = user_info
+    if not can_edit:
+        raise HTTPException(status_code=403, detail="Only admin or editor can resolve alerts")
+    ev = resolve_alert(db=db, alert_id=alert_id, user_id=user_id)
+    if not ev:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return {"id": ev.id, "status": ev.status}
+
+
+@app.get("/api/alert-rules")
+def api_list_alert_rules(
+    scope: Optional[str] = Query(None),
+    is_enabled: Optional[bool] = Query(None, description="Filter by enabled"),
+    db=Depends(get_db),
+):
+    """List alert rules. All roles can view."""
+    try:
+        return list_alert_rules(db=db, scope=scope, is_enabled=is_enabled)
+    except Exception as e:
+        logger.warning("List alert rules failed (tables or schema may be missing): %s", e, exc_info=True)
+        return []
+
+
+@app.post("/api/alert-rules")
+def api_create_alert_rule(
+    body: AlertRuleCreate,
+    db=Depends(get_db),
+    user_info: Tuple[str, bool] = Depends(get_alert_user),
+):
+    """Create alert rule. Requires edit role. params_json validated per rule_type."""
+    user_id, can_edit = user_info
+    if not can_edit:
+        raise HTTPException(status_code=403, detail="Only admin or editor can create alert rules")
+    try:
+        r = create_alert_rule(
+            db=db,
+            name=body.name,
+            scope=body.scope,
+            severity=body.severity,
+            rule_type=body.rule_type,
+            schedule=body.schedule,
+            created_by=user_id,
+            description=body.description,
+            is_enabled=body.is_enabled,
+            kpi_key=body.kpi_key,
+            dimension_filters_json=body.dimension_filters_json,
+            params_json=body.params_json,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return get_alert_rule_by_id(db=db, rule_id=r.id)
+
+
+@app.get("/api/alert-rules/{rule_id}")
+def api_get_alert_rule(
+    rule_id: int,
+    db=Depends(get_db),
+):
+    """Get single alert rule."""
+    out = get_alert_rule_by_id(db=db, rule_id=rule_id)
+    if not out:
+        raise HTTPException(status_code=404, detail="Alert rule not found")
+    return out
+
+
+@app.put("/api/alert-rules/{rule_id}")
+def api_update_alert_rule(
+    rule_id: int,
+    body: AlertRuleUpdate,
+    db=Depends(get_db),
+    user_info: Tuple[str, bool] = Depends(get_alert_user),
+):
+    """Update alert rule. Requires edit role. params_json validated."""
+    user_id, can_edit = user_info
+    if not can_edit:
+        raise HTTPException(status_code=403, detail="Only admin or editor can update alert rules")
+    try:
+        r = update_alert_rule(
+            db=db,
+            rule_id=rule_id,
+            updated_by=user_id,
+            name=body.name,
+            description=body.description,
+            is_enabled=body.is_enabled,
+            severity=body.severity,
+            kpi_key=body.kpi_key,
+            dimension_filters_json=body.dimension_filters_json,
+            params_json=body.params_json,
+            schedule=body.schedule,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not r:
+        raise HTTPException(status_code=404, detail="Alert rule not found")
+    return get_alert_rule_by_id(db=db, rule_id=r.id)
+
+
+@app.delete("/api/alert-rules/{rule_id}")
+def api_delete_alert_rule(
+    rule_id: int,
+    disable_only: bool = Query(True, description="If true, disable rule; if false, delete"),
+    db=Depends(get_db),
+    user_info: Tuple[str, bool] = Depends(get_alert_user),
+):
+    """Disable or delete alert rule. Requires edit role."""
+    user_id, can_edit = user_info
+    if not can_edit:
+        raise HTTPException(status_code=403, detail="Only admin or editor can delete/disable alert rules")
+    ok = delete_alert_rule(db=db, rule_id=rule_id, updated_by=user_id, disable_only=disable_only)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Alert rule not found")
+    return {"id": rule_id, "disabled": disable_only}
 
 
 # ==================== Explainability API ====================

@@ -18,6 +18,7 @@ export type SectionKey =
   | 'measurement-models'
   | 'nba'
   | 'mmm'
+  | 'notifications'
 
 interface SectionMeta {
   title: string
@@ -32,6 +33,7 @@ const SECTION_ORDER: SectionKey[] = [
   'measurement-models',
   'nba',
   'mmm',
+  'notifications',
 ]
 
 const SECTION_META: Record<SectionKey, SectionMeta> = {
@@ -69,6 +71,12 @@ const SECTION_META: Record<SectionKey, SectionMeta> = {
     title: 'MMM defaults',
     description: 'Set defaults for new MMM runs including aggregation cadence.',
     icon: 'MD',
+  },
+  notifications: {
+    title: 'Notifications',
+    description:
+      'Configure notification channels (email, Slack) and preferences: severities, digest mode, and quiet hours.',
+    icon: 'NT',
   },
 }
 
@@ -277,6 +285,26 @@ interface ModelConfigPreviewResult {
   changed_keys?: string[]
   active_config_id?: string | null
   active_version?: number | null
+}
+
+interface NotificationChannelRow {
+  id: number
+  type: 'email' | 'slack_webhook'
+  config: { emails?: string[]; configured?: boolean }
+  is_verified: boolean
+  created_at: string | null
+}
+
+interface NotificationPrefRow {
+  id: number
+  user_id: string
+  channel_id: number
+  severities: string[]
+  digest_mode: 'realtime' | 'daily'
+  quiet_hours: { start?: string; end?: string; timezone?: string } | null
+  is_enabled: boolean
+  created_at: string | null
+  updated_at: string | null
 }
 
 const DEFAULT_MODEL_CONFIG_JSON: Record<string, any> = {
@@ -636,6 +664,17 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       Partial<Record<SectionKey, string>>
     >({})
 
+    const [notificationsChannelsBaseline, setNotificationsChannelsBaseline] =
+      useState<NotificationChannelRow[]>([])
+    const [notificationsChannelsDraft, setNotificationsChannelsDraft] =
+      useState<NotificationChannelRow[]>([])
+    const [notificationsPrefsBaseline, setNotificationsPrefsBaseline] =
+      useState<NotificationPrefRow[]>([])
+    const [notificationsPrefsDraft, setNotificationsPrefsDraft] =
+      useState<NotificationPrefRow[]>([])
+    const [notificationsSlackWebhookInput, setNotificationsSlackWebhookInput] =
+      useState('') // only for new/editing slack; never persisted in state to UI after save
+
     const settingsQuery = useQuery<Settings>({
       queryKey: ['settings'],
       queryFn: async () => {
@@ -666,6 +705,121 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         const res = await fetch('/api/model-configs')
         if (!res.ok) throw new Error('Failed to load model configs')
         return res.json()
+      },
+    })
+
+    const notificationChannelsQuery = useQuery<NotificationChannelRow[]>({
+      queryKey: ['settings', 'notification-channels'],
+      queryFn: async () => {
+        const res = await fetch('/api/settings/notification-channels')
+        if (!res.ok) throw new Error('Failed to load notification channels')
+        return res.json()
+      },
+    })
+
+    const notificationPrefsQuery = useQuery<NotificationPrefRow[]>({
+      queryKey: ['settings', 'notification-preferences'],
+      queryFn: async () => {
+        const res = await fetch('/api/settings/notification-preferences')
+        if (!res.ok) throw new Error('Failed to load notification preferences')
+        return res.json()
+      },
+    })
+
+    const saveNotificationsMutation = useMutation({
+      mutationFn: async (payload: {
+        channelsBaseline: NotificationChannelRow[]
+        channelsDraft: NotificationChannelRow[]
+        prefsDraft: NotificationPrefRow[]
+        slackWebhookInput: string
+      }) => {
+        const {
+          channelsBaseline,
+          channelsDraft,
+          prefsDraft,
+          slackWebhookInput,
+        } = payload
+        const baselineIds = new Set(channelsBaseline.map((c) => c.id))
+        const draftById = new Map(channelsDraft.map((c) => [c.id, c]))
+        const newChannels = channelsDraft.filter((c) => !c.id || c.id < 0)
+        const existingChannels = channelsDraft.filter((c) => c.id > 0)
+        const toDelete = [...baselineIds].filter((id) => !draftById.has(id))
+        const newIdMap = new Map<number, number>()
+        for (const ch of newChannels) {
+          const body: { type: string; config: Record<string, unknown>; slack_webhook_url?: string } = {
+            type: ch.type,
+            config: ch.config?.emails ? { emails: ch.config.emails } : {},
+          }
+          if (ch.type === 'slack_webhook' && slackWebhookInput?.trim()) {
+            body.slack_webhook_url = slackWebhookInput.trim()
+          }
+          const res = await fetch('/api/settings/notification-channels', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          })
+          if (!res.ok) throw new Error('Failed to create channel')
+          const created = (await res.json()) as NotificationChannelRow
+          newIdMap.set(ch.id, created.id)
+        }
+        for (const ch of existingChannels) {
+          const res = await fetch(
+            `/api/settings/notification-channels/${ch.id}`,
+            {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                config: ch.config,
+                slack_webhook_url:
+                  ch.type === 'slack_webhook' && slackWebhookInput?.trim()
+                    ? slackWebhookInput.trim()
+                    : undefined,
+              }),
+            },
+          )
+          if (!res.ok) throw new Error('Failed to update channel')
+        }
+        for (const id of toDelete) {
+          const res = await fetch(
+            `/api/settings/notification-channels/${id}`,
+            { method: 'DELETE' },
+          )
+          if (!res.ok) throw new Error('Failed to delete channel')
+        }
+        const resolveChannelId = (cid: number): number =>
+          cid > 0 ? cid : newIdMap.get(cid) ?? cid
+        for (const pref of prefsDraft) {
+          const channelId = resolveChannelId(pref.channel_id)
+          if (channelId <= 0) continue
+          const res = await fetch('/api/settings/notification-preferences', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              channel_id: channelId,
+              severities: pref.severities ?? [],
+              digest_mode: pref.digest_mode ?? 'realtime',
+              quiet_hours: pref.quiet_hours ?? null,
+              is_enabled: pref.is_enabled ?? false,
+            }),
+          })
+          if (!res.ok) throw new Error('Failed to save preference')
+        }
+        const chRes = await fetch('/api/settings/notification-channels')
+        const prRes = await fetch('/api/settings/notification-preferences')
+        if (!chRes.ok || !prRes.ok) throw new Error('Failed to refetch')
+        return {
+          channels: (await chRes.json()) as NotificationChannelRow[],
+          prefs: (await prRes.json()) as NotificationPrefRow[],
+        }
+      },
+      onSuccess: (data) => {
+        setNotificationsChannelsBaseline(data.channels)
+        setNotificationsChannelsDraft(data.channels)
+        setNotificationsPrefsBaseline(data.prefs)
+        setNotificationsPrefsDraft(data.prefs)
+        setNotificationsSlackWebhookInput('')
+        void notificationChannelsQuery.refetch()
+        void notificationPrefsQuery.refetch()
       },
     })
 
@@ -2327,6 +2481,25 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       }
     }, [settingsQuery.data, settingsBaseline])
 
+    useEffect(() => {
+      const ch = notificationChannelsQuery.data
+      const pr = notificationPrefsQuery.data
+      if (
+        Array.isArray(ch) &&
+        Array.isArray(pr) &&
+        notificationsChannelsBaseline.length === 0
+      ) {
+        setNotificationsChannelsBaseline(deepClone(ch))
+        setNotificationsChannelsDraft(deepClone(ch))
+        setNotificationsPrefsBaseline(deepClone(pr))
+        setNotificationsPrefsDraft(deepClone(pr))
+      }
+    }, [
+      notificationChannelsQuery.data,
+      notificationPrefsQuery.data,
+      notificationsChannelsBaseline.length,
+    ])
+
     const nbaErrors = useMemo(() => {
       const errors: Partial<Record<keyof NBASettings, string>> = {}
       if (nbaDraft.min_prefix_support < 1) {
@@ -2772,6 +2945,27 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       selectedModelConfigId,
     ])
 
+    const notificationsDirty = useMemo(() => {
+      if (
+        notificationsChannelsDraft.length !==
+          notificationsChannelsBaseline.length ||
+        notificationsPrefsDraft.length !== notificationsPrefsBaseline.length
+      )
+        return true
+      const chSame =
+        JSON.stringify(notificationsChannelsDraft) ===
+        JSON.stringify(notificationsChannelsBaseline)
+      const prSame =
+        JSON.stringify(notificationsPrefsDraft) ===
+        JSON.stringify(notificationsPrefsBaseline)
+      return !chSame || !prSame
+    }, [
+      notificationsChannelsBaseline,
+      notificationsChannelsDraft,
+      notificationsPrefsBaseline,
+      notificationsPrefsDraft,
+    ])
+
     const dirtySections = useMemo(() => {
       const dirty: SectionKey[] = []
       if (settingsDirty.attribution) dirty.push('attribution')
@@ -2780,8 +2974,9 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       if (measurementDirty) dirty.push('measurement-models')
       if (settingsDirty.nba) dirty.push('nba')
       if (settingsDirty.mmm) dirty.push('mmm')
+      if (notificationsDirty) dirty.push('notifications')
       return dirty
-    }, [kpiDirty, measurementDirty, settingsDirty, taxonomyDirty])
+    }, [kpiDirty, measurementDirty, notificationsDirty, settingsDirty, taxonomyDirty])
 
     useEffect(() => {
       onDirtySectionsChange?.(dirtySections)
@@ -3003,6 +3198,22 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                 return false
               }
             }
+            if (section === 'notifications') {
+              try {
+                await saveNotificationsMutation.mutateAsync({
+                  channelsBaseline: notificationsChannelsBaseline,
+                  channelsDraft: notificationsChannelsDraft,
+                  prefsDraft: notificationsPrefsDraft,
+                  slackWebhookInput: notificationsSlackWebhookInput,
+                })
+                setLastSavedAt((prev) => ({
+                  ...prev,
+                  notifications: new Date().toLocaleTimeString(),
+                }))
+              } catch {
+                return false
+              }
+            }
           }
           return true
         } catch (error) {
@@ -3018,6 +3229,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         modelConfigJson,
         saveKpiMutation,
         saveModelConfigMutation,
+        saveNotificationsMutation,
         saveSettingsMutation,
         saveTaxonomyMutation,
         selectedModelConfigId,
@@ -3029,6 +3241,12 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         sourceAliasIssues,
         nbaDraft,
         mmmDraft,
+        notificationsChannelsBaseline,
+        notificationsChannelsDraft,
+        notificationsPrefsDraft,
+        notificationsSlackWebhookInput,
+        modelConfigParseError,
+        currentConfigObject,
       ],
     )
 
@@ -3089,6 +3307,11 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
               setCurrentConfigObject(null)
             }
               break
+            case 'notifications':
+              setNotificationsChannelsDraft(deepClone(notificationsChannelsBaseline))
+              setNotificationsPrefsDraft(deepClone(notificationsPrefsBaseline))
+              setNotificationsSlackWebhookInput('')
+              break
             default:
               break
           }
@@ -3099,6 +3322,8 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       kpiBaseline,
       modelConfigBaseline,
       modelConfigBaselineChangeNote,
+      notificationsChannelsBaseline,
+      notificationsPrefsBaseline,
       settingsBaseline,
       taxonomyBaseline,
     ],
@@ -3166,6 +3391,8 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
               saveModelConfigMutation.isPending ||
               activateModelConfigMutation.isPending
             )
+          case 'notifications':
+            return saveNotificationsMutation.isPending
           default:
             return false
         }
@@ -3174,6 +3401,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         activateModelConfigMutation.isPending,
         saveKpiMutation.isPending,
         saveModelConfigMutation.isPending,
+        saveNotificationsMutation.isPending,
         saveSettingsMutation.isPending,
         saveTaxonomyMutation.isPending,
       ],
@@ -3197,6 +3425,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
           'measurement-models': 'Measurement model updated',
           nba: 'NBA defaults saved',
           mmm: 'MMM defaults saved',
+          notifications: 'Notification settings saved',
         }
         const errorMessages: Partial<Record<SectionKey, string>> = {
           attribution: 'Failed to save attribution defaults',
@@ -3205,6 +3434,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
           'measurement-models': 'Failed to save measurement model',
           nba: 'Failed to save NBA defaults',
           mmm: 'Failed to save MMM defaults',
+          notifications: 'Failed to save notification settings',
         }
         setToast({
           id: toastIdRef.current,
@@ -7414,6 +7644,507 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       )
     }
 
+    const SEVERITY_OPTIONS = [
+      { value: 'info', label: 'Info' },
+      { value: 'warn', label: 'Warning' },
+      { value: 'critical', label: 'Critical' },
+    ]
+    const TIMEZONES = [
+      'UTC',
+      'Europe/London',
+      'Europe/Prague',
+      'Europe/Paris',
+      'America/New_York',
+      'America/Los_Angeles',
+      'Asia/Tokyo',
+    ]
+
+    const renderNotifications = () => {
+      const inputStyle: CSSProperties = {
+        padding: `${t.space.sm}px ${t.space.md}px`,
+        borderRadius: t.radius.sm,
+        border: `1px solid ${t.color.border}`,
+        fontSize: t.font.sizeSm,
+        background: t.color.surface,
+        color: t.color.text,
+      }
+      const emailCh = notificationsChannelsDraft.find((c) => c.type === 'email')
+      const slackCh = notificationsChannelsDraft.find(
+        (c) => c.type === 'slack_webhook',
+      )
+      const getPrefForChannel = (channelId: number) =>
+        notificationsPrefsDraft.find((p) => p.channel_id === channelId)
+
+      const addEmailChannel = () => {
+        if (emailCh) return
+        setNotificationsChannelsDraft((prev) => [
+          ...prev,
+          {
+            id: -1,
+            type: 'email' as const,
+            config: { emails: [] },
+            is_verified: false,
+            created_at: null,
+          },
+        ])
+        setNotificationsPrefsDraft((prev) => [
+          ...prev,
+          {
+            id: -1,
+            user_id: 'default',
+            channel_id: -1,
+            severities: [],
+            digest_mode: 'realtime',
+            quiet_hours: null,
+            is_enabled: false,
+            created_at: null,
+            updated_at: null,
+          },
+        ])
+      }
+      const addSlackChannel = () => {
+        if (slackCh) return
+        setNotificationsChannelsDraft((prev) => [
+          ...prev,
+          {
+            id: -2,
+            type: 'slack_webhook' as const,
+            config: { configured: false },
+            is_verified: false,
+            created_at: null,
+          },
+        ])
+        setNotificationsPrefsDraft((prev) => [
+          ...prev,
+          {
+            id: -1,
+            user_id: 'default',
+            channel_id: -2,
+            severities: [],
+            digest_mode: 'realtime',
+            quiet_hours: null,
+            is_enabled: false,
+            created_at: null,
+            updated_at: null,
+          },
+        ])
+      }
+      const removeChannel = (id: number) => {
+        setNotificationsChannelsDraft((prev) => prev.filter((c) => c.id !== id))
+        setNotificationsPrefsDraft((prev) => prev.filter((p) => p.channel_id !== id))
+        if (id === slackCh?.id) setNotificationsSlackWebhookInput('')
+      }
+      const setChannelEmails = (emails: string[]) => {
+        setNotificationsChannelsDraft((prev) =>
+          prev.map((c) =>
+            c.type === 'email'
+              ? { ...c, config: { ...c.config, emails } }
+              : c,
+          ),
+        )
+      }
+      const setPref = (
+        channelId: number,
+        patch: Partial<NotificationPrefRow>,
+      ) => {
+        setNotificationsPrefsDraft((prev) =>
+          prev.map((p) =>
+            p.channel_id === channelId ? { ...p, ...patch } : p,
+          ),
+        )
+      }
+
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: t.space.xl }}>
+          <div>
+            <h3
+              style={{
+                margin: `0 0 ${t.space.sm}px`,
+                fontSize: t.font.sizeMd,
+                fontWeight: t.font.weightSemibold,
+                color: t.color.text,
+              }}
+            >
+              Notification channels
+            </h3>
+            <p
+              style={{
+                margin: `0 0 ${t.space.md}px`,
+                fontSize: t.font.sizeSm,
+                color: t.color.textSecondary,
+              }}
+            >
+              Email (workspace) or user-specific; Slack webhook optional. Notifications are off by default until you enable them.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: t.space.md }}>
+              {!emailCh && (
+                <button
+                  type="button"
+                  onClick={addEmailChannel}
+                  style={{
+                    padding: `${t.space.sm}px ${t.space.md}px`,
+                    borderRadius: t.radius.sm,
+                    border: `1px solid ${t.color.border}`,
+                    background: 'transparent',
+                    color: t.color.text,
+                    fontSize: t.font.sizeSm,
+                    cursor: 'pointer',
+                  }}
+                >
+                  + Add email channel (workspace)
+                </button>
+              )}
+              {emailCh && (
+                <div
+                  style={{
+                    border: `1px solid ${t.color.borderLight}`,
+                    borderRadius: t.radius.md,
+                    padding: t.space.md,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: t.space.sm,
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: t.font.sizeSm,
+                        fontWeight: t.font.weightMedium,
+                        color: t.color.text,
+                      }}
+                    >
+                      Email (workspace)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeChannel(emailCh.id)}
+                      style={{
+                        padding: '2px 8px',
+                        fontSize: t.font.sizeXs,
+                        border: `1px solid ${t.color.border}`,
+                        background: 'transparent',
+                        color: t.color.textMuted,
+                        cursor: 'pointer',
+                        borderRadius: t.radius.sm,
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <span style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                      Recipients (one per line or comma-separated)
+                    </span>
+                    <textarea
+                      value={(emailCh.config?.emails ?? []).join('\n')}
+                      onChange={(e) => {
+                        const raw = e.target.value
+                        const emails = raw
+                          .split(/[\n,]+/)
+                          .map((s) => s.trim())
+                          .filter(Boolean)
+                        setChannelEmails(emails)
+                      }}
+                      placeholder="user@example.com"
+                      rows={3}
+                      style={{ ...inputStyle, resize: 'vertical' }}
+                    />
+                  </label>
+                </div>
+              )}
+              {!slackCh && (
+                <button
+                  type="button"
+                  onClick={addSlackChannel}
+                  style={{
+                    padding: `${t.space.sm}px ${t.space.md}px`,
+                    borderRadius: t.radius.sm,
+                    border: `1px solid ${t.color.border}`,
+                    background: 'transparent',
+                    color: t.color.text,
+                    fontSize: t.font.sizeSm,
+                    cursor: 'pointer',
+                  }}
+                >
+                  + Add Slack webhook
+                </button>
+              )}
+              {slackCh && (
+                <div
+                  style={{
+                    border: `1px solid ${t.color.borderLight}`,
+                    borderRadius: t.radius.md,
+                    padding: t.space.md,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: t.space.sm,
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: t.font.sizeSm,
+                        fontWeight: t.font.weightMedium,
+                        color: t.color.text,
+                      }}
+                    >
+                      Slack webhook
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeChannel(slackCh.id)}
+                      style={{
+                        padding: '2px 8px',
+                        fontSize: t.font.sizeXs,
+                        border: `1px solid ${t.color.border}`,
+                        background: 'transparent',
+                        color: t.color.textMuted,
+                        cursor: 'pointer',
+                        borderRadius: t.radius.sm,
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                  {slackCh.config?.configured ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                        Webhook configured (URL is stored securely and not shown).
+                      </span>
+                      <input
+                        type="password"
+                        placeholder="Enter new URL to replace"
+                        value={notificationsSlackWebhookInput}
+                        onChange={(e) => setNotificationsSlackWebhookInput(e.target.value)}
+                        style={{ ...inputStyle, maxWidth: 400 }}
+                      />
+                    </div>
+                  ) : (
+                    <input
+                      type="password"
+                      placeholder="https://hooks.slack.com/services/..."
+                      value={notificationsSlackWebhookInput}
+                      onChange={(e) => setNotificationsSlackWebhookInput(e.target.value)}
+                      style={{ ...inputStyle, maxWidth: 400 }}
+                    />
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <h3
+              style={{
+                margin: `0 0 ${t.space.sm}px`,
+                fontSize: t.font.sizeMd,
+                fontWeight: t.font.weightSemibold,
+                color: t.color.text,
+              }}
+            >
+              Preferences
+            </h3>
+            <p
+              style={{
+                margin: `0 0 ${t.space.md}px`,
+                fontSize: t.font.sizeSm,
+                color: t.color.textSecondary,
+              }}
+            >
+              Severities to notify, delivery mode, and quiet hours (timezone-aware). Default: notifications off.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: t.space.lg }}>
+              {notificationsChannelsDraft.map((ch) => {
+                const pref = getPrefForChannel(ch.id)
+                return (
+                  <div
+                    key={ch.id}
+                    style={{
+                      border: `1px solid ${t.color.borderLight}`,
+                      borderRadius: t.radius.md,
+                      padding: t.space.md,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: t.space.md,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: t.font.sizeSm,
+                        fontWeight: t.font.weightMedium,
+                        color: t.color.text,
+                      }}
+                    >
+                      {ch.type === 'email' ? 'Email' : 'Slack'} – preferences
+                    </div>
+                    <label
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: t.space.sm,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={pref?.is_enabled ?? false}
+                        onChange={(e) =>
+                          setPref(ch.id, { is_enabled: e.target.checked })
+                        }
+                      />
+                      <span style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+                        Enable notifications for this channel
+                      </span>
+                    </label>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <span style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                        Severities to notify
+                      </span>
+                      <div style={{ display: 'flex', gap: t.space.md, flexWrap: 'wrap' }}>
+                        {SEVERITY_OPTIONS.map((opt) => (
+                          <label
+                            key={opt.value}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 6,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={(pref?.severities ?? []).includes(opt.value)}
+                              onChange={(e) => {
+                                const next = e.target.checked
+                                  ? [...(pref?.severities ?? []), opt.value]
+                                  : (pref?.severities ?? []).filter((s) => s !== opt.value)
+                                setPref(ch.id, { severities: next })
+                              }}
+                            />
+                            <span style={{ fontSize: t.font.sizeSm }}>{opt.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <span style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                        Delivery
+                      </span>
+                      <select
+                        value={pref?.digest_mode ?? 'realtime'}
+                        onChange={(e) =>
+                          setPref(ch.id, {
+                            digest_mode: e.target.value as 'realtime' | 'daily',
+                          })
+                        }
+                        style={{ ...inputStyle, maxWidth: 200 }}
+                      >
+                        <option value="realtime">Realtime</option>
+                        <option value="daily">Daily digest</option>
+                      </select>
+                    </label>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <span style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                        Quiet hours (optional, timezone-aware)
+                      </span>
+                      <div
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: '1fr 1fr auto',
+                          gap: t.space.sm,
+                          alignItems: 'end',
+                        }}
+                      >
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          <span style={{ fontSize: t.font.sizeXs }}>Start</span>
+                          <input
+                            type="time"
+                            value={pref?.quiet_hours?.start ?? ''}
+                            onChange={(e) =>
+                              setPref(ch.id, {
+                                quiet_hours: {
+                                  ...(pref?.quiet_hours ?? {}),
+                                  start: e.target.value || undefined,
+                                  timezone:
+                                    pref?.quiet_hours?.timezone ?? TIMEZONES[0],
+                                },
+                              })
+                            }
+                            style={inputStyle}
+                          />
+                        </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          <span style={{ fontSize: t.font.sizeXs }}>End</span>
+                          <input
+                            type="time"
+                            value={pref?.quiet_hours?.end ?? ''}
+                            onChange={(e) =>
+                              setPref(ch.id, {
+                                quiet_hours: {
+                                  ...(pref?.quiet_hours ?? {}),
+                                  end: e.target.value || undefined,
+                                  timezone:
+                                    pref?.quiet_hours?.timezone ?? TIMEZONES[0],
+                                },
+                              })
+                            }
+                            style={inputStyle}
+                          />
+                        </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          <span style={{ fontSize: t.font.sizeXs }}>Timezone</span>
+                          <select
+                            value={pref?.quiet_hours?.timezone ?? TIMEZONES[0]}
+                            onChange={(e) =>
+                              setPref(ch.id, {
+                                quiet_hours: {
+                                  ...(pref?.quiet_hours ?? {}),
+                                  timezone: e.target.value,
+                                },
+                              })
+                            }
+                            style={{ ...inputStyle, minWidth: 140 }}
+                          >
+                            {TIMEZONES.map((tz) => (
+                              <option key={tz} value={tz}>
+                                {tz}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+              {notificationsChannelsDraft.length === 0 && (
+                <p
+                  style={{
+                    fontSize: t.font.sizeSm,
+                    color: t.color.textMuted,
+                  }}
+                >
+                  Add a channel above to configure preferences.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )
+    }
+
     const renderSectionBody = () => {
       switch (activeSection) {
         case 'attribution':
@@ -7428,6 +8159,8 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
           return renderTaxonomy()
         case 'measurement-models':
           return renderMeasurementConfigs()
+        case 'notifications':
+          return renderNotifications()
         default:
           return null
       }

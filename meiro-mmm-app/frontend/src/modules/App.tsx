@@ -14,6 +14,7 @@ import MMMWizardShell from './MMMWizardShell'
 import type { SettingsPageHandle, SectionKey } from './Settings'
 
 const Overview = lazy(() => import('./Overview'))
+const AlertsPage = lazy(() => import('./Alerts'))
 const ChannelPerformance = lazy(() => import('./ChannelPerformance'))
 const AttributionComparison = lazy(() => import('./AttributionComparison'))
 const ConversionPaths = lazy(() => import('./ConversionPaths'))
@@ -28,6 +29,7 @@ const PathArchetypes = lazy(() => import('./PathArchetypes'))
 
 type Page =
   | 'overview'
+  | 'alerts'
   | 'dashboard'
   | 'comparison'
   | 'paths'
@@ -64,6 +66,13 @@ const NAV_ITEMS: NavItem[] = [
     section: 'Overview',
     icon: 'OV',
     breadcrumb: 'Overview',
+  },
+  {
+    key: 'alerts',
+    label: 'Alerts',
+    section: 'Data & Ops',
+    icon: 'AL',
+    breadcrumb: 'Data & Ops / Alerts',
   },
   {
     key: 'dashboard',
@@ -949,6 +958,7 @@ export default function App() {
                   onConnectDataSources={handleSetDatasources}
                 />
               )}
+              {page === 'alerts' && <AlertsPage />}
               {page === 'dashboard' && (
                 <ChannelPerformance
                   model={selectedModel}

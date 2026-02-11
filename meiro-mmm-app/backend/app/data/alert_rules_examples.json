@@ -1,0 +1,101 @@
+{
+  "description": "Example alert rule payloads for the Alerts engine (MVP detection types)",
+  "rules": [
+    {
+      "name": "Conversions KPI anomaly (z-score)",
+      "description": "Alert when conversions deviate from 28-period same-weekday baseline",
+      "scope": "default",
+      "severity": "warn",
+      "rule_type": "anomaly_kpi",
+      "kpi_key": "conversions",
+      "dimension_filters_json": null,
+      "params_json": {
+        "zscore_threshold": 2.5,
+        "lookback_periods": 28,
+        "min_volume": { "conversions": 10 }
+      },
+      "schedule": "daily",
+      "created_by": "system"
+    },
+    {
+      "name": "Spend anomaly (hourly baseline)",
+      "description": "Alert when spend is anomalous vs same-hour baseline",
+      "scope": "default",
+      "severity": "critical",
+      "rule_type": "anomaly_kpi",
+      "kpi_key": "spend",
+      "params_json": {
+        "zscore_threshold": 3.0,
+        "lookback_periods": 28,
+        "min_volume": { "spend": 100 }
+      },
+      "schedule": "hourly",
+      "created_by": "system"
+    },
+    {
+      "name": "Conversions below threshold",
+      "description": "Alert when daily conversions drop below 5",
+      "scope": "default",
+      "severity": "warn",
+      "rule_type": "threshold",
+      "kpi_key": "conversions",
+      "params_json": {
+        "threshold_value": 5,
+        "operator": "<"
+      },
+      "schedule": "daily",
+      "created_by": "system"
+    },
+    {
+      "name": "Spend above threshold",
+      "description": "Alert when spend exceeds 50000",
+      "scope": "default",
+      "severity": "info",
+      "rule_type": "threshold",
+      "kpi_key": "spend",
+      "params_json": {
+        "threshold_value": 50000,
+        "operator": ">"
+      },
+      "schedule": "daily",
+      "created_by": "system"
+    },
+    {
+      "name": "Data freshness - touchpoint staleness",
+      "description": "Warn when last touchpoint is older than 24 hours",
+      "scope": "default",
+      "severity": "warn",
+      "rule_type": "data_freshness",
+      "kpi_key": null,
+      "params_json": {
+        "max_age_hours": 24
+      },
+      "schedule": "hourly",
+      "created_by": "system"
+    },
+    {
+      "name": "Data freshness - critical staleness",
+      "description": "Critical when no data for 48 hours",
+      "scope": "default",
+      "severity": "critical",
+      "rule_type": "data_freshness",
+      "params_json": {
+        "max_age_minutes": 2880
+      },
+      "schedule": "hourly",
+      "created_by": "system"
+    },
+    {
+      "name": "Pipeline health - spend vs conversions",
+      "description": "Warn when spend present but no conversions (or vice versa) in 24h window",
+      "scope": "default",
+      "severity": "warn",
+      "rule_type": "pipeline_health",
+      "params_json": {
+        "tolerance_hours": 24
+      },
+      "schedule": "hourly",
+      "created_by": "system"
+    }
+  ]
+}

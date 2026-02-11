@@ -1,0 +1,143 @@
+{
+  "GET /api/overview/summary": {
+    "description": "Query: date_from=2024-01-01, date_to=2024-01-31, timezone=UTC, currency=USD",
+    "response": {
+      "kpi_tiles": [
+        {
+          "kpi_key": "spend",
+          "value": 24930.0,
+          "delta_pct": 5.2,
+          "sparkline": [1200, 1150, 1300, 1280, 1250, 1320, 1310, 1290, 1340, 1300, 1280, 1350, 1330, 1310],
+          "confidence": "ok"
+        },
+        {
+          "kpi_key": "conversions",
+          "value": 142,
+          "delta_pct": -2.1,
+          "sparkline": [8, 12, 10, 11, 9, 14, 12, 10, 11, 13, 9, 12, 10, 11],
+          "confidence": "ok"
+        },
+        {
+          "kpi_key": "revenue",
+          "value": 28450.5,
+          "delta_pct": 8.3,
+          "sparkline": [1800, 2100, 1950, 2200, 2000, 2050, 1980, 2100, 2150, 1900, 2050, 2200, 2100, 2150],
+          "confidence": "ok"
+        }
+      ],
+      "highlights": [
+        {
+          "type": "kpi_delta",
+          "kpi_key": "revenue",
+          "message": "Revenue up 8.3% vs previous period",
+          "delta_pct": 8.3
+        },
+        {
+          "type": "alert",
+          "alert_id": 3,
+          "severity": "warn",
+          "message": "Conversion rate below threshold",
+          "ts_detected": "2024-01-28T14:00:00"
+        }
+      ],
+      "freshness": {
+        "last_touchpoint_ts": "2024-01-31T23:45:00",
+        "last_conversion_ts": "2024-01-31T23:42:00",
+        "ingest_lag_minutes": 125.5
+      },
+      "model_id": null,
+      "date_from": "2024-01-01",
+      "date_to": "2024-01-31",
+      "timezone": "UTC",
+      "currency": "USD"
+    }
+  },
+  "GET /api/overview/drivers": {
+    "description": "Query: date_from=2024-01-01, date_to=2024-01-31, top_campaigns_n=10",
+    "response": {
+      "by_channel": [
+        {
+          "channel": "google_ads",
+          "spend": 12500.0,
+          "conversions": 58,
+          "revenue": 14200.0,
+          "delta_spend_pct": 4.2,
+          "delta_conversions_pct": -1.5,
+          "delta_revenue_pct": 6.8
+        },
+        {
+          "channel": "meta_ads",
+          "spend": 8200.0,
+          "conversions": 52,
+          "revenue": 9800.0,
+          "delta_spend_pct": 3.1,
+          "delta_conversions_pct": -2.0,
+          "delta_revenue_pct": 5.2
+        },
+        {
+          "channel": "linkedin_ads",
+          "spend": 3500.0,
+          "conversions": 18,
+          "revenue": 3200.5,
+          "delta_spend_pct": 8.0,
+          "delta_conversions_pct": 2.1,
+          "delta_revenue_pct": 12.3
+        }
+      ],
+      "by_campaign": [
+        {
+          "campaign": "Brand",
+          "revenue": 8500.0,
+          "conversions": 32,
+          "delta_revenue_pct": 5.0
+        },
+        {
+          "campaign": "Performance_Q1",
+          "revenue": 6200.0,
+          "conversions": 28,
+          "delta_revenue_pct": 12.1
+        }
+      ],
+      "biggest_movers": [
+        { "channel": "linkedin_ads", "delta_pct": 12.3, "metric": "revenue" },
+        { "channel": "email", "delta_pct": -8.2, "metric": "spend" }
+      ],
+      "date_from": "2024-01-01",
+      "date_to": "2024-01-31"
+    }
+  },
+  "GET /api/overview/alerts": {
+    "description": "Query: scope=default, limit=50",
+    "response": {
+      "alerts": [
+        {
+          "id": 1,
+          "rule_id": 1,
+          "rule_name": "Conversion rate drop",
+          "ts_detected": "2024-01-28T14:00:00",
+          "severity": "warn",
+          "title": "Conversion rate below threshold",
+          "message": "Conversion rate 2.1% is below threshold 2.5% for channel google_ads",
+          "status": "open",
+          "context": { "kpi_key": "conversion_rate", "observed": 0.021, "expected": 0.025 },
+          "related_entities": { "channel": "google_ads" },
+          "deep_link": "/dashboard/data-quality?alert_id=1&kpi=conversion_rate"
+        },
+        {
+          "id": 2,
+          "rule_id": 2,
+          "rule_name": "Data freshness",
+          "ts_detected": "2024-01-27T09:00:00",
+          "severity": "info",
+          "title": "Ingest lag > 4 hours",
+          "message": "Last successful ingest was 5.2 hours ago",
+          "status": "resolved",
+          "context": null,
+          "related_entities": null,
+          "deep_link": "/dashboard/data-quality?alert_id=2"
+        }
+      ],
+      "total": 2
+    }
+  }
+}
