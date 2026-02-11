@@ -119,7 +119,7 @@ def compute_journeys_completeness(journeys: List[Dict[str, Any]]) -> List[Tuple[
     duplicate_ids = 0
 
     for j in journeys:
-        cid = j.get("customer_id") or j.get("profile_id") or j.get("id")
+        cid = j.get("customer_id") or j.get("profile_id") or j.get("id") or (j.get("customer") or {}).get("id")
         if not cid:
             missing_profile += 1
         else:
@@ -136,7 +136,7 @@ def compute_journeys_completeness(journeys: List[Dict[str, Any]]) -> List[Tuple[
         any_channel = False
         any_non_direct = False
         for tp in tps:
-            if tp.get("timestamp"):
+            if tp.get("timestamp") or tp.get("ts"):
                 any_ts = True
             ch = tp.get("channel")
             if ch:

@@ -3,26 +3,74 @@
     {
       "name": "Paid Search",
       "channel": "paid_search",
-      "source_regex": "google|bing|baidu",
-      "medium_regex": "cpc|ppc|paid_search"
+      "priority": 10,
+      "enabled": true,
+      "source": {
+        "operator": "regex",
+        "value": "google|bing|baidu"
+      },
+      "medium": {
+        "operator": "regex",
+        "value": "cpc|ppc|paid_search"
+      },
+      "campaign": {
+        "operator": "any",
+        "value": ""
+      }
     },
     {
       "name": "Paid Social",
       "channel": "paid_social",
-      "source_regex": "facebook|meta|instagram|linkedin|twitter|tiktok",
-      "medium_regex": "cpc|paid_social|social"
+      "priority": 20,
+      "enabled": true,
+      "source": {
+        "operator": "regex",
+        "value": "facebook|meta|instagram|linkedin|twitter|tiktok"
+      },
+      "medium": {
+        "operator": "regex",
+        "value": "cpc|paid_social|social"
+      },
+      "campaign": {
+        "operator": "any",
+        "value": ""
+      }
     },
     {
       "name": "Email",
       "channel": "email",
-      "source_regex": null,
-      "medium_regex": "email"
+      "priority": 30,
+      "enabled": true,
+      "source": {
+        "operator": "any",
+        "value": ""
+      },
+      "medium": {
+        "operator": "contains",
+        "value": "email"
+      },
+      "campaign": {
+        "operator": "any",
+        "value": ""
+      }
     },
     {
       "name": "Direct",
       "channel": "direct",
-      "source_regex": null,
-      "medium_regex": "(none|direct)"
+      "priority": 40,
+      "enabled": true,
+      "source": {
+        "operator": "any",
+        "value": ""
+      },
+      "medium": {
+        "operator": "regex",
+        "value": "(none|direct)"
+      },
+      "campaign": {
+        "operator": "any",
+        "value": ""
+      }
     }
   ],
   "source_aliases": {

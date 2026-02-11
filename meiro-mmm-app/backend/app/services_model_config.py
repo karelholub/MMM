@@ -25,9 +25,16 @@ def _now() -> datetime:
     return datetime.utcnow()
 
 
-def _diff_configs(old: Optional[Dict[str, Any]], new: Dict[str, Any]) -> Dict[str, Any]:
-    """Very simple diff: store old/new; callers can inspect fields as needed."""
-    return {"old": old or {}, "new": new}
+def _diff_configs(
+    old: Optional[Dict[str, Any]],
+    new: Dict[str, Any],
+    meta: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Very simple diff: store old/new plus optional meta information."""
+    diff: Dict[str, Any] = {"old": old or {}, "new": new}
+    if meta:
+        diff["meta"] = meta
+    return diff
 
 
 def create_draft_config(
@@ -169,6 +176,7 @@ def activate_config(
     cfg_id: str,
     actor: str,
     set_as_default: bool = True,
+    activation_note: Optional[str] = None,
 ) -> ModelConfig:
     cfg: ModelConfig = db.get(ModelConfig, cfg_id)
     if not cfg:
@@ -183,6 +191,8 @@ def activate_config(
         .filter(ModelConfig.name == cfg.name, ModelConfig.status == ModelConfigStatus.ACTIVE)
         .all()
     )
+    previous_active_config = others[0] if others else None
+
     for o in others:
         o.status = ModelConfigStatus.ARCHIVED
         o.updated_at = _now()
@@ -192,11 +202,16 @@ def activate_config(
     cfg.updated_at = _now()
     db.add(cfg)
     db.flush()
+    audit_meta = {"activation_note": activation_note} if activation_note else None
     audit = ModelConfigAudit(
         model_config_id=cfg.id,
         actor=actor,
         action="activate",
-        diff_json=None,
+        diff_json=_diff_configs(
+            previous_active_config.config_json if previous_active_config else None,
+            cfg.config_json or {},
+            meta=audit_meta,
+        ),
         created_at=_now(),
     )
     db.add(audit)

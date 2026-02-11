@@ -31,10 +31,11 @@ def save_token(platform: str, data: Dict[str, Any]) -> None:
         "updated_at": datetime.now().isoformat(),
     }
     
-    # Store any additional fields (like ad_account_id for Meta)
-    if "ad_account_id" in data:
-        encrypted_data["ad_account_id"] = data["ad_account_id"]
-    
+    # Store any additional non-sensitive fields
+    for key in ("ad_account_id", "api_base_url"):
+        if key in data:
+            encrypted_data[key] = data[key]
+
     tokens[platform] = encrypted_data
     
     TOKENS_DB_PATH.write_text(json.dumps(tokens, indent=2))
@@ -60,9 +61,10 @@ def get_token(platform: str) -> Optional[Dict[str, Any]]:
         }
         
         # Include additional fields
-        if "ad_account_id" in token_data:
-            decrypted["ad_account_id"] = token_data["ad_account_id"]
-        
+        for key in ("ad_account_id", "api_base_url"):
+            if key in token_data:
+                decrypted[key] = token_data[key]
+
         return decrypted
     except Exception as e:
         print(f"Error reading token for {platform}: {e}")

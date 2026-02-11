@@ -1,8 +1,17 @@
-import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react'
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  useRef,
+  lazy,
+  Suspense,
+} from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { tokens } from '../theme/tokens'
 import { WorkspaceContext, JourneysSummary } from '../components/WorkspaceContext'
 import MMMWizardShell from './MMMWizardShell'
+import type { SettingsPageHandle, SectionKey } from './Settings'
 
 const Overview = lazy(() => import('./Overview'))
 const ChannelPerformance = lazy(() => import('./ChannelPerformance'))
@@ -153,6 +162,10 @@ const ATTRIBUTION_MODELS = [
 export default function App() {
   const [page, setPage] = useState<Page>('overview')
   const [lastPage, setLastPage] = useState<Page | null>(null)
+  const settingsRef = useRef<SettingsPageHandle | null>(null)
+  const [settingsDirtySections, setSettingsDirtySections] = useState<SectionKey[]>([])
+  const [pendingSettingsNav, setPendingSettingsNav] = useState<Page | null>(null)
+  const [showSettingsGuard, setShowSettingsGuard] = useState(false)
   const [selectedModel, setSelectedModel] = useState('linear')
   const [mmmRunId, setMmmRunId] = useState<string | null>(null)
   const [mmmDatasetId, setMmmDatasetId] = useState<string | null>(null)
@@ -287,11 +300,64 @@ export default function App() {
   const primaryKpiCount: number | undefined = journeysQuery.data?.primary_kpi_count
   const channels = useMemo(() => journeysQuery.data?.channels ?? [], [journeysQuery.data?.channels])
 
-  const handleSetPage = useCallback((p: Page) => {
-    setLastPage((prev) => (prev === p ? prev : prev ?? 'dashboard'))
-    setPage(p)
+  const navigateToPage = useCallback((next: Page) => {
+    setLastPage((prev) => (prev === next ? prev : prev ?? 'dashboard'))
+    setPage(next)
   }, [])
-  const handleSetDatasources = useCallback(() => setPage('datasources'), [])
+
+  const handleSetPage = useCallback(
+    (next: Page) => {
+      if (
+        page === 'settings' &&
+        next !== 'settings' &&
+        settingsDirtySections.length > 0
+      ) {
+        setPendingSettingsNav(next)
+        setShowSettingsGuard(true)
+        return
+      }
+      navigateToPage(next)
+    },
+    [navigateToPage, page, settingsDirtySections.length],
+  )
+  const handleSetDatasources = useCallback(
+    () => handleSetPage('datasources'),
+    [handleSetPage],
+  )
+
+  const handleConfirmLeaveSettings = useCallback(
+    async (action: 'stay' | 'discard' | 'save') => {
+      if (!pendingSettingsNav) {
+        setShowSettingsGuard(false)
+        return
+      }
+      if (action === 'stay') {
+        setShowSettingsGuard(false)
+        setPendingSettingsNav(null)
+        return
+      }
+      if (action === 'discard') {
+        settingsRef.current?.discardSections()
+        setSettingsDirtySections([])
+        setShowSettingsGuard(false)
+        const next = pendingSettingsNav
+        setPendingSettingsNav(null)
+        navigateToPage(next)
+        return
+      }
+      if (action === 'save') {
+        const success = await settingsRef.current?.saveSections()
+        if (success !== false) {
+          setSettingsDirtySections([])
+          setShowSettingsGuard(false)
+          const next = pendingSettingsNav
+          setPendingSettingsNav(null)
+          navigateToPage(next)
+        }
+      }
+    },
+    [navigateToPage, pendingSettingsNav, settingsRef],
+  )
   const handleMmmStartOver = useCallback(() => {
     setMmmRunId(null)
     setMmmDatasetId(null)
@@ -905,7 +971,12 @@ export default function App() {
               {page === 'path_archetypes' && <PathArchetypes />}
               {page === 'expenses' && <ExpenseManager />}
               {page === 'datasources' && <DataSources onJourneysImported={onJourneysImported} />}
-              {page === 'settings' && <SettingsPage />}
+              {page === 'settings' && (
+                <SettingsPage
+                  ref={settingsRef}
+                  onDirtySectionsChange={setSettingsDirtySections}
+                />
+              )}
               {page === 'dq' && <DataQuality />}
               {page === 'incrementality' && <IncrementalityPage />}
               {page === 'mmm' && (
@@ -928,6 +999,111 @@ export default function App() {
           </div>
         </main>
       </div>
+
+      {showSettingsGuard && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15, 23, 42, 0.45)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 30,
+            padding: 24,
+          }}
+        >
+          <div
+            style={{
+              width: 'min(480px, 100%)',
+              background: tokens.color.surface,
+              borderRadius: tokens.radius.lg,
+              border: `1px solid ${tokens.color.border}`,
+              boxShadow: tokens.shadowLg,
+              padding: 24,
+              display: 'grid',
+              gap: 16,
+            }}
+          >
+            <div>
+              <h3
+                style={{
+                  margin: 0,
+                  fontSize: tokens.font.sizeLg,
+                  fontWeight: tokens.font.weightSemibold,
+                  color: tokens.color.text,
+                }}
+              >
+                Unsaved changes in Settings
+              </h3>
+              <p
+                style={{
+                  margin: '8px 0 0',
+                  fontSize: tokens.font.sizeSm,
+                  color: tokens.color.textSecondary,
+                }}
+              >
+                Save or discard your pending edits before leaving the Settings area.
+              </p>
+            </div>
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: 12,
+                flexWrap: 'wrap',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => handleConfirmLeaveSettings('stay')}
+                style={{
+                  padding: '8px 14px',
+                  borderRadius: tokens.radius.sm,
+                  border: `1px solid ${tokens.color.border}`,
+                  background: 'transparent',
+                  color: tokens.color.text,
+                  fontSize: tokens.font.sizeSm,
+                  cursor: 'pointer',
+                }}
+              >
+                Stay
+              </button>
+              <button
+                type="button"
+                onClick={() => handleConfirmLeaveSettings('discard')}
+                style={{
+                  padding: '8px 14px',
+                  borderRadius: tokens.radius.sm,
+                  border: 'none',
+                  background: tokens.color.borderLight,
+                  color: tokens.color.text,
+                  fontSize: tokens.font.sizeSm,
+                  cursor: 'pointer',
+                }}
+              >
+                Discard
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleConfirmLeaveSettings('save')}
+                style={{
+                  padding: '8px 18px',
+                  borderRadius: tokens.radius.sm,
+                  border: 'none',
+                  background: tokens.color.accent,
+                  color: tokens.color.surface,
+                  fontSize: tokens.font.sizeSm,
+                  fontWeight: tokens.font.weightSemibold,
+                  cursor: 'pointer',
+                }}
+              >
+                Save & leave
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </WorkspaceContext.Provider>
   )
 }

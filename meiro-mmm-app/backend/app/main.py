@@ -1,8 +1,8 @@
-from fastapi import FastAPI, BackgroundTasks, UploadFile, File, HTTPException, Query, Body, Request, Header, Depends
+from fastapi import FastAPI, BackgroundTasks, UploadFile, File, Form, HTTPException, Query, Body, Request, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from fastapi.responses import RedirectResponse, Response
+from pydantic import BaseModel, Field
+from typing import List, Optional, Dict, Any, Tuple
 import pandas as pd
 from pathlib import Path
 import io
@@ -15,12 +15,13 @@ from datetime import datetime
 from app.utils.token_store import save_token, get_token, delete_token, get_all_connected_platforms
 from app.utils.encrypt import encrypt, decrypt
 from app.utils import datasource_config as ds_config
-from app.utils.taxonomy import load_taxonomy, save_taxonomy, Taxonomy
+from app.utils.taxonomy import load_taxonomy, save_taxonomy, Taxonomy, MatchExpression, ChannelRule
 from app.utils.kpi_config import load_kpi_config, save_kpi_config, KpiConfig, KpiDefinition
 from app.db import Base, engine, get_db
 from app.models_config_dq import (
     ModelConfig as ORMModelConfig,
     ModelConfigAudit,
+    ModelConfigStatus,
     DQSnapshot,
     DQAlertRule,
     DQAlert,
@@ -43,6 +44,14 @@ from app.services_conversions import (
     apply_model_config_to_journeys,
     load_journeys_from_db,
     persist_journeys_as_conversion_paths,
+    v2_to_legacy,
+)
+from app.services_journey_ingestion import validate_and_normalize
+from app.services_import_runs import (
+    create_run as create_import_run,
+    get_runs as get_import_runs,
+    get_run as get_import_run,
+    get_last_successful_run,
 )
 from app.services_quality import (
     load_config_and_meta,
@@ -68,6 +77,18 @@ from app.services_incrementality import (
 )
 from app.mmm_engine import fit_model as mmm_fit_model, engine_info
 from app.connectors import meiro_cdp
+from app.utils.meiro_config import (
+    get_last_test_at,
+    get_webhook_last_received_at,
+    get_webhook_received_count,
+    get_webhook_secret,
+    get_mapping,
+    save_mapping,
+    get_pull_config,
+    save_pull_config,
+    rotate_webhook_secret,
+    set_webhook_received,
+)
 from app.attribution_engine import (
     run_attribution,
     run_all_models as run_all_attribution,
@@ -166,6 +187,11 @@ class MeiroCDPConnectRequest(BaseModel):
     api_base_url: str
     api_key: str
 
+class MeiroCDPTestRequest(BaseModel):
+    api_base_url: Optional[str] = None
+    api_key: Optional[str] = None
+    save_on_success: bool = False
+
 class MeiroCDPExportRequest(BaseModel):
     since: str
     until: str
@@ -225,6 +251,12 @@ class AttributionMappingConfig(BaseModel):
     timestamp_field: str = "timestamp"
 
 
+class FromCDPRequest(BaseModel):
+    mapping: Optional[AttributionMappingConfig] = None
+    config_id: Optional[str] = None
+    import_note: Optional[str] = None
+
+
 class BuildFromPlatformRequest(BaseModel):
     """Request to build an MMM weekly dataset from platform journeys and expenses."""
     date_start: str  # ISO date
@@ -267,6 +299,8 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 MMM_PLATFORM_DIR = DATA_DIR / "mmm_platform"
 MMM_PLATFORM_DIR.mkdir(parents=True, exist_ok=True)
 RUNS_FILE = DATA_DIR / "mmm_runs.json"
+IMPORT_RUNS_FILE = DATA_DIR / "import_runs.json"
+LAST_IMPORT_RESULT_FILE = DATA_DIR / "last_import_result.json"
 
 
 def _load_runs():
@@ -293,6 +327,65 @@ def _save_runs():
 
 
 _load_runs()
+
+
+def _append_import_run(
+    source: str,
+    count: int,
+    status: str = "success",
+    error: Optional[str] = None,
+    total: int = 0,
+    valid: int = 0,
+    invalid: int = 0,
+    converted: int = 0,
+    channels_detected: Optional[List[str]] = None,
+    validation_summary: Optional[Dict[str, Any]] = None,
+    config_snapshot: Optional[Dict[str, Any]] = None,
+    preview_rows: Optional[List[Dict[str, Any]]] = None,
+    initiated_by: Optional[str] = None,
+    import_note: Optional[str] = None,
+) -> None:
+    """Append an import run. Delegates to services_import_runs with full schema."""
+    create_import_run(
+        source=source,
+        status=status,
+        total=total if total is not None and total > 0 else count,
+        valid=valid if valid is not None and valid >= 0 else (count if status == "success" else 0),
+        invalid=invalid,
+        converted=converted,
+        channels_detected=channels_detected,
+        validation_summary=validation_summary,
+        config_snapshot=config_snapshot,
+        error=error,
+        preview_rows=preview_rows,
+        initiated_by=initiated_by,
+        import_note=import_note,
+    )
+
+
+def _save_last_import_result(result: Dict[str, Any]) -> None:
+    """Persist last import result for preview drawer and validation report."""
+    try:
+        # Serialize for JSON (convert datetime etc.)
+        out = {
+            "import_summary": result.get("import_summary", {}),
+            "validation_items": result.get("validation_items", []),
+            "items_detail": result.get("items_detail", []),
+        }
+        LAST_IMPORT_RESULT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        LAST_IMPORT_RESULT_FILE.write_text(json.dumps(out, indent=0, default=str), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _load_last_import_result() -> Dict[str, Any]:
+    """Load last import result for UI."""
+    if not LAST_IMPORT_RESULT_FILE.exists():
+        return {"import_summary": {}, "validation_items": [], "items_detail": []}
+    try:
+        return json.loads(LAST_IMPORT_RESULT_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {"import_summary": {}, "validation_items": [], "items_detail": []}
 
 
 # ==================== Settings ====================
@@ -323,12 +416,75 @@ class NBASettings(BaseModel):
     min_prefix_support: int = 5
     min_conversion_rate: float = 0.01  # 1%
     max_prefix_depth: int = 5
+    min_next_support: int = 5
+    max_suggestions_per_prefix: int = 3
+    min_uplift_pct: Optional[float] = None  # expressed as decimal (e.g., 0.1 = 10%)
+    excluded_channels: List[str] = Field(default_factory=lambda: ["direct"])
 
 
 class Settings(BaseModel):
     attribution: AttributionSettings = AttributionSettings()
     mmm: MMMSettings = MMMSettings()
     nba: NBASettings = NBASettings()
+
+
+class AttributionPreviewPayload(BaseModel):
+    settings: AttributionSettings
+
+
+class AttributionPreviewResponse(BaseModel):
+    previewAvailable: bool
+    totalJourneys: int
+    windowImpactCount: int
+    windowDirection: str
+    useConvertedFlagImpact: int
+    useConvertedFlagDirection: str
+    reason: Optional[str] = None
+
+
+class NBAPreviewPayload(BaseModel):
+    settings: NBASettings
+    level: Optional[str] = "channel"
+
+
+class NBAPreviewResponse(BaseModel):
+    previewAvailable: bool
+    datasetJourneys: int
+    totalPrefixes: int
+    prefixesEligible: int
+    totalRecommendations: int
+    averageRecommendationsPerPrefix: float
+    filteredBySupportPct: float
+    filteredByConversionPct: float
+    reason: Optional[str] = None
+
+
+class NBATestPayload(BaseModel):
+    settings: NBASettings
+    path_prefix: str
+    level: Optional[str] = "channel"
+
+
+class NBATestRecommendation(BaseModel):
+    step: str
+    channel: str
+    campaign: Optional[str] = None
+    count: int
+    conversions: int
+    conversion_rate: float
+    avg_value: float
+    avg_value_converted: float
+    uplift_pct: Optional[float] = None
+
+
+class NBATestResponse(BaseModel):
+    previewAvailable: bool
+    prefix: str
+    level: str
+    totalPrefixSupport: int
+    baselineConversionRate: float
+    recommendations: List[NBATestRecommendation]
+    reason: Optional[str] = None
 
 
 SETTINGS_PATH = DATA_DIR / "settings.json"
@@ -352,6 +508,94 @@ SETTINGS: Settings = _load_settings()
 
 def _save_settings() -> None:
     SETTINGS_PATH.write_text(SETTINGS.model_dump_json(indent=2))
+
+
+def _filter_nba_recommendations(
+    nba_raw: Dict[str, List[Dict[str, Any]]],
+    settings: NBASettings,
+) -> Tuple[Dict[str, List[Dict[str, Any]]], Dict[str, Any]]:
+    """Apply NBA settings thresholds to raw recommendations and collect stats."""
+
+    stats: Dict[str, Any] = {
+        "total_before": 0,
+        "total_after": 0,
+        "filtered_support": 0,
+        "filtered_conversion": 0,
+        "filtered_uplift": 0,
+        "filtered_excluded": 0,
+        "filtered_depth": 0,
+        "trimmed_cap": 0,
+        "prefixes_considered": 0,
+        "prefixes_retained": 0,
+    }
+
+    min_prefix_support = max(1, settings.min_prefix_support)
+    min_conversion_rate = max(0.0, settings.min_conversion_rate)
+    max_prefix_depth = max(0, settings.max_prefix_depth)
+    min_next_support = max(1, settings.min_next_support or settings.min_prefix_support)
+    max_suggestions = max(1, settings.max_suggestions_per_prefix)
+    min_uplift_pct = settings.min_uplift_pct
+    excluded_channels = {
+        ch.strip().lower() for ch in (settings.excluded_channels or []) if ch
+    }
+
+    filtered: Dict[str, List[Dict[str, Any]]] = {}
+
+    for prefix, recs in nba_raw.items():
+        stats["prefixes_considered"] += 1
+        stats["total_before"] += len(recs)
+
+        depth = len([step for step in prefix.split(" > ") if step])
+        if depth > max_prefix_depth:
+            stats["filtered_depth"] += len(recs)
+            continue
+
+        prefix_support = sum(int(r.get("count", 0)) for r in recs)
+        if prefix_support < min_prefix_support:
+            stats["filtered_support"] += len(recs)
+            continue
+
+        total_conversions = sum(int(r.get("conversions", 0)) for r in recs)
+        baseline_rate = (
+            total_conversions / prefix_support if prefix_support > 0 else 0.0
+        )
+
+        kept: List[Dict[str, Any]] = []
+        for rec in recs:
+            count = int(rec.get("count", 0))
+            conv_rate = float(rec.get("conversion_rate", 0.0))
+            channel = str(rec.get("channel", "")).lower()
+
+            if count < min_next_support:
+                stats["filtered_support"] += 1
+                continue
+            if conv_rate < min_conversion_rate:
+                stats["filtered_conversion"] += 1
+                continue
+            if excluded_channels and channel in excluded_channels:
+                stats["filtered_excluded"] += 1
+                continue
+            if (
+                min_uplift_pct is not None
+                and min_uplift_pct > 0
+                and baseline_rate > 0
+            ):
+                uplift = (conv_rate - baseline_rate) / baseline_rate
+                if uplift < min_uplift_pct:
+                    stats["filtered_uplift"] += 1
+                    continue
+
+            kept.append(rec)
+
+        if kept:
+            if len(kept) > max_suggestions:
+                stats["trimmed_cap"] += len(kept) - max_suggestions
+                kept = kept[:max_suggestions]
+            filtered[prefix] = kept
+            stats["prefixes_retained"] += 1
+            stats["total_after"] += len(kept)
+
+    return filtered, stats
 
 
 # KPI configuration (separate JSON file)
@@ -493,6 +737,15 @@ class ModelConfigUpdatePayload(BaseModel):
 class ModelConfigActivatePayload(BaseModel):
     actor: str = "system"
     set_as_default: bool = True
+    activation_note: Optional[str] = None
+
+
+class ModelConfigValidatePayload(BaseModel):
+    config_json: Optional[Dict[str, Any]] = None
+
+
+class ModelConfigPreviewPayload(BaseModel):
+    config_json: Optional[Dict[str, Any]] = None
 
 
 @app.get("/api/model-configs")
@@ -564,7 +817,11 @@ def activate_model_config(cfg_id: str, payload: ModelConfigActivatePayload, db=D
     """Activate a ModelConfig and (optionally) set as default for reports."""
     try:
         cfg = activate_config(
-            db=db, cfg_id=cfg_id, actor=payload.actor, set_as_default=payload.set_as_default
+            db=db,
+            cfg_id=cfg_id,
+            actor=payload.actor,
+            set_as_default=payload.set_as_default,
+            activation_note=payload.activation_note,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -579,6 +836,172 @@ def archive_model_config(cfg_id: str, actor: str = "system", db=Depends(get_db))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"id": cfg.id, "status": cfg.status, "version": cfg.version}
+
+
+def _compute_journey_metrics(journeys: List[Dict[str, Any]]) -> Dict[str, Any]:
+    touchpoints = sum(len(j.get("touchpoints") or []) for j in journeys)
+    conversions = sum(1 for j in journeys if j.get("converted", True))
+    return {
+        "journeys": len(journeys),
+        "touchpoints": touchpoints,
+        "conversions": conversions,
+    }
+
+
+def _changed_top_level_keys(
+    old_cfg: Optional[Dict[str, Any]],
+    new_cfg: Dict[str, Any],
+) -> List[str]:
+    old_map = old_cfg if isinstance(old_cfg, dict) else {}
+    keys = set(old_map.keys()) | set(new_cfg.keys())
+    changed: List[str] = []
+    for key in sorted(keys):
+        if old_map.get(key) != new_cfg.get(key):
+            changed.append(key)
+    return changed
+
+
+@app.post("/api/model-configs/{cfg_id}/validate")
+def validate_model_config_route(
+    cfg_id: str,
+    payload: ModelConfigValidatePayload,
+    db=Depends(get_db),
+):
+    cfg = db.get(ORMModelConfig, cfg_id)
+    if not cfg:
+        raise HTTPException(status_code=404, detail="Config not found")
+
+    cfg_json: Any = payload.config_json or cfg.config_json or {}
+    schema_errors: List[str] = []
+    errors: List[str] = []
+    warnings: List[str] = []
+    missing_conversions: List[str] = []
+
+    if not isinstance(cfg_json, dict):
+        schema_errors.append("Config JSON must be a top-level object.")
+    else:
+        ok, msg = validate_model_config(cfg_json)
+        if not ok:
+            errors.append(msg)
+
+        conv_section = cfg_json.get("conversions") or {}
+        conversion_defs = conv_section.get("conversion_definitions") or []
+        available_keys = {d.id for d in KPI_CONFIG.definitions}
+        missing_conversions = sorted(
+            {
+                str(defn.get("key"))
+                for defn in conversion_defs
+                if defn.get("key") and defn.get("key") not in available_keys
+            }
+        )
+        if missing_conversions:
+            errors.append(
+                "Conversion definitions reference unknown KPI keys: "
+                + ", ".join(missing_conversions)
+            )
+
+        required_sections = ["eligible_touchpoints", "windows", "conversions"]
+        for section in required_sections:
+            if section not in cfg_json:
+                errors.append(f"Missing top-level section '{section}'")
+
+        touchpoints = cfg_json.get("eligible_touchpoints") or {}
+        for field in [
+            "include_channels",
+            "exclude_channels",
+            "include_event_types",
+            "exclude_event_types",
+        ]:
+            value = touchpoints.get(field)
+            if value is not None and not isinstance(value, list):
+                errors.append(f"'{field}' must be an array of strings")
+
+    valid = not errors and not schema_errors
+    return {
+        "valid": valid,
+        "errors": errors,
+        "warnings": warnings,
+        "missing_conversions": missing_conversions,
+        "schema_errors": schema_errors,
+    }
+
+
+@app.post("/api/model-configs/{cfg_id}/preview")
+def preview_model_config(
+    cfg_id: str,
+    payload: ModelConfigPreviewPayload,
+    db=Depends(get_db),
+):
+    cfg = db.get(ORMModelConfig, cfg_id)
+    if not cfg:
+        raise HTTPException(status_code=404, detail="Config not found")
+
+    cfg_json: Any = payload.config_json or cfg.config_json or {}
+    if not isinstance(cfg_json, dict):
+        return {"preview_available": False, "reason": "Config JSON must be an object"}
+
+    global JOURNEYS
+    if not JOURNEYS:
+        JOURNEYS = load_journeys_from_db(db)
+    if not JOURNEYS:
+        return {"preview_available": False, "reason": "No journeys loaded"}
+
+    baseline_cfg: Optional[ORMModelConfig] = (
+        db.query(ORMModelConfig)
+        .filter(
+            ORMModelConfig.name == cfg.name,
+            ORMModelConfig.status == ModelConfigStatus.ACTIVE,
+        )
+        .order_by(ORMModelConfig.version.desc())
+        .first()
+    )
+    baseline_json = baseline_cfg.config_json if baseline_cfg else {}
+
+    baseline_journeys = apply_model_config_to_journeys(
+        JOURNEYS,
+        baseline_json or {},
+    )
+    draft_journeys = apply_model_config_to_journeys(JOURNEYS, cfg_json)
+
+    baseline_metrics = _compute_journey_metrics(baseline_journeys)
+    draft_metrics = _compute_journey_metrics(draft_journeys)
+
+    deltas: Dict[str, float] = {
+        key: float(draft_metrics.get(key, 0) - baseline_metrics.get(key, 0))
+        for key in draft_metrics.keys()
+    }
+    deltas_pct: Dict[str, Optional[float]] = {}
+    for key, delta in deltas.items():
+        baseline_value = baseline_metrics.get(key, 0)
+        deltas_pct[key] = (
+            round((delta / baseline_value) * 100.0, 2) if baseline_value else None
+        )
+
+    warnings: List[str] = []
+    coverage_warning = False
+    baseline_conversions = baseline_metrics.get("conversions", 0)
+    draft_conversions = draft_metrics.get("conversions", 0)
+    if baseline_conversions and draft_conversions / baseline_conversions < 0.9:
+        coverage_warning = True
+        warnings.append(
+            "Projected attributable conversions decrease by more than 10% versus the active config."
+        )
+
+    changed_keys = _changed_top_level_keys(baseline_json or {}, cfg_json)
+
+    return {
+        "preview_available": True,
+        "baseline": baseline_metrics,
+        "draft": draft_metrics,
+        "deltas": deltas,
+        "deltas_pct": deltas_pct,
+        "warnings": warnings,
+        "coverage_warning": coverage_warning,
+        "changed_keys": changed_keys,
+        "active_config_id": baseline_cfg.id if baseline_cfg else None,
+        "active_version": baseline_cfg.version if baseline_cfg else None,
+        "reason": None,
+    }
 
 
 @app.get("/api/model-configs/{cfg_id}")
@@ -773,6 +1196,251 @@ def update_settings(new_settings: Settings):
     return SETTINGS
 
 
+@app.post(
+    "/api/attribution/preview",
+    response_model=AttributionPreviewResponse,
+)
+def attribution_preview(
+    payload: AttributionPreviewPayload,
+    db=Depends(get_db),
+) -> AttributionPreviewResponse:
+    """Return a lightweight preview of how attribution defaults would impact journeys."""
+    global JOURNEYS
+    if not JOURNEYS:
+        JOURNEYS = load_journeys_from_db(db, limit=50000)
+
+    if not JOURNEYS:
+        return AttributionPreviewResponse(
+            previewAvailable=False,
+            totalJourneys=0,
+            windowImpactCount=0,
+            windowDirection="none",
+            useConvertedFlagImpact=0,
+            useConvertedFlagDirection="none",
+            reason="Preview unavailable (no journeys loaded)",
+        )
+
+    baseline = SETTINGS.attribution
+    proposed = payload.settings
+
+    baseline_window = max(baseline.lookback_window_days, 1)
+    proposed_window = max(proposed.lookback_window_days, 1)
+
+    def _journey_duration_days(journey: Dict[str, Any]) -> Optional[int]:
+        timestamps = []
+        for tp in journey.get("touchpoints", []):
+            ts = tp.get("timestamp")
+            if not ts:
+                continue
+            try:
+                timestamps.append(datetime.fromisoformat(ts))
+            except ValueError:
+                continue
+        if not timestamps:
+            return None
+        timestamps.sort()
+        delta = timestamps[-1] - timestamps[0]
+        return max(delta.days, 0)
+
+    window_direction = "none"
+    if proposed_window < baseline_window:
+        window_direction = "tighten"
+    elif proposed_window > baseline_window:
+        window_direction = "loosen"
+
+    window_impact = 0
+    for journey in JOURNEYS:
+        if not journey.get("converted", True):
+            continue
+        duration = _journey_duration_days(journey)
+        if duration is None:
+            continue
+        baseline_allowed = duration <= baseline_window
+        proposed_allowed = duration <= proposed_window
+        if baseline_allowed != proposed_allowed:
+            window_impact += 1
+
+    converted_direction = "none"
+    converted_impact = 0
+    converted_false_count = sum(1 for journey in JOURNEYS if not journey.get("converted", True))
+
+    if baseline.use_converted_flag and not proposed.use_converted_flag:
+        converted_direction = "more_included"
+        converted_impact = converted_false_count
+    elif not baseline.use_converted_flag and proposed.use_converted_flag:
+        converted_direction = "fewer_included"
+        converted_impact = converted_false_count
+
+    return AttributionPreviewResponse(
+        previewAvailable=True,
+        totalJourneys=len(JOURNEYS),
+        windowImpactCount=window_impact,
+        windowDirection=window_direction,
+        useConvertedFlagImpact=converted_impact,
+        useConvertedFlagDirection=converted_direction,
+    )
+
+
+@app.post(
+    "/api/nba/preview",
+    response_model=NBAPreviewResponse,
+)
+def nba_preview(
+    payload: NBAPreviewPayload,
+    db=Depends(get_db),
+) -> NBAPreviewResponse:
+    """Return estimated impact metrics for proposed NBA thresholds."""
+    global JOURNEYS
+    if not JOURNEYS:
+        JOURNEYS = load_journeys_from_db(db, limit=50000)
+
+    if not JOURNEYS:
+        return NBAPreviewResponse(
+            previewAvailable=False,
+            datasetJourneys=0,
+            totalPrefixes=0,
+            prefixesEligible=0,
+            totalRecommendations=0,
+            averageRecommendationsPerPrefix=0.0,
+            filteredBySupportPct=0.0,
+            filteredByConversionPct=0.0,
+            reason="Preview unavailable (no journeys loaded)",
+        )
+
+    requested_level = (payload.level or "channel").lower()
+    use_level = (
+        "campaign"
+        if requested_level == "campaign" and has_any_campaign(JOURNEYS)
+        else "channel"
+    )
+    if requested_level == "campaign" and use_level != "campaign":
+        reason = "Campaign-level preview unavailable (journeys lack campaign data)"
+    else:
+        reason = None
+
+    nba_raw = compute_next_best_action(JOURNEYS, level=use_level)
+    filtered, stats = _filter_nba_recommendations(nba_raw, payload.settings)
+
+    total_before = stats.get("total_before", 0) or 0
+    support_filtered = (
+        stats.get("filtered_support", 0) + stats.get("filtered_depth", 0)
+    )
+    conversion_filtered = stats.get("filtered_conversion", 0)
+    prefixes_eligible = stats.get("prefixes_retained", 0)
+    total_after = stats.get("total_after", 0)
+    avg_per_prefix = (
+        total_after / prefixes_eligible if prefixes_eligible else 0.0
+    )
+
+    filtered_support_pct = (
+        (support_filtered / total_before) * 100 if total_before else 0.0
+    )
+    filtered_conversion_pct = (
+        (conversion_filtered / total_before) * 100 if total_before else 0.0
+    )
+
+    return NBAPreviewResponse(
+        previewAvailable=True,
+        datasetJourneys=len(JOURNEYS),
+        totalPrefixes=stats.get("prefixes_considered", 0),
+        prefixesEligible=prefixes_eligible,
+        totalRecommendations=total_after,
+        averageRecommendationsPerPrefix=round(avg_per_prefix, 2),
+        filteredBySupportPct=round(filtered_support_pct, 2),
+        filteredByConversionPct=round(filtered_conversion_pct, 2),
+        reason=reason,
+    )
+
+
+@app.post(
+    "/api/nba/test",
+    response_model=NBATestResponse,
+)
+def nba_test(
+    payload: NBATestPayload,
+    db=Depends(get_db),
+) -> NBATestResponse:
+    """Return recommendations for a specific prefix using proposed settings."""
+    global JOURNEYS
+    if not JOURNEYS:
+        JOURNEYS = load_journeys_from_db(db, limit=50000)
+
+    if not JOURNEYS:
+        return NBATestResponse(
+            previewAvailable=False,
+            prefix=payload.path_prefix or "",
+            level=payload.level or "channel",
+            totalPrefixSupport=0,
+            baselineConversionRate=0.0,
+            recommendations=[],
+            reason="Recommendations unavailable (no journeys loaded)",
+        )
+
+    requested_level = (payload.level or "channel").lower()
+    use_level = (
+        "campaign"
+        if requested_level == "campaign" and has_any_campaign(JOURNEYS)
+        else "channel"
+    )
+    normalized_prefix = payload.path_prefix.strip()
+    nba_raw = compute_next_best_action(JOURNEYS, level=use_level)
+
+    if normalized_prefix not in nba_raw and normalized_prefix != "":
+        # Allow simple comma-separated prefixes to be normalized via _step_string
+        prefix_steps = [
+            step.strip()
+            for step in normalized_prefix.replace(",", " > ").split(" > ")
+            if step.strip()
+        ]
+        normalized_prefix = " > ".join(prefix_steps)
+
+    prefix_recs = {normalized_prefix: nba_raw.get(normalized_prefix, [])}
+    filtered, stats = _filter_nba_recommendations(prefix_recs, payload.settings)
+    kept = filtered.get(normalized_prefix, [])
+
+    prefix_support = sum(int(r.get("count", 0)) for r in nba_raw.get(normalized_prefix, []))
+    total_conversions = sum(
+        int(r.get("conversions", 0)) for r in nba_raw.get(normalized_prefix, [])
+    )
+    baseline_rate = (
+        total_conversions / prefix_support if prefix_support > 0 else 0.0
+    )
+
+    recommendations = [
+        NBATestRecommendation(
+            step=str(rec.get("step") or rec.get("channel")),
+            channel=str(rec.get("channel")),
+            campaign=rec.get("campaign"),
+            count=int(rec.get("count", 0)),
+            conversions=int(rec.get("conversions", 0)),
+            conversion_rate=float(rec.get("conversion_rate", 0.0)),
+            avg_value=float(rec.get("avg_value", 0.0)),
+            avg_value_converted=float(rec.get("avg_value_converted", 0.0)),
+            uplift_pct=(
+                ((float(rec.get("conversion_rate", 0.0)) - baseline_rate) / baseline_rate)
+                if baseline_rate > 0
+                else None
+            ),
+        )
+        for rec in kept
+    ]
+
+    if requested_level == "campaign" and use_level != "campaign":
+        reason = "Campaign-level recommendations unavailable (journeys lack campaign data)"
+    else:
+        reason = None
+
+    return NBATestResponse(
+        previewAvailable=True,
+        prefix=normalized_prefix or "(start)",
+        level=use_level,
+        totalPrefixSupport=prefix_support,
+        baselineConversionRate=baseline_rate,
+        recommendations=recommendations,
+        reason=reason,
+    )
+
+
 # ==================== Taxonomy API ====================
 
 
@@ -780,13 +1448,23 @@ def update_settings(new_settings: Settings):
 def get_taxonomy():
     """Return current channel/source/medium/campaign taxonomy rules."""
     tax = load_taxonomy()
+
+    def _serialize_expression(expr):
+        return {
+            "operator": expr.normalize_operator(),
+            "value": expr.value or "",
+        }
+
     return {
         "channel_rules": [
             {
                 "name": r.name,
                 "channel": r.channel,
-                "source_regex": r.source_regex,
-                "medium_regex": r.medium_regex,
+                "priority": r.priority,
+                "enabled": r.enabled,
+                "source": _serialize_expression(r.source),
+                "medium": _serialize_expression(r.medium),
+                "campaign": _serialize_expression(r.campaign),
             }
             for r in tax.channel_rules
         ],
@@ -798,32 +1476,48 @@ def get_taxonomy():
 @app.post("/api/taxonomy")
 def update_taxonomy(payload: Dict[str, Any]):
     """Replace taxonomy rules and aliases."""
-    rules = []
-    for r in payload.get("channel_rules", []):
-        rules.append(
-            {
-                "name": r.get("name", ""),
-                "channel": r.get("channel", ""),
-                "source_regex": r.get("source_regex"),
-                "medium_regex": r.get("medium_regex"),
+    def _parse_expression(data: Optional[Dict[str, Any]], fallback_regex: Optional[str] = None):
+        if isinstance(data, dict):
+            return {
+                "operator": data.get("operator", "any"),
+                "value": data.get("value", ""),
             }
+        if fallback_regex:
+            return {"operator": "regex", "value": fallback_regex}
+        return {"operator": "any", "value": ""}
+
+    rules: List[ChannelRule] = []
+    channel_rules_payload = payload.get("channel_rules", [])
+    for idx, rule_payload in enumerate(channel_rules_payload):
+        expr_source = _parse_expression(
+            rule_payload.get("source"),
+            rule_payload.get("source_regex"),
         )
+        expr_medium = _parse_expression(
+            rule_payload.get("medium"),
+            rule_payload.get("medium_regex"),
+        )
+        expr_campaign = _parse_expression(rule_payload.get("campaign"))
+
+        rules.append(
+            ChannelRule(
+                name=rule_payload.get("name", ""),
+                channel=rule_payload.get("channel", ""),
+                priority=int(rule_payload.get("priority", (idx + 1) * 10)),
+                enabled=bool(rule_payload.get("enabled", True)),
+                source=MatchExpression(**expr_source),
+                medium=MatchExpression(**expr_medium),
+                campaign=MatchExpression(**expr_campaign),
+            )
+        )
+
+    rules.sort(key=lambda r: (r.priority, r.name))
+
     tax = Taxonomy(
-        channel_rules=[Taxonomy.default().channel_rules[0]].__class__(  # create empty then replace below
-        )
+        channel_rules=rules,
+        source_aliases=payload.get("source_aliases", {}),
+        medium_aliases=payload.get("medium_aliases", {}),
     )
-    tax.channel_rules = [Taxonomy.default().channel_rules[0]]
-    tax.channel_rules = [
-        type(Taxonomy.default().channel_rules[0])(
-            name=r["name"],
-            channel=r["channel"],
-            source_regex=r.get("source_regex"),
-            medium_regex=r.get("medium_regex"),
-        )
-        for r in rules
-    ]
-    tax.source_aliases = payload.get("source_aliases", {})
-    tax.medium_aliases = payload.get("medium_aliases", {})
     save_taxonomy(tax)
     return get_taxonomy()
 
@@ -858,8 +1552,9 @@ def map_channel_endpoint(body: Dict[str, Any]):
     
     source = body.get("source")
     medium = body.get("medium")
+    campaign = body.get("campaign")
     
-    mapping = map_to_channel(source, medium)
+    mapping = map_to_channel(source, medium, campaign)
     return {
         "channel": mapping.channel,
         "matched_rule": mapping.matched_rule,
@@ -1011,6 +1706,10 @@ class KpiConfigModel(BaseModel):
     primary_kpi_id: Optional[str] = None
 
 
+class KpiTestPayload(BaseModel):
+    definition: KpiDefinitionModel
+
+
 @app.get("/api/kpis", response_model=KpiConfigModel)
 def get_kpis():
     """Return configured KPI and micro-conversion definitions."""
@@ -1019,6 +1718,100 @@ def get_kpis():
         definitions=[KpiDefinitionModel(**d.__dict__) for d in cfg.definitions],
         primary_kpi_id=cfg.primary_kpi_id,
     )
+
+
+@app.post("/api/kpis/test")
+def test_kpi_definition(payload: KpiTestPayload, db=Depends(get_db)):
+    """Evaluate a KPI definition against loaded journeys for quick validation."""
+    global JOURNEYS
+    if not JOURNEYS:
+        JOURNEYS = load_journeys_from_db(db)
+    if not JOURNEYS:
+        return {
+            "testAvailable": False,
+            "eventsMatched": 0,
+            "journeysMatched": 0,
+            "journeysTotal": 0,
+            "journeysPct": 0.0,
+            "missingValueChecks": 0,
+            "missingValueCount": 0,
+            "missingValuePct": None,
+            "message": None,
+            "reason": "Load sample data to test",
+        }
+
+    definition = payload.definition
+    total_journeys = len(JOURNEYS)
+    target_event = (definition.event_name or definition.id or "").strip().lower()
+    matched_events = 0
+    journeys_matched = 0
+    missing_value_checks = 0
+    missing_value_count = 0
+    fallback_used = False
+
+    def _record_value(source: Dict[str, Any]) -> None:
+        nonlocal missing_value_checks, missing_value_count
+        if definition.value_field:
+            missing_value_checks += 1
+            value = source.get(definition.value_field)
+            if value in (None, "", []):
+                missing_value_count += 1
+
+    for journey in JOURNEYS:
+        journey_matches = False
+        events = journey.get("events") or []
+
+        if target_event:
+            for event in events:
+                name = str(event.get("name") or event.get("event_name") or "").strip().lower()
+                if name and name == target_event:
+                    matched_events += 1
+                    journey_matches = True
+                    _record_value(event)
+
+        if not journey_matches:
+            journey_type = str(journey.get("kpi_type") or "").strip().lower()
+            if definition.id and journey_type == definition.id.strip().lower():
+                matched_events += 1
+                journey_matches = True
+                _record_value(journey)
+                fallback_used = True
+            elif not target_event and definition.event_name == "":
+                # If no specific event provided, treat conversion flag as match
+                if journey.get("converted", False):
+                    matched_events += 1
+                    journey_matches = True
+                    _record_value(journey)
+                    fallback_used = True
+
+        if journey_matches:
+            journeys_matched += 1
+
+    journeys_pct = (
+        (journeys_matched / total_journeys) * 100.0 if total_journeys else 0.0
+    )
+    missing_value_pct = (
+        (missing_value_count / missing_value_checks) * 100.0
+        if missing_value_checks
+        else None
+    )
+
+    return {
+        "testAvailable": True,
+        "eventsMatched": matched_events,
+        "journeysMatched": journeys_matched,
+        "journeysTotal": total_journeys,
+        "journeysPct": round(journeys_pct, 2),
+        "missingValueChecks": missing_value_checks,
+        "missingValueCount": missing_value_count,
+        "missingValuePct": round(missing_value_pct, 2) if missing_value_pct is not None else None,
+        "message": (
+            "Matched using KPI ID fallback; event stream not found."
+            if fallback_used and target_event
+            else None
+        ),
+        "reason": None,
+    }
 
 
 @app.post("/api/kpis", response_model=KpiConfigModel)
@@ -1049,19 +1842,89 @@ def list_attribution_models():
     """List available attribution models."""
     return {"models": ATTRIBUTION_MODELS}
 
+def _compute_journey_validation(journeys: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Compute validation summary: error/warn counts and top issues."""
+    error_list: List[str] = []
+    warn_list: List[str] = []
+    seen_ids: Dict[str, int] = {}
+    for j in journeys:
+        pid = str(j.get("customer_id") or j.get("profile_id") or j.get("id") or "")
+        if not pid or pid.startswith("anon-"):
+            warn_list.append("Missing or anonymous customer_id")
+        else:
+            seen_ids[pid] = seen_ids.get(pid, 0) + 1
+        tps = j.get("touchpoints") or []
+        if not tps:
+            error_list.append("Journey has no touchpoints")
+        for tp in tps:
+            if not tp.get("channel") and not tp.get("source"):
+                warn_list.append("Touchpoint missing channel/source")
+            if not tp.get("timestamp"):
+                warn_list.append("Touchpoint missing timestamp")
+    dup_ids = [pid for pid, c in seen_ids.items() if c > 1]
+    if dup_ids:
+        warn_list.append(f"Duplicate customer_ids: {len(dup_ids)} ids")
+    top_errors = list(dict.fromkeys(error_list))[:5]
+    top_warnings = list(dict.fromkeys(warn_list))[:5]
+    return {
+        "error_count": len(error_list),
+        "warn_count": len(warn_list),
+        "top_errors": top_errors,
+        "top_warnings": top_warnings,
+        "duplicate_ids_count": len(dup_ids),
+    }
+
+
+def _compute_data_freshness_hours(last_ts) -> Optional[float]:
+    """Hours since last touchpoint. None if no timestamps."""
+    if last_ts is None:
+        return None
+    try:
+        dt = pd.to_datetime(last_ts, errors="coerce") if isinstance(last_ts, str) else last_ts
+        if dt is None or pd.isna(dt):
+            return None
+        delta = datetime.utcnow() - (dt.to_pydatetime() if hasattr(dt, "to_pydatetime") else dt)
+        return delta.total_seconds() / 3600.0
+    except Exception:
+        return None
+
+
+def _derive_system_state(loaded: bool, count: int, last_import_at: Optional[str], freshness_hours: Optional[float], error_count: int, warn_count: int) -> str:
+    """Derive system state: Empty / Loading / Data Loaded / Stale / Partial / Error."""
+    if not loaded or count == 0:
+        return "empty"
+    if error_count > 0:
+        return "error"
+    if warn_count > 0 and warn_count >= count * 0.1:
+        return "partial"
+    if freshness_hours is not None and freshness_hours > 168:  # > 7 days
+        return "stale"
+    return "data_loaded"
+
+
 @app.get("/api/attribution/journeys")
 def get_journeys_summary(db=Depends(get_db)):
-    """Get summary of currently loaded conversion journeys."""
+    """Get summary of currently loaded conversion journeys including status, freshness, and system state."""
     global JOURNEYS
     if not JOURNEYS:
-        # Attempt to hydrate in-memory journeys from the normalised store.
         JOURNEYS = load_journeys_from_db(db)
     if not JOURNEYS:
-        return {"loaded": False, "count": 0}
+        runs = get_import_runs(limit=1)
+        last_run = runs[0] if runs and runs[0].get("status") == "success" else None
+        return {
+            "loaded": False,
+            "count": 0,
+            "converted": 0,
+            "channels": [],
+            "last_import_at": last_run.get("at") if last_run else None,
+            "last_import_source": last_run.get("source") if last_run else None,
+            "data_freshness_hours": None,
+            "system_state": "empty",
+            "validation": {"error_count": 0, "warn_count": 0},
+        }
 
     converted = [j for j in JOURNEYS if j.get("converted", True)]
     channels: set = set()
-    # Derive simple date range from touchpoint timestamps for measurement context.
     first_ts = None
     last_ts = None
     for j in JOURNEYS:
@@ -1081,7 +1944,6 @@ def get_journeys_summary(db=Depends(get_db)):
             if last_ts is None or dt > last_ts:
                 last_ts = dt
 
-    # KPI breakdown by configured definitions (journey-level kpi_type if present)
     kpi_counts: Dict[str, int] = {}
     for j in JOURNEYS:
         ktype = j.get("kpi_type")
@@ -1096,6 +1958,18 @@ def get_journeys_summary(db=Depends(get_db)):
                 primary_kpi_label = d.label
                 break
     primary_count = kpi_counts.get(primary_kpi_id, len(converted) if primary_kpi_id else len(converted))
+
+    runs = get_import_runs(limit=50)
+    last_run = next((r for r in runs if r.get("status") == "success"), None)
+    last_import_at = last_run.get("at") if last_run else None
+    last_import_source = last_run.get("source") if last_run else None
+    freshness_hours = _compute_data_freshness_hours(last_ts)
+    validation = _compute_journey_validation(JOURNEYS)
+    system_state = _derive_system_state(
+        True, len(JOURNEYS), last_import_at, freshness_hours,
+        validation["error_count"], validation["warn_count"],
+    )
+
     return {
         "loaded": True,
         "count": len(JOURNEYS),
@@ -1109,31 +1983,271 @@ def get_journeys_summary(db=Depends(get_db)):
         "kpi_counts": kpi_counts,
         "date_min": first_ts.isoformat() if first_ts is not None else None,
         "date_max": last_ts.isoformat() if last_ts is not None else None,
+        "last_import_at": last_import_at,
+        "last_import_source": last_import_source,
+        "data_freshness_hours": round(freshness_hours, 1) if freshness_hours is not None else None,
+        "system_state": system_state,
+        "validation": validation,
     }
 
-@app.post("/api/attribution/journeys/upload")
-async def upload_journeys(file: UploadFile = File(...), db=Depends(get_db)):
-    """Upload conversion path data as JSON."""
+
+@app.get("/api/attribution/journeys/preview")
+def get_journeys_preview(limit: int = Query(20, ge=1, le=100), db=Depends(get_db)):
+    """Preview first N parsed journeys: customer_id, touchpoints_count, first_ts, last_ts, converted, conversion_value, channels_list."""
     global JOURNEYS
-    content = await file.read()
+    if not JOURNEYS:
+        JOURNEYS = load_journeys_from_db(db)
+    if not JOURNEYS:
+        return {"rows": [], "columns": [], "total": 0}
+    rows = []
+    for idx, j in enumerate(JOURNEYS[:limit]):
+        tps = j.get("touchpoints") or []
+        first_ts = None
+        last_ts = None
+        for tp in tps:
+            ts = tp.get("timestamp")
+            if ts:
+                try:
+                    dt = pd.to_datetime(ts, errors="coerce")
+                    if dt is not None and not pd.isna(dt):
+                        if first_ts is None or dt < first_ts:
+                            first_ts = dt
+                        if last_ts is None or dt > last_ts:
+                            last_ts = dt
+                except Exception:
+                    pass
+        channels = list(dict.fromkeys(tp.get("channel", "?") for tp in tps))
+        rows.append({
+            "validIndex": idx,
+            "customer_id": j.get("customer_id") or j.get("profile_id") or j.get("id") or "—",
+            "touchpoints_count": len(tps),
+            "first_ts": first_ts.isoformat() if first_ts is not None else None,
+            "last_ts": last_ts.isoformat() if last_ts is not None else None,
+            "converted": j.get("converted", True),
+            "conversion_value": j.get("conversion_value"),
+            "channels_list": channels,
+        })
+    return {
+        "rows": rows,
+        "columns": ["customer_id", "touchpoints_count", "first_ts", "last_ts", "converted", "conversion_value", "channels_list"],
+        "total": len(JOURNEYS),
+    }
+
+
+@app.get("/api/attribution/journeys/validation")
+def get_journeys_validation(db=Depends(get_db)):
+    """Validation summary: structured items + import summary from last ingestion."""
+    last = _load_last_import_result()
+    items = last.get("validation_items", [])
+    summary = last.get("import_summary", {})
+    error_count = sum(1 for x in items if x.get("severity") == "error")
+    warn_count = sum(1 for x in items if x.get("severity") == "warning")
+    return {
+        "error_count": error_count,
+        "warn_count": warn_count,
+        "validation_items": items,
+        "import_summary": summary,
+        "total": summary.get("total", 0),
+        "top_errors": [x["message"] for x in items if x.get("severity") == "error"][:5],
+        "top_warnings": [x["message"] for x in items if x.get("severity") == "warning"][:5],
+    }
+
+
+@app.get("/api/attribution/journeys/import-result")
+def get_import_result():
+    """Last import result for drawer (original vs normalized per row) and validation report."""
+    return _load_last_import_result()
+
+
+@app.get("/api/attribution/journeys/row-details")
+def get_row_details(valid_index: int = Query(..., ge=0)):
+    """Get original and normalized JSON for a preview row (by validIndex)."""
+    last = _load_last_import_result()
+    items = last.get("items_detail", [])
+    for it in items:
+        if it.get("valid") and it.get("validIndex") == valid_index:
+            return {"original": it.get("original"), "normalized": it.get("normalized"), "journeyIndex": it.get("journeyIndex")}
+    raise HTTPException(status_code=404, detail="Row not found")
+
+
+@app.get("/api/attribution/journeys/validation-report")
+def download_validation_report():
+    """Download validation report as JSON file."""
+    last = _load_last_import_result()
+    content = json.dumps(last, indent=2, default=str)
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={"Content-Disposition": "attachment; filename=validation-report.json"},
+    )
+
+
+@app.get("/api/attribution/import-log")
+def get_import_log(
+    status: Optional[str] = Query(None),
+    source: Optional[str] = Query(None),
+    since: Optional[str] = Query(None),
+    until: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=200),
+):
+    """Return import runs with filters for Import Log UI."""
+    runs = get_import_runs(status=status, source=source, since=since, until=until, limit=limit)
+    return {"runs": runs}
+
+
+@app.get("/api/attribution/import-log/{run_id}")
+def get_import_run_detail(run_id: str):
+    """Return single import run detail for drawer."""
+    run = get_import_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Import run not found")
+    out = dict(run)
+    out["at"] = run.get("finished_at") or run.get("started_at")
+    out["count"] = run.get("valid") if run.get("status") == "success" else 0
+    return out
+
+
+class ImportPreCheckResponse(BaseModel):
+    would_overwrite: bool
+    current_count: int
+    current_converted: int
+    current_channels: List[str]
+    incoming_count: int
+    incoming_converted: int
+    incoming_channels: List[str]
+    converted_drop_pct: Optional[float] = None
+    warning: Optional[str] = None
+
+
+@app.get("/api/attribution/import-precheck")
+def import_precheck(source: str = Query(...), db=Depends(get_db)):
+    """Pre-check: what would change if we import. For confirmation modal."""
+    from app.services_conversions import load_journeys_from_db
+    current = load_journeys_from_db(db)
+    current_count = len(current or [])
+    current_converted = sum(1 for j in (current or []) if j.get("converted", True))
+    current_channels = sorted(set(tp.get("channel", "unknown") for j in (current or []) for tp in j.get("touchpoints", [])))
+    last_success = get_last_successful_run()
+    # We don't know incoming counts until we actually run - use last run as proxy for "incoming"
+    if last_success and last_success.get("source") == source:
+        incoming_count = last_success.get("valid", 0)
+        incoming_converted = last_success.get("converted", 0)
+        incoming_channels = last_success.get("channels_detected", [])
+    else:
+        incoming_count = 0
+        incoming_converted = 0
+        incoming_channels = []
+    would_overwrite = current_count > 0
+    drop_pct = None
+    warning = None
+    if would_overwrite and current_converted > 0 and incoming_converted < current_converted:
+        drop_pct = ((current_converted - incoming_converted) / current_converted) * 100
+        if drop_pct > 10:
+            warning = f"Converted journeys would drop by {drop_pct:.0f}%. Verify your import source and mapping."
+    return ImportPreCheckResponse(
+        would_overwrite=would_overwrite,
+        current_count=current_count,
+        current_converted=current_converted,
+        current_channels=current_channels,
+        incoming_count=incoming_count,
+        incoming_converted=incoming_converted,
+        incoming_channels=incoming_channels,
+        converted_drop_pct=drop_pct,
+        warning=warning,
+    )
+
+
+class ImportConfirmRequest(BaseModel):
+    confirmed: bool = True
+    import_note: Optional[str] = None
+
+
+@app.post("/api/attribution/import-log/{run_id}/rerun")
+def import_rerun(run_id: str, db=Depends(get_db)):
+    """Re-run import with same settings as the given run."""
+    run = get_import_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Import run not found")
+    source = run.get("source", "")
+    if source == "sample":
+        return load_sample_journeys(req=LoadSampleRequest(), db=db)
+    if source in ("meiro_webhook", "meiro_pull"):
+        return import_journeys_from_cdp(req=FromCDPRequest(), db=db)
+    if source == "meiro":
+        return import_journeys_from_cdp(req=FromCDPRequest(), db=db)
+    raise HTTPException(status_code=400, detail=f"Rerun not supported for source: {source}")
+
+
+@app.get("/api/attribution/field-mapping")
+def get_field_mapping():
+    """Return default CDP field mapping (for Field Mapping tab)."""
+    return {
+        "touchpoint_attr": "touchpoints",
+        "value_attr": "conversion_value",
+        "id_attr": "customer_id",
+        "channel_field": "channel",
+        "timestamp_field": "timestamp",
+    }
+
+
+@app.get("/api/datasources/connections")
+def get_datasource_connections():
+    """Combined connection status for Meiro CDP and ad platforms (for Connections section)."""
+    connected = get_all_connected_platforms()
+    config_status = ds_config.get_status()
+    meiro_connected = meiro_cdp.is_connected()
+    connections = [
+        {"id": "meiro", "label": "Meiro CDP", "status": "connected" if meiro_connected else "not_connected", "role": "journeys"},
+        {"id": "meta", "label": "Meta Ads", "status": "connected" if "meta" in connected else ("needs_attention" if not config_status.get("meta", {}).get("configured") else "not_connected"), "role": "spend"},
+        {"id": "google", "label": "Google Ads", "status": "connected" if "google" in connected else ("needs_attention" if not config_status.get("google", {}).get("configured") else "not_connected"), "role": "spend"},
+        {"id": "linkedin", "label": "LinkedIn Ads", "status": "connected" if "linkedin" in connected else ("needs_attention" if not config_status.get("linkedin", {}).get("configured") else "not_connected"), "role": "spend"},
+    ]
+    return {"connections": connections}
+
+
+@app.post("/api/attribution/journeys/upload")
+async def upload_journeys(file: UploadFile = File(...), import_note: Optional[str] = Form(None), db=Depends(get_db)):
+    """Upload conversion path data as JSON. Validates, normalizes, persists valid journeys only."""
+    global JOURNEYS
     try:
+        content = await file.read()
         data = json.loads(content)
-        if isinstance(data, list):
-            JOURNEYS = data
-        elif isinstance(data, dict) and "journeys" in data:
-            JOURNEYS = data["journeys"]
-        else:
-            raise ValueError("Expected a JSON array of journeys")
+        if not (isinstance(data, list) or (isinstance(data, dict) and "journeys" in data)):
+            if isinstance(data, dict) and data.get("schema_version") == "2.0":
+                pass
+            else:
+                raise ValueError("Expected JSON array of journeys or v2 envelope with 'journeys'")
     except (json.JSONDecodeError, ValueError) as e:
+        _append_import_run("upload", 0, "error", str(e))
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
-    # Persist into normalised conversion path storage for reuse by DQ and other APIs.
-    persist_journeys_as_conversion_paths(db, JOURNEYS, replace=True)
-    return {"count": len(JOURNEYS), "message": f"Loaded {len(JOURNEYS)} journeys"}
+
+    result = validate_and_normalize(data)
+    valid = result["valid_journeys"]
+    summary = result["import_summary"]
+    persist_journeys_as_conversion_paths(db, valid, replace=True)
+    JOURNEYS = [v2_to_legacy(j) for j in valid]
+    _save_last_import_result(result)
+    errs = [i for i in result.get("validation_items", []) if i.get("severity") == "error"]
+    warns = [i for i in result.get("validation_items", []) if i.get("severity") == "warning"]
+    _append_import_run(
+        "upload", len(valid), "success",
+        total=summary.get("total", 0), valid=summary.get("valid", 0), invalid=summary.get("invalid", 0),
+        converted=summary.get("converted", 0), channels_detected=summary.get("channels_detected"),
+        validation_summary={"top_errors": errs[:10], "top_warnings": warns[:10]},
+        config_snapshot={"schema_version": result.get("schema_version", "1.0")},
+        preview_rows=[{"customer_id": j.get("customer", {}).get("id", "?"), "touchpoints": len(j.get("touchpoints", [])), "converted": bool(j.get("conversions"))} for j in valid[:20]],
+        import_note=import_note,
+    )
+    return {
+        "count": len(valid),
+        "message": f"Loaded {len(valid)} valid journeys",
+        "import_summary": summary,
+        "validation_items": result["validation_items"],
+    }
 
 @app.post("/api/attribution/journeys/from-cdp")
 def import_journeys_from_cdp(
-    mapping: AttributionMappingConfig = AttributionMappingConfig(),
-    config_id: Optional[str] = None,
+    req: FromCDPRequest = Body(default=FromCDPRequest()),
     db=Depends(get_db),
 ):
     """Parse loaded CDP profiles into attribution journeys using configurable mapping."""
@@ -1141,47 +2255,113 @@ def import_journeys_from_cdp(
     cdp_json_path = DATA_DIR / "meiro_cdp_profiles.json"
     cdp_path = DATA_DIR / "meiro_cdp.csv"
 
+    saved = get_mapping()
+    base = AttributionMappingConfig(
+        touchpoint_attr=saved.get("touchpoint_attr", "touchpoints"),
+        value_attr=saved.get("value_attr", "conversion_value"),
+        id_attr=saved.get("id_attr", "customer_id"),
+        channel_field=saved.get("channel_field", "channel"),
+        timestamp_field=saved.get("timestamp_field", "timestamp"),
+    )
+    mapping = base
+    if req.mapping:
+        mapping = AttributionMappingConfig(
+            touchpoint_attr=req.mapping.touchpoint_attr or base.touchpoint_attr,
+            value_attr=req.mapping.value_attr or base.value_attr,
+            id_attr=req.mapping.id_attr or base.id_attr,
+            channel_field=req.mapping.channel_field or base.channel_field,
+            timestamp_field=req.mapping.timestamp_field or base.timestamp_field,
+        )
+
+    source_label = "meiro_webhook"
     if cdp_json_path.exists():
         with open(cdp_json_path) as f:
             profiles = json.load(f)
     elif cdp_path.exists():
         df = pd.read_csv(cdp_path)
         profiles = df.to_dict(orient="records")
+        source_label = "meiro_pull"
     else:
+        _append_import_run("meiro_webhook", 0, "error", error="No CDP data found. Fetch from Meiro CDP first.")
         raise HTTPException(status_code=404, detail="No CDP data found. Fetch from Meiro CDP first.")
 
-    journeys = parse_conversion_paths(
-        profiles,
-        touchpoint_attr=mapping.touchpoint_attr,
-        value_attr=mapping.value_attr,
-        id_attr=mapping.id_attr,
-        channel_field=mapping.channel_field,
-        timestamp_field=mapping.timestamp_field,
-    )
-    # Apply model config if provided (windows + conversion key annotation)
-    effective_config_id = config_id or get_default_config_id()
+    try:
+        journeys = parse_conversion_paths(
+            profiles,
+            touchpoint_attr=mapping.touchpoint_attr,
+            value_attr=mapping.value_attr,
+            id_attr=mapping.id_attr,
+            channel_field=mapping.channel_field,
+            timestamp_field=mapping.timestamp_field,
+        )
+    except Exception as e:
+        _append_import_run(source_label, 0, "error", error=str(e))
+        raise
+
+    effective_config_id = req.config_id or get_default_config_id()
     if effective_config_id:
         cfg = db.get(ORMModelConfig, effective_config_id)
         if cfg:
             journeys = apply_model_config_to_journeys(journeys, cfg.config_json or {})
 
     JOURNEYS = journeys
-    # Persist parsed journeys into the normalised ConversionPath table.
     persist_journeys_as_conversion_paths(db, JOURNEYS, replace=True)
+    converted = sum(1 for j in journeys if j.get("converted", True))
+    ch_set = set()
+    for j in journeys:
+        for tp in j.get("touchpoints", []):
+            ch_set.add(tp.get("channel", "unknown"))
+    _append_import_run(
+        "meiro_webhook", len(journeys), "success",
+        total=len(journeys), valid=len(journeys), converted=converted, channels_detected=sorted(ch_set),
+        config_snapshot={"mapping_preset": "saved", "schema_version": "1.0"},
+        preview_rows=[{"customer_id": j.get("customer_id", "?"), "touchpoints": len(j.get("touchpoints", [])), "value": j.get("conversion_value", 0)} for j in journeys[:20]],
+        import_note=req.import_note,
+    )
     return {"count": len(JOURNEYS), "message": f"Parsed {len(JOURNEYS)} journeys from CDP data"}
 
+class LoadSampleRequest(BaseModel):
+    import_note: Optional[str] = None
+
+
 @app.post("/api/attribution/journeys/load-sample")
-def load_sample_journeys(db=Depends(get_db)):
-    """Load the built-in sample conversion paths."""
+def load_sample_journeys(req: LoadSampleRequest = Body(default=LoadSampleRequest()), db=Depends(get_db)):
+    """Load the built-in sample conversion paths. Validates and normalizes."""
     global JOURNEYS
     sample_file = SAMPLE_DIR / "sample-conversion-paths.json"
     if not sample_file.exists():
+        _append_import_run("sample", 0, "error", "Sample data not found")
         raise HTTPException(status_code=404, detail="Sample data not found")
-    with open(sample_file) as f:
-        JOURNEYS = json.load(f)
-    # Persist sample journeys so downstream APIs can operate on a consistent store.
-    persist_journeys_as_conversion_paths(db, JOURNEYS, replace=True)
-    return {"count": len(JOURNEYS), "message": f"Loaded {len(JOURNEYS)} sample journeys"}
+    try:
+        with open(sample_file) as f:
+            raw_list = json.load(f)
+    except Exception as e:
+        _append_import_run("sample", 0, "error", str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to read sample: {e}")
+
+    result = validate_and_normalize(raw_list)
+    valid = result["valid_journeys"]
+    summary = result["import_summary"]
+    persist_journeys_as_conversion_paths(db, valid, replace=True)
+    JOURNEYS = [v2_to_legacy(j) for j in valid]
+    _save_last_import_result(result)
+    errs = [i for i in result.get("validation_items", []) if i.get("severity") == "error"]
+    warns = [i for i in result.get("validation_items", []) if i.get("severity") == "warning"]
+    _append_import_run(
+        "sample", len(valid), "success",
+        total=summary.get("total", 0), valid=summary.get("valid", 0), invalid=summary.get("invalid", 0),
+        converted=summary.get("converted", 0), channels_detected=summary.get("channels_detected"),
+        validation_summary={"top_errors": errs[:10], "top_warnings": warns[:10]},
+        config_snapshot={"schema_version": result.get("schema_version", "1.0")},
+        preview_rows=[{"customer_id": j.get("customer", {}).get("id", "?"), "touchpoints": len(j.get("touchpoints", [])), "converted": bool(j.get("conversions"))} for j in valid[:20]],
+        import_note=req.import_note,
+    )
+    return {
+        "count": len(valid),
+        "message": f"Loaded {len(valid)} valid journeys",
+        "import_summary": summary,
+        "validation_items": result["validation_items"],
+    }
 
 @app.post("/api/attribution/run")
 def run_attribution_model(model: str = "linear", config_id: Optional[str] = None, db=Depends(get_db)):
@@ -1384,34 +2564,27 @@ def get_path_analysis(
     path_analysis = analyze_paths(journeys_for_analysis, include_non_converted=include_non_converted)
 
     # NBA recommendations (channel level)
-    nba_channel = compute_next_best_action(journeys_for_analysis, level="channel")
-    min_support = SETTINGS.nba.min_prefix_support
-    min_rate = SETTINGS.nba.min_conversion_rate
-    filtered_channel: Dict[str, Any] = {}
-    for prefix, recs in nba_channel.items():
-        kept = [r for r in recs if r["count"] >= min_support and r["conversion_rate"] >= min_rate]
-        if kept:
-            filtered_channel[prefix] = kept
+    nba_channel_raw = compute_next_best_action(journeys_for_analysis, level="channel")
+    filtered_channel, _channel_stats = _filter_nba_recommendations(
+        nba_channel_raw, SETTINGS.nba
+    )
     path_analysis["next_best_by_prefix"] = filtered_channel
 
     # NBA recommendations (campaign level, optional)
     if has_any_campaign(journeys_for_analysis):
-        nba_campaign = compute_next_best_action(journeys_for_analysis, level="campaign")
-        filtered_campaign: Dict[str, Any] = {}
-        for prefix, recs in nba_campaign.items():
-            kept = [r for r in recs if r["count"] >= min_support and r["conversion_rate"] >= min_rate]
-            if kept:
-                filtered_campaign[prefix] = kept
+        nba_campaign_raw = compute_next_best_action(
+            journeys_for_analysis, level="campaign"
+        )
+        filtered_campaign, _campaign_stats = _filter_nba_recommendations(
+            nba_campaign_raw, SETTINGS.nba
+        )
         path_analysis["next_best_by_prefix_campaign"] = filtered_campaign
     path_analysis["config"] = meta
     path_analysis["view_filters"] = {
         "direct_mode": direct_mode_normalized,
         "path_scope": "all" if include_non_converted else "converted",
     }
-    path_analysis["nba_config"] = {
-        "min_prefix_support": SETTINGS.nba.min_prefix_support,
-        "min_conversion_rate": SETTINGS.nba.min_conversion_rate,
-    }
+    path_analysis["nba_config"] = SETTINGS.nba.model_dump()
     return path_analysis
 
 
@@ -1717,11 +2890,10 @@ def _next_best_action_impl(path_so_far: str = "", level: str = "channel"):
         raise HTTPException(status_code=400, detail="No journeys loaded.")
     prefix = path_so_far.strip().replace(",", " > ").replace("  ", " ").strip()
     use_level = "campaign" if level == "campaign" and has_any_campaign(JOURNEYS) else "channel"
-    nba = compute_next_best_action(JOURNEYS, level=use_level)
-    min_support = SETTINGS.nba.min_prefix_support
-    min_rate = SETTINGS.nba.min_conversion_rate
-    recs = nba.get(prefix, [])
-    filtered = [r for r in recs if r["count"] >= min_support and r["conversion_rate"] >= min_rate][:10]
+    nba_raw = compute_next_best_action(JOURNEYS, level=use_level)
+    filtered_map, _stats = _filter_nba_recommendations(nba_raw, SETTINGS.nba)
+    recs = filtered_map.get(prefix, [])
+    filtered = recs[:10]
 
     # Best-effort "why" samples: top continuation paths that start with the
     # requested prefix, summarised from raw journeys.
@@ -1772,10 +2944,7 @@ def _next_best_action_impl(path_so_far: str = "", level: str = "channel"):
         "level": use_level,
         "recommendations": filtered,
         "why_samples": why_samples,
-        "nba_config": {
-            "min_prefix_support": SETTINGS.nba.min_prefix_support,
-            "min_conversion_rate": SETTINGS.nba.min_conversion_rate,
-        },
+        "nba_config": SETTINGS.nba.model_dump(),
     }
 
 
@@ -1938,7 +3107,10 @@ def get_campaign_performance(
         })
 
     # Attach NBA suggestion (campaign-level) and uplift vs synthetic holdout
-    nba_campaign = compute_next_best_action(JOURNEYS, level="campaign")
+    nba_campaign_raw = compute_next_best_action(JOURNEYS, level="campaign")
+    nba_campaign, _nba_campaign_stats = _filter_nba_recommendations(
+        nba_campaign_raw, SETTINGS.nba
+    )
     uplift = compute_campaign_uplift(journeys_for_model)
     for c in campaigns_list:
         recs = nba_campaign.get(c["campaign"], [])
@@ -4728,13 +5900,42 @@ def merge_ads():
 
 # ==================== Meiro CDP Connector Routes ====================
 
+@app.post("/api/connectors/meiro/test")
+def meiro_test(req: MeiroCDPTestRequest = MeiroCDPTestRequest()):
+    """Test connection without saving. Optionally save on success."""
+    api_base_url = req.api_base_url
+    api_key = req.api_key
+    if not api_base_url or not api_key:
+        cfg = meiro_cdp.get_config()
+        if not cfg:
+            raise HTTPException(status_code=400, detail="No saved credentials. Provide api_base_url and api_key.")
+        api_base_url = cfg["api_base_url"]
+        api_key = cfg["api_key"]
+    result = meiro_cdp.test_connection(api_base_url, api_key)
+    if result.get("ok"):
+        if req.save_on_success:
+            meiro_cdp.save_config(api_base_url, api_key)
+        meiro_cdp.update_last_test_at()
+        return {"ok": True, "message": "Connection successful"}
+    raise HTTPException(status_code=400, detail=result.get("message", "Connection failed"))
+
+
 @app.post("/api/connectors/meiro/connect")
 def meiro_connect(req: MeiroCDPConnectRequest):
     result = meiro_cdp.test_connection(req.api_base_url, req.api_key)
     if result.get("ok"):
         meiro_cdp.save_config(req.api_base_url, req.api_key)
+        meiro_cdp.update_last_test_at()
         return {"message": "Connected to Meiro CDP", "connected": True}
     raise HTTPException(status_code=400, detail=result.get("message", "Connection failed"))
+
+
+@app.post("/api/connectors/meiro/save")
+def meiro_save(req: MeiroCDPConnectRequest):
+    """Save credentials without testing. Use with caution."""
+    meiro_cdp.save_config(req.api_base_url, req.api_key)
+    return {"message": "Credentials saved"}
+
 
 @app.delete("/api/connectors/meiro")
 def meiro_disconnect():
@@ -4745,6 +5946,23 @@ def meiro_disconnect():
 @app.get("/api/connectors/meiro/status")
 def meiro_status():
     return {"connected": meiro_cdp.is_connected()}
+
+
+@app.get("/api/connectors/meiro/config")
+def meiro_config():
+    """Full config for UI: connection status, last test, webhook URL, webhook stats. Never returns API key."""
+    meta = meiro_cdp.get_connection_metadata()
+    webhook_url = f"{BASE_URL}/api/connectors/meiro/profiles"
+    return {
+        "connected": meiro_cdp.is_connected(),
+        "api_base_url": meta["api_base_url"] if meta else None,
+        "last_test_at": meta["last_test_at"] if meta else get_last_test_at(),
+        "has_key": meta["has_key"] if meta else False,
+        "webhook_url": webhook_url,
+        "webhook_last_received_at": get_webhook_last_received_at(),
+        "webhook_received_count": get_webhook_received_count(),
+        "webhook_has_secret": bool(get_webhook_secret() or os.getenv("MEIRO_WEBHOOK_SECRET", "").strip()),
+    }
 
 @app.get("/api/connectors/meiro/attributes")
 def meiro_attributes():
@@ -4790,7 +6008,12 @@ def meiro_profiles_status():
         except Exception:
             pass
     webhook_url = f"{BASE_URL}/api/connectors/meiro/profiles"
-    return {"stored_count": count, "webhook_url": webhook_url}
+    return {
+        "stored_count": count,
+        "webhook_url": webhook_url,
+        "webhook_last_received_at": get_webhook_last_received_at(),
+        "webhook_received_count": get_webhook_received_count(),
+    }
 
 
 @app.post("/api/connectors/meiro/profiles")
@@ -4811,9 +6034,9 @@ async def meiro_receive_profiles(
         - replace: false = append to existing profiles
 
     Optional security:
-      - Set env MEIRO_WEBHOOK_SECRET; then Meiro must send header X-Meiro-Webhook-Secret with that value.
+      - Set env MEIRO_WEBHOOK_SECRET or rotate secret in UI; Meiro must send header X-Meiro-Webhook-Secret.
     """
-    webhook_secret = os.getenv("MEIRO_WEBHOOK_SECRET", "").strip()
+    webhook_secret = get_webhook_secret() or os.getenv("MEIRO_WEBHOOK_SECRET", "").strip()
     if webhook_secret:
         if not x_meiro_webhook_secret or x_meiro_webhook_secret != webhook_secret:
             raise HTTPException(status_code=401, detail="Invalid or missing X-Meiro-Webhook-Secret")
@@ -4847,7 +6070,173 @@ async def meiro_receive_profiles(
             to_store = profiles
 
     out_path.write_text(json.dumps(to_store, indent=2))
+    set_webhook_received(count_delta=len(profiles))
     return {"received": len(profiles), "stored_total": len(to_store), "message": "Profiles saved. Use Import from CDP in Data Sources to load into attribution."}
+
+
+@app.post("/api/connectors/meiro/webhook/rotate-secret")
+def meiro_webhook_rotate():
+    """Rotate webhook secret. Returns new secret (show once)."""
+    secret = rotate_webhook_secret()
+    return {"message": "Webhook secret rotated", "secret": secret}
+
+
+MEIRO_MAPPING_PRESETS = {
+    "web_ads_ga": {
+        "name": "Web + Ads (GA-like)",
+        "touchpoint_attr": "touchpoints",
+        "value_attr": "conversion_value",
+        "id_attr": "customer_id",
+        "channel_field": "channel",
+        "timestamp_field": "timestamp",
+        "channel_mapping": {
+            "google": "google_ads",
+            "facebook": "meta_ads",
+            "meta": "meta_ads",
+            "linkedin": "linkedin_ads",
+            "cpc": "paid_search",
+            "ppc": "paid_search",
+            "organic": "organic_search",
+            "email": "email",
+            "direct": "direct",
+        },
+    },
+    "crm_lifecycle": {
+        "name": "CRM + Lifecycle",
+        "touchpoint_attr": "touchpoints",
+        "value_attr": "conversion_value",
+        "id_attr": "customer_id",
+        "channel_field": "source",
+        "timestamp_field": "event_date",
+        "channel_mapping": {
+            "salesforce": "crm",
+            "hubspot": "crm",
+            "marketo": "marketing_automation",
+            "pardot": "marketing_automation",
+            "newsletter": "email",
+            "onboarding": "lifecycle",
+            "retention": "lifecycle",
+            "winback": "lifecycle",
+        },
+    },
+}
+
+
+@app.get("/api/connectors/meiro/mapping")
+def meiro_get_mapping():
+    return {"mapping": get_mapping(), "presets": MEIRO_MAPPING_PRESETS}
+
+
+@app.post("/api/connectors/meiro/mapping")
+def meiro_save_mapping(mapping: dict):
+    save_mapping(mapping)
+    return {"message": "Mapping saved"}
+
+
+@app.get("/api/connectors/meiro/pull-config")
+def meiro_get_pull_config():
+    return get_pull_config()
+
+
+@app.post("/api/connectors/meiro/pull-config")
+def meiro_save_pull_config(config: dict):
+    save_pull_config(config)
+    return {"message": "Pull config saved"}
+
+
+@app.post("/api/connectors/meiro/pull")
+def meiro_pull(since: Optional[str] = None, until: Optional[str] = None, db=Depends(get_db)):
+    """Pull mode: fetch events from Meiro API, build journeys, persist."""
+    if not meiro_cdp.is_connected():
+        raise HTTPException(status_code=401, detail="Meiro CDP not connected")
+    from datetime import datetime, timedelta
+    today = datetime.utcnow().date()
+    pull_cfg = get_pull_config()
+    lookback = pull_cfg.get("lookback_days", 30)
+    start = (today - timedelta(days=lookback)).isoformat()
+    end = today.isoformat()
+    since = since or start
+    until = until or end
+    saved = get_mapping()
+    try:
+        records = meiro_cdp.fetch_raw_events(since=since, until=until)
+    except Exception as e:
+        _append_import_run("meiro_pull", 0, "error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+    journeys = meiro_cdp.build_journeys_from_events(
+        records,
+        id_attr=saved.get("id_attr", "customer_id"),
+        timestamp_attr=saved.get("timestamp_field", "timestamp"),
+        channel_attr=saved.get("channel_field", "channel"),
+        conversion_selector=pull_cfg.get("conversion_selector", "purchase"),
+        session_gap_minutes=pull_cfg.get("session_gap_minutes", 30),
+        dedup_interval_minutes=pull_cfg.get("dedup_interval_minutes", 5),
+        channel_mapping=saved.get("channel_mapping"),
+    )
+    global JOURNEYS
+    JOURNEYS = journeys
+    persist_journeys_as_conversion_paths(db, JOURNEYS, replace=True)
+    converted = sum(1 for j in journeys if j.get("converted", True))
+    ch_set = set()
+    for j in journeys:
+        for tp in j.get("touchpoints", []):
+            ch_set.add(tp.get("channel", "unknown"))
+    _append_import_run(
+        "meiro_pull", len(journeys), "success",
+        total=len(journeys), valid=len(journeys), converted=converted, channels_detected=sorted(ch_set),
+        config_snapshot={"lookback_days": pull_cfg.get("lookback_days"), "session_gap_minutes": pull_cfg.get("session_gap_minutes"), "conversion_selector": pull_cfg.get("conversion_selector")},
+        preview_rows=[{"customer_id": j.get("customer_id", "?"), "touchpoints": len(j.get("touchpoints", [])), "value": j.get("conversion_value", 0)} for j in journeys[:20]],
+    )
+    return {"count": len(journeys), "message": f"Pulled {len(journeys)} journeys from Meiro"}
+
+
+@app.post("/api/connectors/meiro/dry-run")
+def meiro_dry_run(limit: int = 100):
+    """Dry run: parse first N profiles, validate, return preview and warnings. No persist."""
+    cdp_json_path = DATA_DIR / "meiro_cdp_profiles.json"
+    cdp_path = DATA_DIR / "meiro_cdp.csv"
+    saved = get_mapping()
+    mapping = AttributionMappingConfig(
+        touchpoint_attr=saved.get("touchpoint_attr", "touchpoints"),
+        value_attr=saved.get("value_attr", "conversion_value"),
+        id_attr=saved.get("id_attr", "customer_id"),
+        channel_field=saved.get("channel_field", "channel"),
+        timestamp_field=saved.get("timestamp_field", "timestamp"),
+    )
+    if cdp_json_path.exists():
+        with open(cdp_json_path) as f:
+            profiles = json.load(f)
+    elif cdp_path.exists():
+        df = pd.read_csv(cdp_path)
+        profiles = df.to_dict(orient="records")
+    else:
+        raise HTTPException(status_code=404, detail="No CDP data found. Fetch or push profiles first.")
+    profiles = profiles[:limit] if isinstance(profiles, list) else []
+    if not profiles:
+        return {"count": 0, "preview": [], "warnings": ["No profiles to process"], "validation": {}}
+    try:
+        journeys = parse_conversion_paths(
+            profiles,
+            touchpoint_attr=mapping.touchpoint_attr,
+            value_attr=mapping.value_attr,
+            id_attr=mapping.id_attr,
+            channel_field=mapping.channel_field,
+            timestamp_field=mapping.timestamp_field,
+        )
+    except Exception as e:
+        return {"count": 0, "preview": [], "warnings": [str(e)], "validation": {"error": str(e)}}
+    warnings = []
+    if journeys:
+        sample_channels = set()
+        for j in journeys:
+            for tp in j.get("touchpoints", []):
+                ch = tp.get("channel") if isinstance(tp, dict) else None
+                if ch:
+                    sample_channels.add(ch)
+        if not any(c for c in sample_channels if "email" in str(c).lower() or "click" in str(c).lower()):
+            warnings.append("No email click tracking detected; channel coverage may be incomplete")
+    preview = [{"id": j.get("customer_id", j.get("id", "?")), "touchpoints": len(j.get("touchpoints", [])), "value": j.get("conversion_value", 0)} for j in journeys[:20]]
+    return {"count": len(journeys), "preview": preview, "warnings": warnings, "validation": {"ok": len(warnings) == 0}}
 
 
 # ==================== Model Fitting Background Task ====================

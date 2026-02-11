@@ -24,6 +24,7 @@ import pandas as pd
 import requests
 
 from app.utils.token_store import save_token, get_token, delete_token
+from app.utils.meiro_config import set_last_test_at, get_last_test_at
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,26 @@ def is_connected() -> bool:
     """Check if Meiro CDP credentials are stored."""
     cfg = get_config()
     return cfg is not None and bool(cfg.get("api_key")) and bool(cfg.get("api_base_url"))
+
+
+def get_connection_metadata() -> Optional[Dict[str, Any]]:
+    """
+    Return safe connection metadata for UI. Never includes API key.
+    """
+    cfg = get_config()
+    if not cfg:
+        return None
+    base = cfg.get("api_base_url", "")
+    return {
+        "api_base_url": base,
+        "has_key": bool(cfg.get("api_key")),
+        "last_test_at": get_last_test_at(),
+    }
+
+
+def update_last_test_at() -> None:
+    """Record that connection test succeeded."""
+    set_last_test_at(datetime.utcnow().isoformat() + "Z")
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +287,115 @@ def fetch_and_transform(
 
     df = pd.DataFrame(records)
     return _aggregate_to_weekly(df)
+
+
+def fetch_raw_events(
+    since: str,
+    until: str,
+    event_types: Optional[List[str]] = None,
+    attributes: Optional[List[str]] = None,
+    segment_id: Optional[str] = None,
+    api_base_url: Optional[str] = None,
+    api_key: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Fetch raw event/customer records from Meiro export (for journey building)."""
+    export_meta = create_export(
+        since=since,
+        until=until,
+        event_types=event_types,
+        attributes=attributes,
+        segment_id=segment_id,
+        api_base_url=api_base_url,
+        api_key=api_key,
+    )
+    export_id = export_meta.get("id") or export_meta.get("export_id", "")
+    if not export_id:
+        raise ValueError("No export ID returned from Meiro CDP")
+    result = poll_export(export_id, api_base_url=api_base_url, api_key=api_key)
+    return result.get("data", [])
+
+
+def build_journeys_from_events(
+    records: List[Dict[str, Any]],
+    *,
+    id_attr: str = "customer_id",
+    timestamp_attr: str = "timestamp",
+    channel_attr: str = "channel",
+    conversion_selector: str = "purchase",
+    session_gap_minutes: int = 30,
+    dedup_interval_minutes: int = 5,
+    channel_mapping: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Build journey list from flat event records.
+    Groups by customer, sessionizes, dedupes, identifies conversions.
+    """
+    channel_mapping = channel_mapping or {}
+    ts_col = timestamp_attr
+    ch_col = channel_attr
+    id_col = id_attr
+
+    # Infer columns
+    for r in records[:10] if records else []:
+        for k in ["date", "event_date", "created_at"]:
+            if k in r and ts_col not in r:
+                ts_col = k
+                break
+        for k in ["source", "utm_source", "traffic_source"]:
+            if k in r and ch_col not in r:
+                ch_col = k
+                break
+
+    journeys = []
+    from collections import defaultdict
+    by_customer = defaultdict(list)
+    for r in records:
+        cid = r.get(id_col, r.get("id", "unknown"))
+        ts = r.get(ts_col, r.get("date", ""))
+        ch = r.get(ch_col, r.get("source", "unknown"))
+        ch = channel_mapping.get(str(ch).lower(), ch) if ch else "unknown"
+        by_customer[cid].append({"ts": ts, "channel": ch, "raw": r})
+
+    for cid, events in by_customer.items():
+        events = sorted(events, key=lambda x: x["ts"])
+        touchpoints = []
+        last_ts = None
+        gap_sec = session_gap_minutes * 60
+        dedup_sec = dedup_interval_minutes * 60
+
+        for e in events:
+            ts = e["ts"]
+            ch = e["channel"]
+            try:
+                t = pd.Timestamp(ts)
+                ts_val = t.timestamp()
+            except Exception:
+                ts_val = 0
+            if last_ts and (ts_val - last_ts) < dedup_sec and touchpoints and touchpoints[-1].get("channel") == ch:
+                continue
+            last_ts = ts_val
+            touchpoints.append({"channel": ch, "timestamp": ts})
+
+        is_conversion = any(
+            str(e.get("event_type", "")).lower() == conversion_selector or
+            str(e.get("event_name", "")).lower() == conversion_selector
+            for e in [x["raw"] for x in events]
+        )
+        conv_val = 0.0
+        for e in [x["raw"] for x in events]:
+            v = e.get("conversion_value", e.get("value", 0))
+            try:
+                conv_val = max(conv_val, float(v or 0))
+            except (TypeError, ValueError):
+                pass
+
+        journeys.append({
+            "customer_id": cid,
+            "touchpoints": touchpoints,
+            "conversion_value": conv_val if is_conversion else 0,
+            "converted": is_conversion,
+        })
+    return journeys
 
 
 def _aggregate_to_weekly(df: pd.DataFrame) -> pd.DataFrame:

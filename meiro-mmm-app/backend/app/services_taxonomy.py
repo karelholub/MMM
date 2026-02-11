@@ -158,6 +158,7 @@ class ChannelMapping:
 def map_to_channel(
     source: Optional[str],
     medium: Optional[str],
+    campaign: Optional[str] = None,
     taxonomy: Optional[Taxonomy] = None,
     default_channel: str = "unknown",
 ) -> ChannelMapping:
@@ -176,6 +177,7 @@ def map_to_channel(
     
     source_clean = (source or "").lower().strip()
     medium_clean = (medium or "").lower().strip()
+    campaign_clean = (campaign or "").lower().strip()
     
     # Case 1: No source and no medium
     if not source_clean and not medium_clean:
@@ -200,37 +202,34 @@ def map_to_channel(
     medium_normalized = taxonomy.medium_aliases.get(medium_clean, medium_clean)
     
     # Try to match rules
-    for rule in taxonomy.channel_rules:
-        has_source_match = False
-        has_medium_match = False
-        
-        if rule.source_regex:
-            if re.search(rule.source_regex, source_normalized, re.IGNORECASE):
-                has_source_match = True
+    for rule in sorted(taxonomy.channel_rules, key=lambda r: (r.priority, r.name)):
+        if not rule.enabled:
+            continue
+
+        if not rule.matches(source_normalized, medium_normalized, campaign_clean):
+            continue
+
+        active_conditions = [
+            rule.source.normalize_operator() != "any" and bool(rule.source.value),
+            rule.medium.normalize_operator() != "any" and bool(rule.medium.value),
+            rule.campaign.normalize_operator() != "any" and bool(rule.campaign.value),
+        ]
+        active_count = sum(1 for cond in active_conditions if cond)
+
+        if active_count >= 2:
+            confidence = 1.0
+        elif active_count == 1:
+            confidence = 0.8
         else:
-            has_source_match = True  # No source requirement
-        
-        if rule.medium_regex:
-            if re.search(rule.medium_regex, medium_normalized, re.IGNORECASE):
-                has_medium_match = True
-        else:
-            has_medium_match = True  # No medium requirement
-        
-        if has_source_match and has_medium_match:
-            # Perfect match
-            if rule.source_regex and rule.medium_regex:
-                confidence = 1.0
-            elif rule.source_regex or rule.medium_regex:
-                confidence = 0.8
-            else:
-                confidence = 0.6
-            
+            confidence = 0.6
+
             return ChannelMapping(
                 channel=rule.channel,
                 matched_rule=rule.name,
                 confidence=confidence,
                 source=source_normalized,
                 medium=medium_normalized,
+            fallback_reason=None,
             )
     
     # No rule matched - fallback to default
@@ -277,8 +276,15 @@ def normalize_touchpoint_with_confidence(
         ""
     )
     
+    campaign = (
+        utm_validation.normalized.get("utm_campaign")
+        or tp.get("campaign")
+        or tp.get("utm_campaign")
+        or ""
+    )
+
     # Map to channel
-    channel_mapping = map_to_channel(source, medium, taxonomy)
+    channel_mapping = map_to_channel(source, medium, campaign, taxonomy)
     confidence *= channel_mapping.confidence
     
     # Build normalized touchpoint
@@ -286,11 +292,7 @@ def normalize_touchpoint_with_confidence(
     normalized["channel"] = channel_mapping.channel
     normalized["source"] = channel_mapping.source or source
     normalized["medium"] = channel_mapping.medium or medium
-    normalized["campaign"] = (
-        utm_validation.normalized.get("utm_campaign") or
-        tp.get("campaign") or
-        tp.get("utm_campaign")
-    )
+    normalized["campaign"] = campaign or None
     normalized["utm_term"] = utm_validation.normalized.get("utm_term")
     normalized["utm_content"] = (
         utm_validation.normalized.get("utm_content") or
@@ -358,8 +360,9 @@ def compute_unknown_share(
             # Normalize and check channel
             source = (tp.get("utm_source") or tp.get("source") or "").lower().strip()
             medium = (tp.get("utm_medium") or tp.get("medium") or "").lower().strip()
+            campaign = (tp.get("utm_campaign") or tp.get("campaign") or "").lower().strip()
             
-            mapping = map_to_channel(source, medium, taxonomy)
+            mapping = map_to_channel(source, medium, campaign, taxonomy)
             
             if mapping.channel == "unknown" or mapping.confidence < 0.5:
                 unknown_count += 1
@@ -511,8 +514,9 @@ def compute_taxonomy_coverage(
         for tp in touchpoints:
             source = (tp.get("utm_source") or tp.get("source") or "").lower().strip()
             medium = (tp.get("utm_medium") or tp.get("medium") or "").lower().strip()
+            campaign = (tp.get("utm_campaign") or tp.get("campaign") or "").lower().strip()
             
-            mapping = map_to_channel(source, medium, taxonomy)
+            mapping = map_to_channel(source, medium, campaign, taxonomy)
             
             channel_dist[mapping.channel] += 1
             
@@ -523,7 +527,7 @@ def compute_taxonomy_coverage(
             medium_confidences[medium].append(mapping.confidence)
             
             if mapping.confidence < 0.5:
-                unmapped_patterns[(source, medium)] += 1
+                unmapped_patterns[(source, medium, campaign)] += 1
     
     # Compute coverage metrics
     sources_with_good_mapping = sum(
@@ -550,8 +554,8 @@ def compute_taxonomy_coverage(
         "medium_coverage": medium_coverage,
         "rule_usage": dict(rule_usage),
         "top_unmapped_patterns": [
-            {"source": s, "medium": m, "count": count}
-            for (s, m), count in top_unmapped
+            {"source": s, "medium": m, "campaign": c or None, "count": count}
+            for (s, m, c), count in top_unmapped
         ],
     }
 
