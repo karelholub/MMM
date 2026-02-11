@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { tokens } from '../theme/tokens'
 import ExplainabilityPanel from '../components/ExplainabilityPanel'
+import ConfidenceBadge, { type Confidence } from '../components/ConfidenceBadge'
 
 interface NextBestRec {
   channel: string
@@ -18,11 +19,82 @@ interface PathAnalysis {
   total_journeys: number
   avg_path_length: number
   avg_time_to_conversion_days: number | null
-  common_paths: { path: string; count: number; share: number }[]
+  common_paths: {
+    path: string
+    count: number
+    share: number
+    avg_time_to_convert_days?: number | null
+    path_length?: number
+  }[]
   channel_frequency: Record<string, number>
-  path_length_distribution: { min: number; max: number; median: number }
+  path_length_distribution: { min: number; max: number; median: number; p90?: number }
+  time_to_conversion_distribution?: { min: number; max: number; median: number; p90?: number } | null
+  direct_unknown_diagnostics?: {
+    touchpoint_share: number
+    journeys_ending_direct_share: number
+  }
+  config?: {
+    config_id?: string
+    config_version?: number
+    conversion_key?: string | null
+    time_window?: {
+      click_lookback_days?: number | null
+      impression_lookback_days?: number | null
+      session_timeout_minutes?: number | null
+      conversion_latency_days?: number | null
+    }
+  } | null
+  view_filters?: {
+    direct_mode?: 'include' | 'exclude'
+    path_scope?: 'converted' | 'all'
+  } | null
+  nba_config?: {
+    min_prefix_support: number
+    min_conversion_rate: number
+  } | null
   next_best_by_prefix?: Record<string, NextBestRec[]>
   next_best_by_prefix_campaign?: Record<string, NextBestRec[]>
+}
+
+interface JourneysSummary {
+  loaded: boolean
+  count: number
+  converted: number
+  non_converted: number
+  primary_kpi_id?: string | null
+  primary_kpi_label?: string | null
+  date_min?: string | null
+  date_max?: string | null
+}
+
+interface PathStepBreakdown {
+  step: string
+  position: number
+  dropoff_share: number
+  prefix_journeys: number
+}
+
+interface PathVariant {
+  path: string
+  count: number
+  share: number
+}
+
+interface PathDetails {
+  path: string
+  summary: {
+    count: number
+    share: number
+    avg_touchpoints: number
+    avg_time_to_convert_days: number | null
+  }
+  step_breakdown: PathStepBreakdown[]
+  variants: PathVariant[]
+  data_health?: {
+    direct_unknown_touch_share: number
+    journeys_ending_direct_share: number
+    confidence?: Confidence | null
+  }
 }
 
 interface PathAnomaly {
@@ -45,8 +117,21 @@ const METRIC_DEFINITIONS: Record<string, string> = {
 }
 
 function exportPathsCSV(
-  paths: { path: string; count: number; share: number }[],
-  nextBestByPrefix?: Record<string, NextBestRec[]>
+  paths: { path: string; count: number; share: number; avg_time_to_convert_days?: number | null; path_length?: number }[],
+  nextBestByPrefix?: Record<string, NextBestRec[]>,
+  meta?: {
+    period?: string
+    conversionKey?: string | null
+    configVersion?: number | null
+    directMode?: 'include' | 'exclude'
+    pathScope?: 'converted' | 'all'
+    filters?: {
+      minCount?: number
+      minPathLength?: number
+      maxPathLength?: number | null
+      containsChannels?: string[]
+    }
+  }
 ) {
   const headers = nextBestByPrefix ? ['Path', 'Count', 'Share (%)', 'Suggested next'] : ['Path', 'Count', 'Share (%)']
   const rows = paths.map((p) => {
@@ -59,7 +144,24 @@ function exportPathsCSV(
     }
     return base
   })
-  const csv = [headers.join(','), ...rows.map((r) => (Array.isArray(r) ? r : [r]).join(','))].join('\n')
+  const headerLines: string[] = []
+  if (meta) {
+    headerLines.push(
+      `# period: ${meta.period || 'n/a'}`,
+      `# conversion_key: ${meta.conversionKey ?? 'n/a'}`,
+      `# config_version: ${meta.configVersion ?? 'n/a'}`,
+      `# direct_mode: ${meta.directMode || 'include'}`,
+      `# path_scope: ${meta.pathScope || 'converted'}`,
+      `# filter_min_count: ${meta.filters?.minCount ?? 'n/a'}`,
+      `# filter_path_length: ${meta.filters?.minPathLength ?? 'n/a'}–${meta.filters?.maxPathLength ?? 'n/a'}`,
+      `# filter_contains_channels: ${(meta.filters?.containsChannels ?? []).join('|') || 'n/a'}`
+    )
+  }
+  const csv = [
+    ...headerLines,
+    headers.join(','),
+    ...rows.map((r) => (Array.isArray(r) ? r : [r]).join(',')),
+  ].join('\n')
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
@@ -70,7 +172,7 @@ function exportPathsCSV(
 }
 
 export default function ConversionPaths() {
-  const [pathSort, setPathSort] = useState<'count' | 'share'>('count')
+  const [pathSort, setPathSort] = useState<'count' | 'share' | 'avg_time' | 'length'>('count')
   const [pathSortDir, setPathSortDir] = useState<'asc' | 'desc'>('desc')
   const [freqSort, setFreqSort] = useState<'channel' | 'count' | 'pct'>('count')
   const [freqSortDir, setFreqSortDir] = useState<'asc' | 'desc'>('desc')
@@ -79,13 +181,40 @@ export default function ConversionPaths() {
   const [tryPathResult, setTryPathResult] = useState<{ path_so_far: string; level: string; recommendations: NextBestRec[] } | null>(null)
   const [tryPathLoading, setTryPathLoading] = useState(false)
   const [tryPathError, setTryPathError] = useState<string | null>(null)
+  const [tryPathWhyOpen, setTryPathWhyOpen] = useState(false)
   const [showWhy, setShowWhy] = useState(false)
   const [showAnomalies, setShowAnomalies] = useState(true)
 
-  const pathsQuery = useQuery<PathAnalysis>({
-    queryKey: ['path-analysis'],
+  const [directMode, setDirectMode] = useState<'include' | 'exclude'>('include')
+  const [pathScope, setPathScope] = useState<'converted' | 'all'>('converted')
+
+  const [minPathCount, setMinPathCount] = useState<number>(1)
+  const [minPathLength, setMinPathLength] = useState<number>(1)
+  const [maxPathLength, setMaxPathLength] = useState<number | ''>('')
+  const [channelFilter, setChannelFilter] = useState<string[]>([])
+
+  const [selectedPath, setSelectedPath] = useState<string | null>(null)
+  const [selectedPathDetails, setSelectedPathDetails] = useState<PathDetails | null>(null)
+  const [selectedPathLoading, setSelectedPathLoading] = useState(false)
+  const [selectedPathError, setSelectedPathError] = useState<string | null>(null)
+
+  const journeysQuery = useQuery<JourneysSummary>({
+    queryKey: ['journeys-summary-for-paths'],
     queryFn: async () => {
-      const res = await fetch('/api/attribution/paths')
+      const res = await fetch('/api/attribution/journeys')
+      if (!res.ok) throw new Error('Failed to load journeys summary')
+      return res.json()
+    },
+  })
+
+  const pathsQuery = useQuery<PathAnalysis>({
+    queryKey: ['path-analysis', directMode, pathScope],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        direct_mode: directMode,
+        path_scope: pathScope === 'all' ? 'all' : 'converted',
+      })
+      const res = await fetch(`/api/attribution/paths?${params.toString()}`)
       if (!res.ok) throw new Error('Failed to fetch path analysis')
       return res.json()
     },
@@ -122,18 +251,52 @@ export default function ConversionPaths() {
   }, [freqRows, freqSort, freqSortDir])
 
   const commonPaths = data?.common_paths ?? []
-  const sortedPaths = useMemo(() => {
-    return [...commonPaths].sort((a, b) => {
-      const cmp = pathSort === 'count' ? a.count - b.count : a.share - b.share
+  const enrichedPaths = useMemo(
+    () =>
+      commonPaths.map((p) => ({
+        ...p,
+        path_length: p.path_length ?? (p.path ? p.path.split(' > ').length : 0),
+      })),
+    [commonPaths],
+  )
+
+  const filteredAndSortedPaths = useMemo(() => {
+    const base = enrichedPaths.filter((p) => {
+      if (p.count < (minPathCount || 1)) return false
+      const len = p.path_length ?? (p.path ? p.path.split(' > ').length : 0)
+      if (len < (minPathLength || 1)) return false
+      if (typeof maxPathLength === 'number' && maxPathLength > 0 && len > maxPathLength) return false
+      if (channelFilter.length) {
+        const steps = p.path.split(' > ')
+        const hasAny = steps.some((s) => channelFilter.includes(s.split(':', 1)[0]))
+        if (!hasAny) return false
+      }
+      return true
+    })
+
+    return base.sort((a, b) => {
+      let cmp = 0
+      if (pathSort === 'count') cmp = a.count - b.count
+      else if (pathSort === 'share') cmp = a.share - b.share
+      else if (pathSort === 'length') cmp = (a.path_length ?? 0) - (b.path_length ?? 0)
+      else if (pathSort === 'avg_time') {
+        const av = a.avg_time_to_convert_days ?? -1
+        const bv = b.avg_time_to_convert_days ?? -1
+        cmp = av - bv
+      }
       return pathSortDir === 'asc' ? cmp : -cmp
     })
-  }, [commonPaths, pathSort, pathSortDir])
+  }, [enrichedPaths, pathSort, pathSortDir, minPathCount, minPathLength, maxPathLength, channelFilter])
 
   const kpis = data
     ? [
         { label: 'Total Journeys', value: data.total_journeys.toLocaleString(), def: METRIC_DEFINITIONS['Total Journeys'] },
         { label: 'Avg Path Length', value: `${data.avg_path_length} touchpoints`, def: METRIC_DEFINITIONS['Avg Path Length'] },
-        { label: 'Avg Time to Convert', value: data.avg_time_to_conversion_days != null ? `${data.avg_time_to_conversion_days} days` : 'N/A', def: METRIC_DEFINITIONS['Avg Time to Convert'] },
+        {
+          label: 'Avg Time to Convert',
+          value: data.avg_time_to_conversion_days != null ? `${data.avg_time_to_conversion_days} days` : 'N/A',
+          def: METRIC_DEFINITIONS['Avg Time to Convert'],
+        },
         { label: 'Path Length Range', value: `${data.path_length_distribution.min} – ${data.path_length_distribution.max}`, def: METRIC_DEFINITIONS['Path Length Range'] },
       ]
     : []
@@ -199,6 +362,23 @@ export default function ConversionPaths() {
     )
   }
 
+  const journeys = journeysQuery.data
+  const periodLabel =
+    journeys?.date_min && journeys?.date_max
+      ? `${journeys.date_min.slice(0, 10)} – ${journeys.date_max.slice(0, 10)}`
+      : 'current dataset'
+
+  const conversionLabel =
+    data.config?.conversion_key ||
+    journeys?.primary_kpi_label ||
+    journeys?.primary_kpi_id ||
+    'All conversions'
+
+  const pathLenDist = data.path_length_distribution
+  const timeDist = data.time_to_conversion_distribution
+  const directDiag = data.direct_unknown_diagnostics
+  const nbaConfig = data.nba_config
+
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto' }}>
       <div
@@ -227,23 +407,114 @@ export default function ConversionPaths() {
             How customers interact with channels before converting.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowWhy((v) => !v)}
+        <div
           style={{
-            border: 'none',
-            backgroundColor: showWhy ? t.color.accentMuted : 'transparent',
-            color: t.color.accent,
-            padding: `${t.space.xs}px ${t.space.sm}px`,
-            borderRadius: t.radius.full,
-            fontSize: t.font.sizeXs,
-            fontWeight: t.font.weightSemibold,
-            cursor: 'pointer',
-            alignSelf: 'center',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'flex-end',
+            gap: t.space.xs,
           }}
         >
-          Why?
-        </button>
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: t.space.sm,
+              alignItems: 'center',
+              justifyContent: 'flex-end',
+            }}
+          >
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+              <strong>Period:</strong> {periodLabel}
+            </div>
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+              <strong>Conversion:</strong> {conversionLabel} (read‑only)
+            </div>
+            {data.config?.time_window && (
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                <strong>Config:</strong>{' '}
+                {[
+                  data.config.time_window.click_lookback_days != null
+                    ? `Click ${data.config.time_window.click_lookback_days}d`
+                    : null,
+                  data.config.time_window.impression_lookback_days != null
+                    ? `Impr. ${data.config.time_window.impression_lookback_days}d`
+                    : null,
+                  data.config.time_window.session_timeout_minutes != null
+                    ? `Session ${data.config.time_window.session_timeout_minutes}m`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </div>
+            )}
+          </div>
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: t.space.sm,
+              alignItems: 'center',
+              justifyContent: 'flex-end',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: t.font.sizeXs }}>
+              <span style={{ color: t.color.textSecondary }}>Direct handling:</span>
+              <button
+                type="button"
+                onClick={() => setDirectMode((m) => (m === 'include' ? 'exclude' : 'include'))}
+                style={{
+                  border: `1px solid ${t.color.borderLight}`,
+                  borderRadius: t.radius.full,
+                  padding: '2px 8px',
+                  fontSize: t.font.sizeXs,
+                  backgroundColor: t.color.bg,
+                  cursor: 'pointer',
+                }}
+                title="View filter only; underlying attribution models are unchanged."
+              >
+                View filter: {directMode === 'include' ? 'Include Direct' : 'Exclude Direct'}
+              </button>
+            </div>
+            {journeys && journeys.non_converted > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: t.font.sizeXs }}>
+                <span style={{ color: t.color.textSecondary }}>Path scope:</span>
+                <button
+                  type="button"
+                  onClick={() => setPathScope((s) => (s === 'converted' ? 'all' : 'converted'))}
+                  style={{
+                    border: `1px solid ${t.color.borderLight}`,
+                    borderRadius: t.radius.full,
+                    padding: '2px 8px',
+                    fontSize: t.font.sizeXs,
+                    backgroundColor: t.color.bg,
+                    cursor: 'pointer',
+                  }}
+                  title="Include non‑converted journeys in path statistics."
+                >
+                  {pathScope === 'converted' ? 'Converted only' : 'Converted + non‑converted'}
+                </button>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => setShowWhy((v) => !v)}
+              style={{
+                border: 'none',
+                backgroundColor: showWhy ? t.color.accentMuted : 'transparent',
+                color: t.color.accent,
+                padding: `${t.space.xs}px ${t.space.sm}px`,
+                borderRadius: t.radius.full,
+                fontSize: t.font.sizeXs,
+                fontWeight: t.font.weightSemibold,
+                cursor: 'pointer',
+                alignSelf: 'center',
+              }}
+            >
+              Why?
+            </button>
+          </div>
+        </div>
       </div>
 
       {showWhy && (
@@ -407,6 +678,31 @@ export default function ConversionPaths() {
             >
               {kpi.value}
             </div>
+            {kpi.label === 'Avg Path Length' && (
+              <div
+                style={{
+                  marginTop: t.space.xs,
+                  fontSize: t.font.sizeXs,
+                  color: t.color.textSecondary,
+                  fontVariantNumeric: 'tabular-nums',
+                }}
+              >
+                Median {pathLenDist.median.toFixed(1)} · P90{' '}
+                {(pathLenDist.p90 ?? pathLenDist.max).toFixed(1)}
+              </div>
+            )}
+            {kpi.label === 'Avg Time to Convert' && timeDist && (
+              <div
+                style={{
+                  marginTop: t.space.xs,
+                  fontSize: t.font.sizeXs,
+                  color: t.color.textSecondary,
+                  fontVariantNumeric: 'tabular-nums',
+                }}
+              >
+                Median {timeDist.median.toFixed(1)}d · P90 {timeDist.p90?.toFixed(1) ?? timeDist.max.toFixed(1)}d
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -536,6 +832,48 @@ export default function ConversionPaths() {
         </div>
       </div>
 
+      {/* Direct / Unknown diagnostics */}
+      {directDiag && (
+        <div
+          style={{
+            marginBottom: t.space.xl,
+            padding: t.space.md,
+            borderRadius: t.radius.lg,
+            border: `1px solid ${t.color.borderLight}`,
+            background: t.color.surface,
+            boxShadow: t.shadowSm,
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: t.space.md,
+            flexWrap: 'wrap',
+          }}
+        >
+          <div>
+            <h3 style={{ margin: '0 0 4px', fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+              Direct / Unknown impact
+            </h3>
+            <p style={{ margin: 0, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+              Approximate share of all touchpoints and conversions that are dominated by <code>direct</code> or{' '}
+              <code>unknown</code> channels. Use this as a quick trust indicator for path‑based insights.
+            </p>
+          </div>
+          <div style={{ display: 'flex', gap: t.space.lg, flexWrap: 'wrap', alignItems: 'center' }}>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+              <strong>{(directDiag.touchpoint_share * 100).toFixed(1)}%</strong>{' '}
+              <span style={{ color: t.color.textSecondary }}>of touchpoints are Direct/Unknown</span>
+            </div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+              <strong>{(directDiag.journeys_ending_direct_share * 100).toFixed(1)}%</strong>{' '}
+              <span style={{ color: t.color.textSecondary }}>of converted journeys end on Direct</span>
+            </div>
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+              For deeper breakdown, use the Why? panel and the Data quality dashboard.
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Try path – Next Best Action */}
       <div
         style={{
@@ -597,6 +935,7 @@ export default function ConversionPaths() {
             onClick={async () => {
               setTryPathError(null)
               setTryPathResult(null)
+              setTryPathWhyOpen(false)
               setTryPathLoading(true)
               try {
                 const pathParam = encodeURIComponent(tryPathInput.trim())
@@ -607,7 +946,13 @@ export default function ConversionPaths() {
                   throw new Error(err.detail || res.statusText)
                 }
                 const json = await res.json()
-                setTryPathResult({ path_so_far: json.path_so_far, level: json.level, recommendations: json.recommendations || [] })
+                setTryPathResult({
+                  path_so_far: json.path_so_far,
+                  level: json.level,
+                  recommendations: json.recommendations || [],
+                  why_samples: json.why_samples || [],
+                  nba_config: json.nba_config || undefined,
+                } as any)
               } catch (e) {
                 setTryPathError((e as Error).message)
               } finally {
@@ -657,12 +1002,62 @@ export default function ConversionPaths() {
                       {rec.campaign != null ? `${rec.channel} / ${rec.campaign}` : rec.channel}
                     </span>
                     <span style={{ color: t.color.textSecondary }}>
-                      {(rec.conversion_rate * 100).toFixed(0)}% conversion · {rec.count} journeys · avg ${rec.avg_value}
+                      Confidence {(rec.conversion_rate * 100).toFixed(1)}% · support {rec.count} journeys · avg ${rec.avg_value}
                     </span>
+                    {((tryPathResult as any).nba_config ?? nbaConfig) &&
+                      rec.count < (((tryPathResult as any).nba_config ?? nbaConfig).min_prefix_support || 0) * 2 && (
+                        <span style={{ marginLeft: t.space.sm, fontSize: t.font.sizeXs, color: t.color.warning }}>
+                          Low sample size: recommendation may be unreliable
+                        </span>
+                      )}
                   </li>
                 ))
               )}
             </ul>
+            {(tryPathResult as any).why_samples && (tryPathResult as any).why_samples.length > 0 && (
+              <div style={{ marginTop: t.space.md }}>
+                <button
+                  type="button"
+                  onClick={() => setTryPathWhyOpen((v) => !v)}
+                  style={{
+                    border: 'none',
+                    backgroundColor: tryPathWhyOpen ? t.color.accentMuted : t.color.bg,
+                    color: t.color.accent,
+                    padding: `${t.space.xs}px ${t.space.sm}px`,
+                    borderRadius: t.radius.full,
+                    fontSize: t.font.sizeXs,
+                    fontWeight: t.font.weightSemibold,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {tryPathWhyOpen ? 'Hide' : 'Why this recommendation?'}
+                </button>
+                {tryPathWhyOpen && (
+                  <div
+                    style={{
+                      marginTop: t.space.sm,
+                      borderRadius: t.radius.md,
+                      border: `1px solid ${t.color.borderLight}`,
+                      background: t.color.bg,
+                      padding: t.space.sm,
+                    }}
+                  >
+                    <p style={{ margin: '0 0 4px', fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                      Top historical continuation paths behind these suggestions (Direct/Unknown‑heavy paths are marked for caution).
+                    </p>
+                    <ul style={{ margin: 0, paddingLeft: t.space.lg, listStyle: 'disc' }}>
+                      {(tryPathResult as any).why_samples.map((s: any, idx: number) => (
+                        <li key={idx} style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                          <span style={{ fontWeight: t.font.weightMedium, color: t.color.text }}>{s.path}</span>{' '}
+                          · {s.count} journeys ({(s.share * 100).toFixed(1)}% of prefix) · Direct/Unknown share{' '}
+                          {(s.direct_unknown_share * 100).toFixed(1)}%
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -681,9 +1076,117 @@ export default function ConversionPaths() {
           <h3 style={{ margin: 0, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
             Most Common Conversion Paths
           </h3>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: t.space.sm, alignItems: 'center' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+              <span>Min count</span>
+              <input
+                type="number"
+                min={1}
+                value={minPathCount}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value || '1', 10)
+                  setMinPathCount(Number.isFinite(v) && v > 0 ? v : 1)
+                }}
+                style={{
+                  width: 64,
+                  padding: `${t.space.xs}px ${t.space.sm}px`,
+                  fontSize: t.font.sizeXs,
+                  border: `1px solid ${t.color.border}`,
+                  borderRadius: t.radius.sm,
+                }}
+              />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+              <span>Path length</span>
+              <input
+                type="number"
+                min={1}
+                value={minPathLength}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value || '1', 10)
+                  setMinPathLength(Number.isFinite(v) && v > 0 ? v : 1)
+                }}
+                style={{
+                  width: 56,
+                  padding: `${t.space.xs}px ${t.space.sm}px`,
+                  fontSize: t.font.sizeXs,
+                  border: `1px solid ${t.color.border}`,
+                  borderRadius: t.radius.sm,
+                }}
+              />
+              <span>–</span>
+              <input
+                type="number"
+                min={1}
+                value={typeof maxPathLength === 'number' ? maxPathLength : ''}
+                onChange={(e) => {
+                  const raw = e.target.value
+                  if (!raw) {
+                    setMaxPathLength('')
+                    return
+                  }
+                  const v = parseInt(raw, 10)
+                  setMaxPathLength(Number.isFinite(v) && v > 0 ? v : '')
+                }}
+                placeholder="Any"
+                style={{
+                  width: 56,
+                  padding: `${t.space.xs}px ${t.space.sm}px`,
+                  fontSize: t.font.sizeXs,
+                  border: `1px solid ${t.color.border}`,
+                  borderRadius: t.radius.sm,
+                }}
+              />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: t.font.sizeXs, color: t.color.textSecondary, flexWrap: 'wrap' }}>
+              <span>Contains channel</span>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, maxWidth: 260 }}>
+                {Object.keys(channelFreq).map((ch) => {
+                  const base = ch.split(':', 1)[0]
+                  const active = channelFilter.includes(base)
+                  return (
+                    <button
+                      key={ch}
+                      type="button"
+                      onClick={() =>
+                        setChannelFilter((prev) =>
+                          prev.includes(base) ? prev.filter((c) => c !== base) : [...prev, base],
+                        )
+                      }
+                      style={{
+                        borderRadius: t.radius.full,
+                        border: `1px solid ${active ? t.color.accent : t.color.borderLight}`,
+                        padding: '1px 8px',
+                        fontSize: t.font.sizeXs,
+                        backgroundColor: active ? t.color.accentMuted : 'transparent',
+                        color: active ? t.color.accent : t.color.textSecondary,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {base}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
           <button
             type="button"
-            onClick={() => exportPathsCSV(data.common_paths, data.next_best_by_prefix)}
+            onClick={() =>
+              exportPathsCSV(filteredAndSortedPaths, data.next_best_by_prefix, {
+                period: periodLabel,
+                conversionKey: data.config?.conversion_key ?? null,
+                configVersion: data.config?.config_version ?? null,
+                directMode,
+                pathScope,
+                filters: {
+                  minCount: minPathCount,
+                  minPathLength,
+                  maxPathLength: typeof maxPathLength === 'number' ? maxPathLength : null,
+                  containsChannels: channelFilter,
+                },
+              })
+            }
             style={{
               padding: `${t.space.sm}px ${t.space.lg}px`,
               fontSize: t.font.sizeSm,
@@ -736,11 +1239,45 @@ export default function ConversionPaths() {
                 >
                   Share {pathSort === 'share' && (pathSortDir === 'asc' ? '↑' : '↓')}
                 </th>
+                <th
+                  style={{
+                    padding: `${t.space.md}px ${t.space.lg}px`,
+                    textAlign: 'right',
+                    fontWeight: t.font.weightSemibold,
+                    color: t.color.textSecondary,
+                    cursor: 'pointer',
+                    userSelect: 'none',
+                  }}
+                  onClick={() => {
+                    setPathSort('length')
+                    setPathSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+                  }}
+                >
+                  Avg touchpoints {pathSort === 'length' && (pathSortDir === 'asc' ? '↑' : '↓')}
+                </th>
+                {filteredAndSortedPaths.some((p) => p.avg_time_to_convert_days != null) && (
+                  <th
+                    style={{
+                      padding: `${t.space.md}px ${t.space.lg}px`,
+                      textAlign: 'right',
+                      fontWeight: t.font.weightSemibold,
+                      color: t.color.textSecondary,
+                      cursor: 'pointer',
+                      userSelect: 'none',
+                    }}
+                    onClick={() => {
+                      setPathSort('avg_time')
+                      setPathSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+                    }}
+                  >
+                    Avg time to convert {pathSort === 'avg_time' && (pathSortDir === 'asc' ? '↑' : '↓')}
+                  </th>
+                )}
                 <th style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'left', fontWeight: t.font.weightSemibold, color: t.color.textSecondary }}>Suggested next</th>
               </tr>
             </thead>
             <tbody>
-              {sortedPaths.slice(0, 20).map((p, idx) => {
+              {filteredAndSortedPaths.slice(0, 20).map((p, idx) => {
                 const prefix = p.path.split(' > ').slice(0, -1).join(' > ')
                 const recs = data.next_best_by_prefix?.[prefix]
                 const top = recs?.[0]
@@ -750,6 +1287,31 @@ export default function ConversionPaths() {
                   style={{
                     borderBottom: `1px solid ${t.color.borderLight}`,
                     backgroundColor: idx % 2 === 0 ? t.color.surface : t.color.bg,
+                    cursor: 'pointer',
+                  }}
+                  onClick={async () => {
+                    setSelectedPath(p.path)
+                    setSelectedPathDetails(null)
+                    setSelectedPathError(null)
+                    setSelectedPathLoading(true)
+                    try {
+                      const params = new URLSearchParams({
+                        path: p.path,
+                        direct_mode: directMode,
+                        path_scope: pathScope === 'all' ? 'all' : 'converted',
+                      })
+                      const res = await fetch(`/api/paths/details?${params.toString()}`)
+                      if (!res.ok) {
+                        const err = await res.json().catch(() => ({}))
+                        throw new Error(err.detail || res.statusText)
+                      }
+                      const json: PathDetails = await res.json()
+                      setSelectedPathDetails(json)
+                    } catch (err) {
+                      setSelectedPathError((err as Error).message)
+                    } finally {
+                      setSelectedPathLoading(false)
+                    }
                   }}
                 >
                   <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, color: t.color.textMuted, fontVariantNumeric: 'tabular-nums' }}>{idx + 1}</td>
@@ -777,6 +1339,14 @@ export default function ConversionPaths() {
                   <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontWeight: t.font.weightMedium, color: t.color.accent, fontVariantNumeric: 'tabular-nums' }}>
                     {(p.share * 100).toFixed(1)}%
                   </td>
+                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: t.color.textSecondary }}>
+                    {p.path_length ?? p.path.split(' > ').length}
+                  </td>
+                  {filteredAndSortedPaths.some((row) => row.avg_time_to_convert_days != null) && (
+                    <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: t.color.textSecondary }}>
+                      {p.avg_time_to_convert_days != null ? `${p.avg_time_to_convert_days.toFixed(1)}d` : '—'}
+                    </td>
+                  )}
                   <td style={{ padding: `${t.space.md}px ${t.space.lg}px` }}>
                     {top ? (
                       <span
@@ -803,12 +1373,256 @@ export default function ConversionPaths() {
             </tbody>
           </table>
         </div>
-        {data.common_paths.length > 20 && (
+        {filteredAndSortedPaths.length > 20 && (
           <p style={{ margin: `${t.space.md}px 0 0`, fontSize: t.font.sizeXs, color: t.color.textMuted }}>
-            Showing top 20 of {data.common_paths.length} paths.
+            Showing top 20 of {filteredAndSortedPaths.length} paths (after filters).
           </p>
         )}
       </div>
+
+      {/* Path drilldown drawer */}
+      {selectedPath && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 88,
+            right: 24,
+            bottom: 24,
+            width: 360,
+            maxWidth: '90vw',
+            background: t.color.surface,
+            borderRadius: t.radius.lg,
+            border: `1px solid ${t.color.borderLight}`,
+            boxShadow: t.shadowLg,
+            padding: t.space.lg,
+            zIndex: 40,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: t.space.md,
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: t.space.sm }}>
+            <h3
+              style={{
+                margin: 0,
+                fontSize: t.font.sizeSm,
+                fontWeight: t.font.weightSemibold,
+                color: t.color.text,
+              }}
+            >
+              Path details
+            </h3>
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedPath(null)
+                setSelectedPathDetails(null)
+                setSelectedPathError(null)
+              }}
+              style={{
+                border: 'none',
+                background: 'transparent',
+                color: t.color.textSecondary,
+                cursor: 'pointer',
+                fontSize: t.font.sizeSm,
+              }}
+            >
+              Close
+            </button>
+          </div>
+          <div
+            style={{
+              fontSize: t.font.sizeXs,
+              color: t.color.textSecondary,
+              maxHeight: 48,
+              overflow: 'hidden',
+            }}
+          >
+            {selectedPath.split(' > ').map((step, i, arr) => (
+              <span key={i}>
+                <span
+                  style={{
+                    display: 'inline-block',
+                    padding: '1px 6px',
+                    backgroundColor: t.color.accentMuted,
+                    color: t.color.accent,
+                    borderRadius: t.radius.sm,
+                    fontSize: t.font.sizeXs,
+                    fontWeight: t.font.weightSemibold,
+                  }}
+                >
+                  {step}
+                </span>
+                {i < arr.length - 1 && <span style={{ margin: '0 3px', color: t.color.textMuted }}>→</span>}
+              </span>
+            ))}
+          </div>
+          {selectedPathLoading && (
+            <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading path details…</p>
+          )}
+          {selectedPathError && (
+            <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.danger }}>{selectedPathError}</p>
+          )}
+          {selectedPathDetails && (
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: t.space.md,
+                overflowY: 'auto',
+              }}
+            >
+              {/* Summary */}
+              <div>
+                <h4
+                  style={{
+                    margin: '0 0 4px',
+                    fontSize: t.font.sizeXs,
+                    fontWeight: t.font.weightSemibold,
+                    color: t.color.textSecondary,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.04em',
+                  }}
+                >
+                  Summary
+                </h4>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.text }}>
+                  <div>
+                    <strong>{selectedPathDetails.summary.count}</strong>{' '}
+                    <span style={{ color: t.color.textSecondary }}>journeys</span>
+                  </div>
+                  <div>
+                    <strong>{(selectedPathDetails.summary.share * 100).toFixed(2)}%</strong>{' '}
+                    <span style={{ color: t.color.textSecondary }}>of journeys in this view</span>
+                  </div>
+                  <div>
+                    <strong>{selectedPathDetails.summary.avg_touchpoints.toFixed(1)}</strong>{' '}
+                    <span style={{ color: t.color.textSecondary }}>avg touchpoints</span>
+                  </div>
+                  <div>
+                    <strong>
+                      {selectedPathDetails.summary.avg_time_to_convert_days != null
+                        ? `${selectedPathDetails.summary.avg_time_to_convert_days.toFixed(1)}d`
+                        : 'N/A'}
+                    </strong>{' '}
+                    <span style={{ color: t.color.textSecondary }}>avg time to convert</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Step breakdown */}
+              {selectedPathDetails.step_breakdown?.length > 0 && (
+                <div>
+                  <h4
+                    style={{
+                      margin: '0 0 4px',
+                      fontSize: t.font.sizeXs,
+                      fontWeight: t.font.weightSemibold,
+                      color: t.color.textSecondary,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.04em',
+                    }}
+                  >
+                    Step breakdown
+                  </h4>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: t.font.sizeXs }}>
+                    <thead>
+                      <tr style={{ borderBottom: `1px solid ${t.color.borderLight}` }}>
+                        <th style={{ textAlign: 'left', padding: '2px 4px', color: t.color.textSecondary }}>Pos</th>
+                        <th style={{ textAlign: 'left', padding: '2px 4px', color: t.color.textSecondary }}>Step</th>
+                        <th style={{ textAlign: 'right', padding: '2px 4px', color: t.color.textSecondary }}>Drop‑off</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedPathDetails.step_breakdown.map((s) => (
+                        <tr key={s.position} style={{ borderBottom: `1px solid ${t.color.borderLight}` }}>
+                          <td style={{ padding: '2px 4px', color: t.color.textSecondary }}>{s.position}</td>
+                          <td style={{ padding: '2px 4px', color: t.color.text }}>{s.step}</td>
+                          <td
+                            style={{
+                              padding: '2px 4px',
+                              textAlign: 'right',
+                              fontVariantNumeric: 'tabular-nums',
+                              color: t.color.textSecondary,
+                            }}
+                          >
+                            {(s.dropoff_share * 100).toFixed(1)}%
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* Variants */}
+              {selectedPathDetails.variants?.length > 0 && (
+                <div>
+                  <h4
+                    style={{
+                      margin: '0 0 4px',
+                      fontSize: t.font.sizeXs,
+                      fontWeight: t.font.weightSemibold,
+                      color: t.color.textSecondary,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.04em',
+                    }}
+                  >
+                    Similar variants
+                  </h4>
+                  <ul style={{ margin: 0, paddingLeft: t.space.lg, listStyle: 'disc', fontSize: t.font.sizeXs }}>
+                    {selectedPathDetails.variants.map((v) => (
+                      <li key={v.path} style={{ marginBottom: 2 }}>
+                        <span style={{ fontWeight: t.font.weightMedium, color: t.color.text }}>{v.path}</span>{' '}
+                        <span style={{ color: t.color.textSecondary }}>
+                          · {v.count} journeys ({(v.share * 100).toFixed(1)}%)
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Data health */}
+              {selectedPathDetails.data_health && (
+                <div>
+                  <h4
+                    style={{
+                      margin: '0 0 4px',
+                      fontSize: t.font.sizeXs,
+                      fontWeight: t.font.weightSemibold,
+                      color: t.color.textSecondary,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.04em',
+                    }}
+                  >
+                    Data health
+                  </h4>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.text }}>
+                    <div>
+                      <strong>
+                        {(selectedPathDetails.data_health.direct_unknown_touch_share * 100).toFixed(1)}%
+                      </strong>{' '}
+                      <span style={{ color: t.color.textSecondary }}>of touches are Direct/Unknown on this path</span>
+                    </div>
+                    <div>
+                      <strong>
+                        {(selectedPathDetails.data_health.journeys_ending_direct_share * 100).toFixed(1)}%
+                      </strong>{' '}
+                      <span style={{ color: t.color.textSecondary }}>of journeys end on Direct</span>
+                    </div>
+                    <div style={{ marginTop: 4 }}>
+                      <ConfidenceBadge confidence={selectedPathDetails.data_health.confidence} compact />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

@@ -725,41 +725,66 @@ def parse_conversion_paths(
     return journeys
 
 
-def analyze_paths(journeys: List[Dict]) -> Dict[str, Any]:
+def analyze_paths(
+    journeys: List[Dict],
+    include_non_converted: bool = False,
+) -> Dict[str, Any]:
     """
     Analyze conversion paths to produce summary statistics:
     - Most common paths
-    - Average path length
-    - Average time to conversion
+    - Average path length (with distribution)
+    - Average time to conversion (with distribution where possible)
     - Channel frequency in paths
+    - Direct / unknown diagnostics
+
+    By default only converted journeys are used for path statistics to keep
+    behaviour backwards compatible. When include_non_converted=True, non‑
+    converted journeys are included in path length and frequency stats, while
+    time‑to‑convert remains based on converted journeys only.
     """
     converted = [j for j in journeys if j.get("converted", True)]
-    if not converted:
-        return {"total_journeys": 0, "avg_path_length": 0, "common_paths": [], "channel_frequency": {}}
+    if include_non_converted:
+        used_for_lengths = journeys
+    else:
+        used_for_lengths = converted
+
+    if not used_for_lengths:
+        return {
+            "total_journeys": 0,
+            "avg_path_length": 0,
+            "common_paths": [],
+            "channel_frequency": {},
+        }
 
     # Path length stats
-    lengths = [len(j.get("touchpoints", [])) for j in converted]
+    lengths = [len(j.get("touchpoints", [])) for j in used_for_lengths]
     avg_length = sum(lengths) / len(lengths) if lengths else 0
 
-    # Channel frequency
+    # Channel frequency + direct / unknown diagnostics (based on the same scope
+    # that is used for length + path counts so UI filters stay consistent).
     channel_freq: Dict[str, int] = defaultdict(int)
-    for j in converted:
+    direct_unknown_touchpoints = 0
+    for j in used_for_lengths:
         for tp in j.get("touchpoints", []):
-            channel_freq[tp.get("channel", "unknown")] += 1
+            ch = tp.get("channel", "unknown")
+            channel_freq[ch] += 1
+            if ch.lower() in ("direct", "unknown"):
+                direct_unknown_touchpoints += 1
 
-    # Most common paths (channel sequences)
+    total_touchpoints = sum(channel_freq.values()) or 1
+
+    # Most common paths (channel sequences) + per-path stats
     path_counts: Dict[str, int] = defaultdict(int)
-    for j in converted:
-        path = " > ".join(tp.get("channel", "?") for tp in j.get("touchpoints", []))
+    path_times_total: Dict[str, float] = defaultdict(float)
+    path_times_n: Dict[str, int] = defaultdict(int)
+
+    for j in used_for_lengths:
+        tps = j.get("touchpoints", [])
+        path = " > ".join(tp.get("channel", "?") for tp in tps)
         path_counts[path] += 1
 
-    common_paths = sorted(
-        [{"path": p, "count": c, "share": round(c / len(converted), 4)} for p, c in path_counts.items()],
-        key=lambda x: -x["count"]
-    )[:20]
-
-    # Time to conversion
-    times_to_conv = []
+    # Time to conversion – still based only on converted journeys
+    times_to_conv: List[float] = []
     for j in converted:
         tps = j.get("touchpoints", [])
         if len(tps) >= 2:
@@ -770,23 +795,86 @@ def analyze_paths(journeys: List[Dict]) -> Dict[str, Any]:
                     delta = (last_ts - first_ts).total_seconds() / 86400.0
                     if delta >= 0:
                         times_to_conv.append(delta)
+                        path = " > ".join(tp.get("channel", "?") for tp in tps)
+                        path_times_total[path] += delta
+                        path_times_n[path] += 1
             except Exception:
+                # Timestamps are best-effort; skip malformed rows without
+                # impacting the overall analysis.
                 pass
 
     avg_time = sum(times_to_conv) / len(times_to_conv) if times_to_conv else None
 
-    return {
-        "total_journeys": len(converted),
+    common_paths = sorted(
+        [
+            {
+                "path": p,
+                "count": c,
+                "share": round(c / len(used_for_lengths), 4),
+                "avg_time_to_convert_days": round(path_times_total[p] / path_times_n[p], 2)
+                if path_times_n.get(p)
+                else None,
+                "path_length": len(p.split(" > ")) if p else 0,
+            }
+            for p, c in path_counts.items()
+        ],
+        key=lambda x: -x["count"],
+    )[:20]
+
+    path_length_distribution: Dict[str, Any]
+    if lengths:
+        path_length_distribution = {
+            "min": min(lengths),
+            "max": max(lengths),
+            "median": float(np.median(lengths)),
+            "p90": float(np.percentile(lengths, 90)),
+        }
+    else:
+        path_length_distribution = {"min": 0, "max": 0, "median": 0.0, "p90": 0.0}
+
+    time_to_conv_distribution: Optional[Dict[str, Any]] = None
+    if times_to_conv:
+        time_to_conv_distribution = {
+            "min": float(min(times_to_conv)),
+            "max": float(max(times_to_conv)),
+            "median": float(np.median(times_to_conv)),
+            "p90": float(np.percentile(times_to_conv, 90)),
+        }
+
+    # Journeys ending in Direct – based on converted journeys only, which is
+    # where "ending with Direct" most strongly impacts reporting.
+    journeys_ending_direct = 0
+    for j in converted:
+        tps = j.get("touchpoints", [])
+        if not tps:
+            continue
+        last_ch = tps[-1].get("channel", "unknown")
+        if last_ch and last_ch.lower() == "direct":
+            journeys_ending_direct += 1
+
+    direct_unknown_diagnostics = {
+        "touchpoint_share": round(direct_unknown_touchpoints / total_touchpoints, 4)
+        if total_touchpoints
+        else 0.0,
+        "journeys_ending_direct_share": round(
+            journeys_ending_direct / len(converted), 4
+        )
+        if converted
+        else 0.0,
+    }
+
+    result: Dict[str, Any] = {
+        "total_journeys": len(used_for_lengths),
         "avg_path_length": round(avg_length, 2),
         "avg_time_to_conversion_days": round(avg_time, 2) if avg_time is not None else None,
         "common_paths": common_paths,
         "channel_frequency": dict(sorted(channel_freq.items(), key=lambda x: -x[1])),
-        "path_length_distribution": {
-            "min": min(lengths) if lengths else 0,
-            "max": max(lengths) if lengths else 0,
-            "median": float(np.median(lengths)) if lengths else 0,
-        },
+        "path_length_distribution": path_length_distribution,
+        "direct_unknown_diagnostics": direct_unknown_diagnostics,
     }
+    if time_to_conv_distribution is not None:
+        result["time_to_conversion_distribution"] = time_to_conv_distribution
+    return result
 
 
 def _step_string(tp: Dict, level: str) -> str:

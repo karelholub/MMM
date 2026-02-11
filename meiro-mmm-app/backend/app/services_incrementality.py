@@ -624,6 +624,159 @@ def get_experiment_time_series(
 
 
 # ---------------------------------------------------------------------------
+# Health checks / readiness
+# ---------------------------------------------------------------------------
+
+
+def compute_experiment_health(
+    db: Session,
+    experiment_id: int,
+    min_assignments_per_group: int = 50,
+    min_conversions_per_group: int = 20,
+) -> Dict[str, Any]:
+    """
+    Compute high-level health signals for an experiment.
+
+    Returns dict with:
+    - experiment_id
+    - sample: {"treatment": n, "control": n}
+    - exposures: {"treatment": n, "control": n}
+    - outcomes: {"treatment": n, "control": n}
+    - balance: {"status": "ok"/"warn", "expected_share": float, "observed_share": float}
+    - data_completeness: {
+          "assignments": {"status": "ok"/"fail"},
+          "outcomes": {"status": "ok"/"fail"},
+          "exposures": {"status": "ok"/"warn"},
+      }
+    - overlap_risk: {"status": "ok"/"warn", "overlapping_profiles": int}
+    - ready_state: {"label": "not_ready"/"early"/"ready", "reasons": [str]}
+    """
+    exp = db.get(Experiment, experiment_id)
+    if not exp:
+        raise ValueError(f"Experiment {experiment_id} not found")
+
+    # Assignments and outcomes (reuse logic similar to compute_experiment_results)
+    assignments = (
+        db.query(ExperimentAssignment)
+        .filter(ExperimentAssignment.experiment_id == experiment_id)
+        .all()
+    )
+    assignment_groups = {a.profile_id: a.group for a in assignments}
+
+    treat_n = sum(1 for a in assignments if a.group == "treatment")
+    control_n = sum(1 for a in assignments if a.group == "control")
+
+    outcomes_rows = (
+        db.query(ExperimentOutcome)
+        .filter(ExperimentOutcome.experiment_id == experiment_id)
+        .all()
+    )
+    treat_conv = 0
+    control_conv = 0
+    for o in outcomes_rows:
+        g = assignment_groups.get(o.profile_id)
+        if g == "treatment":
+            treat_conv += 1
+        elif g == "control":
+            control_conv += 1
+
+    # Exposures joined with assignments (if any)
+    exposures_rows = (
+        db.query(ExperimentExposure)
+        .filter(ExperimentExposure.experiment_id == experiment_id)
+        .all()
+    )
+    treat_exp = 0
+    control_exp = 0
+    for e in exposures_rows:
+        g = assignment_groups.get(e.profile_id)
+        if g == "treatment":
+            treat_exp += 1
+        elif g == "control":
+            control_exp += 1
+
+    total_n = treat_n + control_n
+    expected_share = 0.5  # default when specific split is not stored
+    observed_share = (treat_n / total_n) if total_n > 0 else 0.0
+    balance_status = "ok"
+    if total_n > 0 and abs(observed_share - expected_share) > 0.1:
+        balance_status = "warn"
+
+    data_completeness = {
+        "assignments": {"status": "ok" if total_n > 0 else "fail"},
+        "outcomes": {"status": "ok" if (treat_conv + control_conv) > 0 else "fail"},
+        "exposures": {
+            "status": "ok" if (treat_exp + control_exp) > 0 else "warn"
+        },
+    }
+
+    # Minimal contamination / overlap heuristic:
+    # any profile assigned in this experiment also appearing in another running
+    # experiment on the same channel with overlapping period.
+    overlapping_profiles = 0
+    if assignments:
+        profile_ids = {a.profile_id for a in assignments}
+        other_experiments = (
+            db.query(Experiment)
+            .filter(Experiment.id != experiment_id)
+            .filter(Experiment.channel == exp.channel)
+            .filter(Experiment.status == "running")
+            .filter(Experiment.start_at <= exp.end_at)
+            .filter(Experiment.end_at >= exp.start_at)
+            .all()
+        )
+        if other_experiments:
+            other_ids = [e.id for e in other_experiments]
+            overlaps = (
+                db.query(ExperimentAssignment.profile_id)
+                .filter(ExperimentAssignment.experiment_id.in_(other_ids))
+                .filter(ExperimentAssignment.profile_id.in_(profile_ids))
+                .distinct()
+                .all()
+            )
+            overlapping_profiles = len(overlaps)
+    overlap_status = "ok" if overlapping_profiles == 0 else "warn"
+
+    # Readiness classification
+    reasons: List[str] = []
+    if total_n < min_assignments_per_group * 2:
+        reasons.append(
+            f"Need at least {min_assignments_per_group} assignments per group; currently "
+            f"{treat_n} treatment / {control_n} control."
+        )
+    if min(treat_conv, control_conv) < min_conversions_per_group:
+        reasons.append(
+            f"Need at least {min_conversions_per_group} conversions per group; currently "
+            f"{treat_conv} treatment / {control_conv} control."
+        )
+
+    if not reasons:
+        ready_label = "ready"
+    elif min(treat_conv, control_conv) > 0:
+        ready_label = "early"
+    else:
+        ready_label = "not_ready"
+
+    return {
+        "experiment_id": experiment_id,
+        "sample": {"treatment": treat_n, "control": control_n},
+        "exposures": {"treatment": treat_exp, "control": control_exp},
+        "outcomes": {"treatment": treat_conv, "control": control_conv},
+        "balance": {
+            "status": balance_status,
+            "expected_share": expected_share,
+            "observed_share": observed_share,
+        },
+        "data_completeness": data_completeness,
+        "overlap_risk": {
+            "status": overlap_status,
+            "overlapping_profiles": overlapping_profiles,
+        },
+        "ready_state": {"label": ready_label, "reasons": reasons},
+    }
+
+
+# ---------------------------------------------------------------------------
 # Auto-assignment from conversion paths
 # ---------------------------------------------------------------------------
 

@@ -11,10 +11,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 import hashlib
 import math
+import logging
 
 import pandas as pd
 
@@ -24,7 +25,7 @@ try:
     from sklearn.cluster import MiniBatchKMeans  # type: ignore
     from sklearn.feature_extraction import DictVectorizer  # type: ignore
     from sklearn.feature_extraction.text import TfidfTransformer  # type: ignore
-    from sklearn.metrics import silhouette_score  # type: ignore
+    from sklearn.metrics import adjusted_rand_score, silhouette_score  # type: ignore
     from sklearn.preprocessing import normalize  # type: ignore
 
     _HAS_ML = True
@@ -34,8 +35,12 @@ except Exception:  # pragma: no cover
     DictVectorizer = None  # type: ignore
     TfidfTransformer = None  # type: ignore
     silhouette_score = None  # type: ignore
+    adjusted_rand_score = None  # type: ignore
     normalize = None  # type: ignore
     _HAS_ML = False
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -85,11 +90,13 @@ def _journey_to_path_row(j: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     valid_ts = [ts for ts in parsed_ts if ts is not None]
 
     time_to_conv_days: Optional[float] = None
+    conv_ts: Optional[pd.Timestamp] = None
     if valid_ts:
         first = min(valid_ts)
         last = max(valid_ts)
         if last >= first:
             time_to_conv_days = float((last - first).total_seconds() / 86400.0)
+        conv_ts = last
 
     # repeated steps (consecutive)
     consecutive_repeats = 0
@@ -108,6 +115,9 @@ def _journey_to_path_row(j: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "touchpoints": len(tps),
         "non_monotonic_ts": int(_is_non_monotonic(valid_ts, parsed_ts)),
         "consecutive_repeats": consecutive_repeats,
+        # Last valid timestamp used as a proxy for "conversion date" for
+        # period-over-period comparisons and cluster-level timing stats.
+        "conversion_ts": conv_ts,
         "start_channel": channels[0] if channels else "unknown",
         "end_channel": channels[-1] if channels else "unknown",
     }
@@ -254,6 +264,8 @@ def compute_path_archetypes(
     top_paths_per_cluster: int = 5,
     max_clusters_returned: int = 12,
     random_state: int = 42,
+    enable_stability: bool = True,
+    enable_compare_previous: bool = False,
 ) -> Dict[str, Any]:
     """Cluster conversion paths into archetypes.
 
@@ -265,11 +277,19 @@ def compute_path_archetypes(
     """
     df_j = _extract_path_rows(journeys)
     if df_j.empty:
-        return {"clusters": [], "total_converted": 0, "diagnostics": {"algorithm": "kmeans", "reason": "no_paths"}}
+        return {
+            "clusters": [],
+            "total_converted": 0,
+            "diagnostics": {"algorithm": "kmeans", "reason": "no_paths"},
+        }
 
     df_p = _aggregate_paths(df_j)
     if df_p.empty:
-        return {"clusters": [], "total_converted": 0, "diagnostics": {"algorithm": "kmeans", "reason": "no_paths"}}
+        return {
+            "clusters": [],
+            "total_converted": 0,
+            "diagnostics": {"algorithm": "kmeans", "reason": "no_paths"},
+        }
 
     total_converted = int(df_p["count"].sum())
     n_paths = int(df_p.shape[0])
@@ -299,8 +319,8 @@ def compute_path_archetypes(
             "diagnostics": {"algorithm": "distinct_paths", "n_unique_paths": n_paths},
         }
 
-    # If the ML stack is unavailable, fall back to "top distinct paths" archetypes.
-    if not _HAS_ML:
+    # Helper: fallback to simple distinct-path archetypes (no clustering).
+    def _distinct_paths_fallback(reason: str) -> Dict[str, Any]:
         top_n = max(1, int(max_clusters_returned))
         clusters = []
         for _, row in df_p.sort_values("count", ascending=False).head(top_n).iterrows():
@@ -313,51 +333,244 @@ def compute_path_archetypes(
                     "size": count,
                     "share": count / total_converted if total_converted else 0.0,
                     "avg_length": float(row["length"]),
-                    "avg_time_to_conversion_days": float(row["time_to_conv"]) if not pd.isna(row["time_to_conv"]) else None,
+                    "avg_time_to_conversion_days": float(row["time_to_conv"])
+                    if not pd.isna(row["time_to_conv"])
+                    else None,
                     "top_channels": _top_channels_for_paths(df_j, [path], top_n=5),
-                    "top_paths": [{"path": path, "count": count, "share": count / total_converted if total_converted else 0.0}],
+                    "top_paths": [
+                        {
+                            "path": path,
+                            "count": count,
+                            "share": count / total_converted if total_converted else 0.0,
+                        }
+                    ],
                     "representative_path": path,
                 }
             )
         return {
             "clusters": clusters,
             "total_converted": total_converted,
-            "diagnostics": {"algorithm": "distinct_paths", "n_unique_paths": n_paths, "reason": "ml_unavailable"},
+            "diagnostics": {
+                "algorithm": "distinct_paths",
+                "n_unique_paths": n_paths,
+                "reason": reason,
+            },
         }
 
-    # Build features for each unique path
-    path_steps: List[List[str]] = [str(p).split(" > ") for p in df_p["path"].tolist()]
-    feature_dicts = [_path_features([_safe_channel(s) for s in steps]) for steps in path_steps]
+    # If the ML stack is unavailable, fall back to "top distinct paths" archetypes.
+    if not _HAS_ML:
+        return _distinct_paths_fallback("ml_unavailable")
 
-    vec = DictVectorizer(sparse=True)
-    X = vec.fit_transform(feature_dicts)
-    # tf-idf + l2 norm improves cosine distance behavior
-    X = TfidfTransformer().fit_transform(X)
-    X = normalize(X, norm="l2", copy=False)
-
-    weights = df_p["count"].astype(float).to_numpy()
-
-    if k_mode == "fixed" and k is not None:
-        k_selected = int(max(2, min(int(k), n_paths)))
-        sil = None
-    else:
-        k_selected, sil = _auto_select_k(X, k_min=k_min, k_max=min(k_max, n_paths - 1), random_state=random_state)
-        k_selected = int(max(2, min(k_selected, n_paths)))
-
-    model = MiniBatchKMeans(n_clusters=k_selected, random_state=random_state, n_init="auto", batch_size=2048)
     try:
-        labels = model.fit_predict(X, sample_weight=weights)
-    except TypeError:
-        # Older scikit-learn: no sample_weight
-        labels = model.fit_predict(X)
+        # Build features for each unique path
+        path_steps: List[List[str]] = [str(p).split(" > ") for p in df_p["path"].tolist()]
+        feature_dicts = [_path_features([_safe_channel(s) for s in steps]) for steps in path_steps]
 
-    df_p = df_p.copy()
-    df_p["cluster"] = labels.astype(int)
+        vec = DictVectorizer(sparse=True)
+        X = vec.fit_transform(feature_dicts)
+        # tf-idf + l2 norm improves cosine distance behavior
+        X = TfidfTransformer().fit_transform(X)
+        X = normalize(X, norm="l2", copy=False)
+
+        weights = df_p["count"].astype(float).to_numpy()
+
+        if k_mode == "fixed" and k is not None:
+            k_selected = int(max(2, min(int(k), n_paths)))
+            sil = None
+        else:
+            k_selected, sil = _auto_select_k(
+                X, k_min=k_min, k_max=min(k_max, n_paths - 1), random_state=random_state
+            )
+            k_selected = int(max(2, min(k_selected, n_paths)))
+
+        model = MiniBatchKMeans(
+            n_clusters=k_selected, random_state=random_state, n_init="auto", batch_size=2048
+        )
+        try:
+            labels = model.fit_predict(X, sample_weight=weights)
+        except TypeError:
+            # Older scikit-learn: no sample_weight
+            labels = model.fit_predict(X)
+
+        df_p = df_p.copy()
+        df_p["cluster"] = labels.astype(int)
+        df_p_with_clusters = df_p.copy()
+
+        # Optional stability: run a second clustering with a different seed and
+        # compare assignments using adjusted Rand index.
+        stability_score: float | None = None
+        if enable_stability and _HAS_ML and adjusted_rand_score is not None:
+            try:
+                model2 = MiniBatchKMeans(
+                    n_clusters=k_selected,
+                    random_state=random_state + 17,
+                    n_init="auto",
+                    batch_size=2048,
+                )
+                try:
+                    labels2 = model2.fit_predict(X, sample_weight=weights)
+                except TypeError:
+                    labels2 = model2.fit_predict(X)
+                ari = float(adjusted_rand_score(labels, labels2))
+                # Clamp to [0, 1] for interpretability.
+                stability_score = max(0.0, min(1.0, ari))
+            except Exception:
+                stability_score = None
+
+    except Exception as exc:
+        # If anything in the ML stack fails (missing deps, numerical issues, etc.),
+        # fall back to a simple distinct-path summary instead of raising 500s.
+        logger.warning("compute_path_archetypes: ML pipeline failed, falling back to distinct_paths: %s", exc)
+        return _distinct_paths_fallback("ml_failed")
+
+    # Map paths to clusters for downstream stats.
+    path_to_cluster: Dict[str, int] = {}
+    for _, row in df_p_with_clusters.iterrows():
+        path_to_cluster[str(row["path"])] = int(row["cluster"])
+
+    # Attach cluster id to per-journey rows where possible.
+    df_j_with_cluster = df_j.copy()
+    df_j_with_cluster["cluster"] = df_j_with_cluster["path"].map(path_to_cluster).astype("Int64")
+
+    # Optional period-over-period comparison on journey conversion timestamps.
+    per_cluster_compare: Dict[int, Dict[str, Any]] = {}
+    compare_available = False
+    if enable_compare_previous and "conversion_ts" in df_j_with_cluster.columns:
+        conv_series = df_j_with_cluster["conversion_ts"].dropna()
+        if not conv_series.empty:
+            conv_series_sorted = conv_series.sort_values()
+            # Require a minimal number of journeys with timestamps to make a split meaningful.
+            if len(conv_series_sorted) >= max(40, k_selected * 4):
+                split_idx = len(conv_series_sorted) // 2
+                split_ts = conv_series_sorted.iloc[split_idx]
+                prev_mask = df_j_with_cluster["conversion_ts"] < split_ts
+                curr_mask = df_j_with_cluster["conversion_ts"] >= split_ts
+                df_prev = df_j_with_cluster[prev_mask].dropna(subset=["cluster"])
+                df_curr = df_j_with_cluster[curr_mask].dropna(subset=["cluster"])
+                if not df_prev.empty and not df_curr.empty:
+                    total_prev = float(len(df_prev))
+                    total_curr = float(len(df_curr))
+                    # Shares by cluster
+                    prev_sizes: Dict[int, int] = (
+                        df_prev.groupby("cluster")["path"]
+                        .size()
+                        .astype(int)
+                        .to_dict()  # type: ignore[assignment]
+                    )
+                    curr_sizes: Dict[int, int] = (
+                        df_curr.groupby("cluster")["path"]
+                        .size()
+                        .astype(int)
+                        .to_dict()  # type: ignore[assignment]
+                    )
+
+                    # Medians by cluster for length and time-to-conversion.
+                    prev_len_med: Dict[int, float] = {}
+                    curr_len_med: Dict[int, float] = {}
+                    prev_ttc_med: Dict[int, Optional[float]] = {}
+                    curr_ttc_med: Dict[int, Optional[float]] = {}
+
+                    for cl, group in df_prev.groupby("cluster"):
+                        lens = [float(x) for x in group.get("length", []) if x is not None]
+                        ttcs = [
+                            float(x)
+                            for x in group.get("time_to_conv", []).dropna().tolist()
+                            if x is not None
+                        ]
+                        prev_len_med[int(cl)] = _median(lens) if lens else 0.0
+                        prev_ttc_med[int(cl)] = _median(ttcs) if ttcs else None
+
+                    for cl, group in df_curr.groupby("cluster"):
+                        lens = [float(x) for x in group.get("length", []) if x is not None]
+                        ttcs = [
+                            float(x)
+                            for x in group.get("time_to_conv", []).dropna().tolist()
+                            if x is not None
+                        ]
+                        curr_len_med[int(cl)] = _median(lens) if lens else 0.0
+                        curr_ttc_med[int(cl)] = _median(ttcs) if ttcs else None
+
+                    for cl in sorted(
+                        set(prev_sizes.keys()) | set(curr_sizes.keys())
+                    ):
+                        cl_int = int(cl)
+                        prev_share = prev_sizes.get(cl_int, 0) / (total_prev or 1.0)
+                        curr_share = curr_sizes.get(cl_int, 0) / (total_curr or 1.0)
+                        per_cluster_compare[cl_int] = {
+                            "share_previous": prev_share,
+                            "share_current": curr_share,
+                            "share_delta": curr_share - prev_share,
+                            "median_length_previous": prev_len_med.get(cl_int),
+                            "median_length_current": curr_len_med.get(cl_int),
+                            "median_length_delta": (
+                                (curr_len_med.get(cl_int) or 0.0)
+                                - (prev_len_med.get(cl_int) or 0.0)
+                            ),
+                            "median_ttc_previous_days": prev_ttc_med.get(cl_int),
+                            "median_ttc_current_days": curr_ttc_med.get(cl_int),
+                            "median_ttc_delta_days": (
+                                (curr_ttc_med.get(cl_int) or 0.0)
+                                - (prev_ttc_med.get(cl_int) or 0.0)
+                            ),
+                        }
+                    compare_available = True
 
     # Cluster summaries (weighted by count)
     clusters: List[Dict[str, Any]] = []
-    for cl in sorted(df_p["cluster"].unique().tolist()):
-        g = df_p[df_p["cluster"] == cl].sort_values("count", ascending=False)
+    channel_counts_overall: Counter[str] = Counter()
+    for ch_list in df_j.get("channels", []):
+        if isinstance(ch_list, list):
+            channel_counts_overall.update(_safe_channel(ch) for ch in ch_list)
+    overall_total_channels = float(sum(channel_counts_overall.values()) or 1.0)
+    overall_channel_dist = {
+        ch: cnt / overall_total_channels for ch, cnt in channel_counts_overall.items()
+    }
+
+    # Pre-compute basic journey-level stats by cluster.
+    cluster_lengths: Dict[int, List[float]] = defaultdict(list)
+    cluster_ttc: Dict[int, List[float]] = defaultdict(list)
+    cluster_channel_counts: Dict[int, Counter[str]] = defaultdict(Counter)
+    cluster_transitions: Dict[int, Counter[tuple[str, str]]] = defaultdict(Counter)
+    cluster_value_sums: Dict[int, float] = defaultdict(float)
+    cluster_value_counts: Dict[int, int] = defaultdict(int)
+
+    for _, row in df_j_with_cluster.dropna(subset=["cluster"]).iterrows():
+        cl = int(row["cluster"])
+        length = float(row.get("length") or 0.0)
+        if length:
+            cluster_lengths[cl].append(length)
+        ttc = row.get("time_to_conv")
+        if pd.notna(ttc):
+            cluster_ttc[cl].append(float(ttc))
+        ch_list = row.get("channels") or []
+        if isinstance(ch_list, list):
+            safe_channels = [_safe_channel(c) for c in ch_list]
+            cluster_channel_counts[cl].update(safe_channels)
+            for a, b in zip(safe_channels, safe_channels[1:]):
+                cluster_transitions[cl][(a, b)] += 1
+
+    # Conversion value (if present on journeys) – best-effort cluster summary.
+    for j in journeys or []:
+        tps = j.get("touchpoints") or []
+        channels = [_safe_channel(tp.get("channel")) for tp in tps] or ["unknown"]
+        path = " > ".join(channels)
+        cl = path_to_cluster.get(path)
+        if cl is None:
+            continue
+        value = j.get("conversion_value")
+        if isinstance(value, (int, float)):
+            cluster_value_sums[cl] += float(value)
+            cluster_value_counts[cl] += 1
+
+    # Per-path counts for representativeness and variants/outliers.
+    path_counts: Dict[str, int] = {
+        str(row["path"]): int(row["count"]) for _, row in df_p_with_clusters.iterrows()
+    }
+
+    for cl in sorted(df_p_with_clusters["cluster"].unique().tolist()):
+        g = df_p_with_clusters[df_p_with_clusters["cluster"] == cl].sort_values(
+            "count", ascending=False
+        )
         size = int(g["count"].sum())
         if size <= 0:
             continue
@@ -368,15 +581,27 @@ def compute_path_archetypes(
         if g["time_to_conv"].notna().any():
             # weight only on non-null
             g_tt = g[g["time_to_conv"].notna()]
-            avg_time = float(np.average(g_tt["time_to_conv"].to_numpy(), weights=g_tt["count"].to_numpy()))
+            avg_time = float(
+                np.average(g_tt["time_to_conv"].to_numpy(), weights=g_tt["count"].to_numpy())
+            )
         else:
             avg_time = None
 
-        top_paths = []
+        top_paths: List[Dict[str, Any]] = []
         for _, r in g.head(top_paths_per_cluster).iterrows():
             p = str(r["path"])
             c = int(r["count"])
-            top_paths.append({"path": p, "count": c, "share": c / total_converted if total_converted else 0.0})
+            top_paths.append(
+                {
+                    "path": p,
+                    "count": c,
+                    "share": c / total_converted if total_converted else 0.0,
+                    "avg_time_to_conversion_days": float(r["time_to_conv"])
+                    if not pd.isna(r["time_to_conv"])
+                    else None,
+                    "avg_length": float(r["length"]),
+                }
+            )
         rep_path = top_paths[0]["path"] if top_paths else str(g.iloc[0]["path"])
 
         # Cluster "name": short and readable (first ~3 steps of representative path)
@@ -384,6 +609,146 @@ def compute_path_archetypes(
         short = " → ".join(rep_steps[:3]) + (" → …" if len(rep_steps) > 3 else "")
 
         top_channels = _top_channels_for_paths(df_j, g["path"].tolist(), top_n=5)
+
+        # Journey-level distribution stats for this cluster.
+        lengths = cluster_lengths.get(cl, [])
+        ttc_vals = cluster_ttc.get(cl, [])
+        length_median = _median(lengths)
+        length_p90 = _percentile(lengths, 90.0)
+        ttc_median = _median(ttc_vals) if ttc_vals else None
+        ttc_p90 = _percentile(ttc_vals, 90.0) if ttc_vals else None
+
+        # Distinctiveness vs global channel distribution.
+        cl_channels = cluster_channel_counts.get(cl, Counter())
+        cl_total_channels = float(sum(cl_channels.values()) or 1.0)
+        l1 = 0.0
+        for ch in set(overall_channel_dist.keys()) | set(cl_channels.keys()):
+            p_all = overall_channel_dist.get(ch, 0.0)
+            p_cl = cl_channels.get(ch, 0) / cl_total_channels
+            l1 += abs(p_all - p_cl)
+        distinctiveness_score = int(round(min(1.0, l1 / 2.0) * 100.0))
+
+        # Simple human-readable label + defining traits.
+        traits: List[str] = []
+        first_ch = rep_steps[0] if rep_steps else ""
+        last_ch = rep_steps[-1] if rep_steps else ""
+        if first_ch:
+            traits.append(f"common first touch: {first_ch}")
+        if last_ch:
+            traits.append(f"common last touch: {last_ch}")
+        if length_p90 >= max(5.0, length_median + 2.0):
+            traits.append("long paths (P90 high)")
+        if ttc_p90 is not None and ttc_p90 >= max(14.0, (ttc_median or 0.0) + 7.0):
+            traits.append("slow time-to-convert tail")
+        if any("email" in ch.lower() for ch in top_channels):
+            traits.append("email-assisted")
+        if any("retarget" in ch.lower() or "remarket" in ch.lower() for ch in top_channels):
+            traits.append("retargeting-heavy")
+
+        label = "Mixed journey"
+        # Heuristic: paths that start with paid-like channels (search/social).
+        paid_like = any(k in first_ch.lower() for k in ["google", "meta", "facebook", "paid", "search"])
+        if "email" in first_ch.lower():
+            label = "Email-led journeys"
+        elif paid_like and last_ch.lower() == "direct":
+            label = "Paid → Direct close"
+        elif any("retarget" in ch.lower() or "remarket" in ch.lower() for ch in top_channels):
+            label = "Retargeting-heavy"
+        elif length_median >= 5:
+            label = "Multi-touch long tail"
+
+        # Representativeness of the representative path.
+        rep_count = path_counts.get(rep_path, 0)
+        representativeness_score = rep_count / float(size or 1.0)
+
+        # Top transitions within this cluster.
+        trans_counter = cluster_transitions.get(cl, Counter())
+        total_trans = float(sum(trans_counter.values()) or 1.0)
+        top_transitions = [
+            {
+                "from": a,
+                "to": b,
+                "count": cnt,
+                "share": cnt / total_trans,
+            }
+            for (a, b), cnt in trans_counter.most_common(10)
+        ]
+
+        # Variants & outliers (within-cluster paths).
+        variants: List[Dict[str, Any]] = []
+        for _, r in g.head(5).iterrows():
+            p = str(r["path"])
+            c = int(r["count"])
+            variants.append(
+                {
+                    "path": p,
+                    "count": c,
+                    "share": c / float(size or 1.0),
+                    "avg_time_to_conversion_days": float(r["time_to_conv"])
+                    if not pd.isna(r["time_to_conv"])
+                    else None,
+                    "avg_length": float(r["length"]),
+                }
+            )
+        outlier_candidates = g.sort_values("count", ascending=True).head(5)
+        outliers: List[Dict[str, Any]] = []
+        for _, r in outlier_candidates.iterrows():
+            p = str(r["path"])
+            c = int(r["count"])
+            outliers.append(
+                {
+                    "path": p,
+                    "count": c,
+                    "share": c / float(size or 1.0),
+                    "avg_time_to_conversion_days": float(r["time_to_conv"])
+                    if not pd.isna(r["time_to_conv"])
+                    else None,
+                    "avg_length": float(r["length"]),
+                }
+            )
+
+        # Next-best-action style suggestions within this archetype:
+        # use the prefix of the representative path (all but last step).
+        actions: List[Dict[str, Any]] = []
+        if len(rep_steps) >= 2:
+            prefix_steps = rep_steps[:-1]
+            prefix = " > ".join(prefix_steps)
+            support_counts: Counter[str] = Counter()
+            for _, row in df_j_with_cluster[df_j_with_cluster["cluster"] == cl].iterrows():
+                ch_list = row.get("channels") or []
+                if not isinstance(ch_list, list):
+                    continue
+                safe_channels = [_safe_channel(c) for c in ch_list]
+                if len(safe_channels) < len(prefix_steps):
+                    continue
+                if safe_channels[: len(prefix_steps)] == prefix_steps:
+                    last = safe_channels[-1]
+                    support_counts[last] += 1
+            total_support = float(sum(support_counts.values()) or 1.0)
+            for ch, cnt in support_counts.most_common(3):
+                actions.append(
+                    {
+                        "channel": ch,
+                        "support": cnt,
+                        "support_share": cnt / total_support,
+                        "low_sample": cnt < 10,
+                    }
+                )
+
+        # Simple confidence heuristic.
+        confidence = "medium"
+        if size >= 200 and distinctiveness_score >= 40:
+            confidence = "high"
+        if size < 50 or distinctiveness_score <= 20:
+            confidence = "low"
+
+        avg_value = None
+        total_value = None
+        if cluster_value_counts.get(cl):
+            total_value = cluster_value_sums[cl]
+            avg_value = total_value / float(cluster_value_counts[cl] or 1)
+
+        compare_info = per_cluster_compare.get(cl)
 
         clusters.append(
             {
@@ -396,6 +761,22 @@ def compute_path_archetypes(
                 "top_channels": top_channels,
                 "top_paths": top_paths,
                 "representative_path": rep_path,
+                "length_median": length_median,
+                "length_p90": length_p90,
+                "time_to_conversion_median_days": ttc_median,
+                "time_to_conversion_p90_days": ttc_p90,
+                "distinctiveness_score": distinctiveness_score,
+                "human_label": label,
+                "defining_traits": traits,
+                "representativeness_score": representativeness_score,
+                "top_transitions": top_transitions,
+                "variants": variants,
+                "outlier_paths": outliers,
+                "actions": actions,
+                "confidence": confidence,
+                "avg_conversion_value": avg_value,
+                "total_conversion_value": total_value,
+                "compare": compare_info,
             }
         )
 
@@ -405,6 +786,113 @@ def compute_path_archetypes(
     for i, c in enumerate(clusters, start=1):
         c["id"] = i
 
+    # Cluster size distribution
+    sizes = [float(c["size"]) for c in clusters]
+    size_min = int(min(sizes)) if sizes else 0
+    size_median = int(_median(sizes)) if sizes else 0
+    size_max = int(max(sizes)) if sizes else 0
+
+    # Overall direct/unknown diagnostics (best-effort).
+    direct_unknown_touchpoints = 0
+    total_touchpoints = 0
+    journeys_ending_direct = 0
+    total_journeys_converted = 0
+    for _, row in df_j.iterrows():
+        ch_list = row.get("channels") or []
+        if isinstance(ch_list, list):
+            safe = [_safe_channel(c) for c in ch_list]
+            total_touchpoints += len(safe)
+            direct_unknown_touchpoints += sum(
+                1 for c in safe if c.lower() in ("direct", "unknown")
+            )
+            total_journeys_converted += 1
+            if safe and safe[-1].lower() in ("direct", "unknown"):
+                journeys_ending_direct += 1
+    direct_unknown_share = (
+        direct_unknown_touchpoints / float(total_touchpoints or 1.0)
+    )
+    ending_direct_share = journeys_ending_direct / float(
+        total_journeys_converted or 1.0
+    )
+
+    # Quality and stability badges + warnings.
+    quality_badge = "ok"
+    warnings: List[Dict[str, Any]] = []
+    if sil is None or sil < 0.1:
+        quality_badge = "weak"
+        warnings.append(
+            {
+                "code": "low_separation",
+                "severity": "warn",
+                "message": "Low separation: clusters overlap (silhouette is low or unavailable).",
+            }
+        )
+    elif sil is not None and sil < 0.2:
+        quality_badge = "warning"
+        warnings.append(
+            {
+                "code": "moderate_separation",
+                "severity": "info",
+                "message": "Clusters are only moderately separated; treat archetypes as directional.",
+            }
+        )
+
+    if direct_unknown_share >= 0.4 or ending_direct_share >= 0.4:
+        warnings.append(
+            {
+                "code": "direct_unknown_dominates",
+                "severity": "warn",
+                "message": "Direct/Unknown channels dominate a large share of touchpoints or last touches. Tracking or taxonomy may be incomplete.",
+            }
+        )
+
+    singleton_paths_ratio = float((df_p["count"] == 1).sum()) / float(n_paths or 1)
+    if singleton_paths_ratio >= 0.5:
+        warnings.append(
+            {
+                "code": "too_many_singletons",
+                "severity": "info",
+                "message": "Many paths occur only once. Clusters may be noisy; consider aggregating channels or relaxing filters.",
+            }
+        )
+
+    if total_converted < max(100, k_selected * 10):
+        warnings.append(
+            {
+                "code": "low_sample_size",
+                "severity": "warn",
+                "message": "Not enough converted journeys for very stable archetypes. Treat results as directional.",
+            }
+        )
+
+    stability_pct = int(round(stability_score * 100.0)) if stability_score is not None else None
+    stability_label = None
+    if stability_pct is not None:
+        if stability_pct >= 80:
+            stability_label = "stable"
+        elif stability_pct >= 50:
+            stability_label = "moderate"
+        else:
+            stability_label = "unstable"
+
+    emerging_cluster_id: Optional[int] = None
+    declining_cluster_id: Optional[int] = None
+    if compare_available:
+        best_inc = None
+        best_dec = None
+        for c in clusters:
+            cmp = c.get("compare") or {}
+            delta = float(cmp.get("share_delta") or 0.0)
+            cid = int(c.get("id"))
+            if best_inc is None or delta > best_inc[1]:
+                best_inc = (cid, delta)
+            if best_dec is None or delta < best_dec[1]:
+                best_dec = (cid, delta)
+        if best_inc is not None:
+            emerging_cluster_id = best_inc[0]
+        if best_dec is not None:
+            declining_cluster_id = best_dec[0]
+
     diagnostics = {
         "algorithm": "kmeans",
         "k_mode": k_mode,
@@ -413,6 +901,21 @@ def compute_path_archetypes(
         "n_unique_paths": n_paths,
         "total_converted": total_converted,
         "conversion_key": conversion_key,
+        "cluster_size_stats": {
+            "min": size_min,
+            "median": size_median,
+            "max": size_max,
+        },
+        "direct_unknown_share": direct_unknown_share,
+        "journeys_ending_direct_share": ending_direct_share,
+        "quality_badge": quality_badge,
+        "warnings": warnings,
+        "stability_score": stability_score,
+        "stability_score_pct": stability_pct,
+        "stability_label": stability_label,
+        "compare_available": compare_available,
+        "emerging_cluster_id": emerging_cluster_id,
+        "declining_cluster_id": declining_cluster_id,
     }
     return {"clusters": clusters, "total_converted": total_converted, "diagnostics": diagnostics}
 

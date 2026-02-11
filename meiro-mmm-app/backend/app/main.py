@@ -62,6 +62,7 @@ from app.services_incrementality import (
     run_nightly_report,
     get_experiment_time_series,
     auto_assign_from_conversion_paths,
+    compute_experiment_health,
 )
 from app.mmm_engine import fit_model as mmm_fit_model, engine_info
 from app.connectors import meiro_cdp
@@ -75,6 +76,7 @@ from app.attribution_engine import (
     compute_next_best_action,
     has_any_campaign,
     ATTRIBUTION_MODELS,
+    _step_string,
 )
 
 # Create DB tables if a real database is configured. This is idempotent and cheap
@@ -228,6 +230,8 @@ SYNC_IN_PROGRESS: set = set()  # source names currently syncing
 
 JOURNEYS: List[Dict] = []  # Current loaded journeys
 ATTRIBUTION_RESULTS: Dict[str, Any] = {}  # Cached attribution results
+# Lightweight in-memory cache for path archetypes, keyed by view state.
+PATH_ARCHETYPES_CACHE: Dict[tuple, Dict[str, Any]] = {}
 
 SAMPLE_DIR = Path(__file__).parent / "sample_data"
 DATA_DIR = Path(__file__).parent / "data"
@@ -1199,7 +1203,12 @@ def get_attribution_result(model: str):
     return result
 
 @app.get("/api/attribution/paths")
-def get_path_analysis(config_id: Optional[str] = None, db=Depends(get_db)):
+def get_path_analysis(
+    config_id: Optional[str] = None,
+    direct_mode: str = "include",
+    path_scope: str = "converted",
+    db=Depends(get_db),
+):
     """Analyze conversion paths for common patterns and statistics. Includes next-best-action recommendations per path prefix (channel and optionally campaign level).
 
     Optional config_id pins to a specific model config; response includes config metadata.
@@ -1215,7 +1224,28 @@ def get_path_analysis(config_id: Optional[str] = None, db=Depends(get_db)):
     if resolved_cfg:
         journeys_for_analysis = apply_model_config_to_journeys(JOURNEYS, resolved_cfg.config_json or {})
 
-    path_analysis = analyze_paths(journeys_for_analysis)
+    # Apply lightweight view filters that affect only the analysis, not the
+    # underlying stored journeys.
+    direct_mode_normalized = (direct_mode or "include").lower()
+    if direct_mode_normalized not in ("include", "exclude"):
+        direct_mode_normalized = "include"
+
+    if direct_mode_normalized == "exclude":
+        filtered_journeys = []
+        for j in journeys_for_analysis:
+            tps = j.get("touchpoints", [])
+            kept = [tp for tp in tps if tp.get("channel", "").lower() != "direct"]
+            if not kept:
+                # If all touchpoints were direct, drop the journey from this view
+                continue
+            j2 = dict(j)
+            j2["touchpoints"] = kept
+            filtered_journeys.append(j2)
+        journeys_for_analysis = filtered_journeys
+
+    include_non_converted = (path_scope or "converted").lower() in ("all", "all_journeys", "include_non_converted")
+
+    path_analysis = analyze_paths(journeys_for_analysis, include_non_converted=include_non_converted)
 
     # NBA recommendations (channel level)
     nba_channel = compute_next_best_action(journeys_for_analysis, level="channel")
@@ -1238,7 +1268,222 @@ def get_path_analysis(config_id: Optional[str] = None, db=Depends(get_db)):
                 filtered_campaign[prefix] = kept
         path_analysis["next_best_by_prefix_campaign"] = filtered_campaign
     path_analysis["config"] = meta
+    path_analysis["view_filters"] = {
+        "direct_mode": direct_mode_normalized,
+        "path_scope": "all" if include_non_converted else "converted",
+    }
+    path_analysis["nba_config"] = {
+        "min_prefix_support": SETTINGS.nba.min_prefix_support,
+        "min_conversion_rate": SETTINGS.nba.min_conversion_rate,
+    }
     return path_analysis
+
+
+@app.get("/api/paths/details")
+def get_path_details(
+    path: str,
+    config_id: Optional[str] = None,
+    direct_mode: str = "include",
+    path_scope: str = "converted",
+    db=Depends(get_db),
+):
+    """
+    Return drilldown details for a single conversion path.
+
+    This is a read-only view that reuses the same journey set and view filters
+    as /api/attribution/paths so that counts, shares, and diagnostics line up
+    with the main table.
+    """
+    if not path:
+        raise HTTPException(status_code=400, detail="path is required")
+
+    global JOURNEYS
+    if not JOURNEYS:
+        JOURNEYS = load_journeys_from_db(db)
+    if not JOURNEYS:
+        raise HTTPException(status_code=400, detail="No journeys loaded.")
+
+    resolved_cfg, meta = load_config_and_meta(db, config_id)
+    journeys_for_analysis = JOURNEYS
+    if resolved_cfg:
+        journeys_for_analysis = apply_model_config_to_journeys(JOURNEYS, resolved_cfg.config_json or {})
+
+    direct_mode_normalized = (direct_mode or "include").lower()
+    if direct_mode_normalized not in ("include", "exclude"):
+        direct_mode_normalized = "include"
+
+    if direct_mode_normalized == "exclude":
+        filtered_journeys = []
+        for j in journeys_for_analysis:
+            tps = j.get("touchpoints", [])
+            kept = [tp for tp in tps if tp.get("channel", "").lower() != "direct"]
+            if not kept:
+                continue
+            j2 = dict(j)
+            j2["touchpoints"] = kept
+            filtered_journeys.append(j2)
+        journeys_for_analysis = filtered_journeys
+
+    include_non_converted = (path_scope or "converted").lower() in ("all", "all_journeys", "include_non_converted")
+
+    # Build basic universe stats for share calculations
+    journeys_universe = journeys_for_analysis if include_non_converted else [j for j in journeys_for_analysis if j.get("converted", True)]
+    if not journeys_universe:
+        raise HTTPException(status_code=400, detail="No journeys for this view.")
+
+    target_steps = [s for s in path.split(" > ") if s]
+
+    matching_journeys = []
+    for j in journeys_universe:
+        steps = [_step_string(tp, "channel") for tp in j.get("touchpoints", [])]
+        if " > ".join(steps) == path:
+            matching_journeys.append(j)
+
+    total_in_view = len(journeys_universe)
+    count = len(matching_journeys)
+
+    # Summary metrics
+    avg_len = 0.0
+    times: list[float] = []
+    from datetime import datetime as _dt
+    for j in matching_journeys:
+        tps = j.get("touchpoints", [])
+        if tps:
+            avg_len += len(tps)
+        if j.get("converted", True) and len(tps) >= 2:
+            try:
+                first_ts = pd.Timestamp(tps[0].get("timestamp", ""))
+                last_ts = pd.Timestamp(tps[-1].get("timestamp", ""))
+                if pd.notna(first_ts) and pd.notna(last_ts):
+                    delta = (last_ts - first_ts).total_seconds() / 86400.0
+                    if delta >= 0:
+                        times.append(delta)
+            except Exception:
+                pass
+
+    avg_len = avg_len / count if count else 0.0
+    avg_time = sum(times) / len(times) if times else None
+
+    # Step breakdown: for each position, estimate drop-off (journeys that stop after this step)
+    step_breakdown = []
+    if target_steps and count:
+        step_count = len(target_steps)
+        for idx, step in enumerate(target_steps):
+            pos = idx + 1
+            prefix = target_steps[:pos]
+            prefix_matches = 0
+            stops_here = 0
+            for j in journeys_universe:
+                steps = [_step_string(tp, "channel") for tp in j.get("touchpoints", [])]
+                if len(steps) < pos:
+                    continue
+                if steps[:pos] == prefix:
+                    prefix_matches += 1
+                    if len(steps) == pos:
+                        stops_here += 1
+            dropoff_share = stops_here / prefix_matches if prefix_matches else 0.0
+            step_breakdown.append(
+                {
+                    "step": step,
+                    "position": pos,
+                    "dropoff_share": round(dropoff_share, 4),
+                    "prefix_journeys": prefix_matches,
+                }
+            )
+
+    # Variant paths: top 5 most similar variants by shared prefix length
+    from collections import defaultdict as _dd
+
+    variant_counts: dict[str, int] = _dd(int)
+    for j in journeys_universe:
+        steps = [_step_string(tp, "channel") for tp in j.get("touchpoints", [])]
+        candidate = " > ".join(steps)
+        if candidate == path:
+            continue
+        variant_counts[candidate] += 1
+
+    def _similarity_score(other: str) -> int:
+        o_steps = [s for s in other.split(" > ") if s]
+        score = 0
+        for a, b in zip(target_steps, o_steps):
+            if a == b:
+                score += 2
+            else:
+                break
+        # small bonus if same length, small penalty otherwise
+        if len(o_steps) == len(target_steps):
+            score += 1
+        elif abs(len(o_steps) - len(target_steps)) == 1:
+            score += 0
+        else:
+            score -= 1
+        return score
+
+    variants = sorted(
+        [
+            {
+                "path": pth,
+                "count": c,
+                "share": round(c / total_in_view, 4),
+            }
+            for pth, c in variant_counts.items()
+        ],
+        key=lambda x: (_similarity_score(x["path"]), x["count"]),
+        reverse=True,
+    )[:5]
+
+    # Data health for this path
+    direct_unknown_touches = 0
+    total_touches = 0
+    journeys_ending_direct = 0
+    for j in matching_journeys:
+        tps = j.get("touchpoints", [])
+        for tp in tps:
+            ch = tp.get("channel", "unknown")
+            total_touches += 1
+            if ch.lower() in ("direct", "unknown"):
+                direct_unknown_touches += 1
+        if tps:
+            last_ch = tps[-1].get("channel", "unknown")
+            if last_ch and last_ch.lower() == "direct":
+                journeys_ending_direct += 1
+
+    direct_unknown_share = (
+        direct_unknown_touches / total_touches if total_touches else 0.0
+    )
+    ending_direct_share = journeys_ending_direct / count if count else 0.0
+
+    confidence = None
+    if meta and meta.get("conversion_key"):
+        snap = get_latest_quality_for_scope(
+            db=db,
+            scope="channel",
+            scope_id=None,
+            conversion_key=meta["conversion_key"],
+        )
+        if snap is not None:
+            confidence = {
+                "score": float(snap.confidence_score),
+                "label": snap.confidence_label,
+                "components": snap.components_json or {},
+            }
+
+    return {
+        "path": path,
+        "summary": {
+            "count": count,
+            "share": round(count / total_in_view, 4) if total_in_view else 0.0,
+            "avg_touchpoints": round(avg_len, 2),
+            "avg_time_to_convert_days": round(avg_time, 2) if avg_time is not None else None,
+        },
+        "step_breakdown": step_breakdown,
+        "variants": variants,
+        "data_health": {
+            "direct_unknown_touch_share": round(direct_unknown_share, 4),
+            "journeys_ending_direct_share": round(ending_direct_share, 4),
+            "confidence": confidence,
+        },
+    }
 
 
 @app.get("/api/paths/archetypes")
@@ -1249,10 +1494,13 @@ def get_path_archetypes(
     k: Optional[int] = None,
     k_min: int = 3,
     k_max: int = 10,
+    direct_mode: str = "include",
+    compare_previous: bool = False,
+    recompute: bool = False,
     db=Depends(get_db),
 ):
     """Return simple path archetypes for current journeys."""
-    global JOURNEYS
+    global JOURNEYS, PATH_ARCHETYPES_CACHE
     if not JOURNEYS:
         JOURNEYS = load_journeys_from_db(db)
     if not JOURNEYS:
@@ -1261,14 +1509,55 @@ def get_path_archetypes(
     journeys_for_analysis = JOURNEYS
     if resolved_cfg:
         journeys_for_analysis = apply_model_config_to_journeys(JOURNEYS, resolved_cfg.config_json or {})
-    return compute_path_archetypes(
+    # Apply direct handling as a view filter, similar to /api/attribution/paths.
+    direct_mode_normalized = (direct_mode or "include").lower()
+    if direct_mode_normalized not in ("include", "exclude"):
+        direct_mode_normalized = "include"
+
+    if direct_mode_normalized == "exclude":
+        filtered_journeys = []
+        for j in journeys_for_analysis:
+            tps = j.get("touchpoints", [])
+            kept = [tp for tp in tps if tp.get("channel", "").lower() != "direct"]
+            if not kept:
+                continue
+            j2 = dict(j)
+            j2["touchpoints"] = kept
+            filtered_journeys.append(j2)
+        journeys_for_analysis = filtered_journeys
+
+    cache_key = (
+        conversion_key or "",
+        config_id or "",
+        k_mode,
+        int(k) if k is not None else None,
+        int(k_min),
+        int(k_max),
+        direct_mode_normalized,
+        bool(compare_previous),
+        len(journeys_for_analysis),
+    )
+
+    if not recompute and cache_key in PATH_ARCHETYPES_CACHE:
+        return PATH_ARCHETYPES_CACHE[cache_key]
+
+    result = compute_path_archetypes(
         journeys_for_analysis,
         conversion_key,
         k_mode=k_mode,
         k=k,
         k_min=k_min,
         k_max=k_max,
+        enable_stability=True,
+        enable_compare_previous=bool(compare_previous),
     )
+    # Attach view filters metadata for the frontend.
+    result.setdefault("diagnostics", {})
+    result["diagnostics"]["view_filters"] = {
+        "direct_mode": direct_mode_normalized,
+    }
+    PATH_ARCHETYPES_CACHE[cache_key] = result
+    return result
 
 
 @app.get("/api/paths/anomalies")
@@ -1297,7 +1586,61 @@ def _next_best_action_impl(path_so_far: str = "", level: str = "channel"):
     min_rate = SETTINGS.nba.min_conversion_rate
     recs = nba.get(prefix, [])
     filtered = [r for r in recs if r["count"] >= min_support and r["conversion_rate"] >= min_rate][:10]
-    return {"path_so_far": prefix or "(start)", "level": use_level, "recommendations": filtered}
+
+    # Best-effort "why" samples: top continuation paths that start with the
+    # requested prefix, summarised from raw journeys.
+    why_samples = []
+    if prefix:
+        from collections import defaultdict as _dd
+
+        prefix_steps = [s for s in prefix.split(" > ") if s]
+        path_counts: dict[str, int] = _dd(int)
+        direct_unknown_counts: dict[str, int] = _dd(int)
+        total_for_prefix = 0
+
+        for j in JOURNEYS:
+            steps = [_step_string(tp, use_level) for tp in j.get("touchpoints", [])]
+            if len(steps) < len(prefix_steps):
+                continue
+            if steps[: len(prefix_steps)] != prefix_steps:
+                continue
+            full_path = " > ".join(steps)
+            path_counts[full_path] += 1
+            total_for_prefix += 1
+            for s in steps:
+                if s.split(":", 1)[0].lower() in ("direct", "unknown"):
+                    direct_unknown_counts[full_path] += 1
+
+        if total_for_prefix:
+            def _dk_share(p: str) -> float:
+                dk = direct_unknown_counts.get(p, 0)
+                length = len(p.split(" > ")) or 1
+                return dk / length
+
+            why_samples = sorted(
+                [
+                    {
+                        "path": pth,
+                        "count": cnt,
+                        "share": round(cnt / total_for_prefix, 4),
+                        "direct_unknown_share": round(_dk_share(pth), 4),
+                    }
+                    for pth, cnt in path_counts.items()
+                ],
+                key=lambda x: (x["count"], -x["direct_unknown_share"]),
+                reverse=True,
+            )[:3]
+
+    return {
+        "path_so_far": prefix or "(start)",
+        "level": use_level,
+        "recommendations": filtered,
+        "why_samples": why_samples,
+        "nba_config": {
+            "min_prefix_support": SETTINGS.nba.min_prefix_support,
+            "min_conversion_rate": SETTINGS.nba.min_conversion_rate,
+        },
+    }
 
 
 @app.get("/api/attribution/next-best-action")
@@ -3449,6 +3792,37 @@ def run_nightly_report_endpoint(db=Depends(get_db)):
     """
     report = run_nightly_report(db)
     return report
+
+
+class ExperimentHealth(BaseModel):
+    experiment_id: int
+    sample: Dict[str, int]
+    exposures: Dict[str, int]
+    outcomes: Dict[str, int]
+    balance: Dict[str, Any]
+    data_completeness: Dict[str, Dict[str, str]]
+    overlap_risk: Dict[str, Any]
+    ready_state: Dict[str, Any]
+
+
+@app.get("/api/experiments/{exp_id}/health", response_model=ExperimentHealth)
+def get_experiment_health(exp_id: int, db=Depends(get_db)):
+    """
+    Lightweight health summary for a single experiment.
+
+    Designed as a trust layer for the Incrementality dashboard:
+    - sample sizes and conversions by group
+    - basic balance check vs an assumed 50/50 split (or close)
+    - data completeness for assignments, outcomes, and exposures
+    - minimal contamination / overlap heuristic
+    - coarse readiness classification (not_ready / early / ready)
+    """
+    exp = db.get(Experiment, exp_id)
+    if not exp:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    payload = compute_experiment_health(db, exp_id)
+    return ExperimentHealth(**payload)
 
 
 class AutoAssignRequest(BaseModel):
