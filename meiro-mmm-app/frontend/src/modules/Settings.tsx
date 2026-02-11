@@ -2327,6 +2327,76 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       }
     }, [settingsQuery.data, settingsBaseline])
 
+    const nbaErrors = useMemo(() => {
+      const errors: Partial<Record<keyof NBASettings, string>> = {}
+      if (nbaDraft.min_prefix_support < 1) {
+        errors.min_prefix_support = 'At least 1 journey required'
+      }
+      const normalizedConversion = normalizeNumericString(
+        nbaConversionRateInput,
+      )
+      if (!normalizedConversion) {
+        errors.min_conversion_rate = 'Conversion rate is required'
+      } else {
+        const parsed = Number(normalizedConversion)
+        if (!Number.isFinite(parsed)) {
+          errors.min_conversion_rate = 'Enter a valid percentage'
+        } else if (parsed < 0 || parsed > 100) {
+          errors.min_conversion_rate = 'Between 0 and 100'
+        }
+      }
+      if (nbaDraft.max_prefix_depth < 0 || nbaDraft.max_prefix_depth > 10) {
+        errors.max_prefix_depth = 'Depth between 0 and 10'
+      }
+      if (nbaDraft.min_next_support < 1) {
+        errors.min_next_support = 'Minimum 1 continuation required'
+      }
+      if (nbaDraft.max_suggestions_per_prefix < 1) {
+        errors.max_suggestions_per_prefix = 'At least 1 suggestion required'
+      } else if (nbaDraft.max_suggestions_per_prefix > 10) {
+        errors.max_suggestions_per_prefix = 'Keep to 10 or fewer suggestions'
+      }
+      const normalizedUplift = normalizeNumericString(nbaUpliftInput)
+      if (normalizedUplift) {
+        const parsed = Number(normalizedUplift)
+        if (!Number.isFinite(parsed)) {
+          errors.min_uplift_pct = 'Enter a valid percentage'
+        } else if (parsed < 0 || parsed > 100) {
+          errors.min_uplift_pct = 'Between 0 and 100'
+        }
+      }
+      return errors
+    }, [nbaDraft, nbaConversionRateInput, nbaUpliftInput])
+
+    const nbaPreviewKey = useMemo(() => {
+      const sortedExcluded = [...(nbaDraft.excluded_channels ?? [])]
+        .map((channel) => channel.trim().toLowerCase())
+        .filter(Boolean)
+        .sort()
+      return JSON.stringify({
+        min_prefix_support: nbaDraft.min_prefix_support,
+        min_conversion_rate: Number(
+          nbaDraft.min_conversion_rate.toFixed(4),
+        ),
+        max_prefix_depth: nbaDraft.max_prefix_depth,
+        min_next_support: nbaDraft.min_next_support,
+        max_suggestions_per_prefix: nbaDraft.max_suggestions_per_prefix,
+        min_uplift_pct:
+          nbaDraft.min_uplift_pct !== null
+            ? Number(nbaDraft.min_uplift_pct.toFixed(4))
+            : null,
+        excluded_channels: sortedExcluded,
+      })
+    }, [
+      nbaDraft.excluded_channels,
+      nbaDraft.max_prefix_depth,
+      nbaDraft.max_suggestions_per_prefix,
+      nbaDraft.min_conversion_rate,
+      nbaDraft.min_next_support,
+      nbaDraft.min_prefix_support,
+      nbaDraft.min_uplift_pct,
+    ])
+
     useEffect(() => {
       const formattedConversion = formatPercentInput(
         nbaDraft.min_conversion_rate,
@@ -2564,47 +2634,6 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       }
     }, [activeSection])
 
-    const nbaErrors = useMemo(() => {
-      const errors: Partial<Record<keyof NBASettings, string>> = {}
-      if (nbaDraft.min_prefix_support < 1) {
-        errors.min_prefix_support = 'At least 1 journey required'
-      }
-      const normalizedConversion = normalizeNumericString(
-        nbaConversionRateInput,
-      )
-      if (!normalizedConversion) {
-        errors.min_conversion_rate = 'Conversion rate is required'
-      } else {
-        const parsed = Number(normalizedConversion)
-        if (!Number.isFinite(parsed)) {
-          errors.min_conversion_rate = 'Enter a valid percentage'
-        } else if (parsed < 0 || parsed > 100) {
-          errors.min_conversion_rate = 'Between 0 and 100'
-        }
-      }
-      if (nbaDraft.max_prefix_depth < 0 || nbaDraft.max_prefix_depth > 10) {
-        errors.max_prefix_depth = 'Depth between 0 and 10'
-      }
-      if (nbaDraft.min_next_support < 1) {
-        errors.min_next_support = 'Minimum 1 continuation required'
-      }
-      if (nbaDraft.max_suggestions_per_prefix < 1) {
-        errors.max_suggestions_per_prefix = 'At least 1 suggestion required'
-      } else if (nbaDraft.max_suggestions_per_prefix > 10) {
-        errors.max_suggestions_per_prefix = 'Keep to 10 or fewer suggestions'
-      }
-      const normalizedUplift = normalizeNumericString(nbaUpliftInput)
-      if (normalizedUplift) {
-        const parsed = Number(normalizedUplift)
-        if (!Number.isFinite(parsed)) {
-          errors.min_uplift_pct = 'Enter a valid percentage'
-        } else if (parsed < 0 || parsed > 100) {
-          errors.min_uplift_pct = 'Between 0 and 100'
-        }
-      }
-      return errors
-    }, [nbaDraft, nbaConversionRateInput, nbaUpliftInput])
-
     const nbaActivePreset = useMemo<NbaPresetKey | 'custom'>(() => {
       return (
         (Object.entries(NBA_PRESETS) as Array<[NbaPresetKey, typeof NBA_PRESETS.conservative]>).find(
@@ -2619,35 +2648,6 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       nbaDraft.max_prefix_depth,
       nbaDraft.min_conversion_rate,
       nbaDraft.min_prefix_support,
-    ])
-
-    const nbaPreviewKey = useMemo(() => {
-      const sortedExcluded = [...(nbaDraft.excluded_channels ?? [])]
-        .map((channel) => channel.trim().toLowerCase())
-        .filter(Boolean)
-        .sort()
-      return JSON.stringify({
-        min_prefix_support: nbaDraft.min_prefix_support,
-        min_conversion_rate: Number(
-          nbaDraft.min_conversion_rate.toFixed(4),
-        ),
-        max_prefix_depth: nbaDraft.max_prefix_depth,
-        min_next_support: nbaDraft.min_next_support,
-        max_suggestions_per_prefix: nbaDraft.max_suggestions_per_prefix,
-        min_uplift_pct:
-          nbaDraft.min_uplift_pct !== null
-            ? Number(nbaDraft.min_uplift_pct.toFixed(4))
-            : null,
-        excluded_channels: sortedExcluded,
-      })
-    }, [
-      nbaDraft.excluded_channels,
-      nbaDraft.max_prefix_depth,
-      nbaDraft.max_suggestions_per_prefix,
-      nbaDraft.min_conversion_rate,
-      nbaDraft.min_next_support,
-      nbaDraft.min_prefix_support,
-      nbaDraft.min_uplift_pct,
     ])
 
     const kpiValidation = useMemo(() => {
