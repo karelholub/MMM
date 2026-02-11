@@ -56,10 +56,12 @@ def _fit_bayesian(
     adstock_cfg: Dict[str, Any],
     saturation_cfg: Dict[str, Any],
     mcmc_cfg: Dict[str, Any],
+    random_seed: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Fit a full Bayesian MMM via pymc-marketing and return results dict."""
 
     l_max = adstock_cfg.get("l_max", 8)
+    seed = int(random_seed) if random_seed is not None else 42
 
     mmm = MMM(
         date_column=date_column,
@@ -84,7 +86,7 @@ def _fit_bayesian(
         tune=tune,
         chains=chains,
         target_accept=target_accept,
-        random_seed=42,
+        random_seed=seed,
     )
 
     # --- Extract results ------------------------------------------------
@@ -312,6 +314,7 @@ def fit_model(
     saturation_cfg: Optional[Dict[str, Any]] = None,
     mcmc_cfg: Optional[Dict[str, Any]] = None,
     force_engine: Optional[str] = None,
+    random_seed: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Fit an MMM model.
@@ -363,6 +366,7 @@ def fit_model(
                 adstock_cfg=adstock_cfg,
                 saturation_cfg=saturation_cfg,
                 mcmc_cfg=mcmc_cfg,
+                random_seed=random_seed,
             )
         except Exception as exc:
             logger.warning("Bayesian fitting failed (%s); falling back to Ridge", exc)

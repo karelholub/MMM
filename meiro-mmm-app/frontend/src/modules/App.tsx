@@ -1,15 +1,16 @@
 import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { tokens } from '../theme/tokens'
+import { WorkspaceContext, JourneysSummary } from '../components/WorkspaceContext'
+import MMMWizardShell from './MMMWizardShell'
 
+const Overview = lazy(() => import('./Overview'))
 const ChannelPerformance = lazy(() => import('./ChannelPerformance'))
 const AttributionComparison = lazy(() => import('./AttributionComparison'))
 const ConversionPaths = lazy(() => import('./ConversionPaths'))
 const ExpenseManager = lazy(() => import('./ExpenseManager'))
 const DataSources = lazy(() => import('./DataSources'))
 const DatasetUploader = lazy(() => import('./DatasetUploader'))
-const MMMDashboard = lazy(() => import('./MMMDashboard'))
-const BudgetOptimizer = lazy(() => import('./BudgetOptimizer'))
 const CampaignPerformance = lazy(() => import('./CampaignPerformance'))
 const SettingsPage = lazy(() => import('./Settings'))
 const DataQuality = lazy(() => import('./DataQuality'))
@@ -17,6 +18,7 @@ const IncrementalityPage = lazy(() => import('./Incrementality'))
 const PathArchetypes = lazy(() => import('./PathArchetypes'))
 
 type Page =
+  | 'overview'
   | 'dashboard'
   | 'comparison'
   | 'paths'
@@ -28,26 +30,116 @@ type Page =
   | 'dq'
   | 'incrementality'
   | 'path_archetypes'
+  | 'datasets'
+
+type NavSection =
+  | 'Overview'
+  | 'Attribution'
+  | 'Journeys'
+  | 'Causal / Planning'
+  | 'Data & Ops'
+  | 'Admin'
+
+interface NavItem {
+  key: Page
+  label: string
+  section: NavSection
+  icon: string
+  breadcrumb: string
+}
+
+const NAV_ITEMS: NavItem[] = [
+  {
+    key: 'overview',
+    label: 'Overview',
+    section: 'Overview',
+    icon: 'OV',
+    breadcrumb: 'Overview',
+  },
+  {
+    key: 'dashboard',
+    label: 'Channel performance',
+    section: 'Attribution',
+    icon: 'CH',
+    breadcrumb: 'Attribution / Channel performance',
+  },
+  {
+    key: 'campaigns',
+    label: 'Campaign performance',
+    section: 'Attribution',
+    icon: 'CA',
+    breadcrumb: 'Attribution / Campaign performance',
+  },
+  {
+    key: 'comparison',
+    label: 'Attribution models',
+    section: 'Attribution',
+    icon: 'AM',
+    breadcrumb: 'Attribution / Attribution models',
+  },
+  {
+    key: 'paths',
+    label: 'Conversion paths',
+    section: 'Journeys',
+    icon: 'JP',
+    breadcrumb: 'Journeys / Conversion paths',
+  },
+  {
+    key: 'path_archetypes',
+    label: 'Path archetypes',
+    section: 'Journeys',
+    icon: 'JA',
+    breadcrumb: 'Journeys / Path archetypes',
+  },
+  {
+    key: 'incrementality',
+    label: 'Incrementality',
+    section: 'Causal / Planning',
+    icon: 'IC',
+    breadcrumb: 'Causal / Incrementality',
+  },
+  {
+    key: 'mmm',
+    label: 'MMM (advanced)',
+    section: 'Causal / Planning',
+    icon: 'MM',
+    breadcrumb: 'Causal / MMM (advanced)',
+  },
+  {
+    key: 'dq',
+    label: 'Data quality',
+    section: 'Data & Ops',
+    icon: 'DQ',
+    breadcrumb: 'Data & Ops / Data quality',
+  },
+  {
+    key: 'datasources',
+    label: 'Data sources',
+    section: 'Data & Ops',
+    icon: 'DS',
+    breadcrumb: 'Data & Ops / Data sources',
+  },
+  {
+    key: 'expenses',
+    label: 'Expenses',
+    section: 'Data & Ops',
+    icon: 'EX',
+    breadcrumb: 'Data & Ops / Expenses',
+  },
+  {
+    key: 'settings',
+    label: 'Settings',
+    section: 'Admin',
+    icon: 'ST',
+    breadcrumb: 'Admin / Settings',
+  },
+]
 
 const PAGE_FALLBACK = (
   <div style={{ padding: 48, textAlign: 'center', color: '#64748b', fontSize: 14 }}>
     Loading…
   </div>
 )
-
-const NAV_ITEMS: { key: Page; label: string }[] = [
-  { key: 'dashboard', label: 'Channel performance' },
-  { key: 'campaigns', label: 'Campaign performance' },
-  { key: 'comparison', label: 'Attribution models' },
-  { key: 'paths', label: 'Conversion paths' },
-  { key: 'path_archetypes', label: 'Path archetypes' },
-  { key: 'mmm', label: 'MMM (advanced)' },
-  { key: 'incrementality', label: 'Incrementality' },
-  { key: 'dq', label: 'Data quality' },
-  { key: 'expenses', label: 'Expenses' },
-  { key: 'datasources', label: 'Data sources' },
-  { key: 'settings', label: 'Settings' },
-]
 
 const ATTRIBUTION_MODELS = [
   { id: 'last_touch', label: 'Last Touch' },
@@ -58,44 +150,35 @@ const ATTRIBUTION_MODELS = [
   { id: 'markov', label: 'Data-Driven (Markov)' },
 ]
 
-const LAYOUT_STYLES = {
-  root: {
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-    minHeight: '100vh',
-    backgroundColor: tokens.color.bg as const,
-  },
-  header: {
-    background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 40%, #1d4ed8 100%)',
-    color: '#ffffff',
-    padding: '16px 32px',
-    display: 'flex' as const,
-    justifyContent: 'space-between' as const,
-    alignItems: 'center' as const,
-    borderBottom: `1px solid rgba(148,163,184,0.4)`,
-  },
-  nav: {
-    display: 'flex' as const,
-    flexWrap: 'wrap' as const,
-    gap: 8,
-    padding: '10px 32px',
-    alignItems: 'center' as const,
-    backgroundColor: tokens.color.surface,
-    borderBottom: `1px solid ${tokens.color.borderLight}`,
-    boxShadow: tokens.shadowSm,
-  },
-  main: {
-    padding: '24px 32px',
-    maxWidth: 1400,
-    margin: '0 auto' as const,
-  },
-} as const
-
 export default function App() {
-  const [page, setPage] = useState<Page>('dashboard')
+  const [page, setPage] = useState<Page>('overview')
+  const [lastPage, setLastPage] = useState<Page | null>(null)
   const [selectedModel, setSelectedModel] = useState('linear')
   const [mmmRunId, setMmmRunId] = useState<string | null>(null)
   const [mmmDatasetId, setMmmDatasetId] = useState<string | null>(null)
+  const [pendingMmmMapping, setPendingMmmMapping] = useState<{ dataset_id: string; columns: { kpi: string; spend_channels: string[]; covariates?: string[] } } | null>(null)
   const [selectedConfigId, setSelectedConfigId] = useState<string | null>(null)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    try {
+      const raw = window.localStorage.getItem('mmm-sidebar-collapsed-v1')
+      return raw === 'true'
+    } catch {
+      return false
+    }
+  })
+  const [pinnedPages, setPinnedPages] = useState<Page[]>(() => {
+    if (typeof window === 'undefined') return []
+    try {
+      const raw = window.localStorage.getItem('mmm-pinned-pages-v1')
+      if (!raw) return []
+      const parsed = JSON.parse(raw) as Page[]
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  })
+  const [navSearch, setNavSearch] = useState('')
 
   const journeysQuery = useQuery({
     queryKey: ['journeys-summary'],
@@ -144,6 +227,11 @@ export default function App() {
       kpi: string
       spend_channels: string[]
       covariates: string[]
+      kpi_mode?: string
+      use_adstock?: boolean
+      use_saturation?: boolean
+      holdout_weeks?: number
+      random_seed?: number | null
     }) => {
       const res = await fetch('/api/models', {
         method: 'POST',
@@ -151,10 +239,14 @@ export default function App() {
         body: JSON.stringify({
           dataset_id: config.dataset_id,
           frequency: 'W',
-          kpi_mode: 'conversions',
+          kpi_mode: config.kpi_mode ?? 'conversions',
           kpi: config.kpi,
           spend_channels: config.spend_channels,
           covariates: config.covariates || [],
+          use_adstock: config.use_adstock ?? true,
+          use_saturation: config.use_saturation ?? true,
+          holdout_weeks: config.holdout_weeks ?? 8,
+          random_seed: config.random_seed ?? null,
         }),
       })
       if (!res.ok) throw new Error('Failed to start MMM run')
@@ -163,6 +255,7 @@ export default function App() {
     onSuccess: (data, variables) => {
       setMmmRunId(data.run_id)
       setMmmDatasetId(variables.dataset_id)
+      setPendingMmmMapping(null)
     },
   })
 
@@ -190,14 +283,22 @@ export default function App() {
   const journeyCount = journeysQuery.data?.count ?? 0
   const convertedCount = journeysQuery.data?.converted ?? 0
   const primaryKpiLabel: string | undefined = journeysQuery.data?.primary_kpi_label
+  const primaryKpiId: string | undefined = journeysQuery.data?.primary_kpi_id ?? undefined
   const primaryKpiCount: number | undefined = journeysQuery.data?.primary_kpi_count
   const channels = useMemo(() => journeysQuery.data?.channels ?? [], [journeysQuery.data?.channels])
 
-  const handleSetPage = useCallback((p: Page) => setPage(p), [])
+  const handleSetPage = useCallback((p: Page) => {
+    setLastPage((prev) => (prev === p ? prev : prev ?? 'dashboard'))
+    setPage(p)
+  }, [])
   const handleSetDatasources = useCallback(() => setPage('datasources'), [])
   const handleMmmStartOver = useCallback(() => {
     setMmmRunId(null)
     setMmmDatasetId(null)
+  }, [])
+  const onMmmSelectRun = useCallback((runId: string, datasetId: string) => {
+    setMmmRunId(runId)
+    setMmmDatasetId(datasetId)
   }, [])
   const onJourneysImported = useCallback(() => {
     void journeysQuery.refetch()
@@ -205,357 +306,628 @@ export default function App() {
   }, [])
   const onMmmMappingComplete = useCallback(
     (mapping: { dataset_id: string; columns: { kpi: string; spend_channels: string[]; covariates?: string[] } }) => {
-      createMmmRunMutation.mutate({
-        dataset_id: mapping.dataset_id,
-        kpi: mapping.columns.kpi,
-        spend_channels: mapping.columns.spend_channels,
-        covariates: mapping.columns.covariates ?? [],
-      })
+      setPendingMmmMapping(mapping)
+      setMmmDatasetId(mapping.dataset_id)
+    },
+    [],
+  )
+  const onMmmStartRun = useCallback(
+    (config: {
+      dataset_id: string
+      kpi: string
+      spend_channels: string[]
+      covariates: string[]
+      kpi_mode: string
+      use_adstock: boolean
+      use_saturation: boolean
+      holdout_weeks: number
+      random_seed: number | null
+    }) => {
+      createMmmRunMutation.mutate(config)
     },
     [createMmmRunMutation],
   )
 
   return (
-    <div style={LAYOUT_STYLES.root}>
-      {/* Header */}
-      <header style={LAYOUT_STYLES.header}>
-        <div>
-          <h1
-            style={{
-              margin: 0,
-              fontSize: tokens.font.size2xl,
-              fontWeight: tokens.font.weightBold,
-              letterSpacing: '-0.04em',
-            }}
-          >
-            Meiro measurement workspace
-          </h1>
-          <p
-            style={{
-              margin: '4px 0 0',
-              fontSize: tokens.font.sizeSm,
-              color: 'rgba(226,232,240,0.8)',
-            }}
-          >
-            Unified attribution, incrementality, and MMM for Meiro CDP data.
-          </p>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          <div
-            style={{
-              padding: '6px 14px',
-              borderRadius: 999,
-              fontSize: tokens.font.sizeSm,
-              fontWeight: tokens.font.weightSemibold,
-              backgroundColor: journeysLoaded ? 'rgba(22,163,74,0.18)' : 'rgba(234,179,8,0.16)',
-              color: journeysLoaded ? '#bbf7d0' : '#facc15',
-              border: `1px solid ${journeysLoaded ? 'rgba(34,197,94,0.5)' : 'rgba(234,179,8,0.5)'}`,
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {journeysLoaded
-              ? primaryKpiLabel
-                ? `${journeyCount} journeys · ${primaryKpiLabel}: ${primaryKpiCount ?? convertedCount}`
-                : `${journeyCount} journeys · ${convertedCount} converted`
-              : 'No journeys loaded'}
-          </div>
-          {!journeysLoaded && (
-            <button
-              onClick={() => loadSampleMutation.mutate()}
-              disabled={loadSampleMutation.isPending}
-              style={{
-                padding: '8px 16px',
-                borderRadius: 999,
-                fontSize: tokens.font.sizeSm,
-                fontWeight: tokens.font.weightSemibold,
-                backgroundColor: tokens.color.accent,
-                color: '#ffffff',
-                border: 'none',
-                cursor: loadSampleMutation.isPending ? 'wait' : 'pointer',
-                opacity: loadSampleMutation.isPending ? 0.7 : 1,
-              }}
-            >
-              {loadSampleMutation.isPending ? 'Loading sample…' : 'Load sample journeys'}
-            </button>
-          )}
-          {journeysLoaded && (
-            <button
-              onClick={() => runAllMutation.mutate()}
-              disabled={runAllMutation.isPending}
-              style={{
-                padding: '8px 16px',
-                borderRadius: 999,
-                fontSize: tokens.font.sizeSm,
-                fontWeight: tokens.font.weightSemibold,
-                backgroundColor: 'rgba(15,23,42,0.6)',
-                color: '#e5e7eb',
-                border: '1px solid rgba(148,163,184,0.6)',
-                cursor: runAllMutation.isPending ? 'wait' : 'pointer',
-                opacity: runAllMutation.isPending ? 0.7 : 1,
-              }}
-            >
-              {runAllMutation.isPending ? 'Running models…' : 'Re-run attribution models'}
-            </button>
-          )}
-        </div>
-      </header>
-
-      {/* Navigation */}
-      <nav style={LAYOUT_STYLES.nav}>
-        <div
+    <WorkspaceContext.Provider
+      value={{
+        attributionModel: selectedModel,
+        setAttributionModel: setSelectedModel,
+        selectedConfigId,
+        setSelectedConfigId,
+        journeysSummary: journeysQuery.data as JourneysSummary | undefined,
+        journeysLoaded,
+        isRunningAttribution: runAllMutation.isPending,
+        isLoadingSampleJourneys: loadSampleMutation.isPending,
+        runAllAttribution: () => runAllMutation.mutate(),
+        loadSampleJourneys: () => loadSampleMutation.mutate(),
+      }}
+    >
+      <div
+        style={{
+          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+          minHeight: '100vh',
+          backgroundColor: tokens.color.bg,
+          display: 'grid',
+          gridTemplateColumns: sidebarCollapsed ? '60px 1fr' : '240px 1fr',
+          gridTemplateRows: '56px auto',
+        }}
+      >
+        {/* Sidebar */}
+        <aside
           style={{
+            gridRow: '1 / span 2',
+            gridColumn: 1,
+            background: tokens.color.surface,
+            borderRight: `1px solid ${tokens.color.borderLight}`,
             display: 'flex',
-            flexWrap: 'wrap',
-            gap: 6,
-            alignItems: 'center',
+            flexDirection: 'column',
           }}
         >
-          {NAV_ITEMS.map((item) => (
-            <button
-              key={item.key}
-              onClick={() => handleSetPage(item.key)}
-              style={{
-                padding: '8px 14px',
-                fontSize: tokens.font.sizeSm,
-                fontWeight: page === item.key ? tokens.font.weightSemibold : tokens.font.weightMedium,
-                backgroundColor: page === item.key ? tokens.color.accent : 'transparent',
-                color: page === item.key ? '#ffffff' : tokens.color.textSecondary,
-                borderRadius: tokens.radius.sm,
-                border: page === item.key ? 'none' : `1px solid ${tokens.color.borderLight}`,
-                cursor: 'pointer',
-                transition: 'background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease',
-              }}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-
-        {(page === 'dashboard' || page === 'comparison' || page === 'campaigns') && (
           <div
             style={{
-              marginLeft: 'auto',
               display: 'flex',
               alignItems: 'center',
-              gap: 8,
-              flexWrap: 'wrap',
+              justifyContent: sidebarCollapsed ? 'center' : 'space-between',
+              padding: '12px 10px',
+              borderBottom: `1px solid ${tokens.color.borderLight}`,
             }}
           >
-            <label
+            {!sidebarCollapsed && (
+              <div>
+                <div
+                  style={{
+                    fontSize: tokens.font.sizeSm,
+                    fontWeight: tokens.font.weightSemibold,
+                    color: tokens.color.text,
+                    letterSpacing: '-0.02em',
+                  }}
+                >
+                  Meiro measurement
+                </div>
+                <div
+                  style={{
+                    fontSize: tokens.font.sizeXs,
+                    color: tokens.color.textSecondary,
+                  }}
+                >
+                  Workspace
+                </div>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setSidebarCollapsed((prev) => {
+                  const next = !prev
+                  try {
+                    window.localStorage.setItem('mmm-sidebar-collapsed-v1', next ? 'true' : 'false')
+                  } catch {
+                    // ignore
+                  }
+                  return next
+                })
+              }}
               style={{
-                fontSize: tokens.font.sizeSm,
-                fontWeight: tokens.font.weightMedium,
+                border: 'none',
+                background: 'transparent',
+                cursor: 'pointer',
+                padding: 6,
+                borderRadius: tokens.radius.full,
                 color: tokens.color.textSecondary,
               }}
+              title={sidebarCollapsed ? 'Expand navigation' : 'Collapse navigation'}
             >
-              Model
-            </label>
-            <select
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
-              style={{
-                padding: '6px 10px',
-                fontSize: tokens.font.sizeSm,
-                border: `1px solid ${tokens.color.border}`,
-                borderRadius: tokens.radius.sm,
-                fontWeight: tokens.font.weightMedium,
-                color: tokens.color.text,
-                cursor: 'pointer',
-                backgroundColor: '#ffffff',
-              }}
-            >
-              {ATTRIBUTION_MODELS.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-            <label
-              style={{
-                fontSize: tokens.font.sizeSm,
-                fontWeight: tokens.font.weightMedium,
-                color: tokens.color.textSecondary,
-                marginLeft: 4,
-              }}
-            >
-              Config
-            </label>
-            <select
-              value={selectedConfigId ?? ''}
-              onChange={(e) => setSelectedConfigId(e.target.value || null)}
-              style={{
-                padding: '6px 10px',
-                fontSize: tokens.font.sizeSm,
-                border: `1px solid ${tokens.color.border}`,
-                borderRadius: tokens.radius.sm,
-                fontWeight: tokens.font.weightMedium,
-                color: tokens.color.text,
-                cursor: 'pointer',
-                maxWidth: 260,
-                backgroundColor: '#ffffff',
-              }}
-            >
-              <option value="">Default active</option>
-              {(modelConfigsQuery.data ?? [])
-                .filter((c) => c.status === 'active' || c.status === 'draft')
-                .map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} v{c.version} {c.status === 'active' ? '• active' : '(draft)'}
-                  </option>
-                ))}
-            </select>
+              {sidebarCollapsed ? '›' : '‹'}
+            </button>
           </div>
-        )}
-      </nav>
 
-      {/* Main Content */}
-      <main style={LAYOUT_STYLES.main}>
-        {!journeysLoaded && page !== 'datasources' && page !== 'expenses' && page !== 'mmm' && page !== 'comparison' && page !== 'paths' && page !== 'campaigns' && page !== 'settings' && page !== 'dq' && page !== 'incrementality' && (
-          <div style={{
-            padding: 40, maxWidth: 560, margin: '0 auto',
-            backgroundColor: tokens.color.surface,
-            borderRadius: tokens.radius.lg,
-            border: `1px solid ${tokens.color.border}`,
-            boxShadow: tokens.shadow,
-          }}>
-            <h2 style={{ fontSize: tokens.font.size2xl, color: tokens.color.text, marginBottom: tokens.space.sm, textAlign: 'center' }}>
-              Welcome to the Attribution Dashboard
-            </h2>
-            <p style={{ fontSize: tokens.font.sizeBase, color: tokens.color.textSecondary, textAlign: 'center', marginBottom: tokens.space.xl }}>
-              Get started in three steps:
-            </p>
-            <ol style={{ fontSize: tokens.font.sizeMd, color: tokens.color.text, marginBottom: tokens.space.xl, paddingLeft: 24, lineHeight: 1.8 }}>
-              <li>Load conversion path data (sample, upload, or connect a data source).</li>
-              <li>Run attribution models from the header, then open Channel or Campaign Performance.</li>
-              <li>Use Conversion Paths for next-best-action and MMM for mix modeling.</li>
-            </ol>
-            <div style={{ display: 'flex', gap: tokens.space.md, justifyContent: 'center', flexWrap: 'wrap' }}>
-              <button
-                onClick={() => loadSampleMutation.mutate()}
-                disabled={loadSampleMutation.isPending}
+          {/* Nav search + pinned */}
+          {!sidebarCollapsed && (
+            <div
+              style={{
+                padding: '10px 12px 4px',
+                borderBottom: `1px solid ${tokens.color.borderLight}`,
+              }}
+            >
+              <input
+                type="text"
+                value={navSearch}
+                onChange={(e) => setNavSearch(e.target.value)}
+                placeholder="Search pages…"
                 style={{
-                  padding: `${tokens.space.md}px ${tokens.space.xl}px`,
-                  fontSize: tokens.font.sizeBase,
-                  fontWeight: tokens.font.weightSemibold,
-                  backgroundColor: tokens.color.success,
-                  color: 'white',
-                  border: 'none',
+                  width: '100%',
+                  padding: '6px 10px',
+                  fontSize: tokens.font.sizeSm,
                   borderRadius: tokens.radius.sm,
-                  cursor: loadSampleMutation.isPending ? 'wait' : 'pointer',
+                  border: `1px solid ${tokens.color.borderLight}`,
+                  backgroundColor: tokens.color.bg,
+                  color: tokens.color.text,
+                }}
+              />
+            </div>
+          )}
+
+          <nav
+            style={{
+              flex: 1,
+              overflowY: 'auto',
+              padding: sidebarCollapsed ? '8px 4px' : '8px 8px 16px',
+            }}
+          >
+            {(() => {
+              const filtered = NAV_ITEMS.filter((item) =>
+                item.label.toLowerCase().includes(navSearch.trim().toLowerCase()),
+              )
+              const pinned = filtered.filter((item) => pinnedPages.includes(item.key))
+              const bySection: Record<NavSection, NavItem[]> = {
+                Overview: [],
+                Attribution: [],
+                'Causal / Planning': [],
+                Journeys: [],
+                'Data & Ops': [],
+                Admin: [],
+              }
+              filtered.forEach((item) => {
+                bySection[item.section].push(item)
+              })
+
+              const renderItem = (item: NavItem) => {
+                const active = page === item.key
+                const isPinned = pinnedPages.includes(item.key)
+                const baseStyle: React.CSSProperties = {
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  width: '100%',
+                  border: 'none',
+                  background: active ? tokens.color.accentMuted : 'transparent',
+                  color: active ? tokens.color.accent : tokens.color.textSecondary,
+                  padding: sidebarCollapsed ? '6px 6px' : '6px 10px',
+                  borderRadius: tokens.radius.md,
+                  cursor: 'pointer',
+                  fontSize: tokens.font.sizeSm,
+                  fontWeight: active ? tokens.font.weightSemibold : tokens.font.weightMedium,
+                }
+                return (
+                  <div key={item.key} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <button
+                      type="button"
+                      onClick={() => handleSetPage(item.key)}
+                      style={baseStyle}
+                      title={sidebarCollapsed ? item.label : undefined}
+                    >
+                      <div
+                        style={{
+                          width: 24,
+                          height: 24,
+                          borderRadius: 999,
+                          border: `1px solid ${active ? tokens.color.accent : tokens.color.borderLight}`,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: tokens.font.sizeXs,
+                          color: active ? tokens.color.accent : tokens.color.textMuted,
+                          backgroundColor: tokens.color.surface,
+                          flexShrink: 0,
+                        }}
+                      >
+                        {item.icon}
+                      </div>
+                      {!sidebarCollapsed && <span>{item.label}</span>}
+                    </button>
+                    {!sidebarCollapsed && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPinnedPages((prev) => {
+                            const next = isPinned ? prev.filter((p) => p !== item.key) : [...prev, item.key]
+                            try {
+                              window.localStorage.setItem('mmm-pinned-pages-v1', JSON.stringify(next))
+                            } catch {
+                              // ignore
+                            }
+                            return next
+                          })
+                        }}
+                        style={{
+                          border: 'none',
+                          background: 'transparent',
+                          cursor: 'pointer',
+                          padding: 2,
+                          fontSize: tokens.font.sizeXs,
+                          color: isPinned ? tokens.color.accent : tokens.color.textMuted,
+                        }}
+                        title={isPinned ? 'Unpin from favorites' : 'Pin to favorites'}
+                      >
+                        {isPinned ? '★' : '☆'}
+                      </button>
+                    )}
+                  </div>
+                )
+              }
+
+              const sectionsInOrder: NavSection[] = [
+                'Overview',
+                'Attribution',
+                'Journeys',
+                'Causal / Planning',
+                'Data & Ops',
+                'Admin',
+              ]
+
+              return (
+                <>
+                  {pinned.length > 0 && !sidebarCollapsed && (
+                    <div style={{ marginBottom: 12 }}>
+                      <div
+                        style={{
+                          fontSize: tokens.font.sizeXs,
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.08em',
+                          color: tokens.color.textMuted,
+                          margin: '4px 8px',
+                        }}
+                      >
+                        Pinned
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {pinned.map(renderItem)}
+                      </div>
+                    </div>
+                  )}
+
+                  {sectionsInOrder.map((section) => {
+                    const items = bySection[section]
+                    if (!items.length) return null
+                    return (
+                      <div key={section} style={{ marginBottom: 12 }}>
+                        {!sidebarCollapsed && (
+                          <div
+                            style={{
+                              fontSize: tokens.font.sizeXs,
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.08em',
+                              color: tokens.color.textMuted,
+                              margin: '6px 8px',
+                            }}
+                          >
+                            {section}
+                          </div>
+                        )}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          {items.map(renderItem)}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </>
+              )
+            })()}
+          </nav>
+        </aside>
+
+        {/* Top app bar */}
+        <header
+          style={{
+            gridRow: 1,
+            gridColumn: 2,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '8px 20px',
+            borderBottom: `1px solid ${tokens.color.borderLight}`,
+            background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 40%, #1d4ed8 100%)',
+            color: '#e5e7eb',
+            gap: 12,
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 2,
+            }}
+          >
+            <div
+              style={{
+                fontSize: tokens.font.sizeSm,
+                fontWeight: tokens.font.weightSemibold,
+                letterSpacing: '-0.02em',
+              }}
+            >
+              Meiro measurement workspace
+            </div>
+            <div
+              style={{
+                fontSize: tokens.font.sizeXs,
+                color: 'rgba(226,232,240,0.85)',
+              }}
+            >
+              Unified attribution, incrementality, MMM, and data quality.
+            </div>
+          </div>
+
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              flexWrap: 'wrap',
+              justifyContent: 'flex-end',
+              minWidth: 0,
+            }}
+          >
+            {/* Workspace context: period & conversion (read-only) */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                flexWrap: 'wrap',
+              }}
+            >
+              <div
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: 999,
+                  backgroundColor: 'rgba(15,23,42,0.65)',
+                  border: '1px solid rgba(148,163,184,0.5)',
+                  fontSize: tokens.font.sizeXs,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  whiteSpace: 'nowrap',
                 }}
               >
-                {loadSampleMutation.isPending ? 'Loading…' : 'Load sample data'}
-              </button>
-              <button
-                onClick={handleSetDatasources}
+                <span style={{ opacity: 0.85 }}>Period</span>
+                <span style={{ fontWeight: tokens.font.weightMedium }}>
+                  {journeysLoaded && journeysQuery.data?.date_min && journeysQuery.data?.date_max
+                    ? `${journeysQuery.data.date_min.slice(0, 10)} – ${journeysQuery.data.date_max.slice(0, 10)}`
+                    : 'Derived from journeys'}
+                </span>
+              </div>
+              <div
                 style={{
-                  padding: `${tokens.space.md}px ${tokens.space.xl}px`,
-                  fontSize: tokens.font.sizeBase,
-                  fontWeight: tokens.font.weightSemibold,
-                  backgroundColor: '#fd7e14',
-                  color: 'white',
-                  border: 'none',
+                  padding: '4px 10px',
+                  borderRadius: 999,
+                  backgroundColor: 'rgba(15,23,42,0.65)',
+                  border: '1px solid rgba(148,163,184,0.5)',
+                  fontSize: tokens.font.sizeXs,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                <span style={{ opacity: 0.85 }}>Conversion</span>
+                <span style={{ fontWeight: tokens.font.weightMedium }}>
+                  {primaryKpiLabel || primaryKpiId || 'Primary KPI'}
+                </span>
+                <span style={{ opacity: 0.7 }}>(read‑only)</span>
+              </div>
+            </div>
+
+            {/* Model + config selectors */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                flexWrap: 'wrap',
+              }}
+            >
+              <label
+                style={{
+                  fontSize: tokens.font.sizeXs,
+                  color: 'rgba(226,232,240,0.9)',
+                }}
+              >
+                Model
+              </label>
+              <select
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                style={{
+                  padding: '4px 8px',
+                  fontSize: tokens.font.sizeXs,
                   borderRadius: tokens.radius.sm,
+                  border: '1px solid rgba(148,163,184,0.6)',
+                  backgroundColor: '#0b1220',
+                  color: '#e5e7eb',
                   cursor: 'pointer',
                 }}
               >
-                Connect data sources
-              </button>
+                {ATTRIBUTION_MODELS.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+              <label
+                style={{
+                  fontSize: tokens.font.sizeXs,
+                  color: 'rgba(226,232,240,0.9)',
+                }}
+              >
+                Config
+              </label>
+              <select
+                value={selectedConfigId ?? ''}
+                onChange={(e) => setSelectedConfigId(e.target.value || null)}
+                style={{
+                  padding: '4px 8px',
+                  fontSize: tokens.font.sizeXs,
+                  borderRadius: tokens.radius.sm,
+                  border: '1px solid rgba(148,163,184,0.6)',
+                  backgroundColor: '#0b1220',
+                  color: '#e5e7eb',
+                  cursor: 'pointer',
+                  maxWidth: 220,
+                }}
+              >
+                <option value="">Default active</option>
+                {(modelConfigsQuery.data ?? [])
+                  .filter((c) => c.status === 'active' || c.status === 'draft')
+                  .map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} v{c.version} {c.status === 'active' ? '• active' : '(draft)'}
+                    </option>
+                  ))}
+              </select>
+            </div>
+
+            {/* Journeys badge + CTA */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                flexWrap: 'wrap',
+              }}
+            >
+              <div
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: 999,
+                  fontSize: tokens.font.sizeXs,
+                  fontWeight: tokens.font.weightSemibold,
+                  backgroundColor: journeysLoaded ? 'rgba(22,163,74,0.26)' : 'rgba(250,204,21,0.18)',
+                  color: journeysLoaded ? '#bbf7d0' : '#facc15',
+                  border: `1px solid ${journeysLoaded ? 'rgba(34,197,94,0.7)' : 'rgba(234,179,8,0.6)'}`,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {journeysLoaded
+                  ? primaryKpiLabel
+                    ? `${journeyCount} journeys · ${primaryKpiLabel}: ${primaryKpiCount ?? convertedCount}`
+                    : `${journeyCount} journeys · ${convertedCount} converted`
+                  : 'No journeys loaded'}
+              </div>
+              {!journeysLoaded && (
+                <button
+                  type="button"
+                  onClick={() => loadSampleMutation.mutate()}
+                  disabled={loadSampleMutation.isPending}
+                  style={{
+                    padding: '6px 14px',
+                    borderRadius: 999,
+                    fontSize: tokens.font.sizeXs,
+                    fontWeight: tokens.font.weightSemibold,
+                    backgroundColor: tokens.color.accent,
+                    color: '#ffffff',
+                    border: 'none',
+                    cursor: loadSampleMutation.isPending ? 'wait' : 'pointer',
+                    opacity: loadSampleMutation.isPending ? 0.7 : 1,
+                  }}
+                >
+                  {loadSampleMutation.isPending ? 'Loading sample…' : 'Load sample data'}
+                </button>
+              )}
+              {journeysLoaded && (
+                <button
+                  type="button"
+                  onClick={() => runAllMutation.mutate()}
+                  disabled={runAllMutation.isPending}
+                  style={{
+                    padding: '6px 16px',
+                    borderRadius: 999,
+                    fontSize: tokens.font.sizeXs,
+                    fontWeight: tokens.font.weightSemibold,
+                    backgroundColor: '#f97316',
+                    color: '#111827',
+                    border: 'none',
+                    cursor: runAllMutation.isPending ? 'wait' : 'pointer',
+                    opacity: runAllMutation.isPending ? 0.85 : 1,
+                    boxShadow: '0 0 0 1px rgba(15,23,42,0.4)',
+                  }}
+                >
+                  {runAllMutation.isPending ? 'Running models…' : 'Re-run attribution models'}
+                </button>
+              )}
             </div>
           </div>
-        )}
+        </header>
 
-        {(journeysLoaded || page === 'datasources' || page === 'expenses' || page === 'mmm' || page === 'comparison' || page === 'paths' || page === 'campaigns' || page === 'settings' || page === 'dq' || page === 'incrementality') && (
-          <Suspense fallback={PAGE_FALLBACK}>
-            {page === 'dashboard' && (
-              <ChannelPerformance model={selectedModel} channels={channels} modelsReady={!!runAllMutation.data} configId={selectedConfigId} />
-            )}
-            {page === 'campaigns' && (
-              <CampaignPerformance model={selectedModel} modelsReady={!!runAllMutation.data} configId={selectedConfigId} />
-            )}
-            {page === 'comparison' && (
-              <AttributionComparison selectedModel={selectedModel} onSelectModel={setSelectedModel} />
-            )}
-            {page === 'paths' && <ConversionPaths />}
-            {page === 'path_archetypes' && <PathArchetypes />}
-            {page === 'expenses' && <ExpenseManager />}
-            {page === 'datasources' && (
-              <DataSources onJourneysImported={onJourneysImported} />
-            )}
-            {page === 'settings' && <SettingsPage />}
-            {page === 'dq' && <DataQuality />}
-            {page === 'incrementality' && <IncrementalityPage />}
-            {/* PathArchetypes can be linked from ConversionPaths via URL hash or future nav item */}
-            {page === 'mmm' && (
-              <div style={{ maxWidth: 1400, margin: '0 auto' }}>
-                {!mmmRunId ? (
-                  <>
-                    <div style={{ marginBottom: tokens.space.xl }}>
-                      <h1 style={{ margin: 0, fontSize: tokens.font.size2xl, fontWeight: tokens.font.weightBold, color: tokens.color.text, letterSpacing: '-0.02em' }}>
-                        Marketing Mix Modeling (MMM)
-                      </h1>
-                      <p style={{ margin: `${tokens.space.xs}px 0 0`, fontSize: tokens.font.sizeSm, color: tokens.color.textSecondary }}>
-                        Upload weekly spend + KPI data, map columns, then run a Bayesian MMM. Results include ROI by channel, contributions, and budget optimization.
-                      </p>
-                    </div>
-                    <DatasetUploader onMappingComplete={onMmmMappingComplete} />
-                    {createMmmRunMutation.isPending && (
-                      <div style={{ marginTop: tokens.space.xl, padding: tokens.space.xl, textAlign: 'center', backgroundColor: tokens.color.bg, borderRadius: tokens.radius.lg, border: `1px solid ${tokens.color.border}` }}>
-                        <p style={{ fontWeight: tokens.font.weightSemibold, color: tokens.color.text, margin: 0 }}>Starting model run…</p>
-                        <p style={{ fontSize: tokens.font.sizeSm, color: tokens.color.textSecondary, marginTop: tokens.space.sm }}>You will be taken to results when the run is queued.</p>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    {(mmmRunQuery.isLoading || mmmRunQuery.data?.status === 'queued' || mmmRunQuery.data?.status === 'running') && (
-                      <div style={{ marginBottom: tokens.space.xl, padding: tokens.space.xl, textAlign: 'center', backgroundColor: tokens.color.warningMuted, borderRadius: tokens.radius.lg, border: `1px solid ${tokens.color.warning}` }}>
-                        <p style={{ fontWeight: tokens.font.weightSemibold, color: tokens.color.warning, margin: 0 }}>Model {mmmRunQuery.data?.status === 'running' ? 'running' : 'queued'}…</p>
-                        <p style={{ fontSize: tokens.font.sizeSm, color: tokens.color.warning, marginTop: tokens.space.sm }}>This may take a few minutes. The page will update automatically.</p>
-                      </div>
-                    )}
-                    {mmmRunQuery.data?.status === 'error' && (
-                      <div style={{ marginBottom: tokens.space.xl, padding: tokens.space.xl, backgroundColor: tokens.color.dangerMuted, borderRadius: tokens.radius.lg, border: `1px solid ${tokens.color.danger}` }}>
-                        <p style={{ fontWeight: tokens.font.weightSemibold, color: tokens.color.danger, margin: 0 }}>Model run failed</p>
-                        <p style={{ fontSize: tokens.font.sizeSm, color: tokens.color.danger, marginTop: tokens.space.sm }}>{String((mmmRunQuery.data as { detail?: string }).detail ?? 'Unknown error')}</p>
-                        <button
-                          type="button"
-                          onClick={handleMmmStartOver}
-                          style={{ marginTop: tokens.space.md, padding: `${tokens.space.sm}px ${tokens.space.lg}px`, fontSize: tokens.font.sizeSm, backgroundColor: tokens.color.textMuted, color: tokens.color.surface, border: 'none', borderRadius: tokens.radius.sm, cursor: 'pointer', fontWeight: tokens.font.weightMedium }}
-                        >
-                          Start over
-                        </button>
-                      </div>
-                    )}
-                    {mmmRunQuery.data?.status === 'finished' && (
-                      <>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: tokens.space.xl, flexWrap: 'wrap', gap: tokens.space.md }}>
-                          <h2 style={{ margin: 0, fontSize: tokens.font.size2xl, fontWeight: tokens.font.weightBold, color: tokens.color.text }}>MMM Results</h2>
-                          <button
-                            type="button"
-                            onClick={handleMmmStartOver}
-                            style={{ padding: `${tokens.space.sm}px ${tokens.space.lg}px`, fontSize: tokens.font.sizeSm, fontWeight: tokens.font.weightMedium, color: tokens.color.surface, backgroundColor: tokens.color.textSecondary, border: 'none', borderRadius: tokens.radius.sm, cursor: 'pointer' }}
-                          >
-                            New model run
-                          </button>
-                        </div>
-                        <MMMDashboard runId={mmmRunId!} datasetId={mmmDatasetId ?? ''} />
-                        {mmmRunQuery.data?.roi?.length > 0 && mmmRunQuery.data?.contrib?.length > 0 && (
-                          <BudgetOptimizer
-                            roiData={mmmRunQuery.data.roi}
-                            contribData={mmmRunQuery.data.contrib}
-                            runId={mmmRunId!}
-                          />
-                        )}
-                      </>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
-          </Suspense>
-        )}
-      </main>
-    </div>
+        {/* Main content with page-level header + breadcrumbs */}
+        <main
+          style={{
+            gridRow: 2,
+            gridColumn: 2,
+            padding: '20px 24px 28px',
+            overflow: 'auto',
+          }}
+        >
+          <div
+            style={{
+              maxWidth: 1400,
+              margin: '0 auto',
+            }}
+          >
+            {/* Breadcrumb / page meta */}
+            <div
+              style={{
+                marginBottom: 12,
+                fontSize: tokens.font.sizeXs,
+                color: tokens.color.textMuted,
+              }}
+            >
+              {NAV_ITEMS.find((n) => n.key === page)?.breadcrumb}
+            </div>
+
+            <Suspense fallback={PAGE_FALLBACK}>
+              {page === 'overview' && (
+                <Overview
+                  lastPage={lastPage}
+                  onNavigate={(p) => handleSetPage(p)}
+                  onConnectDataSources={handleSetDatasources}
+                />
+              )}
+              {page === 'dashboard' && (
+                <ChannelPerformance
+                  model={selectedModel}
+                  channels={channels}
+                  modelsReady={!!runAllMutation.data}
+                  configId={selectedConfigId}
+                />
+              )}
+              {page === 'campaigns' && (
+                <CampaignPerformance
+                  model={selectedModel}
+                  modelsReady={!!runAllMutation.data}
+                  configId={selectedConfigId}
+                />
+              )}
+              {page === 'comparison' && (
+                <AttributionComparison selectedModel={selectedModel} onSelectModel={setSelectedModel} />
+              )}
+              {page === 'paths' && <ConversionPaths />}
+              {page === 'path_archetypes' && <PathArchetypes />}
+              {page === 'expenses' && <ExpenseManager />}
+              {page === 'datasources' && <DataSources onJourneysImported={onJourneysImported} />}
+              {page === 'settings' && <SettingsPage />}
+              {page === 'dq' && <DataQuality />}
+              {page === 'incrementality' && <IncrementalityPage />}
+              {page === 'mmm' && (
+                <MMMWizardShell
+                  primaryKpiLabel={primaryKpiLabel}
+                  currencyCode={undefined}
+                  onOpenDataQuality={() => handleSetPage('dq')}
+                  mmmRunId={mmmRunId}
+                  mmmDatasetId={mmmDatasetId}
+                  pendingMmmMapping={pendingMmmMapping}
+                  mmmRunQuery={mmmRunQuery}
+                  createMmmRunMutation={createMmmRunMutation}
+                  onMmmMappingComplete={onMmmMappingComplete}
+                  onMmmStartRun={onMmmStartRun}
+                  onMmmSelectRun={onMmmSelectRun}
+                  onStartOver={handleMmmStartOver}
+                />
+              )}
+            </Suspense>
+          </div>
+        </main>
+      </div>
+    </WorkspaceContext.Provider>
   )
 }

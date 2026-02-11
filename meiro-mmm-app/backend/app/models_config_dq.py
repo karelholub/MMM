@@ -105,6 +105,7 @@ class DQAlert(Base):
     baseline_value = Column(Float, nullable=True)
     status = Column(String(32), nullable=False, default="open")  # open/acked/resolved
     message = Column(Text, nullable=False)
+    note = Column(Text, nullable=True)
 
 
 class NotificationEndpoint(Base):

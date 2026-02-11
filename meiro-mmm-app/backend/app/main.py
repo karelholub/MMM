@@ -51,6 +51,8 @@ from app.services_quality import (
     compute_overall_quality_from_dq,
 )
 from app.services_paths import compute_path_archetypes, compute_path_anomalies
+from app.services_mmm_platform import build_mmm_dataset_from_platform
+from app.services_mmm_mapping import build_smart_suggestions, validate_mapping
 from app.services_incrementality import (
     assign_profiles_deterministic,
     record_exposure,
@@ -104,6 +106,11 @@ class ModelConfig(BaseModel):
     covariates: Optional[List[str]] = []
     priors: Optional[Dict[str, Any]] = None
     mcmc: Optional[Dict[str, Any]] = None
+    use_adstock: bool = True
+    use_saturation: bool = True
+    holdout_weeks: Optional[int] = 8
+    random_seed: Optional[int] = None
+    channel_display_names: Optional[Dict[str, str]] = None  # channel id -> human-readable name for MMM outputs
 
     def __init__(self, **data):
         if 'priors' not in data or data['priors'] is None:
@@ -217,6 +224,27 @@ class AttributionMappingConfig(BaseModel):
     channel_field: str = "channel"
     timestamp_field: str = "timestamp"
 
+
+class BuildFromPlatformRequest(BaseModel):
+    """Request to build an MMM weekly dataset from platform journeys and expenses."""
+    date_start: str  # ISO date
+    date_end: str    # ISO date
+    kpi_target: str = "sales"  # sales | attribution (marketing-driven conversions)
+    spend_channels: List[str]  # e.g. ["google_ads", "meta_ads", "linkedin_ads"]
+    covariates: Optional[List[str]] = None
+    currency: str = "USD"
+    attribution_model: Optional[str] = None  # e.g. "linear"; when kpi_target=attribution, which model was used
+    attribution_config_id: Optional[str] = None  # optional model config id
+
+
+class ValidateMappingRequest(BaseModel):
+    """Request to validate an MMM column mapping before running the model."""
+    date_column: str
+    kpi: str
+    spend_channels: List[str]
+    covariates: Optional[List[str]] = None
+    kpi_target: Optional[str] = None  # sales | attribution; used for suggestion context only
+
 # ==================== In-memory State ====================
 
 RUNS: Dict[str, Any] = {}
@@ -236,6 +264,35 @@ PATH_ARCHETYPES_CACHE: Dict[tuple, Dict[str, Any]] = {}
 SAMPLE_DIR = Path(__file__).parent / "sample_data"
 DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+MMM_PLATFORM_DIR = DATA_DIR / "mmm_platform"
+MMM_PLATFORM_DIR.mkdir(parents=True, exist_ok=True)
+RUNS_FILE = DATA_DIR / "mmm_runs.json"
+
+
+def _load_runs():
+    """Load run registry from disk (idempotent)."""
+    global RUNS
+    if RUNS_FILE.exists():
+        try:
+            raw = RUNS_FILE.read_text(encoding="utf-8")
+            RUNS.update(json.loads(raw))
+        except Exception:
+            pass
+
+
+def _save_runs():
+    """Persist run registry. Only serializable fields (no Path, etc.)."""
+    try:
+        out = {}
+        for rid, r in RUNS.items():
+            out[rid] = {k: v for k, v in r.items() if k in ("status", "config", "kpi_mode", "created_at", "updated_at", "dataset_id", "r2", "contrib", "roi", "engine", "detail", "uplift", "campaigns", "channel_summary", "adstock_params", "saturation_params", "diagnostics", "attribution_model", "attribution_config_id")}
+        RUNS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        RUNS_FILE.write_text(json.dumps(out, indent=0), encoding="utf-8")
+    except Exception:
+        pass
+
+
+_load_runs()
 
 
 # ==================== Settings ====================
@@ -1201,6 +1258,85 @@ def get_attribution_result(model: str):
     if not result:
         raise HTTPException(status_code=404, detail=f"No results for model '{model}'. Run it first.")
     return result
+
+
+def _attribution_weekly_series(
+    journeys: List[Dict],
+    model: str,
+    date_start: str,
+    date_end: str,
+    config_id: Optional[str] = None,
+    db=None,
+) -> List[Dict[str, Any]]:
+    """Return list of { date, attributed_value } for each week by running attribution on journeys that converted that week."""
+    import pandas as pd
+    WEEK_FREQ = "W-MON"
+    ds = pd.to_datetime(date_start, errors="coerce")
+    de = pd.to_datetime(date_end, errors="coerce")
+    if pd.isna(ds) or pd.isna(de) or ds > de:
+        return []
+    date_start_ts = ds.normalize().to_period(WEEK_FREQ).start_time
+    date_end_ts = de.normalize().to_period(WEEK_FREQ).start_time
+    week_range = pd.date_range(start=date_start_ts, end=date_end_ts, freq=WEEK_FREQ)
+
+    def _conversion_week(j):
+        tps = j.get("touchpoints") or []
+        last_ts = None
+        for tp in tps:
+            ts = tp.get("timestamp")
+            if not ts:
+                continue
+            try:
+                t = pd.to_datetime(ts, errors="coerce")
+                if pd.notna(t):
+                    last_ts = t if last_ts is None else max(last_ts, t)
+            except Exception:
+                continue
+        if last_ts is None:
+            return None
+        return last_ts.normalize().to_period(WEEK_FREQ).start_time
+
+    resolved_cfg, meta = load_config_and_meta(db, config_id) if db else (None, None)
+    journeys_for_model = apply_model_config_to_journeys(journeys, (resolved_cfg.config_json or {}) if resolved_cfg else {}) if resolved_cfg else journeys
+    kwargs = {}
+    if model == "time_decay" and SETTINGS.attribution.time_decay_half_life_days:
+        kwargs["half_life_days"] = SETTINGS.attribution.time_decay_half_life_days
+    if model == "position_based":
+        kwargs["first_pct"] = SETTINGS.attribution.position_first_pct
+        kwargs["last_pct"] = SETTINGS.attribution.position_last_pct
+
+    out = []
+    for w in week_range:
+        week_journeys = [
+            j for j in journeys_for_model
+            if j.get("converted", True) and _conversion_week(j) == w
+        ]
+        if not week_journeys:
+            out.append({"date": w.strftime("%Y-%m-%d"), "attributed_value": 0.0})
+            continue
+        try:
+            res = run_attribution(week_journeys, model=model, **kwargs)
+            out.append({"date": w.strftime("%Y-%m-%d"), "attributed_value": float(res.get("total_value", 0) or 0)})
+        except Exception:
+            out.append({"date": w.strftime("%Y-%m-%d"), "attributed_value": 0.0})
+    return out
+
+
+@app.get("/api/attribution/weekly")
+def get_attribution_weekly(
+    model: str = Query(..., description="Attribution model id"),
+    date_start: str = Query(..., description="ISO date start"),
+    date_end: str = Query(..., description="ISO date end"),
+    config_id: Optional[str] = Query(None),
+    db=Depends(get_db),
+):
+    """Return attributed value (or conversions) per week for reconciliation with MMM KPI series."""
+    global JOURNEYS
+    if not JOURNEYS:
+        JOURNEYS = load_journeys_from_db(db, limit=50000)
+    series = _attribution_weekly_series(JOURNEYS, model, date_start, date_end, config_id, db)
+    return {"model": model, "config_id": config_id, "series": series}
+
 
 @app.get("/api/attribution/paths")
 def get_path_analysis(
@@ -2448,15 +2584,113 @@ def start_oauth(platform: str):
 @app.post("/api/data-quality/run")
 def run_data_quality(db=Depends(get_db)):
     """Compute a new DQ snapshot bucket and evaluate alert rules."""
+    started = time.time()
     snaps = compute_dq_snapshots(db)
     alerts = evaluate_alert_rules(db)
     # Derive coarse confidence snapshots for channel/campaign scopes from latest DQ metrics
     quality_snaps = compute_overall_quality_from_dq(db)
+    duration_ms = int((time.time() - started) * 1000)
     return {
         "snapshots_created": len(snaps),
         "alerts_created": len(alerts),
-        "latest_bucket": snaps[0].ts_bucket if snaps else None,
+        "latest_bucket": snaps[0].ts_bucket.isoformat() if snaps else None,
         "quality_snapshots_created": len(quality_snaps),
+        "duration_ms": duration_ms,
+    }
+
+
+@app.get("/api/data-quality/last-run")
+def get_data_quality_last_run(db=Depends(get_db)):
+    """Return last DQ run metadata (derived from latest snapshot bucket)."""
+    row = db.query(DQSnapshot.ts_bucket).order_by(DQSnapshot.ts_bucket.desc()).first()
+    if not row:
+        return {"last_bucket": None, "has_data": False}
+    return {"last_bucket": row[0].isoformat() if hasattr(row[0], "isoformat") else str(row[0]), "has_data": True}
+
+
+# Drilldown definitions and recommended actions per metric
+_DQ_DRILLDOWN = {
+    "freshness_lag_minutes": {
+        "definition": "How delayed the most recent event is per source. High lag means attribution windows may miss recent touchpoints.",
+        "recommended_actions": [
+            "Check Meiro event ingestion delay in Data Sources",
+            "Verify ad platform connector sync schedule",
+            "Review Expenses reconciliation timing",
+        ],
+    },
+    "missing_profile_pct": {
+        "definition": "Share of journeys without a profile/customer ID. Without IDs, paths cannot be joined to conversions.",
+        "recommended_actions": [
+            "Verify gclid/fbclid capture and consent on landing pages",
+            "Check Meiro identity resolution and profile stitching",
+            "Ensure event tracking includes customer_id or equivalent",
+        ],
+    },
+    "missing_timestamp_pct": {
+        "definition": "Share of journeys with no touchpoint timestamps. Without timestamps, windowing and path ordering break.",
+        "recommended_actions": [
+            "Ensure all events include timestamp or event_time",
+            "Check UTM taxonomy mapping for server-side events",
+            "Verify event enrichment pipelines add timestamps",
+        ],
+    },
+    "duplicate_id_pct": {
+        "definition": "Share of duplicate profile IDs across journeys. Duplicates can cause double-counting in attribution.",
+        "recommended_actions": [
+            "Review identity resolution and deduplication rules",
+            "Check for multiple event streams emitting same profile_id",
+            "Verify Conversion Paths deduplication logic",
+        ],
+    },
+    "conversion_attributable_pct": {
+        "definition": "Share of conversions with at least one eligible touchpoint. Low values mean many conversions cannot be attributed.",
+        "recommended_actions": [
+            "Review eligible touchpoints config in Model Configurator",
+            "Fix UTM taxonomy mapping for new sources in Taxonomy",
+            "Check Connectors for missing channel mapping",
+        ],
+    },
+}
+
+
+@app.get("/api/data-quality/drilldown")
+def get_data_quality_drilldown(
+    metric_key: str,
+    source: Optional[str] = None,
+    limit: int = 10,
+    db=Depends(get_db),
+):
+    """Return drilldown: definition, breakdown by source, top offenders (if available), recommended actions."""
+    info = _DQ_DRILLDOWN.get(metric_key, {})
+    definition = info.get("definition", f" metric: {metric_key}")
+    recommended_actions = info.get("recommended_actions", [])
+
+    q = db.query(DQSnapshot).filter(DQSnapshot.metric_key == metric_key).order_by(DQSnapshot.ts_bucket.desc())
+    if source:
+        q = q.filter(DQSnapshot.source == source)
+    rows = q.limit(limit * 3).all()
+    by_source: Dict[str, float] = {}
+    top_offenders: List[Dict[str, Any]] = []
+    seen_sources = set()
+    for r in rows:
+        if r.source not in seen_sources:
+            seen_sources.add(r.source)
+            by_source[r.source] = r.metric_value
+        if r.meta_json and isinstance(r.meta_json, dict):
+            offenders = r.meta_json.get("top_offenders") or r.meta_json.get("top_campaigns")
+            if offenders and not top_offenders:
+                for i, o in enumerate(offenders[:10]):
+                    if isinstance(o, dict):
+                        top_offenders.append(o)
+                    elif isinstance(o, (str, int, float)):
+                        top_offenders.append({"key": str(o), "value": None})
+    breakdown = [{"source": s, "value": v} for s, v in sorted(by_source.items(), key=lambda x: -x[1])[:limit]]
+    return {
+        "metric_key": metric_key,
+        "definition": definition,
+        "breakdown": breakdown,
+        "top_offenders": top_offenders[:10] if top_offenders else [],
+        "recommended_actions": recommended_actions,
     }
 
 
@@ -2464,7 +2698,9 @@ def run_data_quality(db=Depends(get_db)):
 def list_data_quality_snapshots(
     metric_key: Optional[str] = None,
     source: Optional[str] = None,
-    limit: int = 100,
+    ts_bucket_since: Optional[str] = None,
+    ts_bucket_until: Optional[str] = None,
+    limit: int = 200,
     db=Depends(get_db),
 ):
     q = db.query(DQSnapshot).order_by(DQSnapshot.ts_bucket.desc())
@@ -2472,11 +2708,23 @@ def list_data_quality_snapshots(
         q = q.filter(DQSnapshot.metric_key == metric_key)
     if source:
         q = q.filter(DQSnapshot.source == source)
+    if ts_bucket_since:
+        try:
+            since = datetime.fromisoformat(ts_bucket_since.replace("Z", "+00:00"))
+            q = q.filter(DQSnapshot.ts_bucket >= since)
+        except ValueError:
+            pass
+    if ts_bucket_until:
+        try:
+            until = datetime.fromisoformat(ts_bucket_until.replace("Z", "+00:00"))
+            q = q.filter(DQSnapshot.ts_bucket <= until)
+        except ValueError:
+            pass
     rows = q.limit(limit).all()
     return [
         {
             "id": r.id,
-            "ts_bucket": r.ts_bucket,
+            "ts_bucket": r.ts_bucket.isoformat() if hasattr(r.ts_bucket, "isoformat") else str(r.ts_bucket),
             "source": r.source,
             "metric_key": r.metric_key,
             "metric_value": r.metric_value,
@@ -2490,6 +2738,7 @@ def list_data_quality_snapshots(
 def list_data_quality_alerts(
     status: Optional[str] = None,
     severity: Optional[str] = None,
+    source: Optional[str] = None,
     limit: int = 100,
     db=Depends(get_db),
 ):
@@ -2497,7 +2746,6 @@ def list_data_quality_alerts(
     if status:
         q = q.filter(DQAlert.status == status)
     rows = q.limit(limit).all()
-    # Note: severity is a property of the rule
     rule_by_id = {
         r.id: r
         for r in db.query(DQAlertRule)
@@ -2509,16 +2757,19 @@ def list_data_quality_alerts(
         rule = rule_by_id.get(a.rule_id)
         if severity and rule and rule.severity != severity:
             continue
+        if source and rule and rule.source != source:
+            continue
         out.append(
             {
                 "id": a.id,
                 "rule_id": a.rule_id,
-                "triggered_at": a.triggered_at,
-                "ts_bucket": a.ts_bucket,
+                "triggered_at": a.triggered_at.isoformat() if hasattr(a.triggered_at, "isoformat") else str(a.triggered_at),
+                "ts_bucket": a.ts_bucket.isoformat() if hasattr(a.ts_bucket, "isoformat") else str(a.ts_bucket),
                 "metric_value": a.metric_value,
                 "baseline_value": a.baseline_value,
                 "status": a.status,
                 "message": a.message,
+                "note": getattr(a, "note", None),
                 "rule": {
                     "name": rule.name if rule else None,
                     "metric_key": rule.metric_key if rule else None,
@@ -2536,6 +2787,10 @@ class AlertStatusUpdate(BaseModel):
     status: str  # open/acked/resolved
 
 
+class AlertNoteUpdate(BaseModel):
+    note: str
+
+
 @app.post("/api/data-quality/alerts/{alert_id}/status")
 def update_alert_status(alert_id: int, body: AlertStatusUpdate, db=Depends(get_db)):
     alert = db.get(DQAlert, alert_id)
@@ -2546,6 +2801,18 @@ def update_alert_status(alert_id: int, body: AlertStatusUpdate, db=Depends(get_d
     db.commit()
     db.refresh(alert)
     return {"id": alert.id, "status": alert.status}
+
+
+@app.post("/api/data-quality/alerts/{alert_id}/note")
+def update_alert_note(alert_id: int, body: AlertNoteUpdate, db=Depends(get_db)):
+    alert = db.get(DQAlert, alert_id)
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    alert.note = body.note
+    db.add(alert)
+    db.commit()
+    db.refresh(alert)
+    return {"id": alert.id, "note": alert.note}
 
 
 # ==================== Explainability API ====================
@@ -3879,7 +4146,10 @@ async def upload_dataset(file: UploadFile = File(...), dataset_id: Optional[str]
 
 @app.get("/api/datasets")
 def list_datasets():
-    return [{"dataset_id": k, "path": str(v.get("path", "")), "type": v.get("type", "sales")} for k, v in DATASETS.items()]
+    return [
+        {"dataset_id": k, "path": str(v.get("path", "")), "type": v.get("type", "sales"), "source": v.get("source", "upload"), "metadata": v.get("metadata")}
+        for k, v in DATASETS.items()
+    ]
 
 @app.get("/api/datasets/{dataset_id}")
 def get_dataset(dataset_id: str, preview_only: bool = True):
@@ -3887,41 +4157,45 @@ def get_dataset(dataset_id: str, preview_only: bool = True):
     if not dataset_info:
         raise HTTPException(status_code=404, detail="Dataset not found")
     path = dataset_info.get("path")
-    if not path or not path.exists():
+    if path is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
-    df = pd.read_csv(path).head(5) if preview_only else pd.read_csv(path)
-    return {"dataset_id": dataset_id, "columns": list(df.columns), "preview_rows": df.to_dict(orient="records"), "type": dataset_info.get("type", "sales")}
+    p = Path(path) if isinstance(path, str) else path
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    df = pd.read_csv(p).head(5) if preview_only else pd.read_csv(p)
+    out = {"dataset_id": dataset_id, "columns": list(df.columns), "preview_rows": df.to_dict(orient="records"), "type": dataset_info.get("type", "sales")}
+    if dataset_info.get("metadata"):
+        out["metadata"] = dataset_info["metadata"]
+    return out
 
 @app.get("/api/datasets/{dataset_id}/validate")
-def validate_dataset(dataset_id: str):
+def validate_dataset(dataset_id: str, kpi_target: Optional[str] = Query(None, description="sales | attribution for KPI suggestion bias")):
     dataset_info = DATASETS.get(dataset_id)
     if not dataset_info:
         raise HTTPException(status_code=404, detail="Dataset not found")
     path = dataset_info.get("path")
-    if not path or not path.exists():
+    if path is None:
         raise HTTPException(status_code=404, detail="Dataset file not found")
-    df = pd.read_csv(path)
+    p = Path(path) if isinstance(path, str) else path
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="Dataset file not found")
+    df = pd.read_csv(p)
     columns = list(df.columns)
     n_rows = len(df)
     col_info = [{"name": col, "dtype": str(df[col].dtype), "missing": int(df[col].isna().sum()), "unique": int(df[col].nunique()), "sample_values": df[col].dropna().head(3).tolist()} for col in columns]
-    date_column = None
+    # Smart mapping suggestions
+    suggestions = build_smart_suggestions(df, kpi_target=kpi_target)
+    date_column = suggestions.get("date_column")
     date_range = None
-    for col in columns:
+    if date_column and date_column in df.columns:
         try:
-            parsed = pd.to_datetime(df[col], errors="coerce")
-            if parsed.notna().sum() > len(df) * 0.8:
-                date_column = col
-                date_range = {"min": str(parsed.min().date()), "max": str(parsed.max().date()), "n_periods": int(parsed.nunique())}
-                break
+            parsed = pd.to_datetime(df[date_column], errors="coerce")
+            date_range = {"min": str(parsed.min().date()), "max": str(parsed.max().date()), "n_periods": int(parsed.nunique())}
         except Exception:
-            continue
-    spend_kw = ["spend", "cost", "budget", "investment", "ad_spend"]
-    kpi_kw = ["sales", "revenue", "conversions", "orders", "profit", "aov", "clicks"]
-    cov_kw = ["holiday", "price", "index", "competitor", "temperature", "season"]
-    numeric_types = ["float64", "int64", "float32", "int32"]
-    suggested_spend = [c for c in columns if any(k in c.lower() for k in spend_kw) and df[c].dtype in numeric_types]
-    suggested_kpi = [c for c in columns if any(k in c.lower() for k in kpi_kw) and df[c].dtype in numeric_types]
-    suggested_cov = [c for c in columns if any(k in c.lower() for k in cov_kw) and df[c].dtype in numeric_types and c not in suggested_spend and c not in suggested_kpi]
+            pass
+    # Legacy suggestion keys for backward compatibility
+    suggestions["spend_channels"] = suggestions.get("spend_channels") or []
+    suggestions["kpi_columns"] = suggestions.get("kpi_columns") or []
     is_tall = {"channel", "campaign", "spend"}.issubset(set(columns))
     warnings = []
     if n_rows < 20:
@@ -3929,9 +4203,116 @@ def validate_dataset(dataset_id: str):
     if date_column and date_range and date_range["n_periods"] < 20:
         warnings.append(f"Only {date_range['n_periods']} unique dates.")
     for ci in col_info:
-        if ci["missing"] > 0 and ci["missing"] / n_rows > 0.1:
+        if ci["missing"] > 0 and n_rows and ci["missing"] / n_rows > 0.1:
             warnings.append(f"Column '{ci['name']}' has {ci['missing']/n_rows*100:.0f}% missing values.")
-    return {"dataset_id": dataset_id, "n_rows": n_rows, "n_columns": len(columns), "columns": col_info, "date_column": date_column, "date_range": date_range, "format": "tall" if is_tall else "wide", "suggestions": {"spend_channels": suggested_spend, "kpi_columns": suggested_kpi, "covariates": suggested_cov}, "warnings": warnings}
+    return {"dataset_id": dataset_id, "n_rows": n_rows, "n_columns": len(columns), "columns": col_info, "date_column": date_column, "date_range": date_range, "format": "tall" if is_tall else "wide", "suggestions": suggestions, "warnings": warnings}
+
+
+@app.get("/api/mmm/platform-options")
+def get_mmm_platform_options():
+    """Return available spend channels and optional covariates for platform-built MMM datasets."""
+    channels = set()
+    for exp in EXPENSES.values():
+        if getattr(exp, "status", "active") == "deleted":
+            continue
+        ch = getattr(exp, "channel", None)
+        if ch:
+            channels.add(ch)
+    return {
+        "spend_channels": sorted(channels),
+        "covariates": [],  # Platform has no covariates yet; hide in UI when empty
+    }
+
+
+@app.post("/api/mmm/datasets/build-from-platform")
+def build_mmm_dataset_from_platform_endpoint(body: BuildFromPlatformRequest, db=Depends(get_db)):
+    """
+    Build an MMM weekly dataset from platform data (journeys + expenses).
+    Persists CSV and registers dataset_id. Returns preview, coverage, and metadata.
+    """
+    global JOURNEYS
+    if not JOURNEYS:
+        JOURNEYS = load_journeys_from_db(db, limit=50000)
+    journeys = JOURNEYS
+    expenses_list = list(EXPENSES.values())
+    try:
+        df, coverage = build_mmm_dataset_from_platform(
+            journeys=journeys,
+            expenses=expenses_list,
+            date_start=body.date_start,
+            date_end=body.date_end,
+            kpi_target=body.kpi_target,
+            spend_channels=body.spend_channels,
+            covariates=body.covariates or [],
+            currency=body.currency,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    kpi_col = "sales" if body.kpi_target == "sales" else "conversions"
+    dataset_id = f"platform-mmm-{uuid.uuid4().hex[:12]}"
+    dest = MMM_PLATFORM_DIR / f"{dataset_id}.csv"
+    df.to_csv(dest, index=False)
+    metadata = {
+        "period_start": body.date_start,
+        "period_end": body.date_end,
+        "kpi_target": body.kpi_target,
+        "kpi_column": kpi_col,
+        "spend_channels": body.spend_channels,
+        "covariates": body.covariates or [],
+        "currency": body.currency,
+        "source": "platform",
+    }
+    if body.kpi_target == "attribution":
+        if body.attribution_model:
+            metadata["attribution_model"] = body.attribution_model
+        if body.attribution_config_id:
+            metadata["attribution_config_id"] = body.attribution_config_id
+    DATASETS[dataset_id] = {
+        "path": dest,
+        "type": "sales" if body.kpi_target == "sales" else "attribution",
+        "source": "platform",
+        "metadata": metadata,
+    }
+    columns = list(df.columns)
+    preview = df.head(10).to_dict(orient="records")
+    return {
+        "dataset_id": dataset_id,
+        "columns": columns,
+        "preview_rows": preview,
+        "coverage": coverage,
+        "metadata": metadata,
+        "path": str(dest),
+        "type": DATASETS[dataset_id]["type"],
+    }
+
+
+@app.post("/api/mmm/datasets/{dataset_id}/validate-mapping")
+def validate_mapping_endpoint(dataset_id: str, body: ValidateMappingRequest):
+    """
+    Validate an MMM column mapping before running the model.
+    Returns blocking errors and warnings (e.g. weekly sanity, non-negative spend, history length, multicollinearity, missingness).
+    """
+    dataset_info = DATASETS.get(dataset_id)
+    if not dataset_info:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    path = dataset_info.get("path")
+    if path is None:
+        raise HTTPException(status_code=404, detail="Dataset file not found")
+    p = Path(path) if isinstance(path, str) else path
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="Dataset file not found")
+    df = pd.read_csv(p)
+    errors, warnings, details = validate_mapping(
+        df,
+        date_column=body.date_column,
+        kpi=body.kpi,
+        spend_channels=body.spend_channels,
+        covariates=body.covariates,
+    )
+    from app.services_mmm_mapping import get_missingness_top_offenders
+    details["missingness_top"] = get_missingness_top_offenders(details, top_n=5)
+    return {"errors": errors, "warnings": warnings, "details": details, "valid": len(errors) == 0}
+
 
 # ==================== MMM Model Routes ====================
 
@@ -3939,18 +4320,51 @@ def validate_dataset(dataset_id: str):
 def run_model(cfg: ModelConfig, tasks: BackgroundTasks):
     if cfg.dataset_id not in DATASETS:
         raise HTTPException(status_code=404, detail="dataset_id not found")
-    # Apply MMM settings default frequency when user leaves it at the default
     if cfg.frequency == "W" and SETTINGS.mmm.frequency != "W":
         cfg.frequency = SETTINGS.mmm.frequency
-    kpi_mode = cfg.kpi_mode if hasattr(cfg, 'kpi_mode') else 'conversions'
-    run_id = f"{kpi_mode}_{len(RUNS)+1:04d}"
-    RUNS[run_id] = {"status": "queued", "config": json.loads(cfg.model_dump_json()), "kpi_mode": kpi_mode}
+    kpi_mode = getattr(cfg, "kpi_mode", "conversions") or "conversions"
+    run_id = f"mmm_{uuid.uuid4().hex[:12]}"
+    now = _now_iso()
+    config_dict = json.loads(cfg.model_dump_json())
+    dataset_meta = (DATASETS.get(cfg.dataset_id) or {}).get("metadata") or {}
+    RUNS[run_id] = {
+        "status": "queued",
+        "config": config_dict,
+        "kpi_mode": kpi_mode,
+        "created_at": now,
+        "updated_at": now,
+        "dataset_id": cfg.dataset_id,
+    }
+    if dataset_meta.get("attribution_model"):
+        RUNS[run_id]["attribution_model"] = dataset_meta["attribution_model"]
+    if dataset_meta.get("attribution_config_id"):
+        RUNS[run_id]["attribution_config_id"] = dataset_meta["attribution_config_id"]
+    _save_runs()
     tasks.add_task(_fit_model, run_id, cfg)
     return {"run_id": run_id, "status": "queued"}
 
+
 @app.get("/api/models")
 def list_models():
-    return [{"run_id": k, **v} for k, v in RUNS.items()]
+    """List all MMM runs with summary for history. Most recent first."""
+    items = []
+    for run_id, r in RUNS.items():
+        config = r.get("config") or {}
+        items.append({
+            "run_id": run_id,
+            "status": r.get("status", "unknown"),
+            "created_at": r.get("created_at"),
+            "updated_at": r.get("updated_at"),
+            "dataset_id": r.get("dataset_id") or config.get("dataset_id"),
+            "kpi_mode": r.get("kpi_mode"),
+            "kpi": config.get("kpi"),
+            "n_channels": len(config.get("spend_channels") or []),
+            "n_covariates": len(config.get("covariates") or []),
+            "r2": r.get("r2"),
+            "engine": r.get("engine"),
+        })
+    items.sort(key=lambda x: (x.get("created_at") or ""), reverse=True)
+    return items
 
 @app.get("/api/models/compare")
 def compare_models():
@@ -4439,31 +4853,70 @@ async def meiro_receive_profiles(
 # ==================== Model Fitting Background Task ====================
 
 def _fit_model(run_id: str, cfg: ModelConfig):
+    now_ts = _now_iso()
     dataset_info = DATASETS.get(cfg.dataset_id)
     if not dataset_info:
-        RUNS[run_id] = {"status": "error", "detail": "Dataset not found"}
+        RUNS[run_id] = {**RUNS.get(run_id, {}), "status": "error", "detail": "Dataset not found", "updated_at": now_ts}
+        _save_runs()
         return
     csv_path = dataset_info.get("path")
-    df = pd.read_csv(csv_path, parse_dates=["date"])
+    p = Path(csv_path) if isinstance(csv_path, str) else csv_path
+    df = pd.read_csv(p, parse_dates=["date"])
     if cfg.kpi not in df.columns:
-        RUNS[run_id] = {"status": "error", "detail": f"Column '{cfg.kpi}' missing"}
+        RUNS[run_id] = {**RUNS.get(run_id, {}), "status": "error", "detail": f"Column '{cfg.kpi}' missing", "updated_at": now_ts}
+        _save_runs()
         return
     is_tall = {"channel", "campaign", "spend"}.issubset(set(df.columns))
     if not is_tall:
         for c in cfg.spend_channels:
             if c not in df.columns:
-                RUNS[run_id] = {"status": "error", "detail": f"Column '{c}' missing"}
+                RUNS[run_id] = {**RUNS.get(run_id, {}), "status": "error", "detail": f"Column '{c}' missing", "updated_at": now_ts}
+                _save_runs()
                 return
     priors = cfg.priors or {}
     adstock_cfg = {"l_max": 8, "alpha_mean": priors.get("adstock", {}).get("alpha_mean", 0.5), "alpha_sd": priors.get("adstock", {}).get("alpha_sd", 0.2)}
     saturation_cfg = {"lam_mean": priors.get("saturation", {}).get("lam_mean", 0.001), "lam_sd": priors.get("saturation", {}).get("lam_sd", 0.0005)}
     mcmc_cfg = cfg.mcmc or {"draws": 1000, "tune": 1000, "chains": 4, "target_accept": 0.9}
+    use_adstock = getattr(cfg, "use_adstock", True)
+    use_saturation = getattr(cfg, "use_saturation", True)
+    force_engine = "ridge" if (not use_adstock and not use_saturation) else None
+    random_seed = getattr(cfg, "random_seed", None)
     try:
         RUNS[run_id]["status"] = "running"
-        result = mmm_fit_model(df=df, target_column=cfg.kpi, channel_columns=cfg.spend_channels, control_columns=cfg.covariates or [], date_column="date", adstock_cfg=adstock_cfg, saturation_cfg=saturation_cfg, mcmc_cfg=mcmc_cfg)
-        RUNS[run_id] = {"status": "finished", "r2": result["r2"], "contrib": result["contrib"], "roi": result["roi"], "engine": result.get("engine", "unknown"), "config": RUNS[run_id]["config"], "kpi_mode": cfg.kpi_mode if hasattr(cfg, "kpi_mode") else "conversions"}
+        RUNS[run_id]["updated_at"] = _now_iso()
+        _save_runs()
+        result = mmm_fit_model(
+            df=df,
+            target_column=cfg.kpi,
+            channel_columns=cfg.spend_channels,
+            control_columns=cfg.covariates or [],
+            date_column="date",
+            adstock_cfg=adstock_cfg,
+            saturation_cfg=saturation_cfg,
+            mcmc_cfg=mcmc_cfg,
+            force_engine=force_engine,
+            random_seed=random_seed,
+        )
+        RUNS[run_id] = {
+            **RUNS[run_id],
+            "status": "finished",
+            "r2": result["r2"],
+            "contrib": result["contrib"],
+            "roi": result["roi"],
+            "engine": result.get("engine", "unknown"),
+            "updated_at": _now_iso(),
+        }
         for key in ("campaigns", "channel_summary", "adstock_params", "saturation_params", "diagnostics"):
             if key in result:
                 RUNS[run_id][key] = result[key]
+        _save_runs()
     except Exception as exc:
-        RUNS[run_id] = {"status": "error", "detail": str(exc), "config": RUNS[run_id].get("config", {}), "kpi_mode": cfg.kpi_mode if hasattr(cfg, "kpi_mode") else "conversions"}
+        RUNS[run_id] = {
+            **RUNS.get(run_id, {}),
+            "status": "error",
+            "detail": str(exc),
+            "config": RUNS[run_id].get("config", {}),
+            "kpi_mode": getattr(cfg, "kpi_mode", "conversions"),
+            "updated_at": _now_iso(),
+        }
+        _save_runs()
