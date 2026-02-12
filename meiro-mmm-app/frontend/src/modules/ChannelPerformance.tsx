@@ -1,7 +1,8 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import ConfidenceBadge, { Confidence } from '../components/ConfidenceBadge'
 import ExplainabilityPanel from '../components/ExplainabilityPanel'
+import TrendPanel from '../components/dashboard/TrendPanel'
 import {
   BarChart,
   Bar,
@@ -88,6 +89,19 @@ interface PerformanceResponse {
   } | null
 }
 
+interface ChannelTrendRow {
+  ts: string
+  channel: string
+  value: number | null
+}
+
+interface ChannelTrendResponse {
+  current_period: { date_from: string; date_to: string; grain: 'daily' | 'weekly' }
+  previous_period: { date_from: string; date_to: string }
+  series: ChannelTrendRow[]
+  series_prev?: ChannelTrendRow[]
+}
+
 const MODEL_LABELS: Record<string, string> = {
   last_touch: 'Last Touch',
   first_touch: 'First Touch',
@@ -167,16 +181,30 @@ type SortKey = keyof ChannelData | 'attributed_share'
 type SortDir = 'asc' | 'desc'
 
 export default function ChannelPerformance({ model, modelsReady, configId }: ChannelPerformanceProps) {
+  const initialTrendParams = useMemo(() => {
+    const params = new URLSearchParams(window.location.search)
+    const kpiRaw = (params.get('kpi') || '').toLowerCase()
+    const kpi = ['spend', 'conversions', 'revenue', 'cpa', 'roas'].includes(kpiRaw) ? kpiRaw : 'conversions'
+    const grainRaw = (params.get('grain') || 'auto').toLowerCase()
+    const grain = grainRaw === 'daily' || grainRaw === 'weekly' ? grainRaw : 'auto'
+    const compare = params.get('compare') !== '0'
+    return { kpi, grain: grain as 'auto' | 'daily' | 'weekly', compare }
+  }, [])
+
   const [sortKey, setSortKey] = useState<SortKey>('attributed_value')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [showWhy, setShowWhy] = useState(false)
 
   const [directMode, setDirectMode] = useState<'include' | 'exclude'>('include')
-  const [comparePrevious, setComparePrevious] = useState(false)
+  const [comparePrevious, setComparePrevious] = useState(initialTrendParams.compare)
+  const [trendKpi, setTrendKpi] = useState(initialTrendParams.kpi)
+  const [trendGrain, setTrendGrain] = useState<'auto' | 'daily' | 'weekly'>(initialTrendParams.grain)
   const [chartSortBy, setChartSortBy] = useState<'spend' | 'attributed_value' | 'roas'>('attributed_value')
   const [channelSearch, setChannelSearch] = useState('')
   const [onlyLowConfidence, setOnlyLowConfidence] = useState(false)
   const [selectedChannel, setSelectedChannel] = useState<ChannelData | null>(null)
+  const [selectedTrendChannels, setSelectedTrendChannels] = useState<string[]>([])
+  const [visibleTrendChannels, setVisibleTrendChannels] = useState<string[]>([])
 
   const journeysQuery = useQuery<JourneysSummary>({
     queryKey: ['journeys-summary-for-channels'],
@@ -216,6 +244,27 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     refetchInterval: false,
   })
 
+  const trendChannelsParam = selectedTrendChannels.length ? selectedTrendChannels.join(',') : 'all'
+  const trendQuery = useQuery<ChannelTrendResponse>({
+    queryKey: ['channel-trend-panel', trendKpi, trendGrain, comparePrevious, trendChannelsParam],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        date_from: journeysQuery.data?.date_min?.slice(0, 10) || '2026-01-01',
+        date_to: journeysQuery.data?.date_max?.slice(0, 10) || '2026-01-31',
+        timezone: 'UTC',
+        kpi_key: trendKpi,
+        grain: trendGrain,
+        compare: comparePrevious ? '1' : '0',
+      })
+      selectedTrendChannels.forEach((ch) => params.append('channels', ch))
+      const res = await fetch(`/api/performance/channel/trend?${params.toString()}`)
+      if (!res.ok) throw new Error('Failed to load channel trend')
+      return res.json()
+    },
+    enabled: modelsReady && !!journeysQuery.data?.date_min && !!journeysQuery.data?.date_max,
+    refetchInterval: false,
+  })
+
   const data = perfQuery.data
   const loading = perfQuery.isLoading || !modelsReady
 
@@ -242,6 +291,37 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     [data?.channels, directMode],
   )
 
+  useEffect(() => {
+    if (!filteredForCharts.length) return
+    if (selectedTrendChannels.length === 0) {
+      setSelectedTrendChannels(filteredForCharts.map((ch) => ch.channel))
+    }
+    if (visibleTrendChannels.length === 0) {
+      setVisibleTrendChannels(filteredForCharts.map((ch) => ch.channel))
+    }
+  }, [filteredForCharts, selectedTrendChannels.length, visibleTrendChannels.length])
+
+  useEffect(() => {
+    if (!filteredForCharts.length) return
+    const available = new Set(filteredForCharts.map((ch) => ch.channel))
+    setSelectedTrendChannels((prev) => {
+      const next = prev.filter((c) => available.has(c))
+      return next.length ? next : Array.from(available)
+    })
+    setVisibleTrendChannels((prev) => {
+      const next = prev.filter((c) => available.has(c))
+      return next.length ? next : Array.from(available)
+    })
+  }, [filteredForCharts])
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    params.set('kpi', trendKpi)
+    params.set('grain', trendGrain)
+    params.set('compare', comparePrevious ? '1' : '0')
+    window.history.replaceState(null, '', `${window.location.pathname}?${params.toString()}`)
+  }, [trendKpi, trendGrain, comparePrevious])
+
   const chartData = useMemo(() => {
     if (!filteredForCharts.length) return []
     const clone = [...filteredForCharts]
@@ -250,6 +330,48 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     else clone.sort((a, b) => a.attributed_value - b.attributed_value)
     return clone
   }, [filteredForCharts, chartSortBy])
+
+  const trendMetrics = useMemo(() => {
+    const rows = trendQuery.data?.series || []
+    const prevRows = trendQuery.data?.series_prev || []
+    if (!rows.length) return []
+    const enabled = new Set(visibleTrendChannels.length ? visibleTrendChannels : selectedTrendChannels)
+    const byTs = new Map<string, number>()
+    rows.forEach((r) => {
+      if (!enabled.has(r.channel)) return
+      if (typeof r.value !== 'number') return
+      byTs.set(r.ts, (byTs.get(r.ts) || 0) + r.value)
+    })
+    const byTsPrev = new Map<string, number>()
+    prevRows.forEach((r) => {
+      if (!enabled.has(r.channel)) return
+      if (typeof r.value !== 'number') return
+      byTsPrev.set(r.ts, (byTsPrev.get(r.ts) || 0) + r.value)
+    })
+    const keys = Array.from(new Set(rows.map((r) => r.ts))).sort()
+    const keysPrev = Array.from(new Set(prevRows.map((r) => r.ts))).sort()
+    const currentSeries = keys.map((k) => ({ ts: k, value: byTs.has(k) ? byTs.get(k)! : null }))
+    const prevSeries = keysPrev.map((k) => ({ ts: k, value: byTsPrev.has(k) ? byTsPrev.get(k)! : null }))
+    return [
+      {
+        key: trendKpi,
+        label: trendKpi.toUpperCase(),
+        current: currentSeries,
+        previous: prevSeries,
+        summaryMode: trendKpi === 'cpa' || trendKpi === 'roas' ? ('avg' as const) : ('sum' as const),
+        formatValue:
+          trendKpi === 'conversions'
+            ? (v: number) => v.toFixed(0)
+            : trendKpi === 'roas'
+            ? (v: number) => `${v.toFixed(2)}x`
+            : formatCurrency,
+      },
+    ]
+  }, [trendQuery.data, trendKpi, selectedTrendChannels, visibleTrendChannels])
+  const availableTrendChannels = useMemo(
+    () => filteredForCharts.map((ch) => ch.channel).sort(),
+    [filteredForCharts],
+  )
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
@@ -479,6 +601,93 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
           <ExplainabilityPanel scope="channel" configId={configId ?? undefined} model={model} />
         </div>
       )}
+
+      <div style={{ marginBottom: t.space.xl }}>
+        <div
+          style={{
+            marginBottom: t.space.sm,
+            display: 'grid',
+            gap: t.space.sm,
+          }}
+        >
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: t.space.sm, alignItems: 'center' }}>
+            <label style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Channels</label>
+            <select
+              multiple
+              value={selectedTrendChannels}
+              onChange={(e) => {
+                const values = Array.from(e.target.selectedOptions).map((o) => o.value)
+                setSelectedTrendChannels(values.length ? values : availableTrendChannels)
+                setVisibleTrendChannels(values.length ? values : availableTrendChannels)
+              }}
+              style={{
+                minWidth: 220,
+                maxWidth: 360,
+                padding: `${t.space.xs}px ${t.space.sm}px`,
+                border: `1px solid ${t.color.border}`,
+                borderRadius: t.radius.sm,
+                fontSize: t.font.sizeSm,
+                background: t.color.surface,
+                color: t.color.text,
+              }}
+            >
+              {availableTrendChannels.map((ch) => (
+                <option key={ch} value={ch}>
+                  {ch}
+                </option>
+              ))}
+            </select>
+            <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+              Hold Cmd/Ctrl to multi-select
+            </span>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: t.space.xs }}>
+            {selectedTrendChannels.map((ch) => {
+              const enabled = visibleTrendChannels.includes(ch)
+              return (
+                <button
+                  key={ch}
+                  type="button"
+                  onClick={() =>
+                    setVisibleTrendChannels((prev) =>
+                      prev.includes(ch) ? prev.filter((x) => x !== ch) : [...prev, ch],
+                    )
+                  }
+                  style={{
+                    border: `1px solid ${enabled ? t.color.accent : t.color.border}`,
+                    background: enabled ? t.color.accentMuted : t.color.surface,
+                    color: enabled ? t.color.accent : t.color.textSecondary,
+                    borderRadius: t.radius.sm,
+                    padding: `${t.space.xs}px ${t.space.sm}px`,
+                    fontSize: t.font.sizeXs,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {ch}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+        <TrendPanel
+          title="Trend"
+          subtitle="Daily trend for selected period"
+          metrics={trendMetrics}
+          metricKey={trendKpi}
+          onMetricKeyChange={(key) => setTrendKpi(key)}
+          grain={trendGrain}
+          onGrainChange={setTrendGrain}
+          compare={comparePrevious}
+          onCompareChange={setComparePrevious}
+          showMetricSelector
+          showGrainSelector
+          showCompareToggle
+          showTableToggle
+          baselineLabel={`vs previous ${trendQuery.data?.current_period ? ((new Date(trendQuery.data.current_period.date_to).getTime() - new Date(trendQuery.data.current_period.date_from).getTime()) / (24 * 60 * 60 * 1000) + 1).toFixed(0) : '0'} days`}
+          infoTooltip="Observed values for selected channels and KPI. Toggle channels above to verify composition."
+          noDataMessage="No data for selected filters and date range"
+        />
+      </div>
 
       {/* Metrics strip */}
       <div

@@ -1,102 +1,91 @@
-import { memo, useMemo } from 'react'
+import { memo } from 'react'
+import TrendPanel, { type KpiSeriesPoint } from './TrendPanel'
 import { tokens as t } from '../../theme/tokens'
-import ConfidenceBadge, { Confidence } from '../ConfidenceBadge'
 
 export interface KpiTileProps {
   label: string
   value: string
-  delta?: { value: number; label?: string }
-  sparkline?: number[]
-  confidence?: Confidence | null
-  annotation?: string | null
-}
-
-function buildSparkline(points: number[]): string {
-  if (points.length === 0) return ''
-  const max = Math.max(...points)
-  const min = Math.min(...points)
-  const range = max - min || 1
-  const width = 100
-  const height = 32
-  return points
-    .map((point, index) => {
-      const x = (index / (points.length - 1 || 1)) * width
-      const y = height - ((point - min) / range) * height
-      return `${x},${y}`
-    })
-    .join(' ')
+  deltaPct?: number | null
+  deltaLabel: string
+  trendLabel: string
+  series?: KpiSeriesPoint[]
+  seriesPrev?: KpiSeriesPoint[]
+  confidence?: {
+    score: number
+    level: 'high' | 'medium' | 'low' | string
+    reasons?: Array<{ key: string; label: string; score: number; detail: string; weight?: number }>
+  } | null
+  infoTooltip: string
+  onClick?: () => void
+  drilldownLabel?: string
+  formatTooltipValue?: (value: number) => string
 }
 
 export const KpiTile = memo(function KpiTile({
   label,
   value,
-  delta,
-  sparkline,
+  deltaPct,
+  deltaLabel,
+  trendLabel,
+  series,
+  seriesPrev,
+  infoTooltip,
+  onClick,
+  drilldownLabel,
+  formatTooltipValue,
   confidence,
-  annotation,
 }: KpiTileProps) {
-  const points = useMemo(() => (sparkline && sparkline.length ? buildSparkline(sparkline) : ''), [sparkline])
-  const deltaLabel =
-    delta && Number.isFinite(delta.value)
-      ? `${delta.value > 0 ? '▲' : delta.value < 0 ? '▼' : '—'} ${Math.abs(delta.value).toFixed(1)}%`
-      : null
-
+  const subtitle = `${value} · ${deltaPct == null ? 'Δ N/A' : `${deltaPct >= 0 ? '+' : ''}${deltaPct.toFixed(1)}% ${deltaLabel}`}`
   return (
     <div
-      style={{
-        display: 'grid',
-        gap: t.space.sm,
-        padding: t.space.lg,
-        background: t.color.surface,
-        borderRadius: t.radius.lg,
-        border: `1px solid ${t.color.borderLight}`,
-        boxShadow: t.shadowSm,
-        minWidth: 220,
+      onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={(e) => {
+        if (onClick && (e.key === 'Enter' || e.key === ' ')) onClick()
       }}
+      style={{ cursor: onClick ? 'pointer' : 'default' }}
     >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <span style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{label}</span>
-        {confidence && <ConfidenceBadge confidence={confidence} />}
-      </div>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: t.space.sm }}>
-        <span
-          style={{
-            fontSize: 28,
-            fontWeight: t.font.weightSemibold,
-            color: t.color.text,
-            letterSpacing: '-0.01em',
-          }}
-        >
-          {value}
-        </span>
-        {deltaLabel && (
-          <span
-            style={{
-              fontSize: t.font.sizeSm,
-              color: delta && delta.value >= 0 ? t.color.success : t.color.danger,
-              fontWeight: t.font.weightMedium,
-            }}
-            title={delta.label}
-          >
-            {deltaLabel}
-          </span>
-        )}
-      </div>
-      {annotation && (
-        <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{annotation}</span>
-      )}
-      {points && (
-        <svg viewBox="0 0 100 32" preserveAspectRatio="none" style={{ width: '100%', height: 32 }}>
-          <polyline
-            fill="none"
-            stroke={t.color.accent}
-            strokeWidth={2}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            points={points}
-          />
-        </svg>
-      )}
+      <TrendPanel
+        title={label}
+        subtitle={trendLabel}
+        metrics={[
+          {
+            key: label.toLowerCase(),
+            label,
+            current: series || [],
+            previous: seriesPrev || [],
+            summaryMode: 'sum',
+            formatValue: formatTooltipValue,
+          },
+        ]}
+        showMetricSelector={false}
+        showGrainSelector={false}
+        showCompareToggle={false}
+        showTableToggle={false}
+        compact
+        badge={
+          confidence ? (
+            <span
+              style={{
+                fontSize: 11,
+                color:
+                  confidence.level === 'high'
+                    ? t.color.success
+                    : confidence.level === 'medium'
+                    ? t.color.warning
+                    : t.color.danger,
+              }}
+              title={confidence.reasons?.map((r) => `${r.label}: ${r.detail}`).join('\n') || 'Data quality score'}
+            >
+              Data quality {Math.round(confidence.score)}/100
+            </span>
+          ) : null
+        }
+        footerNote={drilldownLabel}
+        baselineLabel={deltaLabel}
+        infoTooltip={`${infoTooltip}\nSummary: ${subtitle}`}
+      />
     </div>
   )
 })

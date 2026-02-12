@@ -1,10 +1,23 @@
 """Tests for Overview (Cover) Dashboard API endpoints."""
 
-from fastapi.testclient import TestClient
+from datetime import datetime
 
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.db import Base
+from app.models_config_dq import ConversionPath
 from app.main import app
+from app.services_overview import get_overview_drivers
 
 client = TestClient(app)
+
+
+def _unit_db_session():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine)()
 
 
 def test_overview_summary_returns_consistent_shape():
@@ -23,11 +36,50 @@ def test_overview_summary_returns_consistent_shape():
     assert "last_touchpoint_ts" in body["freshness"]
     assert "last_conversion_ts" in body["freshness"]
     assert "ingest_lag_minutes" in body["freshness"]
+    assert "current_period" in body
+    assert "previous_period" in body
     for tile in body["kpi_tiles"]:
         assert "kpi_key" in tile
         assert "value" in tile
-        assert "confidence" in tile
+        assert "delta_pct" in tile
+        assert "delta_abs" in tile
+        assert "current_period" in tile
+        assert "previous_period" in tile
+        assert "series" in tile
+        assert "series_prev" in tile
+        assert "confidence_score" in tile
+        assert "confidence_level" in tile
+        assert "confidence_reasons" in tile
         assert tile["kpi_key"] in ("spend", "conversions", "revenue")
+
+
+def test_overview_summary_previous_period_is_equal_length():
+    resp = client.get(
+        "/api/overview/summary",
+        params={"date_from": "2024-02-01", "date_to": "2024-02-14"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    cp = body["current_period"]
+    pp = body["previous_period"]
+    cp_from = datetime.fromisoformat(cp["date_from"])
+    cp_to = datetime.fromisoformat(cp["date_to"])
+    pp_from = datetime.fromisoformat(pp["date_from"])
+    pp_to = datetime.fromisoformat(pp["date_to"])
+    assert (cp_to - cp_from) == (pp_to - pp_from)
+    assert pp_to < cp_from
+
+
+def test_overview_summary_empty_series_do_not_fake_flat_lines():
+    resp = client.get(
+        "/api/overview/summary",
+        params={"date_from": "2024-03-01", "date_to": "2024-03-07"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    for tile in body["kpi_tiles"]:
+        if tile["value"] == 0:
+            assert tile["series"] == []
 
 
 def test_overview_summary_optional_params():
@@ -116,3 +168,39 @@ def test_overview_alerts_optional_filters():
     assert resp.status_code == 200
     body = resp.json()
     assert len(body["alerts"]) <= 10
+
+
+def test_overview_drivers_last_touch_count_uses_position_not_value_equality():
+    db = _unit_db_session()
+    try:
+        row = ConversionPath(
+            conversion_id="conv-1",
+            profile_id="p-1",
+            conversion_key="signup",
+            conversion_ts=datetime(2024, 2, 15, 12, 0),
+            path_json={
+                "conversion_value": 100.0,
+                "touchpoints": [
+                    {"channel": "email", "campaign": "camp-a"},
+                    {"channel": "email", "campaign": "camp-a"},
+                ],
+            },
+            path_hash="hash-1",
+            length=2,
+            first_touch_ts=datetime(2024, 2, 15, 11, 0),
+            last_touch_ts=datetime(2024, 2, 15, 11, 30),
+        )
+        db.add(row)
+        db.commit()
+
+        out = get_overview_drivers(
+            db,
+            date_from="2024-02-01",
+            date_to="2024-02-29",
+            expenses={},
+            top_campaigns_n=10,
+        )
+        by_channel = {x["channel"]: x for x in out["by_channel"]}
+        assert by_channel["email"]["conversions"] == 1
+    finally:
+        db.close()

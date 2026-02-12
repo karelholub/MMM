@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 from sqlalchemy.orm import Session
@@ -250,23 +251,32 @@ def _severity_matches(pref: UserNotificationPref, severity: str) -> bool:
 
 
 def _in_quiet_hours(now: datetime, quiet_hours_json: Optional[Dict[str, Any]]) -> bool:
-    """True if now falls inside quiet hours. Expects {"start": "HH:MM", "end": "HH:MM"} (24h)."""
+    """True if now falls inside quiet hours. Expects {"start": "HH:MM", "end": "HH:MM", "timezone"?: IANA tz}."""
     if not quiet_hours_json or not isinstance(quiet_hours_json, dict):
         return False
     start_s = quiet_hours_json.get("start")
     end_s = quiet_hours_json.get("end")
+    tz_name = quiet_hours_json.get("timezone") or quiet_hours_json.get("tz")
     if not start_s or not end_s:
         return False
     try:
+        local_now = now
+        if tz_name:
+            tz = ZoneInfo(str(tz_name))
+            if now.tzinfo is None:
+                local_now = now.replace(tzinfo=timezone.utc).astimezone(tz)
+            else:
+                local_now = now.astimezone(tz)
+
         start_parts = start_s.split(":")
         end_parts = end_s.split(":")
         start_min = int(start_parts[0]) * 60 + int(start_parts[1]) if len(start_parts) >= 2 else int(start_parts[0]) * 60
         end_min = int(end_parts[0]) * 60 + int(end_parts[1]) if len(end_parts) >= 2 else int(end_parts[0]) * 60
-        now_min = now.hour * 60 + now.minute
+        now_min = local_now.hour * 60 + local_now.minute
         if start_min <= end_min:
             return start_min <= now_min < end_min
         return now_min >= start_min or now_min < end_min
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, ZoneInfoNotFoundError):
         return False
 
 

@@ -141,7 +141,7 @@ function AlertsBell({ alerts }: { alerts: DashboardAlert[] }) {
             position: 'absolute',
             top: 'calc(100% + 8px)',
             right: 0,
-            width: 320,
+            width: 'min(320px, calc(100vw - 32px))',
             maxHeight: 360,
             overflowY: 'auto',
             background: t.color.surface,
@@ -284,14 +284,13 @@ export function DashboardPage({
     >
       <div
         style={{
-          display: 'flex',
-          flexWrap: 'wrap',
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
           gap: t.space.md,
-          justifyContent: 'space-between',
-          alignItems: 'center',
+          alignItems: 'start',
         }}
       >
-        <div style={{ display: 'grid', gap: 4, minWidth: 200 }}>
+        <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
           <h1
             style={{
               margin: 0,
@@ -315,13 +314,16 @@ export function DashboardPage({
             alignItems: 'center',
             gap: t.space.md,
             flexWrap: 'wrap',
-            justifyContent: 'flex-end',
+            justifyContent: 'flex-start',
+            minWidth: 0,
           }}
         >
-          {dateRange}
-          {filters}
-          {actions}
-          <AlertsBell alerts={alerts} />
+          {dateRange && <div style={{ minWidth: 0, flex: '0 1 auto' }}>{dateRange}</div>}
+          {filters && <div style={{ minWidth: 0, flex: '1 1 220px' }}>{filters}</div>}
+          {actions && <div style={{ minWidth: 0, flex: '0 1 auto' }}>{actions}</div>}
+          <div style={{ marginLeft: 'auto' }}>
+            <AlertsBell alerts={alerts} />
+          </div>
         </div>
       </div>
       <div style={{ minHeight: 240 }}>{content}</div>

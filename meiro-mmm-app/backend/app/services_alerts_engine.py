@@ -564,12 +564,17 @@ def run_alerts_engine(
                     existing.updated_at = now
                     metrics["events_resolved"] += 1
 
-        current_fingerprints_by_rule[rule.id] = rule_fingerprints
+        # If no fingerprints were evaluated this run (e.g. missing data / no baseline),
+        # skip resolution for this rule to avoid resolving all open events by accident.
+        if rule_fingerprints:
+            current_fingerprints_by_rule[rule.id] = rule_fingerprints
 
     for rule in rules:
         if rule.rule_type not in EVALUATORS:
             continue
-        fps = current_fingerprints_by_rule.get(rule.id, [])
+        fps = current_fingerprints_by_rule.get(rule.id)
+        if fps is None:
+            continue
         metrics["events_resolved"] += _resolve_open_events_for_rule(db, rule.id, fps)
 
     try:

@@ -1,5 +1,742 @@
 [
 {
+"id": "e86c5a4c-bf3",
+"source": "upload",
+"started_at": "2026-02-12T11:22:19.415248Z",
+"finished_at": "2026-02-12T11:22:19.415248Z",
+"status": "success",
+"total": 5000,
+"valid": 5000,
+"invalid": 0,
+"converted": 3952,
+"channels_detected": [
+"direct",
+"email",
+"google_ads",
+"linkedin_ads",
+"meta_ads",
+"whatsapp"
+],
+"validation_summary": {
+"top_errors": [
+{
+"journeyIndex": 8,
+"fieldPath": "touchpoints[2].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 9,
+"fieldPath": "touchpoints[6].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 14,
+"fieldPath": "touchpoints[5].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 19,
+"fieldPath": "touchpoints[0].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 23,
+"fieldPath": "touchpoints[3].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 24,
+"fieldPath": "touchpoints[3].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 27,
+"fieldPath": "touchpoints[5].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 28,
+"fieldPath": "touchpoints[0].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 37,
+"fieldPath": "touchpoints[4].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 39,
+"fieldPath": "touchpoints[2].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+}
+],
+"top_warnings": []
+},
+"config_snapshot": {
+"schema_version": "2.0"
+},
+"initiated_by": null,
+"import_note": null,
+"error": null,
+"preview_rows": [
+{
+"customer_id": "c0001",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c0002",
+"touchpoints": 6,
+"converted": true
+},
+{
+"customer_id": "c0003",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c0004",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c0005",
+"touchpoints": 7,
+"converted": false
+},
+{
+"customer_id": "c0006",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c0007",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c0008",
+"touchpoints": 4,
+"converted": false
+},
+{
+"customer_id": "c0009",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c0010",
+"touchpoints": 7,
+"converted": true
+},
+{
+"customer_id": "c0011",
+"touchpoints": 3,
+"converted": false
+},
+{
+"customer_id": "c0012",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c0013",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c0014",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c0015",
+"touchpoints": 6,
+"converted": true
+},
+{
+"customer_id": "c0016",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c0017",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c0018",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c0019",
+"touchpoints": 7,
+"converted": true
+},
+{
+"customer_id": "c0020",
+"touchpoints": 1,
+"converted": true
+}
+]
+},
+{
+"id": "295af404-e04",
+"source": "upload",
+"started_at": "2026-02-12T11:16:41.663765Z",
+"finished_at": "2026-02-12T11:16:41.663765Z",
+"status": "success",
+"total": 1000,
+"valid": 1000,
+"invalid": 0,
+"converted": 791,
+"channels_detected": [
+"direct",
+"email",
+"google_ads",
+"linkedin_ads",
+"meta_ads",
+"whatsapp"
+],
+"validation_summary": {
+"top_errors": [],
+"top_warnings": []
+},
+"config_snapshot": {
+"schema_version": "1.0"
+},
+"initiated_by": null,
+"import_note": null,
+"error": null,
+"preview_rows": [
+{
+"customer_id": "c0001",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c0002",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c0003",
+"touchpoints": 1,
+"converted": true
+},
+{
+"customer_id": "c0004",
+"touchpoints": 6,
+"converted": true
+},
+{
+"customer_id": "c0005",
+"touchpoints": 7,
+"converted": true
+},
+{
+"customer_id": "c0006",
+"touchpoints": 6,
+"converted": true
+},
+{
+"customer_id": "c0007",
+"touchpoints": 3,
+"converted": false
+},
+{
+"customer_id": "c0008",
+"touchpoints": 6,
+"converted": true
+},
+{
+"customer_id": "c0009",
+"touchpoints": 6,
+"converted": true
+},
+{
+"customer_id": "c0010",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c0011",
+"touchpoints": 7,
+"converted": true
+},
+{
+"customer_id": "c0012",
+"touchpoints": 2,
+"converted": false
+},
+{
+"customer_id": "c0013",
+"touchpoints": 4,
+"converted": false
+},
+{
+"customer_id": "c0014",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c0015",
+"touchpoints": 6,
+"converted": true
+},
+{
+"customer_id": "c0016",
+"touchpoints": 3,
+"converted": false
+},
+{
+"customer_id": "c0017",
+"touchpoints": 7,
+"converted": true
+},
+{
+"customer_id": "c0018",
+"touchpoints": 5,
+"converted": true
+},
+{
+"customer_id": "c0019",
+"touchpoints": 2,
+"converted": false
+},
+{
+"customer_id": "c0020",
+"touchpoints": 4,
+"converted": false
+}
+]
+},
+{
+"id": "3e9d439e-759",
+"source": "upload",
+"started_at": "2026-02-12T11:11:41.462864Z",
+"finished_at": "2026-02-12T11:11:41.462864Z",
+"status": "success",
+"total": 5000,
+"valid": 5000,
+"invalid": 0,
+"converted": 3952,
+"channels_detected": [
+"direct",
+"email",
+"google_ads",
+"linkedin_ads",
+"meta_ads",
+"whatsapp"
+],
+"validation_summary": {
+"top_errors": [
+{
+"journeyIndex": 8,
+"fieldPath": "touchpoints[2].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 9,
+"fieldPath": "touchpoints[6].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 14,
+"fieldPath": "touchpoints[5].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 19,
+"fieldPath": "touchpoints[0].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 23,
+"fieldPath": "touchpoints[3].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 24,
+"fieldPath": "touchpoints[3].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 27,
+"fieldPath": "touchpoints[5].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 28,
+"fieldPath": "touchpoints[0].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 37,
+"fieldPath": "touchpoints[4].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 39,
+"fieldPath": "touchpoints[2].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+}
+],
+"top_warnings": []
+},
+"config_snapshot": {
+"schema_version": "2.0"
+},
+"initiated_by": null,
+"import_note": null,
+"error": null,
+"preview_rows": [
+{
+"customer_id": "c0001",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c0002",
+"touchpoints": 6,
+"converted": true
+},
+{
+"customer_id": "c0003",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c0004",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c0005",
+"touchpoints": 7,
+"converted": false
+},
+{
+"customer_id": "c0006",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c0007",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c0008",
+"touchpoints": 4,
+"converted": false
+},
+{
+"customer_id": "c0009",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c0010",
+"touchpoints": 7,
+"converted": true
+},
+{
+"customer_id": "c0011",
+"touchpoints": 3,
+"converted": false
+},
+{
+"customer_id": "c0012",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c0013",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c0014",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c0015",
+"touchpoints": 6,
+"converted": true
+},
+{
+"customer_id": "c0016",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c0017",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c0018",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c0019",
+"touchpoints": 7,
+"converted": true
+},
+{
+"customer_id": "c0020",
+"touchpoints": 1,
+"converted": true
+}
+]
+},
+{
+"id": "27621f93-47f",
+"source": "upload",
+"started_at": "2026-02-12T09:56:18.121675Z",
+"finished_at": "2026-02-12T09:56:18.121675Z",
+"status": "success",
+"total": 5000,
+"valid": 5000,
+"invalid": 0,
+"converted": 3952,
+"channels_detected": [
+"direct",
+"email",
+"google_ads",
+"linkedin_ads",
+"meta_ads",
+"whatsapp"
+],
+"validation_summary": {
+"top_errors": [
+{
+"journeyIndex": 8,
+"fieldPath": "touchpoints[2].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 9,
+"fieldPath": "touchpoints[6].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 14,
+"fieldPath": "touchpoints[5].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 19,
+"fieldPath": "touchpoints[0].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 23,
+"fieldPath": "touchpoints[3].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 24,
+"fieldPath": "touchpoints[3].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 27,
+"fieldPath": "touchpoints[5].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 28,
+"fieldPath": "touchpoints[0].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 37,
+"fieldPath": "touchpoints[4].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+},
+{
+"journeyIndex": 39,
+"fieldPath": "touchpoints[2].ts",
+"severity": "error",
+"message": "Touchpoint timestamp is after conversion timestamp.",
+"suggestedFix": "Remove or reorder touchpoints so none occur after conversion."
+}
+],
+"top_warnings": []
+},
+"config_snapshot": {
+"schema_version": "2.0"
+},
+"initiated_by": null,
+"import_note": null,
+"error": null,
+"preview_rows": [
+{
+"customer_id": "c0001",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c0002",
+"touchpoints": 6,
+"converted": true
+},
+{
+"customer_id": "c0003",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c0004",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c0005",
+"touchpoints": 7,
+"converted": false
+},
+{
+"customer_id": "c0006",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c0007",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c0008",
+"touchpoints": 4,
+"converted": false
+},
+{
+"customer_id": "c0009",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c0010",
+"touchpoints": 7,
+"converted": true
+},
+{
+"customer_id": "c0011",
+"touchpoints": 3,
+"converted": false
+},
+{
+"customer_id": "c0012",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c0013",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c0014",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c0015",
+"touchpoints": 6,
+"converted": true
+},
+{
+"customer_id": "c0016",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c0017",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c0018",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c0019",
+"touchpoints": 7,
+"converted": true
+},
+{
+"customer_id": "c0020",
+"touchpoints": 1,
+"converted": true
+}
+]
+},
+{
 "id": "d9e47471-473",
 "source": "upload",
 "started_at": "2026-02-11T19:12:18.357315Z",

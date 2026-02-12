@@ -1,9 +1,10 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LineChart, Line } from 'recharts'
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { tokens } from '../theme/tokens'
 import ConfidenceBadge, { Confidence } from '../components/ConfidenceBadge'
 import ExplainabilityPanel from '../components/ExplainabilityPanel'
+import TrendPanel from '../components/dashboard/TrendPanel'
 
 interface CampaignPerformanceProps {
   model: string
@@ -22,6 +23,8 @@ interface JourneysSummary {
   primary_kpi_label?: string | null
   primary_kpi_count?: number
   kpi_counts?: Record<string, number>
+  date_min?: string | null
+  date_max?: string | null
 }
 
 interface SuggestedNext {
@@ -92,6 +95,22 @@ interface CampaignTrendsResponse {
   campaigns: string[]
   dates: string[]
   series: Record<string, CampaignTrendPoint[]>
+}
+
+interface CampaignTrendV2Row {
+  ts: string
+  campaign_id: string
+  campaign_name?: string | null
+  channel: string
+  platform?: string | null
+  value: number | null
+}
+
+interface CampaignTrendV2Response {
+  current_period: { date_from: string; date_to: string; grain: 'daily' | 'weekly' }
+  previous_period: { date_from: string; date_to: string }
+  series: CampaignTrendV2Row[]
+  series_prev?: CampaignTrendV2Row[]
 }
 
 const MODEL_LABELS: Record<string, string> = {
@@ -171,6 +190,16 @@ type SortKey = keyof CampaignData
 type SortDir = 'asc' | 'desc'
 
 export default function CampaignPerformance({ model, modelsReady, configId }: CampaignPerformanceProps) {
+  const initialTrendParams = useMemo(() => {
+    const params = new URLSearchParams(window.location.search)
+    const kpiRaw = (params.get('kpi') || '').toLowerCase()
+    const kpi = ['spend', 'conversions', 'revenue', 'cpa', 'roas'].includes(kpiRaw) ? kpiRaw : 'conversions'
+    const grainRaw = (params.get('grain') || 'auto').toLowerCase()
+    const grain = grainRaw === 'daily' || grainRaw === 'weekly' ? grainRaw : 'auto'
+    const compare = params.get('compare') !== '0'
+    return { kpi, grain: grain as 'auto' | 'daily' | 'weekly', compare }
+  }, [])
+
   const [sortKey, setSortKey] = useState<SortKey>('attributed_value')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [search, setSearch] = useState('')
@@ -180,7 +209,11 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
   const [showWhy, setShowWhy] = useState(false)
   const [conversionKey, setConversionKey] = useState<string | ''>('')
   const [directMode, setDirectMode] = useState<'include' | 'exclude'>('include')
-  const [comparePrevious, setComparePrevious] = useState(false)
+  const [comparePrevious, setComparePrevious] = useState(initialTrendParams.compare)
+  const [trendKpi, setTrendKpi] = useState(initialTrendParams.kpi)
+  const [trendGrain, setTrendGrain] = useState<'auto' | 'daily' | 'weekly'>(initialTrendParams.grain)
+  const [trendCampaignSearch, setTrendCampaignSearch] = useState('')
+  const [selectedTrendCampaign, setSelectedTrendCampaign] = useState<string>('all')
 
   const journeysQuery = useQuery<JourneysSummary>({
     queryKey: ['journeys-summary-for-campaigns'],
@@ -209,14 +242,22 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
   const loading = perfQuery.isLoading || !modelsReady
   const campaigns = data?.campaigns ?? []
 
-  const trendsQuery = useQuery<CampaignTrendsResponse>({
-    queryKey: ['campaign-performance-trends'],
+  const trendQuery = useQuery<CampaignTrendV2Response>({
+    queryKey: ['campaign-performance-trend-v2', trendKpi, trendGrain, comparePrevious],
     queryFn: async () => {
-      const res = await fetch('/api/attribution/campaign-performance/trends')
+      const params = new URLSearchParams({
+        date_from: (journeysQuery.data?.date_min || '2026-01-01').slice(0, 10),
+        date_to: (journeysQuery.data?.date_max || '2026-01-31').slice(0, 10),
+        timezone: 'UTC',
+        kpi_key: trendKpi,
+        grain: trendGrain,
+        compare: comparePrevious ? '1' : '0',
+      })
+      const res = await fetch(`/api/performance/campaign/trend?${params.toString()}`)
       if (!res.ok) throw new Error('Failed to fetch campaign trends')
       return res.json()
     },
-    enabled: !!campaigns.length,
+    enabled: !!campaigns.length && !!journeysQuery.data?.date_min && !!journeysQuery.data?.date_max,
     refetchInterval: false,
   })
 
@@ -265,11 +306,76 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
     }
     return filteredCampaigns[0]?.campaign ?? null
   }, [selectedCampaign, filteredCampaigns])
+  const activeCampaignLabel = useMemo(() => {
+    if (!activeCampaignKey) return 'none'
+    const active = filteredCampaigns.find((c) => c.campaign === activeCampaignKey)
+    if (!active) return activeCampaignKey
+    return active.campaign_name ? `${active.channel} / ${active.campaign_name}` : active.campaign
+  }, [activeCampaignKey, filteredCampaigns])
+  const activeCampaignStats = useMemo(() => {
+    if (!activeCampaignKey) return null
+    return filteredCampaigns.find((c) => c.campaign === activeCampaignKey) ?? null
+  }, [activeCampaignKey, filteredCampaigns])
+  const trendCampaignOptions = useMemo(() => {
+    const ranked = [...filteredCampaigns]
+      .sort((a, b) => (b.spend || b.attributed_conversions) - (a.spend || a.attributed_conversions))
+      .slice(0, 30)
+    return ranked.map((c) => c.campaign)
+  }, [filteredCampaigns])
 
-  const activeTrendSeries: CampaignTrendPoint[] =
-    activeCampaignKey && trendsQuery.data?.series?.[activeCampaignKey]
-      ? trendsQuery.data.series[activeCampaignKey]
-      : []
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    params.set('kpi', trendKpi)
+    params.set('grain', trendGrain)
+    params.set('compare', comparePrevious ? '1' : '0')
+    window.history.replaceState(null, '', `${window.location.pathname}?${params.toString()}`)
+  }, [trendKpi, trendGrain, comparePrevious])
+
+  const campaignTrendMetrics = useMemo(() => {
+    const rows = trendQuery.data?.series || []
+    const prevRows = trendQuery.data?.series_prev || []
+    if (!rows.length) return []
+    const campaignFilter =
+      selectedTrendCampaign === 'all'
+        ? new Set(
+            trendCampaignOptions.filter((c) =>
+              c.toLowerCase().includes(trendCampaignSearch.trim().toLowerCase()),
+            ),
+          )
+        : new Set([selectedTrendCampaign])
+
+    const byTs = new Map<string, number>()
+    rows.forEach((r) => {
+      if (!campaignFilter.has(r.campaign_id)) return
+      if (typeof r.value !== 'number') return
+      byTs.set(r.ts, (byTs.get(r.ts) || 0) + r.value)
+    })
+    const byTsPrev = new Map<string, number>()
+    prevRows.forEach((r) => {
+      if (!campaignFilter.has(r.campaign_id)) return
+      if (typeof r.value !== 'number') return
+      byTsPrev.set(r.ts, (byTsPrev.get(r.ts) || 0) + r.value)
+    })
+    const keys = Array.from(new Set(rows.map((r) => r.ts))).sort()
+    const keysPrev = Array.from(new Set(prevRows.map((r) => r.ts))).sort()
+    const currentSeries = keys.map((k) => ({ ts: k, value: byTs.has(k) ? byTs.get(k)! : null }))
+    const prevSeries = keysPrev.map((k) => ({ ts: k, value: byTsPrev.has(k) ? byTsPrev.get(k)! : null }))
+    return [
+      {
+        key: trendKpi,
+        label: trendKpi.toUpperCase(),
+        current: currentSeries,
+        previous: prevSeries,
+        summaryMode: trendKpi === 'cpa' || trendKpi === 'roas' ? ('avg' as const) : ('sum' as const),
+        formatValue:
+          trendKpi === 'conversions'
+            ? (v: number) => v.toFixed(0)
+            : trendKpi === 'roas'
+            ? (v: number) => `${v.toFixed(2)}x`
+            : formatCurrency,
+      },
+    ]
+  }, [trendQuery.data, trendKpi, selectedTrendCampaign, trendCampaignOptions, trendCampaignSearch])
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
@@ -435,6 +541,62 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
         >
           Why?
         </button>
+      </div>
+
+      <div style={{ marginBottom: t.space.xl }}>
+        <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', alignItems: 'center', marginBottom: t.space.sm }}>
+          <label style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Campaign</label>
+          <input
+            type="text"
+            placeholder="Search campaigns..."
+            value={trendCampaignSearch}
+            onChange={(e) => setTrendCampaignSearch(e.target.value)}
+            style={{
+              padding: `${t.space.xs}px ${t.space.sm}px`,
+              border: `1px solid ${t.color.border}`,
+              borderRadius: t.radius.sm,
+              fontSize: t.font.sizeSm,
+              minWidth: 180,
+            }}
+          />
+          <select
+            value={selectedTrendCampaign}
+            onChange={(e) => setSelectedTrendCampaign(e.target.value)}
+            style={{
+              padding: `${t.space.xs}px ${t.space.sm}px`,
+              border: `1px solid ${t.color.border}`,
+              borderRadius: t.radius.sm,
+              fontSize: t.font.sizeSm,
+              minWidth: 240,
+            }}
+          >
+            <option value="all">All campaigns (aggregated)</option>
+            {trendCampaignOptions
+              .filter((c) => c.toLowerCase().includes(trendCampaignSearch.trim().toLowerCase()))
+              .map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+          </select>
+        </div>
+        <TrendPanel
+          title="Trend"
+          subtitle="Daily trend for selected period"
+          metrics={campaignTrendMetrics}
+          metricKey={trendKpi}
+          onMetricKeyChange={setTrendKpi}
+          grain={trendGrain}
+          onGrainChange={setTrendGrain}
+          compare={comparePrevious}
+          onCompareChange={setComparePrevious}
+          showMetricSelector
+          showGrainSelector
+          showCompareToggle
+          showTableToggle
+          infoTooltip="Observed values by date for selected campaign scope. Change vs previous period is shown in summary."
+          noDataMessage="No data for selected filters and date range"
+        />
       </div>
 
       {/* Measurement context controls */}
@@ -757,28 +919,6 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
         </span>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: t.space.md, marginBottom: t.space.xl }}>
-        {kpis.map((kpi) => (
-          <div
-            key={kpi.label}
-            style={{
-              background: t.color.surface,
-              border: `1px solid ${t.color.borderLight}`,
-              borderRadius: t.radius.md,
-              padding: `${t.space.lg}px ${t.space.xl}px`,
-              boxShadow: t.shadowSm,
-            }}
-          >
-            <div style={{ fontSize: t.font.sizeXs, fontWeight: t.font.weightMedium, color: t.color.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em' }} title={kpi.def}>
-              {kpi.label}
-            </div>
-            <div style={{ fontSize: t.font.sizeXl, fontWeight: t.font.weightBold, color: t.color.text, marginTop: t.space.xs, fontVariantNumeric: 'tabular-nums' }}>
-              {kpi.value}
-            </div>
-          </div>
-        ))}
-      </div>
-
       <div
         style={{
           display: 'grid',
@@ -822,55 +962,49 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
           }}
         >
           <h3 style={{ margin: `0 0 ${t.space.lg}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-            {activeCampaignKey ? `Trend for ${activeCampaignKey}` : 'Campaign trend'}
+            Campaign selection
           </h3>
-          {trendsQuery.isLoading && (
-            <p style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary, margin: 0 }}>Loading trends…</p>
-          )}
-          {!trendsQuery.isLoading && !activeCampaignKey && (
-            <p style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary, margin: 0 }}>Select a campaign from the table below to see its trend.</p>
-          )}
-          {!trendsQuery.isLoading && activeCampaignKey && activeTrendSeries.length === 0 && (
-            <p style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary, margin: 0 }}>No trend data for this campaign.</p>
-          )}
-          {!trendsQuery.isLoading && activeCampaignKey && activeTrendSeries.length > 0 && (
-            <ResponsiveContainer width="100%" height={320}>
-              <LineChart data={activeTrendSeries} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
-                <XAxis dataKey="date" tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }} />
-                <YAxis yAxisId="left" tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }} />
-                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }} />
-                <Tooltip
-                  contentStyle={{ fontSize: t.font.sizeSm, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
-                  labelFormatter={(label) => `Date: ${label}`}
-                  formatter={(value: number, name) =>
-                    name === 'transactions'
-                      ? [value.toFixed(0), 'Transactions']
-                      : [formatCurrency(value), 'Revenue']
-                  }
-                />
-                <Legend wrapperStyle={{ fontSize: t.font.sizeSm }} />
-                <Line
-                  yAxisId="left"
-                  type="monotone"
-                  dataKey="transactions"
-                  name="Transactions"
-                  stroke={t.color.chart[0]}
-                  strokeWidth={2}
-                  dot={{ r: 3 }}
-                />
-                <Line
-                  yAxisId="right"
-                  type="monotone"
-                  dataKey="revenue"
-                  name="Revenue"
-                  stroke={t.color.chart[2]}
-                  strokeWidth={2}
-                  dot={{ r: 3 }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          )}
+          <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+            Use the Trend section above to inspect KPI movement for all campaigns or one selected campaign.
+          </p>
+          <p style={{ margin: `${t.space.sm}px 0 0`, fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+            Current table selection: {activeCampaignLabel}
+          </p>
+          <div
+            style={{
+              marginTop: t.space.md,
+              display: 'grid',
+              gridTemplateColumns: 'repeat(2, minmax(120px, 1fr))',
+              gap: t.space.sm,
+            }}
+          >
+            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Spend</div>
+              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                {activeCampaignStats ? formatCurrency(activeCampaignStats.spend) : '—'}
+              </div>
+            </div>
+            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Attributed Revenue</div>
+              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                {activeCampaignStats ? formatCurrency(activeCampaignStats.attributed_value) : '—'}
+              </div>
+            </div>
+            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Conversions</div>
+              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                {activeCampaignStats ? activeCampaignStats.attributed_conversions.toFixed(1) : '—'}
+              </div>
+            </div>
+            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>ROAS / CPA</div>
+              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                {activeCampaignStats
+                  ? `${activeCampaignStats.roas != null ? `${activeCampaignStats.roas.toFixed(2)}×` : '—'} / ${activeCampaignStats.cpa != null ? formatCurrency(activeCampaignStats.cpa) : '—'}`
+                  : '—'}
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 

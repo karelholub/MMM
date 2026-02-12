@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { tokens as t } from '../theme/tokens'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
@@ -11,7 +11,6 @@ import {
   KpiTileSkeleton,
   DataHealthCard,
 } from '../components/dashboard'
-import type { Confidence } from '../components/ConfidenceBadge'
 
 type PageKey =
   | 'overview'
@@ -38,9 +37,30 @@ interface OverviewProps {
 interface KpiTileResponse {
   kpi_key: string
   value: number
+  delta_abs?: number | null
   delta_pct?: number | null
+  current_period?: {
+    date_from: string
+    date_to: string
+    grain?: 'daily' | 'hourly' | string
+  }
+  previous_period?: {
+    date_from: string
+    date_to: string
+  }
+  series?: Array<{ ts: string; value: number | null }>
+  series_prev?: Array<{ ts: string; value: number | null }>
   sparkline?: number[]
   confidence?: string
+  confidence_score?: number
+  confidence_level?: 'high' | 'medium' | 'low' | string
+  confidence_reasons?: Array<{
+    key: string
+    label: string
+    score: number
+    detail: string
+    weight?: number
+  }>
 }
 
 interface HighlightItem {
@@ -63,6 +83,15 @@ interface OverviewSummaryResponse {
   kpi_tiles: KpiTileResponse[]
   highlights: HighlightItem[]
   freshness: FreshnessResponse
+  current_period?: {
+    date_from: string
+    date_to: string
+    grain?: 'daily' | 'hourly' | string
+  }
+  previous_period?: {
+    date_from: string
+    date_to: string
+  }
   date_from: string
   date_to: string
 }
@@ -121,19 +150,6 @@ function formatKpiValue(kpiKey: string, value: number): string {
   return value.toLocaleString()
 }
 
-/** Map overview API confidence string to ConfidenceBadge shape */
-function overviewConfidenceToBadge(confidence?: string | null): Confidence | null {
-  if (!confidence) return null
-  const map: Record<string, { score: number; label: string }> = {
-    ok: { score: 85, label: 'high' },
-    degraded: { score: 55, label: 'medium' },
-    stale: { score: 25, label: 'low' },
-    no_data: { score: 0, label: 'low' },
-  }
-  const c = map[confidence]
-  return c ? { score: c.score, label: c.label } : null
-}
-
 function getDefaultDateRange(): { date_from: string; date_to: string } {
   const end = new Date()
   const start = new Date()
@@ -142,6 +158,15 @@ function getDefaultDateRange(): { date_from: string; date_to: string } {
     date_from: start.toISOString().slice(0, 10),
     date_to: end.toISOString().slice(0, 10),
   }
+}
+
+function daysInPeriod(fromIso?: string, toIso?: string): number {
+  if (!fromIso || !toIso) return 0
+  const from = new Date(fromIso)
+  const to = new Date(toIso)
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return 0
+  const days = Math.floor((to.getTime() - from.getTime()) / (24 * 60 * 60 * 1000)) + 1
+  return Math.max(1, days)
 }
 
 // --- Cover Dashboard ---
@@ -234,6 +259,51 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
     openAlerts.length > 0 ||
     highlights.length > 0
   const isEmpty = !summaryQuery.isLoading && !summaryQuery.error && !hasAnyData
+  const periodDays = daysInPeriod(summary?.current_period?.date_from, summary?.current_period?.date_to)
+  const baselineLabel = periodDays > 0 ? `vs previous ${periodDays} ${periodDays === 1 ? 'day' : 'days'}` : 'vs previous period'
+  const tileOrder: Array<KpiTileResponse['kpi_key']> = ['spend', 'conversions', 'revenue']
+  const orderedKpiTiles = tileOrder
+    .map((key) => kpiTiles.find((k) => k.kpi_key === key))
+    .filter((k): k is KpiTileResponse => Boolean(k))
+
+  function trendLabelFor(tile: KpiTileResponse): string {
+    const grain = tile.current_period?.grain ?? summary?.current_period?.grain ?? 'daily'
+    return grain === 'hourly' ? 'Hourly trend (selected period)' : 'Daily trend (selected period)'
+  }
+
+  function confidenceFor(tile: KpiTileResponse) {
+    const score = tile.confidence_score
+    const level = tile.confidence_level || tile.confidence || 'low'
+    if (score == null) return null
+    return {
+      score,
+      level,
+      reasons: tile.confidence_reasons || [],
+    }
+  }
+
+  function infoTooltipFor(tile: KpiTileResponse): string {
+    const grain = tile.current_period?.grain ?? summary?.current_period?.grain ?? 'daily'
+    return [
+      `Sparkline: observed ${tile.kpi_key} values (${grain}) for the selected period.`,
+      `Comparison: ${baselineLabel}.`,
+      'Caveats: conversions and revenue reflect observed conversion paths; spend reflects imported expenses and currency conversion settings.',
+    ].join('\n')
+  }
+
+  function tileDrilldown(key: string): { label: string; go: () => void } {
+    const pushTrendQuery = (kpi: string) => {
+      const params = new URLSearchParams(window.location.search)
+      params.set('kpi', kpi)
+      params.set('grain', 'auto')
+      params.set('compare', '1')
+      window.history.replaceState(null, '', `${window.location.pathname}?${params.toString()}`)
+      onNavigate('dashboard')
+    }
+    if (key === 'spend') return { label: 'Click to open Channel performance', go: () => pushTrendQuery('spend') }
+    if (key === 'conversions') return { label: 'Click to open Channel performance', go: () => pushTrendQuery('conversions') }
+    return { label: 'Click to open Channel performance', go: () => pushTrendQuery('revenue') }
+  }
 
   const isLoading = summaryQuery.isLoading || driversQuery.isLoading
   const isError = summaryQuery.isError || driversQuery.isError
@@ -376,14 +446,14 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
         style={{
           display: 'grid',
           gap: t.space.xl,
-          gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
         }}
       >
         {[1, 2, 3, 4, 5, 6].map((i) => (
           <KpiTileSkeleton key={i} />
         ))}
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: t.space.xl }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: t.space.xl }}>
         <SectionCard title="What changed" subtitle="Top insights">
           <div style={{ display: 'grid', gap: t.space.sm }}>
             {[1, 2, 3].map((i) => (
@@ -422,24 +492,31 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
           style={{
             display: 'grid',
             gap: t.space.xl,
-            gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
             maxWidth: '100%',
+            alignItems: 'stretch',
           }}
         >
-          {kpiTiles.slice(0, 10).map((kpi) => (
-            <KpiTile
-              key={kpi.kpi_key}
-              label={kpi.kpi_key.charAt(0).toUpperCase() + kpi.kpi_key.slice(1)}
-              value={formatKpiValue(kpi.kpi_key, kpi.value)}
-              delta={
-                kpi.delta_pct != null && Number.isFinite(kpi.delta_pct)
-                  ? { value: kpi.delta_pct }
-                  : undefined
-              }
-              sparkline={kpi.sparkline?.length ? kpi.sparkline : undefined}
-              confidence={overviewConfidenceToBadge(kpi.confidence) ?? undefined}
-            />
-          ))}
+          {orderedKpiTiles.map((kpi) => {
+            const deepLink = tileDrilldown(kpi.kpi_key)
+            return (
+              <KpiTile
+                key={kpi.kpi_key}
+                label={kpi.kpi_key.charAt(0).toUpperCase() + kpi.kpi_key.slice(1)}
+                value={formatKpiValue(kpi.kpi_key, kpi.value)}
+                deltaPct={kpi.delta_pct ?? null}
+                deltaLabel={baselineLabel}
+                trendLabel={trendLabelFor(kpi)}
+                series={kpi.series?.length ? kpi.series : undefined}
+                seriesPrev={kpi.series_prev?.length ? kpi.series_prev : undefined}
+                confidence={confidenceFor(kpi) ?? undefined}
+                infoTooltip={infoTooltipFor(kpi)}
+                onClick={deepLink.go}
+                drilldownLabel={deepLink.label}
+                formatTooltipValue={(val) => formatKpiValue(kpi.kpi_key, val)}
+              />
+            )
+          })}
         </div>
 
         {/* C) What changed feed */}
@@ -487,10 +564,11 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
         </SectionCard>
 
         {/* D) Drivers: top channels + optional campaigns */}
-        <div style={{ display: 'grid', gap: t.space.xl, gridTemplateColumns: 'minmax(0,2fr) minmax(0,1fr)' }}>
+        <div style={{ display: 'grid', gap: t.space.xl, gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))' }}>
           <SectionCard
             title="Top channels"
             subtitle="Spend, conversions, revenue and period-over-period delta"
+            overflow="auto"
             actions={
               <button
                 type="button"
@@ -546,6 +624,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
           <SectionCard
             title="Top campaigns"
             subtitle="By revenue (optional)"
+            overflow="auto"
             actions={
               <button
                 type="button"
@@ -596,7 +675,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
         </div>
 
         {/* E) Data health + F) Recent alerts side by side */}
-        <div style={{ display: 'grid', gap: t.space.xl, gridTemplateColumns: 'minmax(0,280px) 1fr' }}>
+        <div style={{ display: 'grid', gap: t.space.xl, gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}>
           <DataHealthCard
             freshness={freshness ?? undefined}
             onOpenDataSources={onConnectDataSources}
@@ -633,7 +712,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
                   key={alert.id}
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: '1fr auto',
+                    gridTemplateColumns: 'minmax(0, 1fr)',
                     gap: t.space.sm,
                     alignItems: 'center',
                     padding: `${t.space.sm}px ${t.space.md}px`,
@@ -657,7 +736,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
                     >
                       {(alert.severity ?? 'info').toUpperCase()}
                     </span>
-                    <span style={{ marginLeft: t.space.sm, fontSize: t.font.sizeSm, color: t.color.text }}>
+                    <span style={{ marginLeft: t.space.sm, fontSize: t.font.sizeSm, color: t.color.text, wordBreak: 'break-word' }}>
                       {alert.title || alert.message}
                     </span>
                     <span style={{ display: 'block', fontSize: t.font.sizeXs, color: t.color.textMuted, marginTop: 2 }}>

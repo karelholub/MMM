@@ -187,6 +187,14 @@ def test_in_quiet_hours_same_day_window():
     assert _in_quiet_hours(datetime(2024, 2, 15, 21, 0), q) is False
 
 
+def test_in_quiet_hours_respects_timezone_metadata():
+    q = {"start": "22:00", "end": "06:00", "timezone": "America/Los_Angeles"}
+    # 12:30 UTC == 04:30 in Los Angeles (inside quiet window)
+    assert _in_quiet_hours(datetime(2024, 2, 15, 12, 30), q) is True
+    # 18:00 UTC == 10:00 in Los Angeles (outside quiet window)
+    assert _in_quiet_hours(datetime(2024, 2, 15, 18, 0), q) is False
+
+
 def test_severity_matches_empty_means_all():
     pref = MagicMockPref(severities_json=[])
     assert _severity_matches(pref, "warn") is True

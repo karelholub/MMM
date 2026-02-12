@@ -74,6 +74,10 @@ from app.services_overview import (
     get_overview_drivers,
     get_overview_alerts,
 )
+from app.services_performance_trends import (
+    build_channel_trend_response,
+    build_campaign_trend_response,
+)
 from app.services_quality import (
     load_config_and_meta,
     get_latest_quality_for_scope,
@@ -4247,6 +4251,98 @@ def overview_drivers(
     )
 
 
+@app.get("/api/performance/channel/trend")
+def performance_channel_trend(
+    date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
+    date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
+    timezone: str = Query("UTC", description="IANA timezone for bucketing"),
+    currency: Optional[str] = Query(None, description="Display currency (metadata only)"),
+    workspace: Optional[str] = Query(None, description="Workspace filter (reserved)"),
+    account: Optional[str] = Query(None, description="Account filter (reserved)"),
+    channels: Optional[List[str]] = Query(None, description="Optional channel filter list"),
+    model_id: Optional[str] = Query(None, description="Optional model config id"),
+    kpi_key: str = Query("revenue", description="spend|conversions|revenue|cpa|roas"),
+    grain: str = Query("auto", description="auto|daily|weekly"),
+    compare: bool = Query(True, description="Include previous-period series"),
+    db=Depends(get_db),
+):
+    """
+    Channel performance trend for selected KPI and period.
+    Returns current period series and optional previous period series.
+    """
+    global JOURNEYS
+    if not JOURNEYS:
+        JOURNEYS = load_journeys_from_db(db)
+    try:
+        out = build_channel_trend_response(
+            journeys=JOURNEYS or [],
+            expenses=EXPENSES,
+            date_from=date_from,
+            date_to=date_to,
+            timezone=timezone,
+            kpi_key=kpi_key,
+            grain=grain,
+            compare=compare,
+            channels=channels,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    out["meta"] = {
+        "workspace": workspace,
+        "account": account,
+        "model_id": model_id,
+        "currency": currency,
+        "kpi_key": kpi_key,
+    }
+    return out
+
+
+@app.get("/api/performance/campaign/trend")
+def performance_campaign_trend(
+    date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
+    date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
+    timezone: str = Query("UTC", description="IANA timezone for bucketing"),
+    currency: Optional[str] = Query(None, description="Display currency (metadata only)"),
+    workspace: Optional[str] = Query(None, description="Workspace filter (reserved)"),
+    account: Optional[str] = Query(None, description="Account filter (reserved)"),
+    channels: Optional[List[str]] = Query(None, description="Optional channel filter list"),
+    model_id: Optional[str] = Query(None, description="Optional model config id"),
+    kpi_key: str = Query("revenue", description="spend|conversions|revenue|cpa|roas"),
+    grain: str = Query("auto", description="auto|daily|weekly"),
+    compare: bool = Query(True, description="Include previous-period series"),
+    db=Depends(get_db),
+):
+    """
+    Campaign performance trend for selected KPI and period.
+    Returns current period series and optional previous period series.
+    """
+    global JOURNEYS
+    if not JOURNEYS:
+        JOURNEYS = load_journeys_from_db(db)
+    try:
+        out = build_campaign_trend_response(
+            journeys=JOURNEYS or [],
+            expenses=EXPENSES,
+            date_from=date_from,
+            date_to=date_to,
+            timezone=timezone,
+            kpi_key=kpi_key,
+            grain=grain,
+            compare=compare,
+            channels=channels,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    out["meta"] = {
+        "workspace": workspace,
+        "account": account,
+        "model_id": model_id,
+        "currency": currency,
+        "kpi_key": kpi_key,
+    }
+    return out
+
+
 @app.get("/api/overview/alerts")
 def overview_alerts(
     scope: Optional[str] = Query(None, description="Filter by workspace/account scope"),
@@ -4603,12 +4699,15 @@ def _filter_journeys_by_period(journeys: List[Dict[str, Any]], start: datetime, 
         if not ts:
             continue
         try:
-            dt = datetime.fromisoformat(ts)
+            dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
         except Exception:
             try:
-                dt = datetime.fromisoformat(str(ts))
+                dt = datetime.fromisoformat(str(ts).split("T")[0])
             except Exception:
                 continue
+        # Normalize timezone-aware timestamps to naive to match start/end.
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(tz=None).replace(tzinfo=None)
         if start <= dt <= end:
             out.append(j)
     return out

@@ -454,3 +454,44 @@ def test_run_alerts_engine_metrics_and_dedupe(db_session, fixed_now):
         engine_mod.overview_get_freshness = original
 
     assert metrics3["events_resolved"] == 1
+
+
+def test_run_alerts_engine_does_not_mass_resolve_on_empty_outcomes(db_session, fixed_now):
+    """If evaluator returns no fingerprints, engine must not resolve all open events for that rule."""
+    rule = AlertRule(
+        id=99,
+        name="Threshold missing data",
+        scope="default",
+        rule_type="threshold",
+        kpi_key="conversions",
+        params_json={"threshold_value": 1, "operator": "<"},
+        schedule="daily",
+        severity="warn",
+        is_enabled=True,
+        created_by="test",
+    )
+    db_session.add(rule)
+    db_session.flush()
+    ev = AlertEvent(
+        rule_id=rule.id,
+        ts_detected=fixed_now,
+        severity="warn",
+        title=rule.name,
+        message="Existing open alert",
+        status="open",
+        fingerprint="fp-existing",
+    )
+    db_session.add(ev)
+    db_session.commit()
+
+    import app.services_alerts_engine as engine_mod
+    original_threshold = engine_mod.EVALUATORS["threshold"]
+    try:
+        engine_mod.EVALUATORS["threshold"] = lambda *_args, **_kwargs: []
+        metrics = run_alerts_engine(db_session, "default", now=fixed_now)
+    finally:
+        engine_mod.EVALUATORS["threshold"] = original_threshold
+
+    db_session.refresh(ev)
+    assert ev.status == "open"
+    assert metrics["events_resolved"] == 0

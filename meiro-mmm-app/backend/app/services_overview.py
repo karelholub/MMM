@@ -15,7 +15,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .models_config_dq import ConversionPath
-from .models_overview_alerts import AlertEvent, AlertRule, MetricSnapshot
+from .models_overview_alerts import AlertEvent, AlertRule
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +105,221 @@ def _sparkline_from_series(series: List[Dict[str, Any]], key: str, num_points: i
     return vals[-num_points:]
 
 
+def _as_datetime(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _normalize_period_bounds(date_from: str, date_to: str) -> Tuple[datetime, datetime]:
+    dt_from = _parse_dt(date_from) or (datetime.utcnow() - timedelta(days=30))
+    dt_to = _parse_dt(date_to) or datetime.utcnow()
+    if isinstance(date_from, str) and len(date_from) == 10:
+        dt_from = dt_from.replace(hour=0, minute=0, second=0, microsecond=0)
+    if isinstance(date_to, str) and len(date_to) == 10:
+        dt_to = dt_to.replace(hour=23, minute=59, second=59, microsecond=999999)
+    if dt_to < dt_from:
+        dt_from, dt_to = dt_to, dt_from
+    return dt_from, dt_to
+
+
+def _bucket_key(ts: datetime, grain: str) -> str:
+    if grain == "hourly":
+        return ts.replace(minute=0, second=0, microsecond=0).isoformat()
+    return ts.date().isoformat()
+
+
+def _bucket_step(grain: str) -> timedelta:
+    return timedelta(hours=1) if grain == "hourly" else timedelta(days=1)
+
+
+def _bucket_keys_in_range(start: datetime, end: datetime, grain: str) -> List[str]:
+    keys: List[str] = []
+    cursor = start.replace(minute=0, second=0, microsecond=0) if grain == "hourly" else start.replace(hour=0, minute=0, second=0, microsecond=0)
+    step = _bucket_step(grain)
+    while cursor <= end:
+        keys.append(_bucket_key(cursor, grain))
+        cursor += step
+    return keys
+
+
+def _series_from_map(values: Dict[str, float], bucket_keys: List[str], *, observed_points: int) -> List[Dict[str, Any]]:
+    if observed_points <= 0:
+        return []
+    out: List[Dict[str, Any]] = []
+    for key in bucket_keys:
+        out.append({"ts": key, "value": float(values[key]) if key in values else None})
+    return out
+
+
+def _series_from_conversion_paths(
+    db: Session,
+    start: datetime,
+    end: datetime,
+    grain: str,
+    conversion_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    q = db.query(ConversionPath).filter(
+        ConversionPath.conversion_ts >= start,
+        ConversionPath.conversion_ts <= end,
+    )
+    if conversion_key:
+        q = q.filter(ConversionPath.conversion_key == conversion_key)
+    rows = q.all()
+    conv_map: Dict[str, float] = {}
+    rev_map: Dict[str, float] = {}
+    total_revenue = 0.0
+    for row in rows:
+        payload = row.path_json or {}
+        convs = payload.get("conversions") or []
+        if convs and isinstance(convs[0], dict):
+            value = float(convs[0].get("value", 0))
+        else:
+            value = float(payload.get("conversion_value", 0))
+        total_revenue += value
+        key = _bucket_key(row.conversion_ts, grain)
+        conv_map[key] = conv_map.get(key, 0.0) + 1.0
+        rev_map[key] = rev_map.get(key, 0.0) + value
+    return {
+        "conversions_total": len(rows),
+        "revenue_total": round(total_revenue, 2),
+        "conversions_map": conv_map,
+        "revenue_map": rev_map,
+        "observed_points": len(rows),
+    }
+
+
+def _series_from_expenses(
+    expenses: Any,
+    start: datetime,
+    end: datetime,
+    grain: str,
+) -> Dict[str, Any]:
+    amount_map: Dict[str, float] = {}
+    observed_points = 0
+    items = expenses.values() if isinstance(expenses, dict) else (expenses or [])
+    for exp in items:
+        entry = exp if isinstance(exp, dict) else getattr(exp, "__dict__", exp)
+        if isinstance(entry, dict):
+            status = entry.get("status", "active")
+            amount_raw = entry.get("converted_amount") or entry.get("amount") or 0
+            start_raw = entry.get("service_period_start")
+        else:
+            status = getattr(exp, "status", "active")
+            amount_raw = getattr(exp, "converted_amount", None) or getattr(exp, "amount", 0) or 0
+            start_raw = getattr(exp, "service_period_start", None)
+        if status == "deleted":
+            continue
+        ts = _as_datetime(start_raw)
+        if ts is None or ts < start or ts > end:
+            continue
+        key = _bucket_key(ts, grain)
+        amount = float(amount_raw)
+        amount_map[key] = amount_map.get(key, 0.0) + amount
+        observed_points += 1
+    return {
+        "total": round(sum(amount_map.values()), 2),
+        "map": amount_map,
+        "observed_points": observed_points,
+    }
+
+
+def _confidence_from_quality(
+    *,
+    freshness_lag_min: Optional[float],
+    expected_points: int,
+    observed_points: int,
+    missing_spend_share: float,
+    missing_conversion_share: float,
+) -> Dict[str, Any]:
+    if observed_points <= 0:
+        reasons = [
+            {
+                "key": "coverage",
+                "label": "Coverage",
+                "score": 0,
+                "weight": 0.4,
+                "detail": "No spend or conversion datapoints in selected period.",
+            }
+        ]
+        return {"score": 0, "level": "low", "reasons": reasons}
+
+    if freshness_lag_min is None:
+        freshness_score = 60
+        freshness_detail = "Ingest lag unavailable."
+    elif freshness_lag_min <= 60 * 4:
+        freshness_score = 100
+        freshness_detail = f"Latest ingest lag {freshness_lag_min:.0f} min."
+    elif freshness_lag_min <= 60 * 24:
+        freshness_score = 70
+        freshness_detail = f"Latest ingest lag {freshness_lag_min:.0f} min."
+    else:
+        freshness_score = 35
+        freshness_detail = f"Latest ingest lag {freshness_lag_min:.0f} min (stale)."
+
+    coverage_ratio = min(1.0, observed_points / max(expected_points, 1))
+    coverage_score = round(coverage_ratio * 100)
+    spend_score = round(max(0.0, 100.0 - missing_spend_share * 100.0))
+    conv_score = round(max(0.0, 100.0 - missing_conversion_share * 100.0))
+    stability_score = 70
+    score = round(
+        freshness_score * 0.30
+        + coverage_score * 0.30
+        + spend_score * 0.20
+        + conv_score * 0.10
+        + stability_score * 0.10
+    )
+    if score >= 80:
+        level = "high"
+    elif score >= 55:
+        level = "medium"
+    else:
+        level = "low"
+    reasons = [
+        {
+            "key": "freshness",
+            "label": "Freshness",
+            "score": freshness_score,
+            "weight": 0.30,
+            "detail": freshness_detail,
+        },
+        {
+            "key": "coverage",
+            "label": "Coverage",
+            "score": coverage_score,
+            "weight": 0.30,
+            "detail": f"{observed_points}/{max(expected_points, 1)} trend points available.",
+        },
+        {
+            "key": "missing_spend",
+            "label": "Missing spend",
+            "score": spend_score,
+            "weight": 0.20,
+            "detail": f"{missing_spend_share * 100:.1f}% of buckets have conversions but no spend.",
+        },
+        {
+            "key": "missing_conversions",
+            "label": "Missing conversions",
+            "score": conv_score,
+            "weight": 0.10,
+            "detail": f"{missing_conversion_share * 100:.1f}% of buckets have spend but no conversions.",
+        },
+        {
+            "key": "model_stability",
+            "label": "Model stability",
+            "score": stability_score,
+            "weight": 0.10,
+            "detail": "Model stability is not computed on Cover; neutral score applied.",
+        },
+    ]
+    return {"score": score, "level": level, "reasons": reasons}
+
+
 # ---------------------------------------------------------------------------
 # Freshness
 # ---------------------------------------------------------------------------
@@ -170,92 +385,147 @@ def get_overview_summary(
     Returns kpi_tiles, highlights, freshness.
     Does not require MMM/Incrementality; uses raw paths + expenses.
     """
-    dt_from = _parse_dt(date_from)
-    dt_to = _parse_dt(date_to)
-    if not dt_from or not dt_to:
-        dt_from = datetime.utcnow() - timedelta(days=30)
-        dt_to = datetime.utcnow()
+    dt_from, dt_to = _normalize_period_bounds(date_from, date_to)
+    period_span = dt_to - dt_from
+    prev_to = dt_from - timedelta(microseconds=1)
+    prev_from = prev_to - period_span
+    grain = "hourly" if period_span <= timedelta(days=2) else "daily"
+    bucket_keys_current = _bucket_keys_in_range(dt_from, dt_to, grain)
+    bucket_keys_prev = _bucket_keys_in_range(prev_from, prev_to, grain)
+    expected_points = len(bucket_keys_current)
 
-    # Previous period for delta
-    delta_days = (dt_to - dt_from).days or 1
-    prev_to = dt_from - timedelta(days=1)
-    prev_from = prev_to - timedelta(days=delta_days)
+    current_paths = _series_from_conversion_paths(db, dt_from, dt_to, grain)
+    prev_paths = _series_from_conversion_paths(db, prev_from, prev_to, grain)
+    current_expenses = _series_from_expenses(expenses or {}, dt_from, dt_to, grain)
+    prev_expenses = _series_from_expenses(expenses or {}, prev_from, prev_to, grain)
 
-    expense_by_channel = _expense_by_channel(expenses or {}, date_from, date_to, currency)
-    total_spend = sum(expense_by_channel.values())
-
-    conv_count, total_revenue, daily_series = _conversions_and_revenue_from_paths(
-        db, dt_from, dt_to, None
-    )
-    prev_conv, prev_revenue, _ = _conversions_and_revenue_from_paths(db, prev_from, prev_to, None)
-
-    # Sparkline: use daily series or metric_snapshots if present
-    scope = workspace or account or "default"
-    try:
-        snapshots = (
-            db.query(MetricSnapshot)
-            .filter(
-                MetricSnapshot.ts >= dt_from,
-                MetricSnapshot.ts <= dt_to,
-                MetricSnapshot.scope == scope,
-            )
-            .order_by(MetricSnapshot.ts.asc())
-            .all()
-        )
-        spend_snap = [s.kpi_value for s in snapshots if s.kpi_key == "spend"]
-        conv_snap = [s.kpi_value for s in snapshots if s.kpi_key == "conversions"]
-        rev_snap = [s.kpi_value for s in snapshots if s.kpi_key == "revenue"]
-    except Exception:
-        spend_snap = conv_snap = rev_snap = []
+    total_spend = current_expenses["total"]
+    prev_spend = prev_expenses["total"]
+    conv_count = current_paths["conversions_total"]
+    prev_conv = prev_paths["conversions_total"]
+    total_revenue = current_paths["revenue_total"]
+    prev_revenue = prev_paths["revenue_total"]
 
     def _delta_pct(curr: float, prev: float) -> Optional[float]:
         if prev == 0:
             return 100.0 if curr > 0 else None
         return round((curr - prev) / prev * 100.0, 1)
 
-    def _confidence(lag_min: Optional[float], has_data: bool) -> str:
-        if not has_data:
-            return "no_data"
-        if lag_min is not None and lag_min > 60 * 24:  # > 1 day
-            return "stale"
-        if lag_min is not None and lag_min > 60 * 4:  # > 4 hours
-            return "degraded"
-        return "ok"
-
     freshness = get_freshness(db, import_runs_get_last_successful)
     lag_min = freshness.get("ingest_lag_minutes")
-    has_any = total_spend > 0 or conv_count > 0 or total_revenue > 0
-    confidence = _confidence(lag_min, has_any)
+    conv_map_current = current_paths["conversions_map"]
+    spend_map_current = current_expenses["map"]
+    buckets_with_conversions = 0
+    missing_spend_buckets = 0
+    buckets_with_spend = 0
+    missing_conversion_buckets = 0
+    for key in bucket_keys_current:
+        conv_v = conv_map_current.get(key, 0.0)
+        spend_v = spend_map_current.get(key, 0.0)
+        if conv_v > 0:
+            buckets_with_conversions += 1
+            if spend_v <= 0:
+                missing_spend_buckets += 1
+        if spend_v > 0:
+            buckets_with_spend += 1
+            if conv_v <= 0:
+                missing_conversion_buckets += 1
+    missing_spend_share = (
+        missing_spend_buckets / buckets_with_conversions if buckets_with_conversions > 0 else 0.0
+    )
+    missing_conversion_share = (
+        missing_conversion_buckets / buckets_with_spend if buckets_with_spend > 0 else 0.0
+    )
 
-    spark_spend = spend_snap[-14:] if spend_snap else _sparkline_from_series(daily_series, "revenue")  # reuse daily as proxy if no spend series
-    if not spark_spend and daily_series:
-        # Fake spend sparkline from revenue * 0.3 for display if no snapshot
-        spark_spend = [d.get("revenue", 0) * 0.3 for d in daily_series[-14:]]
-    spark_conversions = conv_snap[-14:] if conv_snap else _sparkline_from_series(daily_series, "conversions")
-    spark_revenue = rev_snap[-14:] if rev_snap else _sparkline_from_series(daily_series, "revenue")
+    observed_points = max(
+        current_expenses.get("observed_points", 0),
+        current_paths.get("observed_points", 0),
+    )
+    confidence = _confidence_from_quality(
+        freshness_lag_min=lag_min,
+        expected_points=expected_points,
+        observed_points=observed_points,
+        missing_spend_share=missing_spend_share,
+        missing_conversion_share=missing_conversion_share,
+    )
+
+    current_spend_series = _series_from_map(
+        current_expenses["map"], bucket_keys_current, observed_points=current_expenses["observed_points"]
+    )
+    prev_spend_series = _series_from_map(
+        prev_expenses["map"], bucket_keys_prev, observed_points=prev_expenses["observed_points"]
+    )
+    current_conv_series = _series_from_map(
+        current_paths["conversions_map"], bucket_keys_current, observed_points=current_paths["observed_points"]
+    )
+    prev_conv_series = _series_from_map(
+        prev_paths["conversions_map"], bucket_keys_prev, observed_points=prev_paths["observed_points"]
+    )
+    current_rev_series = _series_from_map(
+        current_paths["revenue_map"], bucket_keys_current, observed_points=current_paths["observed_points"]
+    )
+    prev_rev_series = _series_from_map(
+        prev_paths["revenue_map"], bucket_keys_prev, observed_points=prev_paths["observed_points"]
+    )
+
+    current_period = {
+        "date_from": dt_from.isoformat(),
+        "date_to": dt_to.isoformat(),
+        "grain": grain,
+    }
+    previous_period = {
+        "date_from": prev_from.isoformat(),
+        "date_to": prev_to.isoformat(),
+    }
+
+    def _tile_payload(
+        *,
+        kpi_key: str,
+        value: float,
+        prev_value: float,
+        series: List[Dict[str, Any]],
+        series_prev: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        delta_abs = round(value - prev_value, 2)
+        delta_pct = _delta_pct(float(value), float(prev_value))
+        return {
+            "kpi_key": kpi_key,
+            "value": round(value, 2) if kpi_key != "conversions" else int(value),
+            "delta_pct": delta_pct,
+            "delta_abs": delta_abs,
+            "current_period": current_period,
+            "previous_period": previous_period,
+            "series": series,
+            "series_prev": series_prev,
+            "sparkline": [float(p["value"]) if isinstance(p.get("value"), (int, float)) else 0.0 for p in series],
+            "confidence": confidence["level"],
+            "confidence_score": confidence["score"],
+            "confidence_level": confidence["level"],
+            "confidence_reasons": confidence["reasons"],
+        }
 
     kpi_tiles = [
-        {
-            "kpi_key": "spend",
-            "value": round(total_spend, 2),
-            "delta_pct": _delta_pct(total_spend, sum(_expense_by_channel(expenses or {}, prev_from.strftime("%Y-%m-%d"), prev_to.strftime("%Y-%m-%d"), currency).values())),
-            "sparkline": spark_spend,
-            "confidence": confidence,
-        },
-        {
-            "kpi_key": "conversions",
-            "value": conv_count,
-            "delta_pct": _delta_pct(float(conv_count), float(prev_conv)),
-            "sparkline": spark_conversions,
-            "confidence": confidence,
-        },
-        {
-            "kpi_key": "revenue",
-            "value": round(total_revenue, 2),
-            "delta_pct": _delta_pct(total_revenue, prev_revenue),
-            "sparkline": spark_revenue,
-            "confidence": confidence,
-        },
+        _tile_payload(
+            kpi_key="spend",
+            value=float(total_spend),
+            prev_value=float(prev_spend),
+            series=current_spend_series,
+            series_prev=prev_spend_series,
+        ),
+        _tile_payload(
+            kpi_key="conversions",
+            value=float(conv_count),
+            prev_value=float(prev_conv),
+            series=current_conv_series,
+            series_prev=prev_conv_series,
+        ),
+        _tile_payload(
+            kpi_key="revenue",
+            value=float(total_revenue),
+            prev_value=float(prev_revenue),
+            series=current_rev_series,
+            series_prev=prev_rev_series,
+        ),
     ]
 
     # Highlights: from alerts + KPI deltas
@@ -295,6 +565,8 @@ def get_overview_summary(
         "kpi_tiles": kpi_tiles,
         "highlights": highlights,
         "freshness": freshness,
+        "current_period": current_period,
+        "previous_period": previous_period,
         "model_id": model_id,
         "date_from": date_from,
         "date_to": date_to,
@@ -349,10 +621,10 @@ def get_overview_drivers(
         convs = payload.get("conversions") or []
         val = float(convs[0].get("value", 0)) if convs and isinstance(convs[0], dict) else float(payload.get("conversion_value", 0))
         tps = payload.get("touchpoints") or []
-        for tp in tps:
+        for idx, tp in enumerate(tps):
             ch = tp.get("channel", "unknown") if isinstance(tp, dict) else "unknown"
             ch_rev[ch] = ch_rev.get(ch, 0) + val / max(len(tps), 1)
-            ch_conv[ch] = ch_conv.get(ch, 0) + (1 if tp == tps[-1] else 0)  # last-touch count
+            ch_conv[ch] = ch_conv.get(ch, 0) + (1 if idx == len(tps) - 1 else 0)  # last-touch count
         if tps:
             last = tps[-1] if isinstance(tps[-1], dict) else {}
             camp = last.get("campaign") or last.get("campaign_name") if isinstance(last, dict) else "unknown"
