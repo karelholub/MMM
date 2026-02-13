@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { tokens as t } from '../theme/tokens'
+import { apiGetJson } from '../lib/apiClient'
 
 interface JourneysSummary {
   loaded: boolean
@@ -199,11 +200,9 @@ export default function PathArchetypes() {
 
   const journeysQuery = useQuery<JourneysSummary>({
     queryKey: ['journeys-summary-for-archetypes'],
-    queryFn: async () => {
-      const res = await fetch('/api/attribution/journeys')
-      if (!res.ok) throw new Error('Failed to load journeys summary')
-      return res.json()
-    },
+    queryFn: async () => apiGetJson<JourneysSummary>('/api/attribution/journeys', {
+      fallbackMessage: 'Failed to load journeys summary',
+    }),
   })
 
   const archetypesQuery = useQuery<ArchetypesResponse>({
@@ -214,9 +213,9 @@ export default function PathArchetypes() {
       if (kMode === 'fixed') params.set('k', String(kFixed))
       params.set('direct_mode', directMode)
       if (comparePrevious) params.set('compare_previous', 'true')
-      const res = await fetch(`/api/paths/archetypes?${params.toString()}`)
-      if (!res.ok) throw new Error('Failed to load path archetypes')
-      return res.json()
+      return apiGetJson<ArchetypesResponse>(`/api/paths/archetypes?${params.toString()}`, {
+        fallbackMessage: 'Failed to load path archetypes',
+      })
     },
   })
 
@@ -426,7 +425,7 @@ export default function PathArchetypes() {
             </label>
             <button
               type="button"
-              onClick={() => archetypesQuery.refetch({ meta: { force: true } })}
+              onClick={() => archetypesQuery.refetch()}
               disabled={archetypesQuery.isFetching}
               style={{
                 borderRadius: tkn.radius.full,

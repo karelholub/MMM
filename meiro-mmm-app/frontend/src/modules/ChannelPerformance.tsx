@@ -17,6 +17,7 @@ import {
   Cell,
 } from 'recharts'
 import { tokens } from '../theme/tokens'
+import { apiGetJson, withQuery } from '../lib/apiClient'
 
 interface ChannelPerformanceProps {
   model: string
@@ -202,27 +203,23 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
   const [chartSortBy, setChartSortBy] = useState<'spend' | 'attributed_value' | 'roas'>('attributed_value')
   const [channelSearch, setChannelSearch] = useState('')
   const [onlyLowConfidence, setOnlyLowConfidence] = useState(false)
-  const [selectedChannel, setSelectedChannel] = useState<ChannelData | null>(null)
   const [selectedTrendChannels, setSelectedTrendChannels] = useState<string[]>([])
-  const [visibleTrendChannels, setVisibleTrendChannels] = useState<string[]>([])
 
   const journeysQuery = useQuery<JourneysSummary>({
     queryKey: ['journeys-summary-for-channels'],
-    queryFn: async () => {
-      const res = await fetch('/api/attribution/journeys')
-      if (!res.ok) throw new Error('Failed to load journeys summary')
-      return res.json()
-    },
+    queryFn: async () => apiGetJson<JourneysSummary>('/api/attribution/journeys', {
+      fallbackMessage: 'Failed to load journeys summary',
+    }),
   })
 
   const perfQuery = useQuery<PerformanceResponse>({
     queryKey: ['channel-performance', model, configId ?? 'default'],
     queryFn: async () => {
-      const params = new URLSearchParams({ model })
-      if (configId) params.append('config_id', configId)
-      const res = await fetch(`/api/attribution/performance?${params.toString()}`)
-      if (!res.ok) throw new Error('Failed to fetch performance')
-      return res.json()
+      const params: Record<string, string> = { model }
+      if (configId) params.config_id = configId
+      return apiGetJson<PerformanceResponse>(withQuery('/api/attribution/performance', params), {
+        fallbackMessage: 'Failed to fetch performance',
+      })
     },
     enabled: modelsReady,
     refetchInterval: false,
@@ -231,14 +228,14 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
   const explainabilityQuery = useQuery<ExplainabilitySummaryLite>({
     queryKey: ['explainability-lite-channel', model, configId ?? 'default'],
     queryFn: async () => {
-      const params = new URLSearchParams({
+      const params: Record<string, string> = {
         scope: 'channel',
         model,
+      }
+      if (configId) params.config_id = configId
+      return apiGetJson<ExplainabilitySummaryLite>(withQuery('/api/explainability/summary', params), {
+        fallbackMessage: 'Failed to load explainability summary',
       })
-      if (configId) params.append('config_id', configId)
-      const res = await fetch(`/api/explainability/summary?${params.toString()}`)
-      if (!res.ok) throw new Error('Failed to load explainability summary')
-      return res.json()
     },
     enabled: modelsReady,
     refetchInterval: false,
@@ -257,9 +254,9 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
         compare: comparePrevious ? '1' : '0',
       })
       selectedTrendChannels.forEach((ch) => params.append('channels', ch))
-      const res = await fetch(`/api/performance/channel/trend?${params.toString()}`)
-      if (!res.ok) throw new Error('Failed to load channel trend')
-      return res.json()
+      return apiGetJson<ChannelTrendResponse>(`/api/performance/channel/trend?${params.toString()}`, {
+        fallbackMessage: 'Failed to load channel trend',
+      })
     },
     enabled: modelsReady && !!journeysQuery.data?.date_min && !!journeysQuery.data?.date_max,
     refetchInterval: false,
@@ -296,19 +293,12 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     if (selectedTrendChannels.length === 0) {
       setSelectedTrendChannels(filteredForCharts.map((ch) => ch.channel))
     }
-    if (visibleTrendChannels.length === 0) {
-      setVisibleTrendChannels(filteredForCharts.map((ch) => ch.channel))
-    }
-  }, [filteredForCharts, selectedTrendChannels.length, visibleTrendChannels.length])
+  }, [filteredForCharts, selectedTrendChannels.length])
 
   useEffect(() => {
     if (!filteredForCharts.length) return
     const available = new Set(filteredForCharts.map((ch) => ch.channel))
     setSelectedTrendChannels((prev) => {
-      const next = prev.filter((c) => available.has(c))
-      return next.length ? next : Array.from(available)
-    })
-    setVisibleTrendChannels((prev) => {
       const next = prev.filter((c) => available.has(c))
       return next.length ? next : Array.from(available)
     })
@@ -335,7 +325,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     const rows = trendQuery.data?.series || []
     const prevRows = trendQuery.data?.series_prev || []
     if (!rows.length) return []
-    const enabled = new Set(visibleTrendChannels.length ? visibleTrendChannels : selectedTrendChannels)
+    const enabled = new Set(selectedTrendChannels)
     const byTs = new Map<string, number>()
     rows.forEach((r) => {
       if (!enabled.has(r.channel)) return
@@ -367,7 +357,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
             : formatCurrency,
       },
     ]
-  }, [trendQuery.data, trendKpi, selectedTrendChannels, visibleTrendChannels])
+  }, [trendQuery.data, trendKpi, selectedTrendChannels])
   const availableTrendChannels = useMemo(
     () => filteredForCharts.map((ch) => ch.channel).sort(),
     [filteredForCharts],
@@ -430,7 +420,6 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
   const totalValue = filteredForCharts.reduce((s, ch) => s + ch.attributed_value, 0)
   const totalConversions = filteredForCharts.reduce((s, ch) => s + ch.attributed_conversions, 0)
 
-  const totalROI = totalSpend > 0 ? (totalValue - totalSpend) / totalSpend : 0
   const totalROAS = totalSpend > 0 ? totalValue / totalSpend : 0
   const avgCPA = totalConversions > 0 ? totalSpend / totalConversions : 0
 
@@ -618,7 +607,6 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
               onChange={(e) => {
                 const values = Array.from(e.target.selectedOptions).map((o) => o.value)
                 setSelectedTrendChannels(values.length ? values : availableTrendChannels)
-                setVisibleTrendChannels(values.length ? values : availableTrendChannels)
               }}
               style={{
                 minWidth: 220,
@@ -640,33 +628,6 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
             <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
               Hold Cmd/Ctrl to multi-select
             </span>
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: t.space.xs }}>
-            {selectedTrendChannels.map((ch) => {
-              const enabled = visibleTrendChannels.includes(ch)
-              return (
-                <button
-                  key={ch}
-                  type="button"
-                  onClick={() =>
-                    setVisibleTrendChannels((prev) =>
-                      prev.includes(ch) ? prev.filter((x) => x !== ch) : [...prev, ch],
-                    )
-                  }
-                  style={{
-                    border: `1px solid ${enabled ? t.color.accent : t.color.border}`,
-                    background: enabled ? t.color.accentMuted : t.color.surface,
-                    color: enabled ? t.color.accent : t.color.textSecondary,
-                    borderRadius: t.radius.sm,
-                    padding: `${t.space.xs}px ${t.space.sm}px`,
-                    fontSize: t.font.sizeXs,
-                    cursor: 'pointer',
-                  }}
-                >
-                  {ch}
-                </button>
-              )
-            })}
           </div>
         </div>
         <TrendPanel
@@ -1084,8 +1045,6 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
                     borderBottom: `1px solid ${t.color.borderLight}`,
                     backgroundColor: idx % 2 === 0 ? t.color.surface : t.color.bg,
                   }}
-                  onClick={() => setSelectedChannel(ch)}
-                  title="Click to see channel drilldown"
                 >
                   {tableColumns.map((col) => {
                     const isChannel = col.key === 'channel'

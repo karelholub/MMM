@@ -1,9 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 import { useState } from "react"
-
-interface ChannelEfficiencyMatrixProps {
-  onNavigate?: (step: 'upload' | 'results') => void
-}
+import { apiGetJson } from '../lib/apiClient'
 
 interface CompareData {
   channel: string
@@ -24,12 +21,12 @@ export default function ChannelEfficiencyMatrix() {
   const { data, isLoading } = useQuery<CompareData[]>({
     queryKey: ["compare"],
     queryFn: async () => {
-      const res = await fetch("/api/models/compare")
-      if (!res.ok) {
-        console.error("Failed to fetch comparison data:", res.status)
+      try {
+        return await apiGetJson<CompareData[]>('/api/models/compare', { fallbackMessage: 'Failed to fetch comparison data' })
+      } catch (error) {
+        console.error("Failed to fetch comparison data:", error)
         return []
       }
-      return res.json()
     }
   })
 
@@ -335,4 +332,3 @@ export default function ChannelEfficiencyMatrix() {
     </div>
   )
 }
-

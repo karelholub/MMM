@@ -12,6 +12,8 @@ import { tokens } from '../theme/tokens'
 import { WorkspaceContext, JourneysSummary } from '../components/WorkspaceContext'
 import MMMWizardShell from './MMMWizardShell'
 import type { SettingsPageHandle, SectionKey } from './Settings'
+import { usePermissions } from '../hooks/usePermissions'
+import { apiGetJson, apiSendJson } from '../lib/apiClient'
 
 const Overview = lazy(() => import('./Overview'))
 const AlertsPage = lazy(() => import('./Alerts'))
@@ -20,12 +22,12 @@ const AttributionComparison = lazy(() => import('./AttributionComparison'))
 const ConversionPaths = lazy(() => import('./ConversionPaths'))
 const ExpenseManager = lazy(() => import('./ExpenseManager'))
 const DataSources = lazy(() => import('./DataSources'))
-const DatasetUploader = lazy(() => import('./DatasetUploader'))
 const CampaignPerformance = lazy(() => import('./CampaignPerformance'))
 const SettingsPage = lazy(() => import('./Settings'))
 const DataQuality = lazy(() => import('./DataQuality'))
 const IncrementalityPage = lazy(() => import('./Incrementality'))
 const PathArchetypes = lazy(() => import('./PathArchetypes'))
+const JourneysPage = lazy(() => import('./Journeys'))
 
 type Page =
   | 'overview'
@@ -41,10 +43,12 @@ type Page =
   | 'dq'
   | 'incrementality'
   | 'path_archetypes'
+  | 'analytics_journeys'
   | 'datasets'
 
 type NavSection =
   | 'Overview'
+  | 'Analytics'
   | 'Attribution'
   | 'Journeys'
   | 'Causal / Planning'
@@ -66,6 +70,13 @@ const NAV_ITEMS: NavItem[] = [
     section: 'Overview',
     icon: 'OV',
     breadcrumb: 'Overview',
+  },
+  {
+    key: 'analytics_journeys',
+    label: 'Journeys',
+    section: 'Analytics',
+    icon: 'JR',
+    breadcrumb: 'Analytics / Journeys',
   },
   {
     key: 'alerts',
@@ -153,6 +164,82 @@ const NAV_ITEMS: NavItem[] = [
   },
 ]
 
+function renderNavIcon(page: Page, active: boolean) {
+  const stroke = active ? tokens.color.accent : tokens.color.textMuted
+  const common = {
+    width: 14,
+    height: 14,
+    viewBox: '0 0 16 16',
+    fill: 'none',
+    stroke,
+    strokeWidth: 1.5,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+    'aria-hidden': true,
+  }
+
+  if (page === 'overview') {
+    return (
+      <svg {...common}>
+        <rect x="2" y="2" width="5" height="5" />
+        <rect x="9" y="2" width="5" height="5" />
+        <rect x="2" y="9" width="5" height="5" />
+        <rect x="9" y="9" width="5" height="5" />
+      </svg>
+    )
+  }
+  if (page === 'alerts' || page === 'dq') {
+    return (
+      <svg {...common}>
+        <path d="M8 2.5a3 3 0 0 0-3 3V8L3.5 10v1h9V10L11 8V5.5a3 3 0 0 0-3-3Z" />
+        <path d="M6.5 12.5a1.5 1.5 0 0 0 3 0" />
+      </svg>
+    )
+  }
+  if (page === 'settings') {
+    return (
+      <svg {...common}>
+        <circle cx="8" cy="8" r="2.2" />
+        <path d="M8 2.2v1.6M8 12.2v1.6M2.2 8h1.6M12.2 8h1.6M3.7 3.7l1.1 1.1M11.2 11.2l1.1 1.1M12.3 3.7l-1.1 1.1M4.8 11.2l-1.1 1.1" />
+      </svg>
+    )
+  }
+  if (page === 'datasources' || page === 'datasets' || page === 'expenses') {
+    return (
+      <svg {...common}>
+        <ellipse cx="8" cy="3.5" rx="5.5" ry="2" />
+        <path d="M2.5 3.5v4c0 1.1 2.5 2 5.5 2s5.5-.9 5.5-2v-4" />
+        <path d="M2.5 7.5v4c0 1.1 2.5 2 5.5 2s5.5-.9 5.5-2v-4" />
+      </svg>
+    )
+  }
+  if (page === 'incrementality' || page === 'mmm') {
+    return (
+      <svg {...common}>
+        <path d="M2.5 12.5h11" />
+        <path d="M3.5 10l3-3 2 2 4-4" />
+        <path d="M10.8 5h1.7v1.7" />
+      </svg>
+    )
+  }
+  if (page === 'dashboard' || page === 'campaigns' || page === 'comparison') {
+    return (
+      <svg {...common}>
+        <path d="M3 13V9M8 13V6M13 13V3" />
+        <path d="M2 13.5h12" />
+      </svg>
+    )
+  }
+  return (
+    <svg {...common}>
+      <circle cx="3.5" cy="8" r="1.5" />
+      <circle cx="8" cy="4" r="1.5" />
+      <circle cx="12.5" cy="8" r="1.5" />
+      <path d="M5 7l1.7-1.8M9.3 5.2 11 7" />
+    </svg>
+  )
+}
+
 const PAGE_FALLBACK = (
   <div style={{ padding: 48, textAlign: 'center', color: '#64748b', fontSize: 14 }}>
     Loading…
@@ -168,8 +255,49 @@ const ATTRIBUTION_MODELS = [
   { id: 'markov', label: 'Data-Driven (Markov)' },
 ]
 
+interface FeatureFlags {
+  journeys_enabled: boolean
+  journey_examples_enabled: boolean
+  funnel_builder_enabled: boolean
+  funnel_diagnostics_enabled: boolean
+  access_control_enabled: boolean
+  custom_roles_enabled: boolean
+  audit_log_enabled: boolean
+  scim_enabled: boolean
+  sso_enabled: boolean
+}
+
+interface AppSettings {
+  feature_flags?: Partial<FeatureFlags>
+}
+
+const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
+  journeys_enabled: false,
+  journey_examples_enabled: false,
+  funnel_builder_enabled: false,
+  funnel_diagnostics_enabled: false,
+  access_control_enabled: false,
+  custom_roles_enabled: false,
+  audit_log_enabled: false,
+  scim_enabled: false,
+  sso_enabled: false,
+}
+
+function parseInitialPage(pathname: string): Page {
+  if (pathname === '/analytics/journeys') return 'analytics_journeys'
+  return 'overview'
+}
+
+function pageToPathname(page: Page): string {
+  if (page === 'analytics_journeys') return '/analytics/journeys'
+  return '/'
+}
+
 export default function App() {
-  const [page, setPage] = useState<Page>('overview')
+  const [page, setPage] = useState<Page>(() => {
+    if (typeof window === 'undefined') return 'overview'
+    return parseInitialPage(window.location.pathname)
+  })
   const [lastPage, setLastPage] = useState<Page | null>(null)
   const settingsRef = useRef<SettingsPageHandle | null>(null)
   const [settingsDirtySections, setSettingsDirtySections] = useState<SectionKey[]>([])
@@ -200,14 +328,77 @@ export default function App() {
       return []
     }
   })
+  const [viewportWidth, setViewportWidth] = useState<number>(() => {
+    if (typeof window === 'undefined') return 1440
+    return window.innerWidth
+  })
   const [navSearch, setNavSearch] = useState('')
+  const permissions = usePermissions()
+
+  const settingsQuery = useQuery<AppSettings>({
+    queryKey: ['app-settings-feature-flags'],
+    queryFn: async () => {
+      try {
+        return await apiGetJson<AppSettings>('/api/settings', { fallbackMessage: 'Failed to load app settings' })
+      } catch {
+        return { feature_flags: DEFAULT_FEATURE_FLAGS }
+      }
+    },
+    staleTime: 30 * 1000,
+  })
+  const featureFlags = useMemo<FeatureFlags>(() => {
+    const incoming = settingsQuery.data?.feature_flags ?? {}
+    return {
+      journeys_enabled: incoming.journeys_enabled ?? DEFAULT_FEATURE_FLAGS.journeys_enabled,
+      journey_examples_enabled:
+        incoming.journey_examples_enabled ?? DEFAULT_FEATURE_FLAGS.journey_examples_enabled,
+      funnel_builder_enabled:
+        incoming.funnel_builder_enabled ?? DEFAULT_FEATURE_FLAGS.funnel_builder_enabled,
+      funnel_diagnostics_enabled:
+        incoming.funnel_diagnostics_enabled ?? DEFAULT_FEATURE_FLAGS.funnel_diagnostics_enabled,
+      access_control_enabled:
+        incoming.access_control_enabled ?? DEFAULT_FEATURE_FLAGS.access_control_enabled,
+      custom_roles_enabled:
+        incoming.custom_roles_enabled ?? DEFAULT_FEATURE_FLAGS.custom_roles_enabled,
+      audit_log_enabled:
+        incoming.audit_log_enabled ?? DEFAULT_FEATURE_FLAGS.audit_log_enabled,
+      scim_enabled: incoming.scim_enabled ?? DEFAULT_FEATURE_FLAGS.scim_enabled,
+      sso_enabled: incoming.sso_enabled ?? DEFAULT_FEATURE_FLAGS.sso_enabled,
+    }
+  }, [settingsQuery.data?.feature_flags])
+  const rbacEnabled = featureFlags.access_control_enabled
+  const hasPermission = useCallback(
+    (key: string) => (!rbacEnabled ? true : permissions.hasPermission(key)),
+    [permissions, rbacEnabled],
+  )
+  const hasAnyPermission = useCallback(
+    (keys: string[]) => (!rbacEnabled ? true : permissions.hasAnyPermission(keys)),
+    [permissions, rbacEnabled],
+  )
+  const hasJourneysPermission = hasAnyPermission(['journeys.view', 'journeys.manage'])
+  const hasAlertsPermission = hasAnyPermission(['alerts.view', 'alerts.manage'])
+  const hasSettingsPermission = hasAnyPermission(['settings.view', 'settings.manage'])
+  const canAccessPage = useCallback(
+    (nextPage: Page): boolean => {
+      if (!rbacEnabled) return true
+      if (nextPage === 'analytics_journeys' || nextPage === 'paths' || nextPage === 'path_archetypes') {
+        return hasJourneysPermission
+      }
+      if (nextPage === 'alerts') return hasAlertsPermission
+      if (nextPage === 'settings') return hasSettingsPermission
+      return true
+    },
+    [hasAlertsPermission, hasJourneysPermission, hasSettingsPermission, rbacEnabled],
+  )
 
   const journeysQuery = useQuery({
     queryKey: ['journeys-summary'],
     queryFn: async () => {
-      const res = await fetch('/api/attribution/journeys')
-      if (!res.ok) return { loaded: false, count: 0 }
-      return res.json()
+      try {
+        return await apiGetJson<any>('/api/attribution/journeys', { fallbackMessage: 'Failed to load journeys summary' })
+      } catch {
+        return { loaded: false, count: 0 }
+      }
     },
     refetchInterval: 15 * 1000,
   })
@@ -215,20 +406,16 @@ export default function App() {
   const modelConfigsQuery = useQuery({
     queryKey: ['model-configs'],
     queryFn: async () => {
-      const res = await fetch('/api/model-configs')
-      if (!res.ok) throw new Error('Failed to load model configs')
-      return res.json() as Promise<
+      return apiGetJson<
         { id: string; name: string; status: string; version: number; activated_at?: string | null }[]
-      >
+      >('/api/model-configs', { fallbackMessage: 'Failed to load model configs' })
     },
   })
 
   const loadSampleMutation = useMutation({
-    mutationFn: async () => {
-      const res = await fetch('/api/attribution/journeys/load-sample', { method: 'POST' })
-      if (!res.ok) throw new Error('Failed to load sample')
-      return res.json()
-    },
+    mutationFn: async () => apiSendJson<any>('/api/attribution/journeys/load-sample', 'POST', {}, {
+      fallbackMessage: 'Failed to load sample',
+    }),
     onSuccess: () => {
       journeysQuery.refetch()
       runAllMutation.mutate()
@@ -236,11 +423,9 @@ export default function App() {
   })
 
   const runAllMutation = useMutation({
-    mutationFn: async () => {
-      const res = await fetch('/api/attribution/run-all', { method: 'POST' })
-      if (!res.ok) throw new Error('Failed to run models')
-      return res.json()
-    },
+    mutationFn: async () => apiSendJson<any>('/api/attribution/run-all', 'POST', undefined, {
+      fallbackMessage: 'Failed to run models',
+    }),
   })
 
   const createMmmRunMutation = useMutation({
@@ -255,24 +440,20 @@ export default function App() {
       holdout_weeks?: number
       random_seed?: number | null
     }) => {
-      const res = await fetch('/api/models', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          dataset_id: config.dataset_id,
-          frequency: 'W',
-          kpi_mode: config.kpi_mode ?? 'conversions',
-          kpi: config.kpi,
-          spend_channels: config.spend_channels,
-          covariates: config.covariates || [],
-          use_adstock: config.use_adstock ?? true,
-          use_saturation: config.use_saturation ?? true,
-          holdout_weeks: config.holdout_weeks ?? 8,
-          random_seed: config.random_seed ?? null,
-        }),
+      return apiSendJson<{ run_id: string }>('/api/models', 'POST', {
+        dataset_id: config.dataset_id,
+        frequency: 'W',
+        kpi_mode: config.kpi_mode ?? 'conversions',
+        kpi: config.kpi,
+        spend_channels: config.spend_channels,
+        covariates: config.covariates || [],
+        use_adstock: config.use_adstock ?? true,
+        use_saturation: config.use_saturation ?? true,
+        holdout_weeks: config.holdout_weeks ?? 8,
+        random_seed: config.random_seed ?? null,
+      }, {
+        fallbackMessage: 'Failed to start MMM run',
       })
-      if (!res.ok) throw new Error('Failed to start MMM run')
-      return res.json()
     },
     onSuccess: (data, variables) => {
       setMmmRunId(data.run_id)
@@ -283,11 +464,7 @@ export default function App() {
 
   const mmmRunQuery = useQuery({
     queryKey: ['mmm-run', mmmRunId],
-    queryFn: async () => {
-      const res = await fetch(`/api/models/${mmmRunId}`)
-      if (!res.ok) throw new Error('Failed to fetch run')
-      return res.json()
-    },
+    queryFn: async () => apiGetJson<any>(`/api/models/${mmmRunId}`, { fallbackMessage: 'Failed to fetch run' }),
     enabled: !!mmmRunId,
     refetchInterval: (query) => {
       const data = query.state?.data as { status?: string } | undefined
@@ -301,6 +478,35 @@ export default function App() {
     }
   }, [journeysQuery.data?.loaded])
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onPopState = () => {
+      setPage(parseInitialPage(window.location.pathname))
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const targetPath = pageToPathname(page)
+    if (page === 'analytics_journeys' && window.location.pathname !== targetPath) {
+      window.history.pushState({}, '', targetPath)
+      return
+    }
+    if (page !== 'analytics_journeys' && window.location.pathname === '/analytics/journeys') {
+      const suffix = `${window.location.search}${window.location.hash}`
+      window.history.pushState({}, '', `/${suffix}`)
+    }
+  }, [page])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onResize = () => setViewportWidth(window.innerWidth)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
   const journeysLoaded = journeysQuery.data?.loaded ?? false
   const journeyCount = journeysQuery.data?.count ?? 0
   const convertedCount = journeysQuery.data?.converted ?? 0
@@ -308,6 +514,21 @@ export default function App() {
   const primaryKpiId: string | undefined = journeysQuery.data?.primary_kpi_id ?? undefined
   const primaryKpiCount: number | undefined = journeysQuery.data?.primary_kpi_count
   const channels = useMemo(() => journeysQuery.data?.channels ?? [], [journeysQuery.data?.channels])
+  const isMobileHeader = viewportWidth < 768
+  const periodReady = !!(journeysLoaded && journeysQuery.data?.date_min && journeysQuery.data?.date_max)
+  const periodLabel = periodReady
+    ? `${journeysQuery.data?.date_min?.slice(0, 10)} – ${journeysQuery.data?.date_max?.slice(0, 10)}`
+    : 'Loading period…'
+  const conversionLabel = primaryKpiLabel || primaryKpiId || (journeysQuery.isLoading ? 'Loading conversion…' : 'Primary KPI')
+  const visibleNavItems = useMemo(
+    () =>
+      NAV_ITEMS.filter(
+        (item) =>
+          (item.key !== 'analytics_journeys' || featureFlags.journeys_enabled) &&
+          canAccessPage(item.key),
+      ),
+    [canAccessPage, featureFlags.journeys_enabled],
+  )
 
   const navigateToPage = useCallback((next: Page) => {
     setLastPage((prev) => (prev === next ? prev : prev ?? 'dashboard'))
@@ -316,6 +537,7 @@ export default function App() {
 
   const handleSetPage = useCallback(
     (next: Page) => {
+      if (!canAccessPage(next)) return
       if (
         page === 'settings' &&
         next !== 'settings' &&
@@ -327,7 +549,7 @@ export default function App() {
       }
       navigateToPage(next)
     },
-    [navigateToPage, page, settingsDirtySections.length],
+    [canAccessPage, navigateToPage, page, settingsDirtySections.length],
   )
   const handleSetDatasources = useCallback(
     () => handleSetPage('datasources'),
@@ -402,6 +624,12 @@ export default function App() {
     },
     [createMmmRunMutation],
   )
+  const pageBlockedByFeature = page === 'analytics_journeys' && !featureFlags.journeys_enabled
+  const pageBlockedByPermissions = !canAccessPage(page)
+  const showNoAccess = !permissions.isLoading && (pageBlockedByFeature || pageBlockedByPermissions)
+  const blockedReason = pageBlockedByFeature
+    ? 'Journeys feature is disabled for this workspace.'
+    : 'Your role does not have permission to view this page.'
 
   return (
     <WorkspaceContext.Provider
@@ -531,12 +759,13 @@ export default function App() {
             }}
           >
             {(() => {
-              const filtered = NAV_ITEMS.filter((item) =>
+              const filtered = visibleNavItems.filter((item) =>
                 item.label.toLowerCase().includes(navSearch.trim().toLowerCase()),
               )
               const pinned = filtered.filter((item) => pinnedPages.includes(item.key))
               const bySection: Record<NavSection, NavItem[]> = {
                 Overview: [],
+                Analytics: [],
                 Attribution: [],
                 'Causal / Planning': [],
                 Journeys: [],
@@ -587,7 +816,7 @@ export default function App() {
                           flexShrink: 0,
                         }}
                       >
-                        {item.icon}
+                        {renderNavIcon(item.key, active)}
                       </div>
                       {!sidebarCollapsed && <span>{item.label}</span>}
                     </button>
@@ -624,6 +853,7 @@ export default function App() {
 
               const sectionsInOrder: NavSection[] = [
                 'Overview',
+                'Analytics',
                 'Attribution',
                 'Journeys',
                 'Causal / Planning',
@@ -687,21 +917,31 @@ export default function App() {
           style={{
             gridRow: 1,
             gridColumn: 2,
-            display: 'flex',
+            display: 'grid',
+            gridTemplateAreas: isMobileHeader
+              ? '"title" "period" "controls"'
+              : '"title period" "controls controls"',
+            gridTemplateColumns: isMobileHeader
+              ? 'minmax(0,1fr)'
+              : 'minmax(0,1fr) minmax(220px,340px)',
             alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '8px 20px',
+            padding: isMobileHeader ? '10px 12px' : '8px 20px',
             borderBottom: `1px solid ${tokens.color.borderLight}`,
             background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 40%, #1d4ed8 100%)',
             color: '#e5e7eb',
-            gap: 12,
+            gap: 10,
+            position: 'relative',
+            zIndex: 20,
+            minWidth: 0,
           }}
         >
           <div
             style={{
+              gridArea: 'title',
               display: 'flex',
               flexDirection: 'column',
               gap: 2,
+              minWidth: 0,
             }}
           >
             <div
@@ -709,6 +949,9 @@ export default function App() {
                 fontSize: tokens.font.sizeSm,
                 fontWeight: tokens.font.weightSemibold,
                 letterSpacing: '-0.02em',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
               }}
             >
               Meiro measurement workspace
@@ -717,6 +960,9 @@ export default function App() {
               style={{
                 fontSize: tokens.font.sizeXs,
                 color: 'rgba(226,232,240,0.85)',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
               }}
             >
               Unified attribution, incrementality, MMM, and data quality.
@@ -725,142 +971,182 @@ export default function App() {
 
           <div
             style={{
-              display: 'flex',
+              gridArea: 'period',
+              display: 'inline-flex',
               alignItems: 'center',
-              gap: 10,
-              flexWrap: 'wrap',
-              justifyContent: 'flex-end',
+              justifyContent: isMobileHeader ? 'flex-start' : 'flex-end',
               minWidth: 0,
             }}
           >
-            {/* Workspace context: period & conversion (read-only) */}
             <div
               style={{
-                display: 'flex',
+                padding: '6px 10px',
+                borderRadius: 999,
+                backgroundColor: 'rgba(15,23,42,0.65)',
+                border: '1px solid rgba(148,163,184,0.5)',
+                fontSize: tokens.font.sizeXs,
+                display: 'inline-flex',
                 alignItems: 'center',
-                gap: 8,
-                flexWrap: 'wrap',
+                gap: 6,
+                minHeight: 28,
+                width: isMobileHeader ? '100%' : 'clamp(180px, 20vw, 320px)',
+                maxWidth: '100%',
               }}
             >
-              <div
+              <span style={{ opacity: 0.85, flex: '0 0 auto' }}>Period</span>
+              <span
                 style={{
-                  padding: '4px 10px',
-                  borderRadius: 999,
-                  backgroundColor: 'rgba(15,23,42,0.65)',
-                  border: '1px solid rgba(148,163,184,0.5)',
-                  fontSize: tokens.font.sizeXs,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 6,
+                  fontWeight: tokens.font.weightMedium,
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
+                  display: 'inline-block',
                 }}
               >
-                <span style={{ opacity: 0.85 }}>Period</span>
-                <span style={{ fontWeight: tokens.font.weightMedium }}>
-                  {journeysLoaded && journeysQuery.data?.date_min && journeysQuery.data?.date_max
-                    ? `${journeysQuery.data.date_min.slice(0, 10)} – ${journeysQuery.data.date_max.slice(0, 10)}`
-                    : 'Derived from journeys'}
-                </span>
-              </div>
-              <div
-                style={{
-                  padding: '4px 10px',
-                  borderRadius: 999,
-                  backgroundColor: 'rgba(15,23,42,0.65)',
-                  border: '1px solid rgba(148,163,184,0.5)',
-                  fontSize: tokens.font.sizeXs,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                <span style={{ opacity: 0.85 }}>Conversion</span>
-                <span style={{ fontWeight: tokens.font.weightMedium }}>
-                  {primaryKpiLabel || primaryKpiId || 'Primary KPI'}
-                </span>
-                <span style={{ opacity: 0.7 }}>(read‑only)</span>
-              </div>
+                {periodLabel}
+              </span>
             </div>
+          </div>
 
-            {/* Model + config selectors */}
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                flexWrap: 'wrap',
-              }}
-            >
+          <div
+            role="toolbar"
+            aria-label="Workspace controls"
+            style={{
+              gridArea: 'controls',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              rowGap: 8,
+              flexWrap: 'wrap',
+              justifyContent: isMobileHeader ? 'flex-start' : 'flex-end',
+              minWidth: 0,
+              maxWidth: '100%',
+            }}
+          >
+              <div
+                style={{
+                  padding: '6px 10px',
+                  borderRadius: 999,
+                  backgroundColor: 'rgba(15,23,42,0.65)',
+                  border: '1px solid rgba(148,163,184,0.5)',
+                  fontSize: tokens.font.sizeXs,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  minHeight: 28,
+                  width: isMobileHeader ? '100%' : 'clamp(180px, 18vw, 260px)',
+                  maxWidth: '100%',
+                }}
+              >
+                <span style={{ opacity: 0.85, flex: '0 0 auto' }}>Conversion</span>
+                <span
+                  style={{
+                    fontWeight: tokens.font.weightMedium,
+                    minWidth: 0,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    display: 'inline-block',
+                  }}
+                >
+                  {conversionLabel}
+                </span>
+                <span style={{ opacity: 0.7, flex: '0 0 auto' }}>(read‑only)</span>
+              </div>
+
               <label
                 style={{
                   fontSize: tokens.font.sizeXs,
                   color: 'rgba(226,232,240,0.9)',
+                  display: 'inline-flex',
+                  alignItems: isMobileHeader ? 'stretch' : 'center',
+                  flexDirection: isMobileHeader ? 'column' : 'row',
+                  gap: isMobileHeader ? 4 : 6,
+                  minWidth: isMobileHeader ? '100%' : 0,
                 }}
               >
-                Model
-              </label>
-              <select
-                value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
-                style={{
-                  padding: '4px 8px',
-                  fontSize: tokens.font.sizeXs,
-                  borderRadius: tokens.radius.sm,
-                  border: '1px solid rgba(148,163,184,0.6)',
-                  backgroundColor: '#0b1220',
-                  color: '#e5e7eb',
-                  cursor: 'pointer',
-                }}
-              >
-                {ATTRIBUTION_MODELS.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
-              <label
-                style={{
-                  fontSize: tokens.font.sizeXs,
-                  color: 'rgba(226,232,240,0.9)',
-                }}
-              >
-                Config
-              </label>
-              <select
-                value={selectedConfigId ?? ''}
-                onChange={(e) => setSelectedConfigId(e.target.value || null)}
-                style={{
-                  padding: '4px 8px',
-                  fontSize: tokens.font.sizeXs,
-                  borderRadius: tokens.radius.sm,
-                  border: '1px solid rgba(148,163,184,0.6)',
-                  backgroundColor: '#0b1220',
-                  color: '#e5e7eb',
-                  cursor: 'pointer',
-                  maxWidth: 220,
-                }}
-              >
-                <option value="">Default active</option>
-                {(modelConfigsQuery.data ?? [])
-                  .filter((c) => c.status === 'active' || c.status === 'draft')
-                  .map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} v{c.version} {c.status === 'active' ? '• active' : '(draft)'}
+                <span>Model</span>
+                <select
+                  value={selectedModel}
+                  onChange={(e) => setSelectedModel(e.target.value)}
+                  style={{
+                    padding: '6px 8px',
+                    height: 30,
+                    fontSize: tokens.font.sizeXs,
+                    borderRadius: tokens.radius.sm,
+                    border: '1px solid rgba(148,163,184,0.6)',
+                    backgroundColor: '#0b1220',
+                    color: '#e5e7eb',
+                    cursor: 'pointer',
+                    width: isMobileHeader ? '100%' : 'clamp(180px, 18vw, 220px)',
+                    minWidth: isMobileHeader ? 0 : 180,
+                    maxWidth: isMobileHeader ? '100%' : 220,
+                  }}
+                >
+                  {ATTRIBUTION_MODELS.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
                     </option>
                   ))}
-              </select>
-            </div>
+                </select>
+              </label>
 
-            {/* Journeys badge + CTA */}
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                flexWrap: 'wrap',
-              }}
-            >
+              <label
+                style={{
+                  fontSize: tokens.font.sizeXs,
+                  color: 'rgba(226,232,240,0.9)',
+                  display: 'inline-flex',
+                  alignItems: isMobileHeader ? 'stretch' : 'center',
+                  flexDirection: isMobileHeader ? 'column' : 'row',
+                  gap: isMobileHeader ? 4 : 6,
+                  minWidth: isMobileHeader ? '100%' : 0,
+                }}
+              >
+                <span>Config</span>
+                {modelConfigsQuery.isLoading ? (
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      display: 'inline-block',
+                      height: 30,
+                      width: isMobileHeader ? '100%' : 'clamp(200px, 20vw, 240px)',
+                      minWidth: isMobileHeader ? 0 : 200,
+                      borderRadius: tokens.radius.sm,
+                      backgroundColor: 'rgba(100,116,139,0.45)',
+                      border: '1px solid rgba(148,163,184,0.4)',
+                    }}
+                  />
+                ) : (
+                  <select
+                    value={selectedConfigId ?? ''}
+                    onChange={(e) => setSelectedConfigId(e.target.value || null)}
+                    style={{
+                      padding: '6px 8px',
+                      height: 30,
+                      fontSize: tokens.font.sizeXs,
+                      borderRadius: tokens.radius.sm,
+                      border: '1px solid rgba(148,163,184,0.6)',
+                      backgroundColor: '#0b1220',
+                      color: '#e5e7eb',
+                      cursor: 'pointer',
+                      width: isMobileHeader ? '100%' : 'clamp(200px, 20vw, 240px)',
+                      minWidth: isMobileHeader ? 0 : 200,
+                      maxWidth: isMobileHeader ? '100%' : 240,
+                    }}
+                  >
+                    <option value="">Default active</option>
+                    {(modelConfigsQuery.data ?? [])
+                      .filter((c) => c.status === 'active' || c.status === 'draft')
+                      .map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name} v{c.version} {c.status === 'active' ? '• active' : '(draft)'}
+                        </option>
+                      ))}
+                  </select>
+                )}
+              </label>
+
               <div
                 style={{
                   padding: '6px 12px',
@@ -870,6 +1156,14 @@ export default function App() {
                   backgroundColor: journeysLoaded ? 'rgba(22,163,74,0.26)' : 'rgba(250,204,21,0.18)',
                   color: journeysLoaded ? '#bbf7d0' : '#facc15',
                   border: `1px solid ${journeysLoaded ? 'rgba(34,197,94,0.7)' : 'rgba(234,179,8,0.6)'}`,
+                  minHeight: 30,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  minWidth: 0,
+                  width: isMobileHeader ? '100%' : 'clamp(180px, 22vw, 360px)',
+                  maxWidth: '100%',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
                 }}
               >
@@ -879,6 +1173,7 @@ export default function App() {
                     : `${journeyCount} journeys · ${convertedCount} converted`
                   : 'No journeys loaded'}
               </div>
+
               {!journeysLoaded && (
                 <button
                   type="button"
@@ -886,6 +1181,7 @@ export default function App() {
                   disabled={loadSampleMutation.isPending}
                   style={{
                     padding: '6px 14px',
+                    height: 30,
                     borderRadius: 999,
                     fontSize: tokens.font.sizeXs,
                     fontWeight: tokens.font.weightSemibold,
@@ -894,6 +1190,8 @@ export default function App() {
                     border: 'none',
                     cursor: loadSampleMutation.isPending ? 'wait' : 'pointer',
                     opacity: loadSampleMutation.isPending ? 0.7 : 1,
+                    marginLeft: 0,
+                    width: isMobileHeader ? '100%' : 'auto',
                   }}
                 >
                   {loadSampleMutation.isPending ? 'Loading sample…' : 'Load sample data'}
@@ -906,6 +1204,7 @@ export default function App() {
                   disabled={runAllMutation.isPending}
                   style={{
                     padding: '6px 16px',
+                    height: 30,
                     borderRadius: 999,
                     fontSize: tokens.font.sizeXs,
                     fontWeight: tokens.font.weightSemibold,
@@ -915,12 +1214,13 @@ export default function App() {
                     cursor: runAllMutation.isPending ? 'wait' : 'pointer',
                     opacity: runAllMutation.isPending ? 0.85 : 1,
                     boxShadow: '0 0 0 1px rgba(15,23,42,0.4)',
+                    marginLeft: 0,
+                    width: isMobileHeader ? '100%' : 'auto',
                   }}
                 >
                   {runAllMutation.isPending ? 'Running models…' : 'Re-run attribution models'}
                 </button>
               )}
-            </div>
           </div>
         </header>
 
@@ -947,15 +1247,45 @@ export default function App() {
                 color: tokens.color.textMuted,
               }}
             >
-              {NAV_ITEMS.find((n) => n.key === page)?.breadcrumb}
+              {NAV_ITEMS.find((n) => n.key === page)?.breadcrumb ?? ''}
             </div>
 
             <Suspense fallback={PAGE_FALLBACK}>
+              {showNoAccess && (
+                <div
+                  style={{
+                    border: `1px solid ${tokens.color.borderLight}`,
+                    borderRadius: tokens.radius.lg,
+                    background: tokens.color.surface,
+                    boxShadow: tokens.shadowXs,
+                    padding: 24,
+                    display: 'grid',
+                    gap: 10,
+                  }}
+                >
+                  <h2
+                    style={{
+                      margin: 0,
+                      fontSize: tokens.font.sizeLg,
+                      fontWeight: tokens.font.weightSemibold,
+                      color: tokens.color.text,
+                    }}
+                  >
+                    No access
+                  </h2>
+                  <p style={{ margin: 0, color: tokens.color.textSecondary, fontSize: tokens.font.sizeSm }}>
+                    {blockedReason}
+                  </p>
+                </div>
+              )}
+              {!showNoAccess && (
+                <>
               {page === 'overview' && (
                 <Overview
-                  lastPage={lastPage}
+                  lastPage={lastPage === 'analytics_journeys' ? 'overview' : lastPage}
                   onNavigate={(p) => handleSetPage(p)}
                   onConnectDataSources={handleSetDatasources}
+                  canCreateAlerts={hasPermission('alerts.manage')}
                 />
               )}
               {page === 'alerts' && <AlertsPage />}
@@ -976,6 +1306,14 @@ export default function App() {
               )}
               {page === 'comparison' && (
                 <AttributionComparison selectedModel={selectedModel} onSelectModel={setSelectedModel} />
+              )}
+              {page === 'analytics_journeys' && (
+                <JourneysPage
+                  featureEnabled={featureFlags.journeys_enabled}
+                  hasPermission={hasJourneysPermission}
+                  journeyExamplesEnabled={featureFlags.journey_examples_enabled}
+                  funnelBuilderEnabled={featureFlags.funnel_builder_enabled}
+                />
               )}
               {page === 'paths' && <ConversionPaths />}
               {page === 'path_archetypes' && <PathArchetypes />}
@@ -1004,6 +1342,8 @@ export default function App() {
                   onMmmSelectRun={onMmmSelectRun}
                   onStartOver={handleMmmStartOver}
                 />
+              )}
+                </>
               )}
             </Suspense>
           </div>

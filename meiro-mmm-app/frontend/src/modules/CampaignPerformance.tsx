@@ -5,6 +5,7 @@ import { tokens } from '../theme/tokens'
 import ConfidenceBadge, { Confidence } from '../components/ConfidenceBadge'
 import ExplainabilityPanel from '../components/ExplainabilityPanel'
 import TrendPanel from '../components/dashboard/TrendPanel'
+import { apiGetJson } from '../lib/apiClient'
 
 interface CampaignPerformanceProps {
   model: string
@@ -83,18 +84,6 @@ interface CampaignPerformanceResponse {
     value_mapped: number
     value_total: number
   } | null
-}
-
-interface CampaignTrendPoint {
-  date: string
-  transactions: number
-  revenue: number
-}
-
-interface CampaignTrendsResponse {
-  campaigns: string[]
-  dates: string[]
-  series: Record<string, CampaignTrendPoint[]>
 }
 
 interface CampaignTrendV2Row {
@@ -217,11 +206,9 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
 
   const journeysQuery = useQuery<JourneysSummary>({
     queryKey: ['journeys-summary-for-campaigns'],
-    queryFn: async () => {
-      const res = await fetch('/api/attribution/journeys')
-      if (!res.ok) throw new Error('Failed to load journeys summary')
-      return res.json()
-    },
+    queryFn: async () => apiGetJson<JourneysSummary>('/api/attribution/journeys', {
+      fallbackMessage: 'Failed to load journeys summary',
+    }),
   })
 
   const perfQuery = useQuery<CampaignPerformanceResponse>({
@@ -230,9 +217,9 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       const params = new URLSearchParams({ model })
       if (configId) params.append('config_id', configId)
       if (conversionKey) params.append('conversion_key', conversionKey)
-      const res = await fetch(`/api/attribution/campaign-performance?${params.toString()}`)
-      if (!res.ok) throw new Error('Failed to fetch campaign performance')
-      return res.json()
+      return apiGetJson<CampaignPerformanceResponse>(`/api/attribution/campaign-performance?${params.toString()}`, {
+        fallbackMessage: 'Failed to fetch campaign performance',
+      })
     },
     enabled: modelsReady,
     refetchInterval: false,
@@ -253,9 +240,9 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
         grain: trendGrain,
         compare: comparePrevious ? '1' : '0',
       })
-      const res = await fetch(`/api/performance/campaign/trend?${params.toString()}`)
-      if (!res.ok) throw new Error('Failed to fetch campaign trends')
-      return res.json()
+      return apiGetJson<CampaignTrendV2Response>(`/api/performance/campaign/trend?${params.toString()}`, {
+        fallbackMessage: 'Failed to fetch campaign trends',
+      })
     },
     enabled: !!campaigns.length && !!journeysQuery.data?.date_min && !!journeysQuery.data?.date_max,
     refetchInterval: false,
@@ -461,8 +448,6 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
   const totalROAS = totalSpend > 0 ? data.total_value / totalSpend : 0
   const avgCPA = data.total_conversions > 0 ? totalSpend / data.total_conversions : 0
   const filteredTotalSpend = filteredCampaigns.reduce((s, c) => s + c.spend, 0)
-  const filteredTotalValue = filteredCampaigns.reduce((s, c) => s + c.attributed_value, 0)
-
   const kpis = [
     { label: 'Total Spend', value: formatCurrency(totalSpend), def: METRIC_DEFINITIONS['Total Spend'] },
     { label: 'Attributed Revenue', value: formatCurrency(data.total_value), def: METRIC_DEFINITIONS['Attributed Revenue'] },

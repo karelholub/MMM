@@ -16,6 +16,7 @@ import {
   Cell,
 } from 'recharts'
 import { tokens } from '../theme/tokens'
+import { apiGetJson } from '../lib/apiClient'
 
 interface MMMDashboardProps {
   runId: string
@@ -39,6 +40,24 @@ interface ChannelSummary {
   roi?: number
   mroas?: number
   elasticity?: number
+}
+
+interface RunData {
+  config?: {
+    kpi?: string
+    spend_channels?: string[]
+    channel_display_names?: Record<string, string>
+    kpi_mode?: string
+  }
+  kpi_mode?: string
+  uplift?: number
+  r2?: number
+  calibration_mape?: number
+  diagnostics?: {
+    rhat_max?: number
+    ess_bulk_min?: number
+    divergences?: number
+  }
 }
 
 function formatCurrency(val: number): string {
@@ -78,11 +97,10 @@ export default function MMMDashboard({ runId, datasetId, runMetadata }: MMMDashb
 
   const { data: taxonomy } = useQuery<{ channel_rules: { channel: string; name: string }[] }>({
     queryKey: ['taxonomy'],
-    queryFn: async () => {
-      const res = await fetch('/api/taxonomy')
-      if (!res.ok) return { channel_rules: [] }
-      return res.json()
-    },
+    queryFn: async () =>
+      apiGetJson<{ channel_rules: { channel: string; name: string }[] }>('/api/taxonomy', {
+        fallbackMessage: 'Failed to fetch taxonomy',
+      }).catch(() => ({ channel_rules: [] })),
   })
   const taxonomyChannelToName = useMemo(() => {
     const m = new Map<string, string>()
@@ -94,49 +112,38 @@ export default function MMMDashboard({ runId, datasetId, runMetadata }: MMMDashb
   const channelDisplay = (ch: string) =>
     channelDisplayName(ch, taxonomyChannelToName, run?.config?.channel_display_names)
 
-  const { data: run } = useQuery({
+  const { data: run } = useQuery<RunData>({
     queryKey: ['run', runId],
-    queryFn: async () => {
-      const res = await fetch(`/api/models/${runId}`)
-      if (!res.ok) throw new Error('Failed to fetch run')
-      return res.json()
-    },
+    queryFn: async () => apiGetJson<RunData>(`/api/models/${runId}`, { fallbackMessage: 'Failed to fetch run' }),
   })
 
-  const { data: contrib } = useQuery({
+  const { data: contrib } = useQuery<Contrib[]>({
     queryKey: ['contrib', runId],
-    queryFn: async () => {
-      const res = await fetch(`/api/models/${runId}/contrib`)
-      if (!res.ok) throw new Error('Failed to fetch contributions')
-      return res.json()
-    },
+    queryFn: async () => apiGetJson<Contrib[]>(`/api/models/${runId}/contrib`, {
+      fallbackMessage: 'Failed to fetch contributions',
+    }),
   })
 
-  const { data: roi } = useQuery({
+  const { data: roi } = useQuery<KPI[]>({
     queryKey: ['roi', runId],
-    queryFn: async () => {
-      const res = await fetch(`/api/models/${runId}/roi`)
-      if (!res.ok) throw new Error('Failed to fetch ROI')
-      return res.json()
-    },
+    queryFn: async () => apiGetJson<KPI[]>(`/api/models/${runId}/roi`, { fallbackMessage: 'Failed to fetch ROI' }),
   })
 
   const { data: channelSummary = [] } = useQuery<ChannelSummary[]>({
     queryKey: ['channel-summary', runId],
-    queryFn: async () => {
-      const res = await fetch(`/api/models/${runId}/summary/channel`)
-      if (!res.ok) return []
-      return res.json()
-    },
+    queryFn: async () =>
+      apiGetJson<ChannelSummary[]>(`/api/models/${runId}/summary/channel`, {
+        fallbackMessage: 'Failed to fetch channel summary',
+      }).catch(() => []),
   })
 
   const { data: datasetResponse } = useQuery({
     queryKey: ['dataset', datasetId],
-    queryFn: async () => {
-      const res = await fetch(`/api/datasets/${datasetId}?preview_only=false`)
-      if (!res.ok) throw new Error('Failed to fetch dataset')
-      return res.json() as Promise<{ preview_rows?: Record<string, unknown>[]; metadata?: { period_start?: string; period_end?: string } }>
-    },
+    queryFn: async () =>
+      apiGetJson<{ preview_rows?: Record<string, unknown>[]; metadata?: { period_start?: string; period_end?: string } }>(
+        `/api/datasets/${datasetId}?preview_only=false`,
+        { fallbackMessage: 'Failed to fetch dataset' },
+      ),
     enabled: !!datasetId,
   })
   const dataset = (datasetResponse?.preview_rows ?? []) as Record<string, unknown>[]
@@ -151,9 +158,9 @@ export default function MMMDashboard({ runId, datasetId, runMetadata }: MMMDashb
         date_end: datasetMetadata!.period_end!,
       })
       if (runMetadata?.attribution_config_id) params.set('config_id', runMetadata.attribution_config_id)
-      const res = await fetch(`/api/attribution/weekly?${params}`)
-      if (!res.ok) throw new Error('Failed to fetch attribution weekly')
-      return res.json()
+      return apiGetJson<{ series: { date: string; attributed_value: number }[] }>(`/api/attribution/weekly?${params}`, {
+        fallbackMessage: 'Failed to fetch attribution weekly',
+      })
     },
     enabled: !!(runMetadata?.attribution_model && datasetMetadata?.period_start && datasetMetadata?.period_end),
   })
@@ -174,8 +181,6 @@ export default function MMMDashboard({ runId, datasetId, runMetadata }: MMMDashb
   }, [dataset, run?.config?.spend_channels])
 
   const weightedROI = roi?.length ? roi.reduce((s: number, r: KPI) => s + r.roi, 0) / roi.length : 0
-  const uplift = run?.uplift ?? 0
-
   const weeks = dataset.length
   const channelsModeled = run?.config?.spend_channels?.length ?? 0
   const r2 = typeof run?.r2 === 'number' ? run.r2 : null
@@ -184,9 +189,7 @@ export default function MMMDashboard({ runId, datasetId, runMetadata }: MMMDashb
   const suspiciousFit = !!(r2 !== null && r2 > 0.98 && weeks > 0 && weeks < 26)
   const manyParamsFewPoints = channelsModeled > 0 && weeks > 0 && channelsModeled > weeks / 2
 
-  const diagnostics = (run as any)?.diagnostics as
-    | { rhat_max?: number; ess_bulk_min?: number; divergences?: number }
-    | undefined
+  const diagnostics = run?.diagnostics
 
   const diagnosticsIssues: string[] = []
   if (diagnostics?.rhat_max && diagnostics.rhat_max > 1.1) diagnosticsIssues.push('Some parameters have high R-hat (convergence warnings).')
@@ -223,14 +226,6 @@ export default function MMMDashboard({ runId, datasetId, runMetadata }: MMMDashb
   useEffect(() => {
     setVisibleChannels(spendChannels)
   }, [spendChannels.join(',')])
-
-  const datasetWithTotalSpend = useMemo(() => {
-    const chs = spendChannels
-    return dataset.map((row) => {
-      const total_spend = chs.reduce((s: number, ch: string) => s + (Number(row[ch]) || 0), 0)
-      return { ...row, total_spend }
-    })
-  }, [dataset, spendChannels])
 
   const topChannelsByShare = useMemo(() => {
     if (!contrib || contrib.length === 0) return []

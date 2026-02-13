@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { tokens as t } from '../../theme/tokens'
+import { apiGetJson, apiSendJson } from '../../lib/apiClient'
 
 export interface AlertDetail {
   id: number
@@ -52,20 +53,13 @@ export default function AlertDetailDrawer({
   const queryClient = useQueryClient()
   const { data: alert, isLoading, error } = useQuery<AlertDetail>({
     queryKey: ['alert-detail', alertId],
-    queryFn: async () => {
-      const res = await fetch(`/api/alerts/${alertId}`)
-      if (!res.ok) throw new Error('Failed to load alert')
-      return res.json()
-    },
+    queryFn: async () => apiGetJson<AlertDetail>(`/api/alerts/${alertId}`, { fallbackMessage: 'Failed to load alert' }),
     enabled: alertId != null,
   })
 
   const ackMutation = useMutation({
-    mutationFn: async () => {
-      const res = await fetch(`/api/alerts/${alertId}/ack`, { method: 'POST' })
-      if (!res.ok) throw new Error('Failed to acknowledge')
-      return res.json()
-    },
+    mutationFn: async () =>
+      apiSendJson<any>(`/api/alerts/${alertId}/ack`, 'POST', undefined, { fallbackMessage: 'Failed to acknowledge' }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['alerts-list'] })
       queryClient.invalidateQueries({ queryKey: ['alert-detail', alertId] })
@@ -73,13 +67,9 @@ export default function AlertDetailDrawer({
   })
   const snoozeMutation = useMutation({
     mutationFn: async (duration_minutes: number) => {
-      const res = await fetch(`/api/alerts/${alertId}/snooze`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ duration_minutes }),
+      return apiSendJson<any>(`/api/alerts/${alertId}/snooze`, 'POST', { duration_minutes }, {
+        fallbackMessage: 'Failed to snooze',
       })
-      if (!res.ok) throw new Error('Failed to snooze')
-      return res.json()
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['alerts-list'] })
@@ -87,11 +77,8 @@ export default function AlertDetailDrawer({
     },
   })
   const resolveMutation = useMutation({
-    mutationFn: async () => {
-      const res = await fetch(`/api/alerts/${alertId}/resolve`, { method: 'POST' })
-      if (!res.ok) throw new Error('Failed to resolve')
-      return res.json()
-    },
+    mutationFn: async () =>
+      apiSendJson<any>(`/api/alerts/${alertId}/resolve`, 'POST', undefined, { fallbackMessage: 'Failed to resolve' }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['alerts-list'] })
       queryClient.invalidateQueries({ queryKey: ['alert-detail', alertId] })

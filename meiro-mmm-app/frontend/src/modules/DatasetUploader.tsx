@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { tokens as t } from '../theme/tokens'
+import { apiGetJson, apiRequest, apiSendJson } from '../lib/apiClient'
 
 interface DatasetUploadResponse {
   dataset_id: string
@@ -18,6 +19,11 @@ interface ColumnMapping {
 
 interface ValidateResponse {
   date_column: string | null
+  date_range?: {
+    n_periods: number
+    min: string
+    max: string
+  } | null
   suggestions: {
     date_column: string | null
     kpi_columns: string[]
@@ -46,8 +52,11 @@ async function uploadDataset({ file, datasetId, type }: { file: File; datasetId?
   const formData = new FormData()
   formData.append('file', file)
   if (datasetId) formData.append('dataset_id', datasetId)
-  const res = await fetch(`/api/datasets/upload?type=${type}`, { method: 'POST', body: formData })
-  if (!res.ok) throw new Error('Upload failed')
+  const res = await apiRequest(`/api/datasets/upload?type=${type}`, {
+    method: 'POST',
+    body: formData,
+    fallbackMessage: 'Upload failed',
+  })
   return res.json()
 }
 
@@ -62,7 +71,6 @@ export default function DatasetUploader({ onMappingComplete }: DatasetUploaderPr
   const [validation, setValidation] = useState<ValidateMappingResponse | null>(null)
   const [proceedDespiteWarnings, setProceedDespiteWarnings] = useState(false)
   const appliedSuggestions = useRef(false)
-  const queryClient = useQueryClient()
 
   const uploadMutation = useMutation({
     mutationFn: uploadDataset,
@@ -71,11 +79,10 @@ export default function DatasetUploader({ onMappingComplete }: DatasetUploaderPr
 
   const { data: validateData } = useQuery<ValidateResponse>({
     queryKey: ['validate', dataset?.dataset_id, datasetType],
-    queryFn: async () => {
-      const res = await fetch(`/api/datasets/${dataset!.dataset_id}/validate?kpi_target=${datasetType}`)
-      if (!res.ok) throw new Error('Validation failed')
-      return res.json()
-    },
+    queryFn: async () =>
+      apiGetJson<ValidateResponse>(`/api/datasets/${dataset!.dataset_id}/validate?kpi_target=${datasetType}`, {
+        fallbackMessage: 'Validation failed',
+      }),
     enabled: !!dataset?.dataset_id,
   })
 
@@ -100,28 +107,24 @@ export default function DatasetUploader({ onMappingComplete }: DatasetUploaderPr
 
   const validateMappingMutation = useMutation({
     mutationFn: async () => {
-      const res = await fetch(`/api/mmm/datasets/${dataset!.dataset_id}/validate-mapping`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          date_column: resolvedDateColumn,
-          kpi,
-          spend_channels: spendChannels,
-          covariates,
-          kpi_target: datasetType,
-        }),
+      return apiSendJson<ValidateMappingResponse>(`/api/mmm/datasets/${dataset!.dataset_id}/validate-mapping`, 'POST', {
+        date_column: resolvedDateColumn,
+        kpi,
+        spend_channels: spendChannels,
+        covariates,
+        kpi_target: datasetType,
+      }, {
+        fallbackMessage: 'Validation failed',
       })
-      if (!res.ok) throw new Error('Validation failed')
-      return res.json() as Promise<ValidateMappingResponse>
     },
     onSuccess: (data) => setValidation(data),
   })
 
   const handleLoadSample = async (sampleId: string) => {
     try {
-      const res = await fetch(`/api/datasets/${sampleId}`)
-      if (!res.ok) throw new Error('Failed to load sample')
-      const data = await res.json()
+      const data = await apiGetJson<DatasetUploadResponse>(`/api/datasets/${sampleId}`, {
+        fallbackMessage: 'Failed to load sample',
+      })
       setDataset(data)
       appliedSuggestions.current = false
     } catch (err) {
@@ -498,7 +501,7 @@ export default function DatasetUploader({ onMappingComplete }: DatasetUploaderPr
               name="datasetType"
               value="sales"
               checked={datasetType === 'sales'}
-              onChange={(e) => setDatasetType('sales')}
+              onChange={() => setDatasetType('sales')}
               style={{ marginRight: 8 }}
             />
             <strong>Total Sales</strong>
@@ -509,7 +512,7 @@ export default function DatasetUploader({ onMappingComplete }: DatasetUploaderPr
               name="datasetType"
               value="attribution"
               checked={datasetType === 'attribution'}
-              onChange={(e) => setDatasetType('attribution')}
+              onChange={() => setDatasetType('attribution')}
               style={{ marginRight: 8 }}
             />
             <strong>Marketing-Driven Conversions (Attribution)</strong>

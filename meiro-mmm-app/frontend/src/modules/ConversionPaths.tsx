@@ -4,6 +4,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { tokens } from '../theme/tokens'
 import ExplainabilityPanel from '../components/ExplainabilityPanel'
 import ConfidenceBadge, { type Confidence } from '../components/ConfidenceBadge'
+import { apiGetJson } from '../lib/apiClient'
 
 interface NextBestRec {
   channel: string
@@ -200,11 +201,9 @@ export default function ConversionPaths() {
 
   const journeysQuery = useQuery<JourneysSummary>({
     queryKey: ['journeys-summary-for-paths'],
-    queryFn: async () => {
-      const res = await fetch('/api/attribution/journeys')
-      if (!res.ok) throw new Error('Failed to load journeys summary')
-      return res.json()
-    },
+    queryFn: async () => apiGetJson<JourneysSummary>('/api/attribution/journeys', {
+      fallbackMessage: 'Failed to load journeys summary',
+    }),
   })
 
   const pathsQuery = useQuery<PathAnalysis>({
@@ -214,19 +213,17 @@ export default function ConversionPaths() {
         direct_mode: directMode,
         path_scope: pathScope === 'all' ? 'all' : 'converted',
       })
-      const res = await fetch(`/api/attribution/paths?${params.toString()}`)
-      if (!res.ok) throw new Error('Failed to fetch path analysis')
-      return res.json()
+      return apiGetJson<PathAnalysis>(`/api/attribution/paths?${params.toString()}`, {
+        fallbackMessage: 'Failed to fetch path analysis',
+      })
     },
   })
 
   const anomaliesQuery = useQuery<{ anomalies: PathAnomaly[] }>({
     queryKey: ['path-anomalies'],
-    queryFn: async () => {
-      const res = await fetch('/api/paths/anomalies')
-      if (!res.ok) throw new Error('Failed to fetch path anomalies')
-      return res.json()
-    },
+    queryFn: async () => apiGetJson<{ anomalies: PathAnomaly[] }>('/api/paths/anomalies', {
+      fallbackMessage: 'Failed to fetch path anomalies',
+    }),
   })
 
   const data = pathsQuery.data
@@ -940,12 +937,9 @@ export default function ConversionPaths() {
               try {
                 const pathParam = encodeURIComponent(tryPathInput.trim())
                 const levelParam = tryPathLevel === 'campaign' && data.next_best_by_prefix_campaign ? 'campaign' : 'channel'
-                const res = await fetch(`/api/attribution/next_best_action?path_so_far=${pathParam}&level=${levelParam}`)
-                if (!res.ok) {
-                  const err = await res.json().catch(() => ({}))
-                  throw new Error(err.detail || res.statusText)
-                }
-                const json = await res.json()
+                const json = await apiGetJson<any>(`/api/attribution/next_best_action?path_so_far=${pathParam}&level=${levelParam}`, {
+                  fallbackMessage: 'Failed to fetch next best action',
+                })
                 setTryPathResult({
                   path_so_far: json.path_so_far,
                   level: json.level,
@@ -1300,12 +1294,9 @@ export default function ConversionPaths() {
                         direct_mode: directMode,
                         path_scope: pathScope === 'all' ? 'all' : 'converted',
                       })
-                      const res = await fetch(`/api/paths/details?${params.toString()}`)
-                      if (!res.ok) {
-                        const err = await res.json().catch(() => ({}))
-                        throw new Error(err.detail || res.statusText)
-                      }
-                      const json: PathDetails = await res.json()
+                      const json = await apiGetJson<PathDetails>(`/api/paths/details?${params.toString()}`, {
+                        fallbackMessage: 'Failed to load path details',
+                      })
                       setSelectedPathDetails(json)
                     } catch (err) {
                       setSelectedPathError((err as Error).message)

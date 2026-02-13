@@ -1,6 +1,7 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { tokens } from '../theme/tokens'
+import { apiGetJson, apiSendJson } from '../lib/apiClient'
 
 const t = tokens
 
@@ -67,9 +68,9 @@ export default function BudgetOptimizer({
     queryKey: ['dataset-preview', datasetId],
     queryFn: async () => {
       if (!datasetId) return []
-      const res = await fetch(`/api/datasets/${datasetId}?preview_only=false`)
-      if (!res.ok) return []
-      const d = await res.json()
+      const d = await apiGetJson<any>(`/api/datasets/${datasetId}?preview_only=false`, {
+        fallbackMessage: 'Failed to load dataset preview',
+      }).catch(() => ({ preview_rows: [] }))
       return d.preview_rows || []
     },
     enabled: !!datasetId,
@@ -208,18 +209,14 @@ export default function BudgetOptimizer({
         const c = constraints[ch] ?? { min: 0.5, max: 2.0, locked: false }
         channel_constraints[ch] = { min: c.min, max: c.max, locked: c.locked }
       })
-      const res = await fetch(`/api/models/${runId}/optimize/auto`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          total_budget: totalBudgetMultiplier,
-          min_spend: 0.5,
-          max_spend: 2.0,
-          channel_constraints,
-        }),
+      const data = await apiSendJson<any>(`/api/models/${runId}/optimize/auto`, 'POST', {
+        total_budget: totalBudgetMultiplier,
+        min_spend: 0.5,
+        max_spend: 2.0,
+        channel_constraints,
+      }, {
+        fallbackMessage: 'Optimization failed',
       })
-      if (!res.ok) throw new Error('Optimization failed')
-      const data = await res.json()
       setOptimalMix(data.optimal_mix ?? null)
       setOptimalUplift(data.uplift ?? null)
       setOptimalPredictedKpi(data.predicted_kpi ?? null)
@@ -243,14 +240,10 @@ export default function BudgetOptimizer({
     setIsWhatIfLoading(true)
     setWhatIfResult(null)
     try {
-      const res = await fetch(`/api/models/${runId}/what_if`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(multipliers),
+      const data = await apiSendJson<WhatIfResult>(`/api/models/${runId}/what_if`, 'POST', multipliers, {
+        fallbackMessage: 'What-if failed',
       })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error((data?.detail as string) || 'What-if failed')
-      setWhatIfResult(data as WhatIfResult)
+      setWhatIfResult(data)
     } catch (e) {
       console.error(e)
     } finally {

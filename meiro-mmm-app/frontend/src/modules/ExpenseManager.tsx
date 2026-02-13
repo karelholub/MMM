@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
+import { apiGetJson, apiSendJson } from '../lib/apiClient'
 
 // --- Types (aligned with backend) ---
 interface ExpenseEntry {
@@ -182,29 +183,23 @@ export default function ExpenseManager() {
 
   const expensesQuery = useQuery<ExpenseEntry[]>({
     queryKey: ['expenses', queryParams],
-    queryFn: async () => {
-      const res = await fetch(`/api/expenses?${queryParams}`)
-      if (!res.ok) throw new Error('Failed to fetch expenses')
-      return res.json()
-    },
+    queryFn: async () => apiGetJson<ExpenseEntry[]>(`/api/expenses?${queryParams}`, {
+      fallbackMessage: 'Failed to fetch expenses',
+    }),
   })
 
   const summaryQuery = useQuery<ExpenseSummary>({
     queryKey: ['expenses-summary', summaryParams],
-    queryFn: async () => {
-      const res = await fetch(`/api/expenses/summary?${summaryParams}`)
-      if (!res.ok) throw new Error('Failed to fetch summary')
-      return res.json()
-    },
+    queryFn: async () => apiGetJson<ExpenseSummary>(`/api/expenses/summary?${summaryParams}`, {
+      fallbackMessage: 'Failed to fetch summary',
+    }),
   })
 
   const importHealthQuery = useQuery<ImportHealthResponse>({
     queryKey: ['imports-health'],
-    queryFn: async () => {
-      const res = await fetch('/api/imports/health')
-      if (!res.ok) throw new Error('Failed to fetch import health')
-      return res.json()
-    },
+    queryFn: async () => apiGetJson<ImportHealthResponse>('/api/imports/health', {
+      fallbackMessage: 'Failed to fetch import health',
+    }),
     refetchInterval: activeTab === 'imports' ? 10000 : false,
   })
 
@@ -217,11 +212,10 @@ export default function ExpenseManager() {
 
   const reconciliationQuery = useQuery<{ rows: ReconciliationRow[]; period_start: string; period_end: string }>({
     queryKey: ['imports-reconciliation', reconciliationParams],
-    queryFn: async () => {
-      const res = await fetch(`/api/imports/reconciliation?${reconciliationParams}`)
-      if (!res.ok) throw new Error('Failed to fetch reconciliation')
-      return res.json()
-    },
+    queryFn: async () => apiGetJson<{ rows: ReconciliationRow[]; period_start: string; period_end: string }>(
+      `/api/imports/reconciliation?${reconciliationParams}`,
+      { fallbackMessage: 'Failed to fetch reconciliation' },
+    ),
   })
   const hasReconciliationWarning = (reconciliationQuery.data?.rows ?? []).some(
     r => r.status === 'Warning' || r.status === 'Critical'
@@ -238,11 +232,10 @@ export default function ExpenseManager() {
 
   const drilldownQuery = useQuery<{ source: string; missing_days: string[]; missing_campaigns: string[] }>({
     queryKey: ['imports-drilldown', drilldownParams],
-    queryFn: async () => {
-      const res = await fetch(`/api/imports/reconciliation/drilldown?${drilldownParams}`)
-      if (!res.ok) throw new Error('Failed to fetch drilldown')
-      return res.json()
-    },
+    queryFn: async () => apiGetJson<{ source: string; missing_days: string[]; missing_campaigns: string[] }>(
+      `/api/imports/reconciliation/drilldown?${drilldownParams}`,
+      { fallbackMessage: 'Failed to fetch drilldown' },
+    ),
     enabled: activeTab === 'imports' && !!drilldownSource,
   })
 
@@ -264,13 +257,7 @@ export default function ExpenseManager() {
         status: 'active',
         actor_type: 'manual',
       }
-      const res = await fetch('/api/expenses', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-      if (!res.ok) throw new Error('Failed to add expense')
-      return res.json()
+      return apiSendJson<any>('/api/expenses', 'POST', payload, { fallbackMessage: 'Failed to add expense' })
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['expenses'] })
@@ -284,9 +271,9 @@ export default function ExpenseManager() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      const res = await fetch(`/api/expenses/${id}?change_note=Soft+delete`, { method: 'DELETE' })
-      if (!res.ok) throw new Error('Failed to delete')
-      return res.json()
+      return apiSendJson<any>(`/api/expenses/${id}?change_note=Soft+delete`, 'DELETE', undefined, {
+        fallbackMessage: 'Failed to delete',
+      })
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['expenses'] })
@@ -297,9 +284,9 @@ export default function ExpenseManager() {
 
   const restoreMutation = useMutation({
     mutationFn: async (id: string) => {
-      const res = await fetch(`/api/expenses/${id}/restore`, { method: 'POST' })
-      if (!res.ok) throw new Error('Failed to restore')
-      return res.json()
+      return apiSendJson<any>(`/api/expenses/${id}/restore`, 'POST', undefined, {
+        fallbackMessage: 'Failed to restore',
+      })
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['expenses'] })
@@ -310,12 +297,9 @@ export default function ExpenseManager() {
 
   const syncMutation = useMutation({
     mutationFn: async (source: string) => {
-      const res = await fetch(`/api/imports/sync/${source}`, { method: 'POST' })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        throw new Error(err.detail || 'Sync failed')
-      }
-      return res.json()
+      return apiSendJson<any>(`/api/imports/sync/${source}`, 'POST', undefined, {
+        fallbackMessage: 'Sync failed',
+      })
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['imports-health'] })
@@ -347,9 +331,10 @@ export default function ExpenseManager() {
   const openDrawer = async (id: string) => {
     setSelectedExpenseId(id)
     try {
-      const res = await fetch(`/api/expenses/${id}/audit`)
-      if (res.ok) setAuditEvents(await res.json())
-      else setAuditEvents([])
+      const data = await apiGetJson<AuditEvent[]>(`/api/expenses/${id}/audit`, {
+        fallbackMessage: 'Failed to fetch audit trail',
+      })
+      setAuditEvents(data)
     } catch {
       setAuditEvents([])
     }

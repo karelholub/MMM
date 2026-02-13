@@ -344,7 +344,6 @@ export default function ExplainabilityPanel({ scope, scopeId, configId, model = 
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 8px' }}>
                 {s.drivers[0].top_contributors.slice(0, 12).map((c) => {
                   const isExpanded = expandedChannel === c.id
-                  const breakdown = s.channel_breakdowns?.[c.id]
                   const labelDelta = `${c.delta >= 0 ? '+' : ''}${formatDriverValue(s.drivers[0].metric, c.delta)}`
                   return (
                     <button
@@ -388,7 +387,11 @@ export default function ExplainabilityPanel({ scope, scopeId, configId, model = 
                 >
                   {(() => {
                     const b = s.channel_breakdowns![expandedChannel]
-                    const renderBlock = (label: string, key: keyof ChannelBreakdown, fmt: (v: number) => string) => {
+                    const renderBlock = (
+                      label: string,
+                      key: 'spend' | 'conversions' | 'attributed_value' | 'roas' | 'cpa',
+                      fmt: (v: number) => string,
+                    ) => {
                       const block = b[key]
                       if (!block) return null
                       const { current, previous, delta } = block

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { apiGetJson } from '../lib/apiClient'
 
 interface ChannelRow {
   channel: string
@@ -30,8 +31,8 @@ export default function CampaignDrilldown({ runId }: { runId: string }) {
       setLoading(true)
       try {
         const [ch, ca] = await Promise.all([
-          fetch(`/api/models/${runId}/summary/channel`).then(r => r.json()),
-          fetch(`/api/models/${runId}/summary/campaign`).then(r => r.json()),
+          apiGetJson<any[]>(`/api/models/${runId}/summary/channel`, { fallbackMessage: 'Failed to load channel summary' }),
+          apiGetJson<any[]>(`/api/models/${runId}/summary/campaign`, { fallbackMessage: 'Failed to load campaign summary' }),
         ])
         if (!mounted) return
         setChannels(Array.isArray(ch) ? ch : [])
@@ -177,5 +178,4 @@ export default function CampaignDrilldown({ runId }: { runId: string }) {
     </div>
   )
 }
-
 

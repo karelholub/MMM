@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { tokens as t } from '../theme/tokens'
+import { apiGetJson, apiSendJson, withQuery } from '../lib/apiClient'
 
 // --- Types ---
 
@@ -100,21 +101,11 @@ function getStatus(
   cfg: { okThreshold?: number; warnThreshold?: number; criticalThreshold?: number; invert?: boolean }
 ): 'ok' | 'warning' | 'critical' {
   if (!cfg) return 'ok'
-  const { okThreshold = 0, warnThreshold = 100, criticalThreshold = 100, invert = false } = cfg
+  const { okThreshold = 0, warnThreshold = 100, invert = false } = cfg
   const fn = invert
-    ? (v: number, o: number, w: number, c: number) => (v >= o ? 'ok' : v >= w ? 'warning' : 'critical')
-    : (v: number, o: number, w: number, c: number) => (v <= o ? 'ok' : v <= w ? 'warning' : 'critical')
-  return fn(value, okThreshold, warnThreshold, criticalThreshold) as 'ok' | 'warning' | 'critical'
-}
-
-// --- Links for drilldown actions ---
-
-const ACTION_LINKS: Record<string, string> = {
-  'Data Sources': '/datasources',
-  'Expenses reconciliation': '/expenses',
-  'Taxonomy': '/settings',
-  'Model Configurator': '/settings',
-  'Connectors': '/datasources',
+    ? (v: number, o: number, w: number) => (v >= o ? 'ok' : v >= w ? 'warning' : 'critical')
+    : (v: number, o: number, w: number) => (v <= o ? 'ok' : v <= w ? 'warning' : 'critical')
+  return fn(value, okThreshold, warnThreshold) as 'ok' | 'warning' | 'critical'
 }
 
 // --- Main component ---
@@ -145,12 +136,9 @@ export default function DataQuality() {
   // Run DQ checks
   const runMutation = useMutation({
     mutationFn: async () => {
-      const res = await fetch('/api/data-quality/run', { method: 'POST' })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        throw new Error(err.detail || 'Failed to run data quality job')
-      }
-      return res.json() as Promise<RunResult>
+      return apiSendJson<RunResult>('/api/data-quality/run', 'POST', undefined, {
+        fallbackMessage: 'Failed to run data quality job',
+      })
     },
     onSuccess: (data) => {
       setLastRunMeta({
@@ -169,20 +157,15 @@ export default function DataQuality() {
 
   const lastRunQuery = useQuery<LastRun>({
     queryKey: ['dq-last-run'],
-    queryFn: async () => {
-      const res = await fetch('/api/data-quality/last-run')
-      if (!res.ok) throw new Error('Failed to load last run')
-      return res.json()
-    },
+    queryFn: async () => apiGetJson<LastRun>('/api/data-quality/last-run', { fallbackMessage: 'Failed to load last run' }),
   })
 
   const snapshotsQuery = useQuery<DQSnapshot[]>({
     queryKey: ['dq-snapshots'],
-    queryFn: async () => {
-      const res = await fetch('/api/data-quality/snapshots?limit=200')
-      if (!res.ok) throw new Error('Failed to load data quality snapshots')
-      return res.json()
-    },
+    queryFn: async () =>
+      apiGetJson<DQSnapshot[]>(withQuery('/api/data-quality/snapshots', { limit: 200 }), {
+        fallbackMessage: 'Failed to load data quality snapshots',
+      }),
   })
 
   const alertsQuery = useQuery<DQAlert[]>({
@@ -192,9 +175,9 @@ export default function DataQuality() {
       if (alertStatusFilter) params.set('status', alertStatusFilter)
       if (alertSeverityFilter) params.set('severity', alertSeverityFilter)
       if (alertSourceFilter) params.set('source', alertSourceFilter)
-      const res = await fetch(`/api/data-quality/alerts?${params}`)
-      if (!res.ok) throw new Error('Failed to load data quality alerts')
-      return res.json()
+      return apiGetJson<DQAlert[]>(`/api/data-quality/alerts?${params}`, {
+        fallbackMessage: 'Failed to load data quality alerts',
+      })
     },
   })
 
@@ -202,22 +185,18 @@ export default function DataQuality() {
     queryKey: ['dq-drilldown', drilldownMetric],
     queryFn: async () => {
       if (!drilldownMetric) throw new Error('No metric')
-      const res = await fetch(`/api/data-quality/drilldown?metric_key=${encodeURIComponent(drilldownMetric)}`)
-      if (!res.ok) throw new Error('Failed to load drilldown')
-      return res.json()
+      return apiGetJson<DQDrilldown>(withQuery('/api/data-quality/drilldown', { metric_key: drilldownMetric }), {
+        fallbackMessage: 'Failed to load drilldown',
+      })
     },
     enabled: !!drilldownMetric,
   })
 
   const updateAlertStatus = useMutation({
     mutationFn: async (payload: { id: number; status: string }) => {
-      const res = await fetch(`/api/data-quality/alerts/${payload.id}/status`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: payload.status }),
+      return apiSendJson<any>(`/api/data-quality/alerts/${payload.id}/status`, 'POST', { status: payload.status }, {
+        fallbackMessage: 'Failed to update alert status',
       })
-      if (!res.ok) throw new Error('Failed to update alert status')
-      return res.json()
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['dq-alerts'] })
@@ -226,13 +205,9 @@ export default function DataQuality() {
 
   const updateAlertNote = useMutation({
     mutationFn: async (payload: { id: number; note: string }) => {
-      const res = await fetch(`/api/data-quality/alerts/${payload.id}/note`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ note: payload.note }),
+      return apiSendJson<any>(`/api/data-quality/alerts/${payload.id}/note`, 'POST', { note: payload.note }, {
+        fallbackMessage: 'Failed to update alert note',
       })
-      if (!res.ok) throw new Error('Failed to update alert note')
-      return res.json()
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['dq-alerts'] })

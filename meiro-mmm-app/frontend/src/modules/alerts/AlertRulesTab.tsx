@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { tokens as t } from '../../theme/tokens'
 import SectionCard from '../../components/dashboard/SectionCard'
 import DashboardTable from '../../components/dashboard/DashboardTable'
+import { apiGetJson, apiSendJson } from '../../lib/apiClient'
 import {
   RULE_TYPES,
   SEVERITIES,
@@ -42,22 +43,14 @@ export default function AlertRulesTab() {
 
   const rulesQuery = useQuery<AlertRuleRow[]>({
     queryKey: ['alert-rules'],
-    queryFn: async () => {
-      const res = await fetch('/api/alert-rules')
-      if (!res.ok) throw new Error('Failed to load rules')
-      return res.json()
-    },
+    queryFn: async () => apiGetJson<AlertRuleRow[]>('/api/alert-rules', { fallbackMessage: 'Failed to load rules' }),
   })
 
   const toggleMutation = useMutation({
     mutationFn: async ({ ruleId, is_enabled }: { ruleId: number; is_enabled: boolean }) => {
-      const res = await fetch(`/api/alert-rules/${ruleId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ is_enabled }),
+      return apiSendJson<any>(`/api/alert-rules/${ruleId}`, 'PUT', { is_enabled }, {
+        fallbackMessage: 'Failed to update rule',
       })
-      if (!res.ok) throw new Error('Failed to update rule')
-      return res.json()
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['alert-rules'] })
@@ -66,27 +59,20 @@ export default function AlertRulesTab() {
 
   const createMutation = useMutation({
     mutationFn: async (body: AlertRuleFormValues) => {
-      const res = await fetch('/api/alert-rules', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: body.name.trim(),
-          description: body.description?.trim() || null,
-          is_enabled: body.is_enabled,
-          scope: body.scope.trim() || SCOPE_DEFAULT,
-          severity: body.severity,
-          rule_type: body.rule_type,
-          kpi_key: body.kpi_key?.trim() || null,
-          dimension_filters_json: body.dimension_filters_json,
-          params_json: body.params_json,
-          schedule: body.schedule,
-        }),
+      return apiSendJson<any>('/api/alert-rules', 'POST', {
+        name: body.name.trim(),
+        description: body.description?.trim() || null,
+        is_enabled: body.is_enabled,
+        scope: body.scope.trim() || SCOPE_DEFAULT,
+        severity: body.severity,
+        rule_type: body.rule_type,
+        kpi_key: body.kpi_key?.trim() || null,
+        dimension_filters_json: body.dimension_filters_json,
+        params_json: body.params_json,
+        schedule: body.schedule,
+      }, {
+        fallbackMessage: 'Failed to create rule',
       })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        throw new Error(err.detail || 'Failed to create rule')
-      }
-      return res.json()
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['alert-rules'] })
@@ -107,25 +93,18 @@ export default function AlertRulesTab() {
       ruleId: number
       body: Partial<AlertRuleFormValues>
     }) => {
-      const res = await fetch(`/api/alert-rules/${ruleId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: body.name?.trim(),
-          description: body.description?.trim() ?? undefined,
-          is_enabled: body.is_enabled,
-          severity: body.severity,
-          kpi_key: body.kpi_key?.trim() ?? undefined,
-          dimension_filters_json: body.dimension_filters_json,
-          params_json: body.params_json,
-          schedule: body.schedule,
-        }),
+      return apiSendJson<any>(`/api/alert-rules/${ruleId}`, 'PUT', {
+        name: body.name?.trim(),
+        description: body.description?.trim() ?? undefined,
+        is_enabled: body.is_enabled,
+        severity: body.severity,
+        kpi_key: body.kpi_key?.trim() ?? undefined,
+        dimension_filters_json: body.dimension_filters_json,
+        params_json: body.params_json,
+        schedule: body.schedule,
+      }, {
+        fallbackMessage: 'Failed to update rule',
       })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        throw new Error(err.detail || 'Failed to update rule')
-      }
-      return res.json()
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['alert-rules'] })

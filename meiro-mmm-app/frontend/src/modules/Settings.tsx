@@ -10,12 +10,22 @@ import {
 import type { CSSProperties } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { tokens as t } from '../theme/tokens'
+import JourneysSettingsSection from './JourneysSettingsSection'
+import AccessControlUsersSection from './AccessControlUsersSection'
+import AccessControlRolesSection from './AccessControlRolesSection'
+import AccessControlAuditLogSection from './AccessControlAuditLogSection'
+import { usePermissions } from '../hooks/usePermissions'
+import { apiGetJson, apiSendJson } from '../lib/apiClient'
 
 export type SectionKey =
   | 'attribution'
   | 'kpi'
   | 'taxonomy'
   | 'measurement-models'
+  | 'journeys'
+  | 'access-control-users'
+  | 'access-control-roles'
+  | 'access-control-audit-log'
   | 'nba'
   | 'mmm'
   | 'notifications'
@@ -31,6 +41,10 @@ const SECTION_ORDER: SectionKey[] = [
   'kpi',
   'taxonomy',
   'measurement-models',
+  'journeys',
+  'access-control-users',
+  'access-control-roles',
+  'access-control-audit-log',
   'nba',
   'mmm',
   'notifications',
@@ -60,6 +74,30 @@ const SECTION_META: Record<SectionKey, SectionMeta> = {
     description:
       'Version, review, and activate measurement configs used in reporting and MMM.',
     icon: 'MM',
+  },
+  journeys: {
+    title: 'Analytics → Journeys',
+    description:
+      'Version and validate defaults for journeys paths, flow, funnels, and diagnostics.',
+    icon: 'JR',
+  },
+  'access-control-users': {
+    title: 'Access Control → Users',
+    description:
+      'Manage workspace users, invitations, and membership roles.',
+    icon: 'AC',
+  },
+  'access-control-roles': {
+    title: 'Access Control → Roles',
+    description:
+      'Manage system and custom roles with permission bundles and access previews.',
+    icon: 'RL',
+  },
+  'access-control-audit-log': {
+    title: 'Access Control → Audit Log',
+    description:
+      'Review workspace security and administrative actions with filters and metadata details.',
+    icon: 'AL',
   },
   nba: {
     title: 'NBA defaults',
@@ -104,6 +142,18 @@ interface NBASettings {
   excluded_channels: string[]
 }
 
+interface FeatureFlags {
+  journeys_enabled: boolean
+  journey_examples_enabled: boolean
+  funnel_builder_enabled: boolean
+  funnel_diagnostics_enabled: boolean
+  access_control_enabled: boolean
+  custom_roles_enabled: boolean
+  audit_log_enabled: boolean
+  scim_enabled: boolean
+  sso_enabled: boolean
+}
+
 type NbaPresetKey = 'conservative' | 'balanced' | 'aggressive'
 
 const NBA_PRESETS: Record<
@@ -136,6 +186,7 @@ interface Settings {
   attribution: AttributionSettings
   mmm: MMMSettings
   nba: NBASettings
+  feature_flags: FeatureFlags
 }
 
 type MatchOperator = 'any' | 'contains' | 'equals' | 'regex'
@@ -385,6 +436,17 @@ const DEFAULT_SETTINGS: Settings = {
     min_uplift_pct: null,
     excluded_channels: ['direct'],
   },
+  feature_flags: {
+    journeys_enabled: false,
+    journey_examples_enabled: false,
+    funnel_builder_enabled: false,
+    funnel_diagnostics_enabled: false,
+    access_control_enabled: false,
+    custom_roles_enabled: false,
+    audit_log_enabled: false,
+    scim_enabled: false,
+    sso_enabled: false,
+  },
 }
 
 const EMPTY_TAXONOMY: Taxonomy = {
@@ -608,15 +670,6 @@ function normalizeNumericString(value: string): string {
   return value.replace(',', '.').trim()
 }
 
-function canonicalizeJson(input: string): string | null {
-  try {
-    if (!input.trim()) return JSON.stringify({})
-    return JSON.stringify(JSON.parse(input))
-  } catch {
-    return null
-  }
-}
-
 export interface SettingsPageHandle {
   getDirtySections: () => SectionKey[]
   saveSections: (sections?: SectionKey[]) => Promise<boolean>
@@ -646,6 +699,7 @@ const badgeStyle: React.CSSProperties = {
 
 const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
   ({ onDirtySectionsChange }, ref) => {
+    const permissions = usePermissions()
     const initialSection: SectionKey =
       (typeof window !== 'undefined' &&
         (() => {
@@ -677,53 +731,54 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
 
     const settingsQuery = useQuery<Settings>({
       queryKey: ['settings'],
-      queryFn: async () => {
-        const res = await fetch('/api/settings')
-        if (!res.ok) throw new Error('Failed to load settings')
-        return res.json()
-      },
+      queryFn: async () => apiGetJson<Settings>('/api/settings', { fallbackMessage: 'Failed to load settings' }),
     })
     const taxonomyQuery = useQuery<Taxonomy>({
       queryKey: ['taxonomy'],
-      queryFn: async () => {
-        const res = await fetch('/api/taxonomy')
-        if (!res.ok) throw new Error('Failed to load taxonomy')
-        return res.json()
-      },
+      queryFn: async () => apiGetJson<Taxonomy>('/api/taxonomy', { fallbackMessage: 'Failed to load taxonomy' }),
     })
     const kpiQuery = useQuery<KpiConfig>({
       queryKey: ['kpis'],
-      queryFn: async () => {
-        const res = await fetch('/api/kpis')
-        if (!res.ok) throw new Error('Failed to load KPI config')
-        return res.json()
-      },
+      queryFn: async () => apiGetJson<KpiConfig>('/api/kpis', { fallbackMessage: 'Failed to load KPI config' }),
     })
+    const currentFlags =
+      settingsQuery.data?.feature_flags ??
+      DEFAULT_SETTINGS.feature_flags
+    const rbacEnabled = currentFlags.access_control_enabled
+    const visibleSectionOrder = useMemo<SectionKey[]>(() => {
+      const canManageSettings = !rbacEnabled || permissions.hasAnyPermission(['settings.manage', 'settings.view'])
+      const canUsers = !rbacEnabled || permissions.hasAnyPermission(['users.manage', 'settings.manage'])
+      const canRoles = !rbacEnabled || permissions.hasPermission('roles.manage')
+      const canAudit =
+        (!rbacEnabled || permissions.hasAnyPermission(['audit.view', 'settings.manage'])) &&
+        currentFlags.audit_log_enabled
+      return SECTION_ORDER.filter((section) => {
+        if (section === 'journeys') return canManageSettings
+        if (section === 'access-control-users') return canUsers
+        if (section === 'access-control-roles') return canRoles
+        if (section === 'access-control-audit-log') return canAudit
+        return true
+      })
+    }, [currentFlags.audit_log_enabled, permissions, rbacEnabled])
     const modelConfigsQuery = useQuery<ModelConfigSummary[]>({
       queryKey: ['model-configs'],
-      queryFn: async () => {
-        const res = await fetch('/api/model-configs')
-        if (!res.ok) throw new Error('Failed to load model configs')
-        return res.json()
-      },
+      queryFn: async () => apiGetJson<ModelConfigSummary[]>('/api/model-configs', { fallbackMessage: 'Failed to load model configs' }),
     })
 
     const notificationChannelsQuery = useQuery<NotificationChannelRow[]>({
       queryKey: ['settings', 'notification-channels'],
-      queryFn: async () => {
-        const res = await fetch('/api/settings/notification-channels')
-        if (!res.ok) throw new Error('Failed to load notification channels')
-        return res.json()
-      },
+      queryFn: async () =>
+        apiGetJson<NotificationChannelRow[]>('/api/settings/notification-channels', {
+          fallbackMessage: 'Failed to load notification channels',
+        }),
     })
 
     const notificationPrefsQuery = useQuery<NotificationPrefRow[]>({
       queryKey: ['settings', 'notification-preferences'],
-      queryFn: async () => {
-        const res = await fetch('/api/settings/notification-preferences')
-        if (!res.ok) throw new Error('Failed to load notification preferences')
-        return res.json()
-      },
+      queryFn: async () =>
+        apiGetJson<NotificationPrefRow[]>('/api/settings/notification-preferences', {
+          fallbackMessage: 'Failed to load notification preferences',
+        }),
     })
 
     const saveNotificationsMutation = useMutation({
@@ -753,63 +808,52 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
           if (ch.type === 'slack_webhook' && slackWebhookInput?.trim()) {
             body.slack_webhook_url = slackWebhookInput.trim()
           }
-          const res = await fetch('/api/settings/notification-channels', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
+          const created = await apiSendJson<NotificationChannelRow>('/api/settings/notification-channels', 'POST', body, {
+            fallbackMessage: 'Failed to create channel',
           })
-          if (!res.ok) throw new Error('Failed to create channel')
-          const created = (await res.json()) as NotificationChannelRow
           newIdMap.set(ch.id, created.id)
         }
         for (const ch of existingChannels) {
-          const res = await fetch(
+          await apiSendJson<NotificationChannelRow>(
             `/api/settings/notification-channels/${ch.id}`,
+            'PUT',
             {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                config: ch.config,
-                slack_webhook_url:
-                  ch.type === 'slack_webhook' && slackWebhookInput?.trim()
-                    ? slackWebhookInput.trim()
-                    : undefined,
-              }),
+              config: ch.config,
+              slack_webhook_url:
+                ch.type === 'slack_webhook' && slackWebhookInput?.trim()
+                  ? slackWebhookInput.trim()
+                  : undefined,
             },
+            { fallbackMessage: 'Failed to update channel' },
           )
-          if (!res.ok) throw new Error('Failed to update channel')
         }
         for (const id of toDelete) {
-          const res = await fetch(
-            `/api/settings/notification-channels/${id}`,
-            { method: 'DELETE' },
-          )
-          if (!res.ok) throw new Error('Failed to delete channel')
+          await apiSendJson<{ ok: boolean }>(`/api/settings/notification-channels/${id}`, 'DELETE', undefined, {
+            fallbackMessage: 'Failed to delete channel',
+          })
         }
         const resolveChannelId = (cid: number): number =>
           cid > 0 ? cid : newIdMap.get(cid) ?? cid
         for (const pref of prefsDraft) {
           const channelId = resolveChannelId(pref.channel_id)
           if (channelId <= 0) continue
-          const res = await fetch('/api/settings/notification-preferences', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              channel_id: channelId,
-              severities: pref.severities ?? [],
-              digest_mode: pref.digest_mode ?? 'realtime',
-              quiet_hours: pref.quiet_hours ?? null,
-              is_enabled: pref.is_enabled ?? false,
-            }),
+          await apiSendJson<NotificationPrefRow>('/api/settings/notification-preferences', 'POST', {
+            channel_id: channelId,
+            severities: pref.severities ?? [],
+            digest_mode: pref.digest_mode ?? 'realtime',
+            quiet_hours: pref.quiet_hours ?? null,
+            is_enabled: pref.is_enabled ?? false,
+          }, {
+            fallbackMessage: 'Failed to save preference',
           })
-          if (!res.ok) throw new Error('Failed to save preference')
         }
-        const chRes = await fetch('/api/settings/notification-channels')
-        const prRes = await fetch('/api/settings/notification-preferences')
-        if (!chRes.ok || !prRes.ok) throw new Error('Failed to refetch')
         return {
-          channels: (await chRes.json()) as NotificationChannelRow[],
-          prefs: (await prRes.json()) as NotificationPrefRow[],
+          channels: await apiGetJson<NotificationChannelRow[]>('/api/settings/notification-channels', {
+            fallbackMessage: 'Failed to refetch channels',
+          }),
+          prefs: await apiGetJson<NotificationPrefRow[]>('/api/settings/notification-preferences', {
+            fallbackMessage: 'Failed to refetch preferences',
+          }),
         }
       },
       onSuccess: (data) => {
@@ -824,54 +868,23 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
     })
 
     const saveSettingsMutation = useMutation({
-      mutationFn: async (payload: Settings) => {
-        const res = await fetch('/api/settings', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        })
-        if (!res.ok) throw new Error('Failed to save settings')
-        return res.json() as Promise<Settings>
-      },
+      mutationFn: async (payload: Settings) =>
+        apiSendJson<Settings>('/api/settings', 'POST', payload, { fallbackMessage: 'Failed to save settings' }),
     })
 
     const saveTaxonomyMutation = useMutation({
-      mutationFn: async (payload: Taxonomy) => {
-        const res = await fetch('/api/taxonomy', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        })
-        if (!res.ok) throw new Error('Failed to save taxonomy')
-        return res.json() as Promise<Taxonomy>
-      },
+      mutationFn: async (payload: Taxonomy) =>
+        apiSendJson<Taxonomy>('/api/taxonomy', 'POST', payload, { fallbackMessage: 'Failed to save taxonomy' }),
     })
 
     const saveKpiMutation = useMutation({
-      mutationFn: async (payload: KpiConfig) => {
-        const res = await fetch('/api/kpis', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        })
-        if (!res.ok) throw new Error('Failed to save KPI config')
-        return res.json() as Promise<KpiConfig>
-      },
+      mutationFn: async (payload: KpiConfig) =>
+        apiSendJson<KpiConfig>('/api/kpis', 'POST', payload, { fallbackMessage: 'Failed to save KPI config' }),
     })
 
     const testKpiMutation = useMutation({
-      mutationFn: async (payload: { definition: KpiDefinition }) => {
-        const res = await fetch('/api/kpis/test', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        })
-        if (!res.ok) {
-          const text = await res.text()
-          throw new Error(text || 'Failed to test KPI definition')
-        }
-        return res.json() as Promise<KpiTestResult>
-      },
+      mutationFn: async (payload: { definition: KpiDefinition }) =>
+        apiSendJson<KpiTestResult>('/api/kpis/test', 'POST', payload, { fallbackMessage: 'Failed to test KPI definition' }),
     })
 
     const saveModelConfigMutation = useMutation({
@@ -879,38 +892,24 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         id: string
         config: Record<string, any>
         changeNote?: string
-      }) => {
-        const res = await fetch(`/api/model-configs/${payload.id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            config_json: payload.config,
-            actor: 'ui',
-            change_note: payload.changeNote,
-          }),
-        })
-        if (!res.ok) throw new Error('Failed to save config')
-        return res.json()
-      },
+      }) =>
+        apiSendJson<any>(`/api/model-configs/${payload.id}`, 'PATCH', {
+          config_json: payload.config,
+          actor: 'ui',
+          change_note: payload.changeNote,
+        }, { fallbackMessage: 'Failed to save config' }),
       onSuccess: () => {
         void modelConfigsQuery.refetch()
       },
     })
 
     const activateModelConfigMutation = useMutation({
-      mutationFn: async (payload: { id: string; activationNote?: string }) => {
-        const res = await fetch(`/api/model-configs/${payload.id}/activate`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            actor: 'ui',
-            set_as_default: true,
-            activation_note: payload.activationNote,
-          }),
-        })
-        if (!res.ok) throw new Error('Failed to activate config')
-        return res.json()
-      },
+      mutationFn: async (payload: { id: string; activationNote?: string }) =>
+        apiSendJson<any>(`/api/model-configs/${payload.id}/activate`, 'POST', {
+          actor: 'ui',
+          set_as_default: true,
+          activation_note: payload.activationNote,
+        }, { fallbackMessage: 'Failed to activate config' }),
       onSuccess: () => {
         setShowActivationModal(false)
         setActivationNote('')
@@ -925,20 +924,13 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
     })
 
     const createDefaultConfigMutation = useMutation({
-      mutationFn: async () => {
-        const res = await fetch('/api/model-configs', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: 'Default Paid Media Config',
-            created_by: 'ui',
-            change_note: 'Initial default config from Settings UI',
-            config_json: DEFAULT_MODEL_CONFIG_JSON,
-          }),
-        })
-        if (!res.ok) throw new Error('Failed to create config')
-        return res.json() as Promise<ModelConfigSummary>
-      },
+      mutationFn: async () =>
+        apiSendJson<ModelConfigSummary>('/api/model-configs', 'POST', {
+          name: 'Default Paid Media Config',
+          created_by: 'ui',
+          change_note: 'Initial default config from Settings UI',
+          config_json: DEFAULT_MODEL_CONFIG_JSON,
+        }, { fallbackMessage: 'Failed to create config' }),
       onSuccess: async (created) => {
         await modelConfigsQuery.refetch()
         if (created?.id) {
@@ -953,20 +945,13 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         config: Record<string, any>
         changeNote?: string
         createdBy?: string
-      }) => {
-        const res = await fetch('/api/model-configs', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: payload.name,
-            config_json: payload.config,
-            created_by: payload.createdBy ?? 'ui',
-            change_note: payload.changeNote,
-          }),
-        })
-        if (!res.ok) throw new Error('Failed to create config')
-        return res.json() as Promise<{ id: string }>
-      },
+      }) =>
+        apiSendJson<{ id: string }>('/api/model-configs', 'POST', {
+          name: payload.name,
+          config_json: payload.config,
+          created_by: payload.createdBy ?? 'ui',
+          change_note: payload.changeNote,
+        }, { fallbackMessage: 'Failed to create config' }),
       onSuccess: async (created) => {
         await modelConfigsQuery.refetch()
         if (created?.id) {
@@ -979,14 +964,9 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       mutationFn: async (payload: { id: string; actor?: string }) => {
         const params = new URLSearchParams()
         params.set('actor', payload.actor ?? 'ui')
-        const res = await fetch(
-          `/api/model-configs/${payload.id}/clone?${params.toString()}`,
-          {
-            method: 'POST',
-          },
-        )
-        if (!res.ok) throw new Error('Failed to duplicate config')
-        return res.json() as Promise<{ id: string }>
+        return apiSendJson<{ id: string }>(`/api/model-configs/${payload.id}/clone?${params.toString()}`, 'POST', undefined, {
+          fallbackMessage: 'Failed to duplicate config',
+        })
       },
       onSuccess: async (created) => {
         await modelConfigsQuery.refetch()
@@ -1000,14 +980,9 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       mutationFn: async (payload: { id: string; actor?: string }) => {
         const params = new URLSearchParams()
         params.set('actor', payload.actor ?? 'ui')
-        const res = await fetch(
-          `/api/model-configs/${payload.id}/archive?${params.toString()}`,
-          {
-            method: 'POST',
-          },
-        )
-        if (!res.ok) throw new Error('Failed to archive config')
-        return res.json()
+        return apiSendJson<any>(`/api/model-configs/${payload.id}/archive?${params.toString()}`, 'POST', undefined, {
+          fallbackMessage: 'Failed to archive config',
+        })
       },
       onSuccess: () => {
         void modelConfigsQuery.refetch()
@@ -1018,30 +993,20 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       mutationFn: async (payload: {
         id: string
         config: Record<string, any>
-      }) => {
-        const res = await fetch(`/api/model-configs/${payload.id}/validate`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ config_json: payload.config }),
-        })
-        if (!res.ok) throw new Error('Failed to validate config')
-        return res.json() as Promise<ModelConfigValidationResult>
-      },
+      }) =>
+        apiSendJson<ModelConfigValidationResult>(`/api/model-configs/${payload.id}/validate`, 'POST', {
+          config_json: payload.config,
+        }, { fallbackMessage: 'Failed to validate config' }),
     })
 
     const previewModelConfigMutation = useMutation({
       mutationFn: async (payload: {
         id: string
         config: Record<string, any>
-      }) => {
-        const res = await fetch(`/api/model-configs/${payload.id}/preview`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ config_json: payload.config }),
-        })
-        if (!res.ok) throw new Error('Failed to compute preview')
-        return res.json() as Promise<ModelConfigPreviewResult>
-      },
+      }) =>
+        apiSendJson<ModelConfigPreviewResult>(`/api/model-configs/${payload.id}/preview`, 'POST', {
+          config_json: payload.config,
+        }, { fallbackMessage: 'Failed to compute preview' }),
     })
 
     const [settingsBaseline, setSettingsBaseline] =
@@ -1612,16 +1577,9 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
           utm_medium: taxonomyTestInput.utm_medium,
           utm_campaign: taxonomyTestInput.utm_campaign,
         }
-
-        const res = await fetch('/api/taxonomy/map-channel', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
+        const data = await apiSendJson<any>('/api/taxonomy/map-channel', 'POST', payload, {
+          fallbackMessage: 'Failed to test taxonomy rule',
         })
-        if (!res.ok) {
-          throw new Error((await res.text()) || 'Failed to test taxonomy rule')
-        }
-        const data = await res.json()
         setTaxonomyTestResult({
           channel: data.channel,
           matched_rule: data.matched_rule ?? null,
@@ -1645,11 +1603,9 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       setDatasetTestError(null)
       setDatasetTestRan(false)
       try {
-        const res = await fetch('/api/taxonomy/unknown-share?limit=10')
-        if (!res.ok) {
-          throw new Error((await res.text()) || 'Failed to analyse dataset')
-        }
-        const data = await res.json()
+        const data = await apiGetJson<any>('/api/taxonomy/unknown-share?limit=10', {
+          fallbackMessage: 'Failed to analyse dataset',
+        })
         setUnknownPatterns(data.top_unmapped_patterns ?? [])
         setDatasetTestRan(true)
       } catch (error) {
@@ -1764,17 +1720,12 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
 
       const timeout = setTimeout(async () => {
         try {
-          const res = await fetch('/api/attribution/preview', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ settings: attributionDraft }),
-            signal: controller.signal,
-          })
-          if (!res.ok) {
-            const text = await res.text()
-            throw new Error(text || 'Failed to calculate preview')
-          }
-          const data = (await res.json()) as AttributionPreviewSummary
+          const data = await apiSendJson<AttributionPreviewSummary>(
+            '/api/attribution/preview',
+            'POST',
+            { settings: attributionDraft },
+            { fallbackMessage: 'Failed to calculate preview', signal: controller.signal },
+          )
           if (controller.signal.aborted) return
           setAttributionPreview(data)
           if (data.previewAvailable) {
@@ -2631,17 +2582,12 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
             },
             level: 'channel',
           }
-          const res = await fetch('/api/nba/preview', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-            signal: controller.signal,
-          })
-          if (!res.ok) {
-            const text = await res.text()
-            throw new Error(text || 'Failed to calculate NBA preview')
-          }
-          const data = (await res.json()) as NBAPreviewSummary
+          const data = await apiSendJson<NBAPreviewSummary>(
+            '/api/nba/preview',
+            'POST',
+            payload,
+            { fallbackMessage: 'Failed to calculate NBA preview', signal: controller.signal },
+          )
           if (controller.signal.aborted) return
           setNbaPreview(data)
           if (data.previewAvailable) {
@@ -2737,9 +2683,9 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       }
       ;(async () => {
         try {
-          const res = await fetch(`/api/model-configs/${selectedModelConfigId}`)
-          if (!res.ok) throw new Error('Failed to load config detail')
-          const data: ModelConfigDetail = await res.json()
+          const data = await apiGetJson<ModelConfigDetail>(`/api/model-configs/${selectedModelConfigId}`, {
+            fallbackMessage: 'Failed to load config detail',
+          })
           const configObject = (data.config_json ?? {}) as Record<string, any>
           const json = JSON.stringify(configObject, null, 2)
           setCurrentConfigObject(configObject)
@@ -2806,6 +2752,12 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         window.history.replaceState(null, '', nextHash)
       }
     }, [activeSection])
+
+    useEffect(() => {
+      if (!visibleSectionOrder.includes(activeSection)) {
+        setActiveSection(visibleSectionOrder[0] ?? 'attribution')
+      }
+    }, [activeSection, visibleSectionOrder])
 
     const nbaActivePreset = useMemo<NbaPresetKey | 'custom'>(() => {
       return (
@@ -3005,6 +2957,11 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         mmm: deepClone(
           overrides.mmm ?? settingsBaseline?.mmm ?? DEFAULT_SETTINGS.mmm,
         ),
+        feature_flags: deepClone(
+          overrides.feature_flags ??
+            settingsBaseline?.feature_flags ??
+            DEFAULT_SETTINGS.feature_flags,
+        ),
       }),
       [settingsBaseline],
     )
@@ -3042,6 +2999,8 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
               mmm: settingsSections.includes('mmm')
                 ? deepClone(merged.mmm)
                 : prev?.mmm ?? deepClone(DEFAULT_SETTINGS.mmm),
+              feature_flags:
+                prev?.feature_flags ?? deepClone(DEFAULT_SETTINGS.feature_flags),
             }))
             if (settingsSections.includes('attribution')) {
               setAttributionDraft(deepClone(merged.attribution))
@@ -3466,16 +3425,9 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
           path_prefix: nbaTestPrefix,
           level: nbaTestLevel,
         }
-        const res = await fetch('/api/nba/test', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
+        const data = await apiSendJson<NBATestResult>('/api/nba/test', 'POST', payload, {
+          fallbackMessage: 'Failed to test recommendations',
         })
-        if (!res.ok) {
-          const text = await res.text()
-          throw new Error(text || 'Failed to test recommendations')
-        }
-        const data = (await res.json()) as NBATestResult
         setNbaTestResult(data)
         setNbaTestError(null)
       } catch (error) {
@@ -8159,6 +8111,30 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
           return renderTaxonomy()
         case 'measurement-models':
           return renderMeasurementConfigs()
+        case 'journeys':
+          return (
+            <JourneysSettingsSection
+              featureFlags={settingsBaseline?.feature_flags ?? DEFAULT_SETTINGS.feature_flags}
+            />
+          )
+        case 'access-control-users':
+          return (
+            <AccessControlUsersSection
+              featureFlags={settingsBaseline?.feature_flags ?? DEFAULT_SETTINGS.feature_flags}
+            />
+          )
+        case 'access-control-roles':
+          return (
+            <AccessControlRolesSection
+              featureFlags={settingsBaseline?.feature_flags ?? DEFAULT_SETTINGS.feature_flags}
+            />
+          )
+        case 'access-control-audit-log':
+          return (
+            <AccessControlAuditLogSection
+              featureFlags={settingsBaseline?.feature_flags ?? DEFAULT_SETTINGS.feature_flags}
+            />
+          )
         case 'notifications':
           return renderNotifications()
         default:
@@ -8209,7 +8185,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                 gap: 6,
               }}
             >
-              {SECTION_ORDER.map((sectionKey) => {
+              {visibleSectionOrder.map((sectionKey) => {
                 const meta = SECTION_META[sectionKey]
                 const isActive = sectionKey === activeSection
                 const isDirty = dirtySections.includes(sectionKey)
@@ -8323,7 +8299,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                     flexWrap: 'wrap',
                   }}
                 >
-                  {!['attribution', 'nba'].includes(activeSection) && (
+                  {!['attribution', 'nba', 'journeys', 'access-control-users', 'access-control-roles', 'access-control-audit-log'].includes(activeSection) && (
                     <>
                       {lastSavedAt[activeSection] &&
                         !dirtySections.includes(activeSection) && (

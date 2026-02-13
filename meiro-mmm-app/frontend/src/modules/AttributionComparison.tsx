@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { tokens } from '../theme/tokens'
+import { apiGetJson } from '../lib/apiClient'
 
 interface AttributionComparisonProps {
   selectedModel: string
@@ -138,11 +139,9 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
 
   const resultsQuery = useQuery<Record<string, ModelResult>>({
     queryKey: ['attribution-results'],
-    queryFn: async () => {
-      const res = await fetch('/api/attribution/results')
-      if (!res.ok) throw new Error('Failed to fetch results')
-      return res.json()
-    },
+    queryFn: async () => apiGetJson<Record<string, ModelResult>>('/api/attribution/results', {
+      fallbackMessage: 'Failed to fetch results',
+    }),
     refetchInterval: 3000,
   })
 
@@ -152,11 +151,9 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
 
   const journeysQuery = useQuery<JourneysSummary>({
     queryKey: ['attribution-journeys-summary'],
-    queryFn: async () => {
-      const res = await fetch('/api/attribution/journeys')
-      if (!res.ok) throw new Error('Failed to load journeys summary')
-      return res.json()
-    },
+    queryFn: async () => apiGetJson<JourneysSummary>('/api/attribution/journeys', {
+      fallbackMessage: 'Failed to load journeys summary',
+    }),
   })
 
   const anyResult: ModelResult | undefined = models.length ? results[models[0]] : undefined

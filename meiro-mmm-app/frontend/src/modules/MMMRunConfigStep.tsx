@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { tokens } from '../theme/tokens'
+import { apiGetJson } from '../lib/apiClient'
 
 const t = tokens
 
@@ -55,11 +56,7 @@ export default function MMMRunConfigStep({
 
   const { data: runs = [], refetch } = useQuery<RunSummary[]>({
     queryKey: ['mmm-runs'],
-    queryFn: async () => {
-      const res = await fetch('/api/models')
-      if (!res.ok) throw new Error('Failed to load runs')
-      return res.json()
-    },
+    queryFn: async () => apiGetJson<RunSummary[]>('/api/models', { fallbackMessage: 'Failed to load runs' }),
   })
 
   const handleRun = () => {

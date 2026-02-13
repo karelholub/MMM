@@ -1,4 +1,5 @@
 // Meiro CDP connector – frontend API wrapper
+import { apiGetJson, apiSendJson, withQuery } from '../lib/apiClient'
 
 export interface MeiroConfig {
   connected: boolean
@@ -21,29 +22,11 @@ export interface MeiroMapping {
 }
 
 export async function connectMeiroCDP(params: { api_base_url: string; api_key: string }) {
-  const res = await fetch('/api/connectors/meiro/connect', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
-  })
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({ detail: 'Connection failed' }))
-    throw new Error(data.detail || 'Connection failed')
-  }
-  return res.json()
+  return apiSendJson<any>('/api/connectors/meiro/connect', 'POST', params, { fallbackMessage: 'Connection failed' })
 }
 
 export async function saveMeiroCDP(params: { api_base_url: string; api_key: string }) {
-  const res = await fetch('/api/connectors/meiro/save', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
-  })
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({ detail: 'Save failed' }))
-    throw new Error(data.detail || 'Save failed')
-  }
-  return res.json()
+  return apiSendJson<any>('/api/connectors/meiro/save', 'POST', params, { fallbackMessage: 'Save failed' })
 }
 
 export async function testMeiroConnection(params?: {
@@ -51,55 +34,35 @@ export async function testMeiroConnection(params?: {
   api_key?: string
   save_on_success?: boolean
 }) {
-  const res = await fetch('/api/connectors/meiro/test', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params || {}),
+  return apiSendJson<any>('/api/connectors/meiro/test', 'POST', params || {}, {
+    fallbackMessage: 'Connection test failed',
   })
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({ detail: 'Connection test failed' }))
-    throw new Error(data.detail || 'Connection test failed')
-  }
-  return res.json()
 }
 
 export async function disconnectMeiroCDP() {
-  const res = await fetch('/api/connectors/meiro', { method: 'DELETE' })
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({ detail: 'Disconnect failed' }))
-    throw new Error(data.detail || 'Disconnect failed')
-  }
-  return res.json()
+  return apiSendJson<any>('/api/connectors/meiro', 'DELETE', undefined, { fallbackMessage: 'Disconnect failed' })
 }
 
 export async function getMeiroCDPStatus(): Promise<{ connected: boolean }> {
-  const res = await fetch('/api/connectors/meiro/status')
-  if (!res.ok) throw new Error('Failed to fetch Meiro CDP status')
-  return res.json()
+  return apiGetJson<{ connected: boolean }>('/api/connectors/meiro/status', {
+    fallbackMessage: 'Failed to fetch Meiro CDP status',
+  })
 }
 
 export async function getMeiroConfig(): Promise<MeiroConfig> {
-  const res = await fetch('/api/connectors/meiro/config')
-  if (!res.ok) throw new Error('Failed to fetch Meiro config')
-  return res.json()
+  return apiGetJson<MeiroConfig>('/api/connectors/meiro/config', { fallbackMessage: 'Failed to fetch Meiro config' })
 }
 
 export async function getMeiroAttributes() {
-  const res = await fetch('/api/connectors/meiro/attributes')
-  if (!res.ok) throw new Error('Failed to fetch attributes')
-  return res.json()
+  return apiGetJson<any>('/api/connectors/meiro/attributes', { fallbackMessage: 'Failed to fetch attributes' })
 }
 
 export async function getMeiroEvents() {
-  const res = await fetch('/api/connectors/meiro/events')
-  if (!res.ok) throw new Error('Failed to fetch events')
-  return res.json()
+  return apiGetJson<any>('/api/connectors/meiro/events', { fallbackMessage: 'Failed to fetch events' })
 }
 
 export async function getMeiroSegments() {
-  const res = await fetch('/api/connectors/meiro/segments')
-  if (!res.ok) throw new Error('Failed to fetch segments')
-  return res.json()
+  return apiGetJson<any>('/api/connectors/meiro/segments', { fallbackMessage: 'Failed to fetch segments' })
 }
 
 export async function fetchMeiroCDPData(params: {
@@ -109,76 +72,49 @@ export async function fetchMeiroCDPData(params: {
   attributes?: string[]
   segment_id?: string
 }) {
-  const res = await fetch('/api/connectors/meiro/fetch', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
+  return apiSendJson<any>('/api/connectors/meiro/fetch', 'POST', params, {
+    fallbackMessage: 'Fetch failed',
   })
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({ detail: 'Fetch failed' }))
-    throw new Error(data.detail || 'Fetch failed')
-  }
-  return res.json()
 }
 
 export async function getMeiroMapping(): Promise<{ mapping: MeiroMapping; presets: Record<string, unknown> }> {
-  const res = await fetch('/api/connectors/meiro/mapping')
-  if (!res.ok) throw new Error('Failed to fetch mapping')
-  return res.json()
+  return apiGetJson<{ mapping: MeiroMapping; presets: Record<string, unknown> }>(
+    '/api/connectors/meiro/mapping',
+    { fallbackMessage: 'Failed to fetch mapping' },
+  )
 }
 
 export async function saveMeiroMapping(mapping: MeiroMapping) {
-  const res = await fetch('/api/connectors/meiro/mapping', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(mapping),
+  return apiSendJson<any>('/api/connectors/meiro/mapping', 'POST', mapping, {
+    fallbackMessage: 'Save failed',
   })
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({ detail: 'Save failed' }))
-    throw new Error(data.detail || 'Save failed')
-  }
-  return res.json()
 }
 
 export async function getMeiroPullConfig(): Promise<Record<string, unknown>> {
-  const res = await fetch('/api/connectors/meiro/pull-config')
-  if (!res.ok) throw new Error('Failed to fetch pull config')
-  return res.json()
+  return apiGetJson<Record<string, unknown>>('/api/connectors/meiro/pull-config', {
+    fallbackMessage: 'Failed to fetch pull config',
+  })
 }
 
 export async function saveMeiroPullConfig(config: Record<string, unknown>) {
-  const res = await fetch('/api/connectors/meiro/pull-config', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(config),
+  return apiSendJson<any>('/api/connectors/meiro/pull-config', 'POST', config, {
+    fallbackMessage: 'Save failed',
   })
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({ detail: 'Save failed' }))
-    throw new Error(data.detail || 'Save failed')
-  }
-  return res.json()
 }
 
 export async function meiroPull(since?: string, until?: string) {
-  const params = new URLSearchParams()
-  if (since) params.set('since', since)
-  if (until) params.set('until', until)
-  const qs = params.toString()
-  const res = await fetch(`/api/connectors/meiro/pull${qs ? `?${qs}` : ''}`, { method: 'POST' })
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({ detail: 'Pull failed' }))
-    throw new Error(data.detail || 'Pull failed')
-  }
-  return res.json()
+  return apiSendJson<any>(
+    withQuery('/api/connectors/meiro/pull', { since, until }),
+    'POST',
+    undefined,
+    { fallbackMessage: 'Pull failed' },
+  )
 }
 
 export async function meiroRotateWebhookSecret(): Promise<{ secret: string }> {
-  const res = await fetch('/api/connectors/meiro/webhook/rotate-secret', { method: 'POST' })
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({ detail: 'Rotate failed' }))
-    throw new Error(data.detail || 'Rotate failed')
-  }
-  return res.json()
+  return apiSendJson<{ secret: string }>('/api/connectors/meiro/webhook/rotate-secret', 'POST', undefined, {
+    fallbackMessage: 'Rotate failed',
+  })
 }
 
 export async function meiroDryRun(limit = 100): Promise<{
@@ -187,10 +123,7 @@ export async function meiroDryRun(limit = 100): Promise<{
   warnings: string[]
   validation: { ok?: boolean; error?: string }
 }> {
-  const res = await fetch(`/api/connectors/meiro/dry-run?limit=${limit}`, { method: 'POST' })
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({ detail: 'Dry run failed' }))
-    throw new Error(data.detail || 'Dry run failed')
-  }
-  return res.json()
+  return apiSendJson<any>(withQuery('/api/connectors/meiro/dry-run', { limit }), 'POST', undefined, {
+    fallbackMessage: 'Dry run failed',
+  })
 }

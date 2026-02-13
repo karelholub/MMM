@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { tokens as t } from '../theme/tokens'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
+import { apiGetJson, apiSendJson } from '../lib/apiClient'
 
 const OWNED_CHANNELS = ['email', 'push', 'sms', 'whatsapp', 'onsite']
 
@@ -112,64 +113,41 @@ export default function IncrementalityPage() {
 
   const experimentsQuery = useQuery<ExperimentSummary[]>({
     queryKey: ['experiments'],
-    queryFn: async () => {
-      const res = await fetch('/api/experiments')
-      if (!res.ok) throw new Error('Failed to load experiments')
-      return res.json()
-    },
+    queryFn: async () => apiGetJson<ExperimentSummary[]>('/api/experiments', { fallbackMessage: 'Failed to load experiments' }),
   })
 
   const detailQuery = useQuery<ExperimentDetail>({
     queryKey: ['experiment', selectedId],
-    queryFn: async () => {
-      const res = await fetch(`/api/experiments/${selectedId}`)
-      if (!res.ok) throw new Error('Failed to load experiment')
-      return res.json()
-    },
+    queryFn: async () => apiGetJson<ExperimentDetail>(`/api/experiments/${selectedId}`, { fallbackMessage: 'Failed to load experiment' }),
     enabled: selectedId != null,
   })
 
   const resultsQuery = useQuery<ExperimentResults>({
     queryKey: ['experiment-results', selectedId],
-    queryFn: async () => {
-      const res = await fetch(`/api/experiments/${selectedId}/results`)
-      if (!res.ok) throw new Error('Failed to load results')
-      return res.json()
-    },
+    queryFn: async () => apiGetJson<ExperimentResults>(`/api/experiments/${selectedId}/results`, { fallbackMessage: 'Failed to load results' }),
     enabled: selectedId != null,
   })
 
   const timeSeriesQuery = useQuery<{ data: TimeSeriesPoint[] }>({
     queryKey: ['experiment-timeseries', selectedId],
-    queryFn: async () => {
-      const res = await fetch(`/api/experiments/${selectedId}/time-series?freq=D`)
-      if (!res.ok) throw new Error('Failed to load time series')
-      return res.json()
-    },
+    queryFn: async () => apiGetJson<{ data: TimeSeriesPoint[] }>(`/api/experiments/${selectedId}/time-series?freq=D`, {
+      fallbackMessage: 'Failed to load time series',
+    }),
     enabled: selectedId != null && showTimeSeries,
   })
 
   const powerMutation = useMutation<PowerAnalysisResult>({
-    mutationFn: async () => {
-      const res = await fetch('/api/experiments/power-analysis', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(powerForm),
-      })
-      if (!res.ok) throw new Error('Failed to compute power analysis')
-      return res.json()
-    },
+    mutationFn: async () =>
+      apiSendJson<PowerAnalysisResult>('/api/experiments/power-analysis', 'POST', powerForm, {
+        fallbackMessage: 'Failed to compute power analysis',
+      }),
   })
 
   const statusMutation = useMutation<ExperimentSummary, Error, { id: number; nextStatus: 'draft' | 'running' | 'completed' }>({
     mutationFn: async ({ id, nextStatus }) => {
-      const res = await fetch(`/api/experiments/${id}/status`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: nextStatus }),
+      return apiSendJson<ExperimentSummary>(`/api/experiments/${id}/status`, 'POST', { status: nextStatus }, {
+        fallbackMessage: 'Failed to update experiment status',
       })
-      if (!res.ok) throw new Error('Failed to update experiment status')
-      return res.json()
     },
     onSuccess: () => {
       experimentsQuery.refetch()
@@ -179,11 +157,9 @@ export default function IncrementalityPage() {
 
   const healthQuery = useQuery<ExperimentHealth>({
     queryKey: ['experiment-health', selectedId],
-    queryFn: async () => {
-      const res = await fetch(`/api/experiments/${selectedId}/health`)
-      if (!res.ok) throw new Error('Failed to load experiment health')
-      return res.json()
-    },
+    queryFn: async () => apiGetJson<ExperimentHealth>(`/api/experiments/${selectedId}/health`, {
+      fallbackMessage: 'Failed to load experiment health',
+    }),
     enabled: selectedId != null,
   })
 
@@ -221,13 +197,9 @@ export default function IncrementalityPage() {
         end_at: new Date(form.end_at).toISOString(),
         notes: combinedNotes || null,
       }
-      const res = await fetch('/api/experiments', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+      return apiSendJson<ExperimentSummary>('/api/experiments', 'POST', body, {
+        fallbackMessage: 'Failed to create experiment',
       })
-      if (!res.ok) throw new Error('Failed to create experiment')
-      return res.json() as Promise<ExperimentSummary>
     },
     onSuccess: (data) => {
       experimentsQuery.refetch()
@@ -1729,4 +1701,3 @@ function KpiCard(props: { label: string; value: string }) {
     </div>
   )
 }
-

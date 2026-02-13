@@ -1,7 +1,8 @@
 import { useMemo } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation } from '@tanstack/react-query'
 import { tokens as t } from '../theme/tokens'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
+import { apiGetJson, apiSendJson, withQuery } from '../lib/apiClient'
 import {
   DashboardPage,
   KpiTile,
@@ -26,11 +27,13 @@ type PageKey =
   | 'dq'
   | 'incrementality'
   | 'path_archetypes'
+  | 'datasets'
 
 interface OverviewProps {
   lastPage: PageKey | null
   onNavigate: (page: PageKey) => void
   onConnectDataSources: () => void
+  canCreateAlerts: boolean
 }
 
 // --- API types (overview summary + drivers + alerts) ---
@@ -137,6 +140,15 @@ interface OverviewAlertsResponse {
   total: number
 }
 
+interface DomainAlertEvent {
+  id: string
+  alert_definition_id: string
+  domain: 'journeys' | 'funnels'
+  triggered_at: string
+  severity: string
+  summary: string
+}
+
 // --- Helpers ---
 function formatCurrency(val: number): string {
   if (!Number.isFinite(val)) return '—'
@@ -170,10 +182,9 @@ function daysInPeriod(fromIso?: string, toIso?: string): number {
 }
 
 // --- Cover Dashboard ---
-export default function Overview({ lastPage, onNavigate, onConnectDataSources }: OverviewProps) {
+export default function Overview({ lastPage, onNavigate, onConnectDataSources, canCreateAlerts }: OverviewProps) {
   const {
     journeysSummary,
-    journeysLoaded,
     isLoadingSampleJourneys,
     loadSampleJourneys,
   } = useWorkspaceContext()
@@ -191,52 +202,54 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
   const summaryQuery = useQuery<OverviewSummaryResponse>({
     queryKey: ['overview-summary', dateRange.date_from, dateRange.date_to],
     queryFn: async () => {
-      const params = new URLSearchParams({
+      return apiGetJson<OverviewSummaryResponse>(withQuery('/api/overview/summary', {
         date_from: dateRange.date_from,
         date_to: dateRange.date_to,
-      })
-      const res = await fetch(`/api/overview/summary?${params.toString()}`)
-      if (!res.ok) throw new Error('Failed to load overview summary')
-      return res.json()
+      }), { fallbackMessage: 'Failed to load overview summary' })
     },
   })
 
   const driversQuery = useQuery<OverviewDriversResponse>({
     queryKey: ['overview-drivers', dateRange.date_from, dateRange.date_to],
     queryFn: async () => {
-      const params = new URLSearchParams({
+      return apiGetJson<OverviewDriversResponse>(withQuery('/api/overview/drivers', {
         date_from: dateRange.date_from,
         date_to: dateRange.date_to,
-      })
-      const res = await fetch(`/api/overview/drivers?${params.toString()}`)
-      if (!res.ok) throw new Error('Failed to load drivers')
-      return res.json()
+      }), { fallbackMessage: 'Failed to load drivers' })
     },
   })
 
   const alertsQuery = useQuery<OverviewAlertsResponse>({
     queryKey: ['overview-alerts', 'open'],
     queryFn: async () => {
-      const params = new URLSearchParams({ status: 'open', limit: '20' })
-      const res = await fetch(`/api/overview/alerts?${params.toString()}`)
-      if (!res.ok) throw new Error('Failed to load alerts')
-      return res.json()
+      return apiGetJson<OverviewAlertsResponse>(withQuery('/api/overview/alerts', { status: 'open', limit: 20 }), {
+        fallbackMessage: 'Failed to load alerts',
+      })
     },
   })
 
-  const queryClient = useQueryClient()
+  const journeyFunnelAlertsQuery = useQuery<{ items: DomainAlertEvent[]; total: number }>({
+    queryKey: ['journey-funnel-alert-events'],
+    queryFn: async () => {
+      const [jBody, fBody] = await Promise.all([
+        apiGetJson<{ items: DomainAlertEvent[] }>('/api/alerts/events?domain=journeys&page=1&per_page=10', {
+          fallbackMessage: 'Failed to load journey alerts',
+        }),
+        apiGetJson<{ items: DomainAlertEvent[] }>('/api/alerts/events?domain=funnels&page=1&per_page=10', {
+          fallbackMessage: 'Failed to load funnel alerts',
+        }),
+      ])
+      const items: DomainAlertEvent[] = [...(jBody.items || []), ...(fBody.items || [])]
+      items.sort((a, b) => new Date(b.triggered_at).getTime() - new Date(a.triggered_at).getTime())
+      return { items, total: items.length }
+    },
+  })
+
   const updateAlertStatusMutation = useMutation({
     mutationFn: async ({ alertId, status, snooze_until }: { alertId: number; status: string; snooze_until?: string }) => {
-      const res = await fetch(`/api/overview/alerts/${alertId}/status`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status, snooze_until }),
+      return apiSendJson<any>(`/api/overview/alerts/${alertId}/status`, 'POST', { status, snooze_until }, {
+        fallbackMessage: 'Failed to update alert',
       })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        throw new Error(err.detail || 'Failed to update alert')
-      }
-      return res.json()
     },
     onSuccess: () => {
       alertsQuery.refetch()
@@ -247,6 +260,8 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
   const summary = summaryQuery.data
   const drivers = driversQuery.data
   const openAlerts = alertsQuery.data?.alerts ?? []
+  const domainAlerts = journeyFunnelAlertsQuery.data?.items ?? []
+  const needsAttentionCount = domainAlerts.filter((a) => a.severity === 'critical' || a.severity === 'warn').length
   const kpiTiles = summary?.kpi_tiles ?? []
   const highlights = summary?.highlights ?? []
   const byChannel = drivers?.by_channel ?? []
@@ -334,22 +349,24 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
 
   const headerActions = (
     <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
-      <button
-        type="button"
-        onClick={() => onNavigate('alerts')}
-        style={{
-          padding: `${t.space.sm}px ${t.space.md}px`,
-          borderRadius: t.radius.sm,
-          border: 'none',
-          background: t.color.accent,
-          color: '#ffffff',
-          fontSize: t.font.sizeSm,
-          fontWeight: t.font.weightSemibold,
-          cursor: 'pointer',
-        }}
-      >
-        Create alert
-      </button>
+      {canCreateAlerts && (
+        <button
+          type="button"
+          onClick={() => onNavigate('alerts')}
+          style={{
+            padding: `${t.space.sm}px ${t.space.md}px`,
+            borderRadius: t.radius.sm,
+            border: 'none',
+            background: t.color.accent,
+            color: '#ffffff',
+            fontSize: t.font.sizeSm,
+            fontWeight: t.font.weightSemibold,
+            cursor: 'pointer',
+          }}
+        >
+          Create alert
+        </button>
+      )}
       {lastPage && lastPage !== 'overview' && (
         <button
           type="button"
@@ -676,6 +693,53 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
 
         {/* E) Data health + F) Recent alerts side by side */}
         <div style={{ display: 'grid', gap: t.space.xl, gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}>
+          <SectionCard
+            title="Journey/Funnel alerts"
+            subtitle={`Needs attention: ${needsAttentionCount}`}
+            actions={
+              <button
+                type="button"
+                onClick={() => onNavigate('alerts')}
+                style={{
+                  padding: `${t.space.xs}px ${t.space.sm}px`,
+                  borderRadius: t.radius.sm,
+                  border: `1px solid ${t.color.border}`,
+                  background: t.color.surface,
+                  fontSize: t.font.sizeXs,
+                  cursor: 'pointer',
+                }}
+              >
+                Open alerts →
+              </button>
+            }
+          >
+            <div style={{ display: 'grid', gap: t.space.sm }}>
+              {domainAlerts.length === 0 && (
+                <span style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  No recent Journeys/Funnels alerts.
+                </span>
+              )}
+              {domainAlerts.slice(0, 5).map((alert) => (
+                <div
+                  key={alert.id}
+                  style={{
+                    display: 'grid',
+                    gap: 2,
+                    padding: `${t.space.xs}px ${t.space.sm}px`,
+                    border: `1px solid ${t.color.borderLight}`,
+                    borderRadius: t.radius.sm,
+                    background: t.color.bg,
+                  }}
+                >
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                    {(alert.domain || 'journeys').toUpperCase()} · {(alert.severity || 'info').toUpperCase()}
+                  </div>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{alert.summary}</div>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{new Date(alert.triggered_at).toLocaleString()}</div>
+                </div>
+              ))}
+            </div>
+          </SectionCard>
           <DataHealthCard
             freshness={freshness ?? undefined}
             onOpenDataSources={onConnectDataSources}

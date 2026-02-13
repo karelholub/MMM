@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useMutation } from '@tanstack/react-query'
+import { apiGetJson, apiRequest } from '../lib/apiClient'
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -52,21 +53,20 @@ type WizardStep = 'source' | 'preview' | 'mapping' | 'quality' | 'confirm'
 async function uploadDataset({ file, type }: { file: File; type: string }): Promise<DatasetUploadResponse> {
   const formData = new FormData()
   formData.append('file', file)
-  const res = await fetch(`/api/datasets/upload?type=${type}`, { method: 'POST', body: formData })
-  if (!res.ok) throw new Error('Upload failed')
+  const res = await apiRequest(`/api/datasets/upload?type=${type}`, {
+    method: 'POST',
+    body: formData,
+    fallbackMessage: 'Upload failed',
+  })
   return res.json()
 }
 
 async function fetchValidation(datasetId: string): Promise<Validation> {
-  const res = await fetch(`/api/datasets/${datasetId}/validate`)
-  if (!res.ok) throw new Error('Validation failed')
-  return res.json()
+  return apiGetJson<Validation>(`/api/datasets/${datasetId}/validate`, { fallbackMessage: 'Validation failed' })
 }
 
 async function loadSampleDataset(sampleId: string): Promise<DatasetUploadResponse> {
-  const res = await fetch(`/api/datasets/${sampleId}`)
-  if (!res.ok) throw new Error('Failed to load sample')
-  return res.json()
+  return apiGetJson<DatasetUploadResponse>(`/api/datasets/${sampleId}`, { fallbackMessage: 'Failed to load sample' })
 }
 
 // ── Styles ─────────────────────────────────────────────────────────

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { tokens } from '../theme/tokens'
 import DatasetUploader from './DatasetUploader'
+import { apiGetJson, apiSendJson } from '../lib/apiClient'
 
 const t = tokens
 
@@ -65,29 +66,24 @@ export default function MMMDataSourceStep({ onMappingComplete }: MMMDataSourceSt
 
   const { data: platformOptions } = useQuery<PlatformOptions>({
     queryKey: ['mmm-platform-options'],
-    queryFn: async () => {
-      const res = await fetch('/api/mmm/platform-options')
-      if (!res.ok) throw new Error('Failed to load options')
-      return res.json()
-    },
+    queryFn: async () => apiGetJson<PlatformOptions>('/api/mmm/platform-options', {
+      fallbackMessage: 'Failed to load options',
+    }),
   })
 
   const { data: attributionModelsData } = useQuery<{ models: string[] }>({
     queryKey: ['attribution-models'],
-    queryFn: async () => {
-      const res = await fetch('/api/attribution/models')
-      if (!res.ok) return { models: ['linear', 'last_touch', 'first_touch', 'time_decay', 'position_based', 'markov'] }
-      return res.json()
-    },
+    queryFn: async () =>
+      apiGetJson<{ models: string[] }>('/api/attribution/models', {
+        fallbackMessage: 'Failed to load attribution models',
+      }).catch(() => ({ models: ['linear', 'last_touch', 'first_touch', 'time_decay', 'position_based', 'markov'] })),
   })
   const { data: modelConfigs } = useQuery<{ id: string; name: string }[]>({
     queryKey: ['model-configs'],
-    queryFn: async () => {
-      const res = await fetch('/api/model-configs')
-      if (!res.ok) return []
-      const list = await res.json()
-      return Array.isArray(list) ? list : []
-    },
+    queryFn: async () =>
+      apiGetJson<any>('/api/model-configs', { fallbackMessage: 'Failed to load model configs' })
+        .then((list) => (Array.isArray(list) ? list : []))
+        .catch(() => []),
   })
 
   const attributionModelOptions = attributionModelsData?.models ?? ['linear', 'last_touch', 'first_touch', 'time_decay', 'position_based', 'markov']
@@ -102,27 +98,20 @@ export default function MMMDataSourceStep({ onMappingComplete }: MMMDataSourceSt
 
   const buildMutation = useMutation({
     mutationFn: async () => {
-      const res = await fetch('/api/mmm/datasets/build-from-platform', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          date_start: dateStart,
-          date_end: dateEnd,
-          kpi_target: kpiTarget,
-          spend_channels: selectedChannels,
-          covariates: covariateOptions.length ? [] : undefined,
-          currency: 'USD',
-          ...(kpiTarget === 'attribution' && {
-            attribution_model: attributionModel,
-            ...(attributionConfigId && { attribution_config_id: attributionConfigId }),
-          }),
+      return apiSendJson<BuildResponse>('/api/mmm/datasets/build-from-platform', 'POST', {
+        date_start: dateStart,
+        date_end: dateEnd,
+        kpi_target: kpiTarget,
+        spend_channels: selectedChannels,
+        covariates: covariateOptions.length ? [] : undefined,
+        currency: 'USD',
+        ...(kpiTarget === 'attribution' && {
+          attribution_model: attributionModel,
+          ...(attributionConfigId && { attribution_config_id: attributionConfigId }),
         }),
+      }, {
+        fallbackMessage: 'Failed to generate dataset',
       })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        throw new Error(err.detail || 'Failed to generate dataset')
-      }
-      return res.json() as Promise<BuildResponse>
     },
     onSuccess: (data) => setPlatformResult(data),
   })
@@ -340,9 +329,9 @@ export default function MMMDataSourceStep({ onMappingComplete }: MMMDataSourceSt
               fontSize: t.font.sizeBase,
               fontWeight: t.font.weightSemibold,
               borderRadius: t.radius.sm,
-              border: `2px solid ${sourceType === 'platform' ? t.color.accent : t.color.border}`,
-              background: sourceType === 'platform' ? t.color.accentMuted : t.color.surface,
-              color: sourceType === 'platform' ? t.color.accent : t.color.textSecondary,
+              border: `2px solid ${t.color.accent}`,
+              background: t.color.accentMuted,
+              color: t.color.accent,
               cursor: 'pointer',
             }}
           >
@@ -356,9 +345,9 @@ export default function MMMDataSourceStep({ onMappingComplete }: MMMDataSourceSt
               fontSize: t.font.sizeBase,
               fontWeight: t.font.weightSemibold,
               borderRadius: t.radius.sm,
-              border: `2px solid ${sourceType === 'csv' ? t.color.accent : t.color.border}`,
-              background: sourceType === 'csv' ? t.color.accentMuted : t.color.surface,
-              color: sourceType === 'csv' ? t.color.accent : t.color.textSecondary,
+              border: `2px solid ${t.color.border}`,
+              background: t.color.surface,
+              color: t.color.textSecondary,
               cursor: 'pointer',
             }}
           >
