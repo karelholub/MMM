@@ -14,6 +14,7 @@ import MMMWizardShell from './MMMWizardShell'
 import type { SettingsPageHandle, SectionKey } from './Settings'
 import { usePermissions } from '../hooks/usePermissions'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
+import ProtectedPage from '../components/ProtectedPage'
 import {
   canAccessPage as canAccessAppPage,
   canManageJourneyDefinitions,
@@ -1256,34 +1257,7 @@ export default function App() {
             </div>
 
             <Suspense fallback={PAGE_FALLBACK}>
-              {showNoAccess && (
-                <div
-                  style={{
-                    border: `1px solid ${tokens.color.borderLight}`,
-                    borderRadius: tokens.radius.lg,
-                    background: tokens.color.surface,
-                    boxShadow: tokens.shadowXs,
-                    padding: 24,
-                    display: 'grid',
-                    gap: 10,
-                  }}
-                >
-                  <h2
-                    style={{
-                      margin: 0,
-                      fontSize: tokens.font.sizeLg,
-                      fontWeight: tokens.font.weightSemibold,
-                      color: tokens.color.text,
-                    }}
-                  >
-                    No access
-                  </h2>
-                  <p style={{ margin: 0, color: tokens.color.textSecondary, fontSize: tokens.font.sizeSm }}>
-                    {blockedReason}
-                  </p>
-                </div>
-              )}
-              {!showNoAccess && (
+              <ProtectedPage blocked={showNoAccess} reason={blockedReason}>
                 <>
               {page === 'overview' && (
                 <Overview
@@ -1350,7 +1324,7 @@ export default function App() {
                 />
               )}
                 </>
-              )}
+              </ProtectedPage>
             </Suspense>
           </div>
         </main>
