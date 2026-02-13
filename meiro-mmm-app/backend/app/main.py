@@ -1,6 +1,6 @@
 from fastapi import FastAPI, BackgroundTasks, UploadFile, File, Form, HTTPException, Query, Body, Request, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import RedirectResponse, Response, JSONResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any, Tuple
 import pandas as pd
@@ -10,9 +10,11 @@ import json
 import os
 import time
 import uuid
+import hashlib
+import secrets
 import requests
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 from app.utils.token_store import save_token, get_token, delete_token, get_all_connected_platforms
@@ -20,11 +22,22 @@ from app.utils.encrypt import encrypt, decrypt
 from app.utils import datasource_config as ds_config
 from app.utils.taxonomy import load_taxonomy, save_taxonomy, Taxonomy, MatchExpression, ChannelRule
 from app.utils.kpi_config import load_kpi_config, save_kpi_config, KpiConfig, KpiDefinition
-from app.db import Base, engine, get_db
+from app.db import Base, engine, get_db, SessionLocal
 from app.models_config_dq import (
     ModelConfig as ORMModelConfig,
     ModelConfigAudit,
     ModelConfigStatus,
+    JourneySettingsVersion as ORMJourneySettingsVersion,
+    JourneySettingsStatus,
+    AuthSession as ORMAuthSession,
+    User as ORMUser,
+    Workspace as ORMWorkspace,
+    WorkspaceMembership,
+    Role as ORMRole,
+    Permission as ORMPermission,
+    RolePermission as ORMRolePermission,
+    Invitation as ORMInvitation,
+    SecurityAuditLog as ORMSecurityAuditLog,
     DQSnapshot,
     DQAlertRule,
     DQAlert,
@@ -42,6 +55,33 @@ from app.services_model_config import (
     archive_config,
     get_default_config_id,
 )
+from app.services_journey_settings import (
+    activate_journey_settings_version,
+    archive_journey_settings_version,
+    build_journey_settings_impact_preview,
+    create_journey_settings_draft,
+    ensure_active_journey_settings,
+    get_active_journey_settings,
+    get_journey_settings_version,
+    invalidate_active_journey_settings_cache,
+    list_journey_settings_versions,
+    update_journey_settings_draft,
+    validate_journey_settings,
+)
+from app.services_access_control import ensure_access_control_seed_data, DEFAULT_WORKSPACE_ID
+from app.services_access_control import PERMISSIONS as RBAC_PERMISSIONS
+from app.services_auth import (
+    CSRF_HEADER_NAME,
+    SESSION_COOKIE_NAME,
+    create_session,
+    ensure_user_and_membership,
+    require_auth_context,
+    resolve_auth_context,
+    revoke_all_user_sessions,
+    revoke_session,
+    verify_csrf,
+)
+from dataclasses import dataclass
 from app.services_data_quality import compute_dq_snapshots, evaluate_alert_rules
 from app.services_conversions import (
     apply_model_config_to_journeys,
@@ -55,6 +95,45 @@ from app.services_import_runs import (
     get_runs as get_import_runs,
     get_run as get_import_run,
     get_last_successful_run,
+)
+from app.services_journey_definitions import (
+    ensure_default_journey_definition,
+    list_journey_definitions,
+    create_journey_definition,
+    update_journey_definition,
+    archive_journey_definition,
+    serialize_journey_definition,
+    get_journey_definition,
+)
+from app.services_journey_paths import list_paths_for_journey_definition
+from app.services_journey_transitions import list_transitions_for_journey_definition
+from app.services_journey_aggregates import run_daily_journey_aggregates
+from app.services_funnels import (
+    create_funnel,
+    get_funnel,
+    get_funnel_diagnostics as compute_funnel_diagnostics,
+    get_funnel_results as compute_funnel_results,
+    list_funnels,
+)
+from app.services_journey_attribution import build_journey_attribution_summary
+from app.services_data_sources import (
+    create_data_source,
+    delete_data_source,
+    disable_data_source,
+    list_data_sources,
+    rotate_data_source_credentials,
+    test_data_source_payload,
+    test_saved_data_source,
+    update_data_source,
+)
+from app.services_journey_alerts import (
+    ALERT_DOMAINS as JOURNEY_ALERT_DOMAINS,
+    ALERT_TYPES as JOURNEY_ALERT_TYPES,
+    create_alert_definition as create_journey_alert_definition,
+    list_alert_definitions as list_journey_alert_definitions,
+    list_alert_events as list_journey_alert_events,
+    preview_alert as preview_journey_alert,
+    update_alert_definition as update_journey_alert_definition,
 )
 from app.models_overview_alerts import AlertEvent, AlertRule, NotificationChannel, UserNotificationPref
 from app.services_alerts import (
@@ -131,6 +210,15 @@ from app.attribution_engine import (
 # for SQLite; in PostgreSQL you should run proper migrations from backend/migrations.
 Base.metadata.create_all(bind=engine)
 
+try:
+    _seed_db = SessionLocal()
+    try:
+        ensure_access_control_seed_data(_seed_db)
+    finally:
+        _seed_db.close()
+except Exception as e:
+    logger.warning("Access control seed initialization failed: %s", e)
+
 # Ensure alert_events / alert_rules have columns from migrations 005/006 (SQLite doesn't run migrations).
 # If the DB predates these, SELECTs would raise OperationalError; we add columns if missing.
 def _ensure_alert_tables_columns():
@@ -151,13 +239,97 @@ def _ensure_alert_tables_columns():
     except Exception as e:
         logger.debug("Alert table column check skipped (e.g. not SQLite or tables missing): %s", e)
 
+
+def _ensure_journey_definition_columns():
+    """Ensure post-v1 journey_definition columns exist for local SQLite dev DBs."""
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            for stmt in (
+                "ALTER TABLE journey_definitions ADD COLUMN updated_by VARCHAR(255)",
+                "ALTER TABLE journey_definitions ADD COLUMN is_archived BOOLEAN NOT NULL DEFAULT 0",
+                "ALTER TABLE journey_definitions ADD COLUMN archived_at TIMESTAMP",
+                "ALTER TABLE journey_definitions ADD COLUMN archived_by VARCHAR(255)",
+            ):
+                try:
+                    conn.execute(text(stmt))
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+    except Exception as e:
+        logger.debug("Journey definition column check skipped: %s", e)
+
+
+def _ensure_journey_paths_columns():
+    """Ensure new columns on journey_paths_daily exist for local SQLite dev DBs."""
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            for stmt in (
+                "ALTER TABLE journey_paths_daily ADD COLUMN campaign_id VARCHAR(128)",
+                "ALTER TABLE journey_transitions_daily ADD COLUMN campaign_id VARCHAR(128)",
+                "ALTER TABLE journey_transitions_daily ADD COLUMN country VARCHAR(64)",
+            ):
+                try:
+                    conn.execute(text(stmt))
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+    except Exception as e:
+        logger.debug("Journey paths column check skipped: %s", e)
+
+
 if "sqlite" in (os.getenv("DATABASE_URL") or "").lower() or not os.getenv("DATABASE_URL"):
     try:
         _ensure_alert_tables_columns()
+        _ensure_journey_definition_columns()
+        _ensure_journey_paths_columns()
     except Exception:
         pass
 
+
+def _is_dev_environment() -> bool:
+    """Best-effort dev/local detection for optional seeds."""
+    explicit = (os.getenv("APP_ENV") or os.getenv("ENV") or os.getenv("MEIRO_ENV") or os.getenv("ENVIRONMENT") or "").strip().lower()
+    if explicit in {"prod", "production"}:
+        return False
+    for key in ("APP_ENV", "ENV", "MEIRO_ENV", "ENVIRONMENT"):
+        val = (os.getenv(key) or "").strip().lower()
+        if val in {"dev", "development", "local"}:
+            return True
+    db_url = (os.getenv("DATABASE_URL") or "").strip().lower()
+    if not db_url or "sqlite" in db_url:
+        return True
+    return os.getenv("DEBUG") == "1"
+
+
+def _maybe_seed_default_journey_definition() -> None:
+    """Create one default journey definition in dev if none exist."""
+    if not _is_dev_environment():
+        return
+    db = SessionLocal()
+    try:
+        ensure_default_journey_definition(db, created_by="dev-seed")
+    except Exception as e:
+        logger.debug("Default journey definition seed skipped: %s", e)
+    finally:
+        db.close()
+
+
+try:
+    _maybe_seed_default_journey_definition()
+except Exception:
+    pass
+
 app = FastAPI(title="Meiro Attribution Dashboard API", version="0.3.0")
+
+SESSION_COOKIE_SECURE = (os.getenv("SESSION_COOKIE_SECURE", "1").strip() != "0")
+SESSION_COOKIE_SAMESITE = (os.getenv("SESSION_COOKIE_SAMESITE", "lax").strip().lower() or "lax")
+SESSION_COOKIE_MAX_AGE = max(3600, int(os.getenv("SESSION_COOKIE_MAX_AGE_SECONDS", str(60 * 60 * 24 * 7))))
+CSRF_EXEMPT_PATHS = {
+    "/api/auth/login",
+    "/api/auth/status",
+}
 
 app.add_middleware(
     CORSMiddleware,
@@ -166,6 +338,128 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def csrf_protection_middleware(request: Request, call_next):
+    # Enforce CSRF for cookie-authenticated unsafe methods. Legacy header-based
+    # callers without session cookies remain unaffected until RBAC rollout.
+    if (
+        request.method in {"POST", "PUT", "PATCH", "DELETE"}
+        and request.url.path.startswith("/api/")
+        and request.url.path not in CSRF_EXEMPT_PATHS
+        and request.cookies.get(SESSION_COOKIE_NAME)
+    ):
+        db = SessionLocal()
+        try:
+            verify_csrf(db, request)
+        except HTTPException as exc:
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+        finally:
+            db.close()
+    return await call_next(request)
+
+
+@dataclass
+class PermissionContext:
+    user_id: str
+    workspace_id: str
+    permissions: set[str]
+    source: str  # session | legacy_header
+
+
+_ALL_PERMISSION_KEYS = {p["key"] for p in RBAC_PERMISSIONS}
+_VIEW_PERMISSIONS = {p for p in _ALL_PERMISSION_KEYS if p.endswith(".view")}
+_EDITOR_PERMISSIONS = _ALL_PERMISSION_KEYS - {"users.manage", "roles.manage", "audit.view"}
+_LEGACY_ROLE_PERMISSION_MAP: Dict[str, set[str]] = {
+    "viewer": set(_VIEW_PERMISSIONS),
+    "analyst": set(_EDITOR_PERMISSIONS),
+    "editor": set(_EDITOR_PERMISSIONS),
+    "power_user": set(_ALL_PERMISSION_KEYS),
+    "admin": set(_ALL_PERMISSION_KEYS),
+}
+
+
+def get_permission_context(
+    request: Request,
+    db=Depends(get_db),
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+    x_user_role: Optional[str] = Header(None, alias="X-User-Role"),
+) -> PermissionContext:
+    raw_session_id = request.cookies.get(SESSION_COOKIE_NAME)
+    if raw_session_id:
+        ctx = resolve_auth_context(db, raw_session_id=raw_session_id)
+        if not ctx:
+            raise HTTPException(status_code=401, detail={"code": "auth_required", "message": "Authentication required"})
+        return PermissionContext(
+            user_id=ctx.user.id,
+            workspace_id=ctx.workspace.id,
+            permissions=set(ctx.permissions),
+            source="session",
+        )
+    # Legacy compatibility: treat headerless callers as viewer so read-only
+    # settings/taxonomy pages keep working without explicit auth headers.
+    role = (x_user_role or "viewer").strip().lower()
+    perms = _LEGACY_ROLE_PERMISSION_MAP.get(role, set())
+    return PermissionContext(
+        user_id=(x_user_id or "system"),
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        permissions=set(perms),
+        source="legacy_header",
+    )
+
+
+def has_permission(ctx: PermissionContext, permission_key: str) -> bool:
+    return permission_key in ctx.permissions
+
+
+def require_permission(permission_key: str):
+    def _dep(ctx: PermissionContext = Depends(get_permission_context)) -> PermissionContext:
+        if not has_permission(ctx, permission_key):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "permission_denied",
+                    "message": f"Missing permission: {permission_key}",
+                    "permission": permission_key,
+                },
+            )
+        return ctx
+
+    return _dep
+
+
+def require_any_permission(permission_keys: List[str]):
+    keys = tuple(dict.fromkeys(permission_keys))
+
+    def _dep(ctx: PermissionContext = Depends(get_permission_context)) -> PermissionContext:
+        for key in keys:
+            if key in ctx.permissions:
+                return ctx
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "forbidden",
+                "message": "Missing required permission",
+                "permission_any_of": list(keys),
+            },
+        )
+
+    return _dep
+
+
+def _workspace_scope_or_403(ctx: PermissionContext, workspace_id: Optional[str]) -> str:
+    target = (workspace_id or ctx.workspace_id or DEFAULT_WORKSPACE_ID).strip() or DEFAULT_WORKSPACE_ID
+    if ctx.source == "session" and target != ctx.workspace_id:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "workspace_scope_denied",
+                "message": "Requested workspace is outside current session scope",
+                "workspace_id": target,
+            },
+        )
+    return target
 
 # ==================== Pydantic Models ====================
 
@@ -377,6 +671,29 @@ def _save_runs():
         pass
 
 
+def _refresh_journey_aggregates_after_import(db, *, reprocess_days: Optional[int] = None) -> None:
+    """Best-effort aggregate refresh so Journeys UI has path/transition data right after import."""
+    try:
+        active = get_active_journey_settings(db, use_cache=True)
+        default_reprocess = (
+            ((active.get("settings_json") or {}).get("performance_guardrails") or {}).get(
+                "aggregation_reprocess_window_days",
+                3,
+            )
+        )
+        effective_reprocess = max(1, int(reprocess_days or default_reprocess or 3))
+        metrics = run_daily_journey_aggregates(db, reprocess_days=effective_reprocess)
+        logger.info(
+            "Post-import journey aggregates refreshed: definitions=%s days_processed=%s source_rows=%s reprocess_days=%s",
+            metrics.get("definitions", 0),
+            metrics.get("days_processed", 0),
+            metrics.get("source_rows_processed", 0),
+            effective_reprocess,
+        )
+    except Exception as e:
+        logger.warning("Post-import journey aggregates refresh failed: %s", e, exc_info=True)
+
+
 _load_runs()
 
 
@@ -473,10 +790,25 @@ class NBASettings(BaseModel):
     excluded_channels: List[str] = Field(default_factory=lambda: ["direct"])
 
 
+class FeatureFlags(BaseModel):
+    """Workspace feature switches."""
+
+    journeys_enabled: bool = False
+    journey_examples_enabled: bool = False
+    funnel_builder_enabled: bool = False
+    funnel_diagnostics_enabled: bool = False
+    access_control_enabled: bool = False
+    custom_roles_enabled: bool = False
+    audit_log_enabled: bool = False
+    scim_enabled: bool = False
+    sso_enabled: bool = False
+
+
 class Settings(BaseModel):
     attribution: AttributionSettings = AttributionSettings()
     mmm: MMMSettings = MMMSettings()
     nba: NBASettings = NBASettings()
+    feature_flags: FeatureFlags = FeatureFlags()
 
 
 class AttributionPreviewPayload(BaseModel):
@@ -799,6 +1131,53 @@ class ModelConfigPreviewPayload(BaseModel):
     config_json: Optional[Dict[str, Any]] = None
 
 
+class JourneySettingsVersionCreatePayload(BaseModel):
+    version_label: Optional[str] = None
+    description: Optional[str] = None
+    settings_json: Optional[Dict[str, Any]] = None
+    created_by: str = "system"
+
+
+class JourneySettingsVersionUpdatePayload(BaseModel):
+    settings_json: Dict[str, Any]
+    description: Optional[str] = None
+    actor: str = "system"
+
+
+class JourneySettingsValidatePayload(BaseModel):
+    settings_json: Optional[Dict[str, Any]] = None
+    version_id: Optional[str] = None
+
+
+class JourneySettingsPreviewPayload(BaseModel):
+    settings_json: Optional[Dict[str, Any]] = None
+    version_id: Optional[str] = None
+
+
+class JourneySettingsActivatePayload(BaseModel):
+    version_id: str
+    actor: str = "system"
+    activation_note: Optional[str] = None
+    confirm: bool = False
+
+
+def _serialize_journey_settings_version(item: ORMJourneySettingsVersion) -> Dict[str, Any]:
+    return {
+        "id": item.id,
+        "status": item.status,
+        "version_label": item.version_label,
+        "description": item.description,
+        "created_at": item.created_at,
+        "updated_at": item.updated_at,
+        "created_by": item.created_by,
+        "activated_at": item.activated_at,
+        "activated_by": item.activated_by,
+        "settings_json": item.settings_json,
+        "validation_json": item.validation_json,
+        "diff_json": item.diff_json,
+    }
+
+
 @app.get("/api/model-configs")
 def list_model_configs(db=Depends(get_db)):
     """List all model configs (draft/active/archived)."""
@@ -1097,6 +1476,156 @@ def get_model_config_audit(cfg_id: str, db=Depends(get_db)):
         for a in audits
     ]
 
+
+@app.get("/api/settings/journeys/versions")
+def list_journeys_settings_versions_route(
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("settings.view")),
+):
+    rows = list_journey_settings_versions(db)
+    return [_serialize_journey_settings_version(r) for r in rows]
+
+
+@app.post("/api/settings/journeys/versions")
+def create_journeys_settings_version_route(
+    payload: JourneySettingsVersionCreatePayload,
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
+):
+    item = create_journey_settings_draft(
+        db,
+        created_by=payload.created_by,
+        version_label=payload.version_label,
+        description=payload.description,
+        settings_json=payload.settings_json,
+    )
+    return _serialize_journey_settings_version(item)
+
+
+@app.get("/api/settings/journeys/versions/{version_id}")
+def get_journeys_settings_version_route(
+    version_id: str,
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("settings.view")),
+):
+    item = get_journey_settings_version(db, version_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Journey settings version not found")
+    return _serialize_journey_settings_version(item)
+
+
+@app.patch("/api/settings/journeys/versions/{version_id}")
+def update_journeys_settings_version_route(
+    version_id: str,
+    payload: JourneySettingsVersionUpdatePayload,
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
+):
+    try:
+        item = update_journey_settings_draft(
+            db,
+            version_id=version_id,
+            actor=payload.actor,
+            settings_json=payload.settings_json,
+            description=payload.description,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return _serialize_journey_settings_version(item)
+
+
+@app.post("/api/settings/journeys/versions/{version_id}/archive")
+def archive_journeys_settings_version_route(
+    version_id: str,
+    actor: str = "system",
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
+):
+    try:
+        item = archive_journey_settings_version(db, version_id=version_id, actor=actor)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return _serialize_journey_settings_version(item)
+
+
+@app.get("/api/settings/journeys/active")
+def get_active_journeys_settings_route(
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("settings.view")),
+):
+    active = ensure_active_journey_settings(db, actor="system")
+    return _serialize_journey_settings_version(active)
+
+
+@app.post("/api/settings/journeys/validate")
+def validate_journeys_settings_route(
+    payload: JourneySettingsValidatePayload,
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("settings.view")),
+):
+    if payload.version_id:
+        item = get_journey_settings_version(db, payload.version_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="Journey settings version not found")
+        target = item.settings_json or {}
+    else:
+        target = payload.settings_json or {}
+    result = validate_journey_settings(target)
+    return {
+        "valid": result["valid"],
+        "errors": result["errors"],
+        "warnings": result["warnings"],
+    }
+
+
+@app.post("/api/settings/journeys/preview")
+def preview_journeys_settings_route(
+    payload: JourneySettingsPreviewPayload,
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("settings.view")),
+):
+    target: Dict[str, Any]
+    if payload.version_id:
+        item = get_journey_settings_version(db, payload.version_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="Journey settings version not found")
+        target = item.settings_json or {}
+    else:
+        target = payload.settings_json or {}
+    return build_journey_settings_impact_preview(db, draft_settings_json=target)
+
+
+@app.post("/api/settings/journeys/activate")
+def activate_journeys_settings_route(
+    payload: JourneySettingsActivatePayload,
+    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
+    db=Depends(get_db),
+):
+    if not payload.confirm:
+        raise HTTPException(status_code=400, detail="Activation requires explicit confirm=true")
+    item = get_journey_settings_version(db, payload.version_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Journey settings version not found")
+    preview = build_journey_settings_impact_preview(
+        db,
+        draft_settings_json=item.settings_json or {},
+    )
+    if not preview.get("preview_available"):
+        raise HTTPException(status_code=400, detail="Impact preview unavailable; resolve validation before activation")
+    try:
+        item = activate_journey_settings_version(
+            db,
+            version_id=payload.version_id,
+            actor=payload.actor,
+            activation_note=payload.activation_note,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        **_serialize_journey_settings_version(item),
+        "impact_preview": preview,
+    }
+
 # Initialize sample datasets
 DATASETS["sample-weekly-01"] = {"path": SAMPLE_DIR / "sample-weekly-01.csv", "type": "sales"}
 DATASETS["sample-weekly-realistic"] = {"path": SAMPLE_DIR / "sample-weekly-realistic.csv", "type": "sales"}
@@ -1229,17 +1758,103 @@ if _sample_paths_file.exists():
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
+
+class AuthLoginPayload(BaseModel):
+    email: str
+    name: Optional[str] = None
+    workspace_id: str = "default"
+
+
+class AuthWorkspaceSwitchPayload(BaseModel):
+    workspace_id: str
+
+
+def _set_session_cookie(response: Response, session_id: str) -> None:
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=session_id,
+        max_age=SESSION_COOKIE_MAX_AGE,
+        httponly=True,
+        secure=SESSION_COOKIE_SECURE,
+        samesite=SESSION_COOKIE_SAMESITE,
+        path="/",
+    )
+
+
+def _clear_session_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=SESSION_COOKIE_NAME,
+        path="/",
+        secure=SESSION_COOKIE_SECURE,
+        samesite=SESSION_COOKIE_SAMESITE,
+    )
+
+
+def _admin_role_id_for_workspace(db, workspace_id: str) -> Optional[str]:
+    role = (
+        db.query(ORMRole)
+        .filter(
+            ORMRole.name == "Admin",
+            ORMRole.is_system == True,  # noqa: E712
+        )
+        .first()
+    )
+    return role.id if role else None
+
+
+def _write_security_audit(
+    db,
+    *,
+    actor_user_id: Optional[str],
+    workspace_id: Optional[str],
+    action_key: str,
+    target_type: str,
+    target_id: Optional[str],
+    metadata: Optional[Dict[str, Any]] = None,
+    request: Optional[Request] = None,
+) -> None:
+    try:
+        if not getattr(SETTINGS.feature_flags, "audit_log_enabled", False):
+            return
+        row = ORMSecurityAuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=actor_user_id,
+            action_key=action_key,
+            target_type=target_type,
+            target_id=target_id,
+            metadata_json=metadata or {},
+            ip=(request.client.host if request and request.client else None),
+            user_agent=(request.headers.get("user-agent")[:512] if request else None),
+            created_at=datetime.utcnow(),
+        )
+        db.add(row)
+        db.commit()
+    except Exception as e:
+        logger.warning("Failed to write security audit log (%s): %s", action_key, e)
+
+
+def _invite_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def _hash_invite_token(raw: str) -> str:
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 # ==================== Settings API ====================
 
 
 @app.get("/api/settings")
-def get_settings():
+def get_settings(_ctx: PermissionContext = Depends(require_permission("settings.view"))):
     """Return current configuration for attribution, MMM, and NBA."""
     return SETTINGS
 
 
 @app.post("/api/settings")
-def update_settings(new_settings: Settings):
+def update_settings(
+    new_settings: Settings,
+    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
+):
     """Update global configuration. Overwrites previous settings."""
     global SETTINGS
     SETTINGS = new_settings
@@ -1263,7 +1878,16 @@ from app.services_notifications import (
 
 
 def _current_user_id(request: Request) -> str:
-    """Resolve current user for notification prefs; default when no auth."""
+    """Resolve current user for notification prefs; session first, then legacy fallback."""
+    raw_session_id = request.cookies.get(SESSION_COOKIE_NAME)
+    if raw_session_id:
+        db = SessionLocal()
+        try:
+            ctx = resolve_auth_context(db, raw_session_id=raw_session_id)
+            if ctx:
+                return ctx.user.id
+        finally:
+            db.close()
     return request.headers.get("X-User-Id") or request.query_params.get("user_id") or "default"
 
 
@@ -1294,7 +1918,10 @@ class NotificationPrefUpsert(BaseModel):
 
 
 @app.get("/api/settings/notification-channels")
-def api_list_notification_channels(db=Depends(get_db)):
+def api_list_notification_channels(
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("settings.view")),
+):
     """List notification channels. Slack webhook URLs are never returned."""
     return list_notification_channels(db)
 
@@ -1303,6 +1930,7 @@ def api_list_notification_channels(db=Depends(get_db)):
 def api_create_notification_channel(
     body: NotificationChannelCreate,
     db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
 ):
     """Create a channel. For slack_webhook, provide slack_webhook_url; it is stored securely."""
     try:
@@ -1317,7 +1945,11 @@ def api_create_notification_channel(
 
 
 @app.get("/api/settings/notification-channels/{channel_id}")
-def api_get_notification_channel(channel_id: int, db=Depends(get_db)):
+def api_get_notification_channel(
+    channel_id: int,
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("settings.view")),
+):
     out = get_notification_channel(db, channel_id)
     if out is None:
         raise HTTPException(status_code=404, detail="Channel not found")
@@ -1329,6 +1961,7 @@ def api_update_notification_channel(
     channel_id: int,
     body: NotificationChannelUpdate,
     db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
 ):
     out = update_notification_channel(
         db,
@@ -1342,14 +1975,22 @@ def api_update_notification_channel(
 
 
 @app.delete("/api/settings/notification-channels/{channel_id}")
-def api_delete_notification_channel(channel_id: int, db=Depends(get_db)):
+def api_delete_notification_channel(
+    channel_id: int,
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
+):
     if not delete_notification_channel(db, channel_id):
         raise HTTPException(status_code=404, detail="Channel not found")
     return {"ok": True}
 
 
 @app.get("/api/settings/notification-preferences")
-def api_list_notification_preferences(request: Request, db=Depends(get_db)):
+def api_list_notification_preferences(
+    request: Request,
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("settings.view")),
+):
     user_id = _current_user_id(request)
     return list_notification_prefs(db, user_id)
 
@@ -1359,6 +2000,7 @@ def api_upsert_notification_preference(
     body: NotificationPrefUpsert,
     request: Request,
     db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
 ):
     user_id = _current_user_id(request)
     return upsert_notification_pref(
@@ -1373,7 +2015,11 @@ def api_upsert_notification_preference(
 
 
 @app.get("/api/settings/notification-preferences/{pref_id}")
-def api_get_notification_preference(pref_id: int, db=Depends(get_db)):
+def api_get_notification_preference(
+    pref_id: int,
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("settings.view")),
+):
     out = get_notification_pref(db, pref_id)
     if out is None:
         raise HTTPException(status_code=404, detail="Preference not found")
@@ -1385,6 +2031,7 @@ def api_update_notification_preference(
     pref_id: int,
     body: NotificationPrefUpdate,
     db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
 ):
     out = update_notification_pref(
         db,
@@ -1400,7 +2047,11 @@ def api_update_notification_preference(
 
 
 @app.delete("/api/settings/notification-preferences/{pref_id}")
-def api_delete_notification_preference(pref_id: int, db=Depends(get_db)):
+def api_delete_notification_preference(
+    pref_id: int,
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
+):
     if not delete_notification_pref(db, pref_id):
         raise HTTPException(status_code=404, detail="Preference not found")
     return {"ok": True}
@@ -2401,7 +3052,7 @@ def get_field_mapping():
 
 
 @app.get("/api/datasources/connections")
-def get_datasource_connections():
+def get_datasource_connections(db=Depends(get_db)):
     """Combined connection status for Meiro CDP and ad platforms (for Connections section)."""
     connected = get_all_connected_platforms()
     config_status = ds_config.get_status()
@@ -2412,7 +3063,189 @@ def get_datasource_connections():
         {"id": "google", "label": "Google Ads", "status": "connected" if "google" in connected else ("needs_attention" if not config_status.get("google", {}).get("configured") else "not_connected"), "role": "spend"},
         {"id": "linkedin", "label": "LinkedIn Ads", "status": "connected" if "linkedin" in connected else ("needs_attention" if not config_status.get("linkedin", {}).get("configured") else "not_connected"), "role": "spend"},
     ]
+    # Append inventory-backed connectors (warehouses and other future systems).
+    try:
+        ds_rows = list_data_sources(db, workspace_id="default", category=None).get("items", [])
+        for row in ds_rows:
+            connections.append(
+                {
+                    "id": row.get("id"),
+                    "label": row.get("name"),
+                    "status": row.get("status", "not_connected"),
+                    "role": row.get("category", "system"),
+                    "type": row.get("type"),
+                    "last_tested_at": row.get("last_tested_at"),
+                }
+            )
+    except Exception:
+        pass
     return {"connections": connections}
+
+
+class DataSourceCreatePayload(BaseModel):
+    workspace_id: str = "default"
+    category: str = Field(..., pattern="^(warehouse|ad_platform|cdp)$")
+    type: str
+    name: str = Field(..., min_length=1, max_length=255)
+    config_json: Dict[str, Any] = Field(default_factory=dict)
+    secrets: Dict[str, Any] = Field(default_factory=dict)
+
+
+class DataSourceUpdatePayload(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    status: Optional[str] = Field(None, pattern="^(connected|error|disabled)$")
+    config_json: Optional[Dict[str, Any]] = None
+
+
+class DataSourceTestPayload(BaseModel):
+    type: str
+    config_json: Dict[str, Any] = Field(default_factory=dict)
+    secrets: Dict[str, Any] = Field(default_factory=dict)
+
+
+class DataSourceRotateCredentialsPayload(BaseModel):
+    secrets: Dict[str, Any] = Field(default_factory=dict)
+
+
+def get_datasource_user(
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+    x_user_role: Optional[str] = Header(None, alias="X-User-Role"),
+):
+    user_id = x_user_id or "system"
+    can_edit = (x_user_role or "").strip().lower() in ("admin", "editor")
+    return user_id, can_edit
+
+
+@app.get("/api/data-sources")
+def api_list_data_sources(
+    category: Optional[str] = Query(None, description="warehouse|ad_platform|cdp"),
+    workspace_id: str = Query("default"),
+    db=Depends(get_db),
+):
+    return list_data_sources(db, workspace_id=workspace_id, category=category)
+
+
+@app.post("/api/data-sources")
+def api_create_data_source(
+    body: DataSourceCreatePayload,
+    db=Depends(get_db),
+    user_info: Tuple[str, bool] = Depends(get_datasource_user),
+):
+    _, can_edit = user_info
+    if not can_edit:
+        raise HTTPException(status_code=403, detail="Only admin or editor can create data sources")
+    try:
+        out = create_data_source(
+            db,
+            workspace_id=body.workspace_id,
+            category=body.category,
+            source_type=body.type,
+            name=body.name,
+            config_json=body.config_json or {},
+            secrets=body.secrets or {},
+        )
+        return out
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.put("/api/data-sources/{source_id}")
+def api_update_data_source(
+    source_id: str,
+    body: DataSourceUpdatePayload,
+    db=Depends(get_db),
+    user_info: Tuple[str, bool] = Depends(get_datasource_user),
+):
+    _, can_edit = user_info
+    if not can_edit:
+        raise HTTPException(status_code=403, detail="Only admin or editor can update data sources")
+    try:
+        out = update_data_source(
+            db,
+            source_id=source_id,
+            name=body.name,
+            status=body.status,
+            config_json=body.config_json,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not out:
+        raise HTTPException(status_code=404, detail="Data source not found")
+    return out
+
+
+@app.post("/api/data-sources/test")
+def api_test_data_source(
+    body: DataSourceTestPayload,
+    db=Depends(get_db),
+):
+    try:
+        return test_data_source_payload(
+            db,
+            source_type=body.type,
+            config_json=body.config_json or {},
+            secrets=body.secrets or {},
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/data-sources/{source_id}/test")
+def api_test_saved_data_source(
+    source_id: str,
+    db=Depends(get_db),
+):
+    out = test_saved_data_source(db, source_id=source_id)
+    if not out:
+        raise HTTPException(status_code=404, detail="Data source not found")
+    return out
+
+
+@app.post("/api/data-sources/{source_id}/disable")
+def api_disable_data_source(
+    source_id: str,
+    db=Depends(get_db),
+    user_info: Tuple[str, bool] = Depends(get_datasource_user),
+):
+    _, can_edit = user_info
+    if not can_edit:
+        raise HTTPException(status_code=403, detail="Only admin or editor can disable data sources")
+    if not disable_data_source(db, source_id):
+        raise HTTPException(status_code=404, detail="Data source not found")
+    return {"ok": True}
+
+
+@app.delete("/api/data-sources/{source_id}")
+def api_delete_data_source(
+    source_id: str,
+    db=Depends(get_db),
+    user_info: Tuple[str, bool] = Depends(get_datasource_user),
+):
+    _, can_edit = user_info
+    if not can_edit:
+        raise HTTPException(status_code=403, detail="Only admin or editor can delete data sources")
+    if not delete_data_source(db, source_id):
+        raise HTTPException(status_code=404, detail="Data source not found")
+    return {"ok": True}
+
+
+@app.post("/api/data-sources/{source_id}/rotate-credentials")
+def api_rotate_data_source_credentials(
+    source_id: str,
+    body: DataSourceRotateCredentialsPayload,
+    db=Depends(get_db),
+    user_info: Tuple[str, bool] = Depends(get_datasource_user),
+):
+    _, can_edit = user_info
+    if not can_edit:
+        raise HTTPException(status_code=403, detail="Only admin or editor can rotate credentials")
+    try:
+        out = rotate_data_source_credentials(db, source_id=source_id, secrets=body.secrets or {})
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not out:
+        raise HTTPException(status_code=404, detail="Data source not found")
+    return out
 
 
 @app.post("/api/attribution/journeys/upload")
@@ -2435,6 +3268,7 @@ async def upload_journeys(file: UploadFile = File(...), import_note: Optional[st
     valid = result["valid_journeys"]
     summary = result["import_summary"]
     persist_journeys_as_conversion_paths(db, valid, replace=True)
+    _refresh_journey_aggregates_after_import(db)
     JOURNEYS = [v2_to_legacy(j) for j in valid]
     _save_last_import_result(result)
     errs = [i for i in result.get("validation_items", []) if i.get("severity") == "error"]
@@ -2516,6 +3350,7 @@ def import_journeys_from_cdp(
 
     JOURNEYS = journeys
     persist_journeys_as_conversion_paths(db, JOURNEYS, replace=True)
+    _refresh_journey_aggregates_after_import(db)
     converted = sum(1 for j in journeys if j.get("converted", True))
     ch_set = set()
     for j in journeys:
@@ -2553,6 +3388,7 @@ def load_sample_journeys(req: LoadSampleRequest = Body(default=LoadSampleRequest
     valid = result["valid_journeys"]
     summary = result["import_summary"]
     persist_journeys_as_conversion_paths(db, valid, replace=True)
+    _refresh_journey_aggregates_after_import(db)
     JOURNEYS = [v2_to_legacy(j) for j in valid]
     _save_last_import_result(result)
     errs = [i for i in result.get("validation_items", []) if i.get("severity") == "error"]
@@ -3839,6 +4675,135 @@ def get_reconciliation_drilldown(
 
 # ==================== OAuth Routes ====================
 
+
+@app.post("/api/auth/login")
+def login_with_session(payload: AuthLoginPayload, response: Response, request: Request, db=Depends(get_db)):
+    """
+    Dev/session login bootstrap.
+    Creates (or reuses) user + active membership and issues an opaque session cookie.
+    """
+    try:
+        user = ensure_user_and_membership(
+            db,
+            email=payload.email,
+            name=payload.name,
+            workspace_id=payload.workspace_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    session_tokens = create_session(
+        db,
+        user=user,
+        workspace_id=payload.workspace_id,
+        request=request,
+    )
+    _set_session_cookie(response, session_tokens["session_id"])
+    ctx = resolve_auth_context(db, raw_session_id=session_tokens["session_id"])
+    if not ctx:
+        raise HTTPException(status_code=500, detail="Failed to establish session")
+    return {
+        "user": {
+            "id": ctx.user.id,
+            "email": ctx.user.email,
+            "name": ctx.user.name,
+            "status": ctx.user.status,
+        },
+        "workspace": {
+            "id": ctx.workspace.id,
+            "name": ctx.workspace.name,
+            "slug": ctx.workspace.slug,
+        },
+        "role": ctx.role.name if ctx.role else None,
+        "permissions": sorted(ctx.permissions),
+        "csrf_token": session_tokens["csrf_token"],
+    }
+
+
+@app.get("/api/auth/me")
+def get_auth_me(request: Request, db=Depends(get_db)):
+    ctx = require_auth_context(db, request)
+    return {
+        "authenticated": True,
+        "user": {
+            "id": ctx.user.id,
+            "email": ctx.user.email,
+            "name": ctx.user.name,
+            "status": ctx.user.status,
+            "last_login_at": ctx.user.last_login_at,
+        },
+        "workspace": {
+            "id": ctx.workspace.id,
+            "name": ctx.workspace.name,
+            "slug": ctx.workspace.slug,
+        },
+        "membership": {
+            "id": ctx.membership.id,
+            "status": ctx.membership.status,
+            "role_id": ctx.membership.role_id,
+            "role_name": ctx.role.name if ctx.role else None,
+        },
+        "permissions": sorted(ctx.permissions),
+    }
+
+
+@app.post("/api/auth/workspace")
+def switch_auth_workspace(
+    payload: AuthWorkspaceSwitchPayload,
+    request: Request,
+    response: Response,
+    db=Depends(get_db),
+):
+    current_ctx = require_auth_context(db, request)
+    membership = (
+        db.query(WorkspaceMembership)
+        .filter(
+            WorkspaceMembership.workspace_id == payload.workspace_id,
+            WorkspaceMembership.user_id == current_ctx.user.id,
+            WorkspaceMembership.status == "active",
+        )
+        .first()
+    )
+    if not membership:
+        raise HTTPException(status_code=403, detail="No active membership for requested workspace")
+    revoke_session(db, request.cookies.get(SESSION_COOKIE_NAME) or "")
+    tokens = create_session(
+        db,
+        user=current_ctx.user,
+        workspace_id=payload.workspace_id,
+        request=request,
+    )
+    _set_session_cookie(response, tokens["session_id"])
+    next_ctx = resolve_auth_context(db, raw_session_id=tokens["session_id"])
+    if not next_ctx:
+        raise HTTPException(status_code=500, detail="Failed to switch workspace")
+    return {
+        "workspace": {
+            "id": next_ctx.workspace.id,
+            "name": next_ctx.workspace.name,
+            "slug": next_ctx.workspace.slug,
+        },
+        "role": next_ctx.role.name if next_ctx.role else None,
+        "permissions": sorted(next_ctx.permissions),
+        "csrf_token": tokens["csrf_token"],
+    }
+
+
+@app.post("/api/auth/logout")
+def logout_session(request: Request, response: Response, db=Depends(get_db)):
+    raw = request.cookies.get(SESSION_COOKIE_NAME)
+    if raw:
+        revoke_session(db, raw)
+    _clear_session_cookie(response)
+    return {"ok": True}
+
+
+@app.post("/api/auth/logout-all")
+def logout_all_sessions(request: Request, response: Response, db=Depends(get_db)):
+    ctx = require_auth_context(db, request)
+    revoked = revoke_all_user_sessions(db, ctx.user.id)
+    _clear_session_cookie(response)
+    return {"ok": True, "sessions_revoked": revoked}
+
 @app.get("/api/auth/status")
 def auth_status():
     connected = get_all_connected_platforms()
@@ -3908,13 +4873,18 @@ class DatasourceCredentialUpdate(BaseModel):
 
 
 @app.get("/api/admin/datasource-config")
-def get_datasource_config_status():
+def get_datasource_config_status(
+    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
+):
     """Return which platforms have credentials configured (no secret values)."""
     return ds_config.get_status()
 
 
 @app.post("/api/admin/datasource-config")
-def update_datasource_config(body: DatasourceCredentialUpdate):
+def update_datasource_config(
+    body: DatasourceCredentialUpdate,
+    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
+):
     """Store OAuth credentials for a platform. Encrypted at rest. Env vars override if set."""
     platform = body.platform.lower()
     if platform not in ("google", "meta", "linkedin"):
@@ -3958,6 +4928,783 @@ def start_oauth(platform: str):
             raise HTTPException(status_code=500, detail="LinkedIn OAuth not configured. Set credentials in Data Sources → Administration.")
         return RedirectResponse(url=f"https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope=r_ads_reporting,r_ads,r_organization_social")
     raise HTTPException(status_code=400, detail=f"Unknown platform: {platform}")
+
+
+class AdminUserUpdatePayload(BaseModel):
+    status: str = Field(..., pattern="^(active|disabled)$")
+
+
+class AdminMembershipUpdatePayload(BaseModel):
+    role_id: str
+
+
+class AdminInvitationCreatePayload(BaseModel):
+    email: str
+    role_id: str
+    workspace_id: Optional[str] = None
+    expires_in_days: int = Field(default=7, ge=1, le=30)
+
+
+class AdminRoleCreatePayload(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    description: Optional[str] = None
+    permission_keys: List[str] = Field(default_factory=list)
+    workspace_id: Optional[str] = None
+
+
+class AdminRoleUpdatePayload(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=128)
+    description: Optional[str] = None
+    permission_keys: Optional[List[str]] = None
+
+
+class InvitationAcceptPayload(BaseModel):
+    token: str
+    name: Optional[str] = None
+
+
+@app.get("/api/admin/permissions")
+def admin_list_permissions(
+    category: Optional[str] = Query(None),
+    _ctx: PermissionContext = Depends(require_permission("roles.manage")),
+    db=Depends(get_db),
+):
+    q = db.query(ORMPermission)
+    if category:
+        q = q.filter(ORMPermission.category == category)
+    rows = q.order_by(ORMPermission.category.asc(), ORMPermission.key.asc()).all()
+    return [
+        {"key": r.key, "description": r.description, "category": r.category}
+        for r in rows
+    ]
+
+
+def _parse_admin_audit_datetime(value: Optional[str], *, field_name: str) -> Optional[datetime]:
+    if not value:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    try:
+        if raw.endswith("Z"):
+            raw = f"{raw[:-1]}+00:00"
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid {field_name}; expected ISO-8601 datetime")
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
+@app.get("/api/admin/audit-log")
+def admin_list_audit_log(
+    workspaceId: Optional[str] = Query(None),
+    action: Optional[str] = Query(None),
+    actor: Optional[str] = Query(None, description="Actor name/email contains"),
+    date_from: Optional[str] = Query(None, description="ISO datetime"),
+    date_to: Optional[str] = Query(None, description="ISO datetime"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    _ctx: PermissionContext = Depends(require_any_permission(["audit.view", "settings.manage"])),
+    db=Depends(get_db),
+):
+    if not getattr(SETTINGS.feature_flags, "audit_log_enabled", False):
+        raise HTTPException(status_code=404, detail="audit_log_enabled flag is off")
+    workspace_id = _workspace_scope_or_403(_ctx, workspaceId)
+    from_dt = _parse_admin_audit_datetime(date_from, field_name="date_from")
+    to_dt = _parse_admin_audit_datetime(date_to, field_name="date_to")
+    if from_dt and to_dt and from_dt > to_dt:
+        raise HTTPException(status_code=400, detail="date_from must be <= date_to")
+
+    q = (
+        db.query(
+            ORMSecurityAuditLog,
+            ORMUser.name.label("actor_name"),
+            ORMUser.email.label("actor_email"),
+        )
+        .outerjoin(ORMUser, ORMUser.id == ORMSecurityAuditLog.actor_user_id)
+        .filter(ORMSecurityAuditLog.workspace_id == workspace_id)
+    )
+
+    if action:
+        action_like = action.strip()
+        if action_like:
+            q = q.filter(ORMSecurityAuditLog.action_key.ilike(f"%{action_like}%"))
+    if actor:
+        actor_like = actor.strip()
+        if actor_like:
+            q = q.filter(
+                (ORMUser.name.ilike(f"%{actor_like}%"))
+                | (ORMUser.email.ilike(f"%{actor_like}%"))
+            )
+    if from_dt:
+        q = q.filter(ORMSecurityAuditLog.created_at >= from_dt)
+    if to_dt:
+        q = q.filter(ORMSecurityAuditLog.created_at <= to_dt)
+
+    total = int(q.count() or 0)
+    rows = (
+        q.order_by(ORMSecurityAuditLog.created_at.desc(), ORMSecurityAuditLog.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    items = []
+    for row, actor_name, actor_email in rows:
+        items.append(
+            {
+                "id": row.id,
+                "workspace_id": row.workspace_id,
+                "actor_user_id": row.actor_user_id,
+                "actor_name": actor_name,
+                "actor_email": actor_email,
+                "action_key": row.action_key,
+                "target_type": row.target_type,
+                "target_id": row.target_id,
+                "metadata_json": row.metadata_json or {},
+                "ip": row.ip,
+                "user_agent": row.user_agent,
+                "created_at": row.created_at,
+            }
+        )
+    return {
+        "items": items,
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+    }
+
+
+@app.get("/api/admin/roles")
+def admin_list_roles(
+    workspaceId: Optional[str] = Query(None),
+    _ctx: PermissionContext = Depends(require_permission("roles.manage")),
+    db=Depends(get_db),
+):
+    workspace_id = _workspace_scope_or_403(_ctx, workspaceId)
+    roles = (
+        db.query(ORMRole)
+        .filter((ORMRole.workspace_id == workspace_id) | (ORMRole.workspace_id.is_(None)))
+        .order_by(ORMRole.is_system.desc(), ORMRole.name.asc())
+        .all()
+    )
+    out = []
+    for role in roles:
+        member_count = (
+            db.query(func.count(WorkspaceMembership.id))
+            .filter(
+                WorkspaceMembership.workspace_id == workspace_id,
+                WorkspaceMembership.role_id == role.id,
+                WorkspaceMembership.status == "active",
+            )
+            .scalar()
+            or 0
+        )
+        perm_keys = [
+            p[0]
+            for p in db.query(ORMRolePermission.permission_key)
+            .filter(ORMRolePermission.role_id == role.id)
+            .all()
+        ]
+        out.append(
+            {
+                "id": role.id,
+                "workspace_id": role.workspace_id,
+                "name": role.name,
+                "description": role.description,
+                "is_system": bool(role.is_system),
+                "member_count": int(member_count),
+                "permission_keys": sorted(perm_keys),
+                "created_at": role.created_at,
+                "updated_at": role.updated_at,
+            }
+        )
+    return {"items": out}
+
+
+@app.post("/api/admin/roles")
+def admin_create_role(
+    body: AdminRoleCreatePayload,
+    request: Request,
+    _ctx: PermissionContext = Depends(require_permission("roles.manage")),
+    db=Depends(get_db),
+):
+    if not SETTINGS.feature_flags.custom_roles_enabled:
+        raise HTTPException(status_code=403, detail="custom_roles_enabled flag is off")
+    workspace_id = _workspace_scope_or_403(_ctx, body.workspace_id)
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    exists = (
+        db.query(ORMRole)
+        .filter(ORMRole.workspace_id == workspace_id, ORMRole.name == name)
+        .first()
+    )
+    if exists:
+        raise HTTPException(status_code=409, detail="Role name already exists in workspace")
+    known_permissions = {p.key for p in db.query(ORMPermission).all()}
+    unknown = [k for k in (body.permission_keys or []) if k not in known_permissions]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown permission keys: {', '.join(sorted(unknown))}")
+    role = ORMRole(
+        id=str(uuid.uuid4()),
+        workspace_id=workspace_id,
+        name=name,
+        description=body.description,
+        is_system=False,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+    db.add(role)
+    db.flush()
+    for key in sorted(set(body.permission_keys or [])):
+        db.add(ORMRolePermission(role_id=role.id, permission_key=key, created_at=datetime.utcnow()))
+    db.commit()
+    _write_security_audit(
+        db,
+        actor_user_id=_ctx.user_id,
+        workspace_id=workspace_id,
+        action_key="role.created",
+        target_type="role",
+        target_id=role.id,
+        metadata={"name": role.name, "permission_keys": sorted(set(body.permission_keys or []))},
+        request=request,
+    )
+    return {"id": role.id, "name": role.name, "workspace_id": role.workspace_id}
+
+
+@app.put("/api/admin/roles/{role_id}")
+def admin_update_role(
+    role_id: str,
+    body: AdminRoleUpdatePayload,
+    request: Request,
+    _ctx: PermissionContext = Depends(require_permission("roles.manage")),
+    db=Depends(get_db),
+):
+    if not SETTINGS.feature_flags.custom_roles_enabled:
+        raise HTTPException(status_code=403, detail="custom_roles_enabled flag is off")
+    role = db.get(ORMRole, role_id)
+    if not role:
+        raise HTTPException(status_code=404, detail="Role not found")
+    workspace_id = _workspace_scope_or_403(_ctx, role.workspace_id or _ctx.workspace_id)
+    if role.is_system:
+        raise HTTPException(status_code=400, detail="System roles are read-only")
+    if body.name is not None:
+        next_name = body.name.strip()
+        if not next_name:
+            raise HTTPException(status_code=400, detail="name is required")
+        dupe = (
+            db.query(ORMRole)
+            .filter(
+                ORMRole.workspace_id == workspace_id,
+                ORMRole.name == next_name,
+                ORMRole.id != role.id,
+            )
+            .first()
+        )
+        if dupe:
+            raise HTTPException(status_code=409, detail="Role name already exists in workspace")
+        role.name = next_name
+    if body.description is not None:
+        role.description = body.description
+    if body.permission_keys is not None:
+        known_permissions = {p.key for p in db.query(ORMPermission).all()}
+        unknown = [k for k in body.permission_keys if k not in known_permissions]
+        if unknown:
+            raise HTTPException(status_code=400, detail=f"Unknown permission keys: {', '.join(sorted(unknown))}")
+        db.query(ORMRolePermission).filter(ORMRolePermission.role_id == role.id).delete(synchronize_session=False)
+        for key in sorted(set(body.permission_keys)):
+            db.add(ORMRolePermission(role_id=role.id, permission_key=key, created_at=datetime.utcnow()))
+    role.updated_at = datetime.utcnow()
+    db.add(role)
+    db.commit()
+    _write_security_audit(
+        db,
+        actor_user_id=_ctx.user_id,
+        workspace_id=workspace_id,
+        action_key="role.updated",
+        target_type="role",
+        target_id=role.id,
+        metadata={"name": role.name},
+        request=request,
+    )
+    return {"id": role.id, "name": role.name}
+
+
+@app.delete("/api/admin/roles/{role_id}")
+def admin_delete_role(
+    role_id: str,
+    request: Request,
+    _ctx: PermissionContext = Depends(require_permission("roles.manage")),
+    db=Depends(get_db),
+):
+    if not SETTINGS.feature_flags.custom_roles_enabled:
+        raise HTTPException(status_code=403, detail="custom_roles_enabled flag is off")
+    role = db.get(ORMRole, role_id)
+    if not role:
+        raise HTTPException(status_code=404, detail="Role not found")
+    workspace_id = _workspace_scope_or_403(_ctx, role.workspace_id or _ctx.workspace_id)
+    if role.is_system:
+        raise HTTPException(status_code=400, detail="System roles cannot be deleted")
+    active_members = (
+        db.query(func.count(WorkspaceMembership.id))
+        .filter(
+            WorkspaceMembership.workspace_id == workspace_id,
+            WorkspaceMembership.role_id == role.id,
+            WorkspaceMembership.status == "active",
+        )
+        .scalar()
+        or 0
+    )
+    if int(active_members) > 0:
+        raise HTTPException(status_code=400, detail="Role has active members; reassign them first")
+    db.query(ORMRolePermission).filter(ORMRolePermission.role_id == role.id).delete(synchronize_session=False)
+    db.delete(role)
+    db.commit()
+    _write_security_audit(
+        db,
+        actor_user_id=_ctx.user_id,
+        workspace_id=workspace_id,
+        action_key="role.deleted",
+        target_type="role",
+        target_id=role_id,
+        metadata={},
+        request=request,
+    )
+    return {"id": role_id, "deleted": True}
+
+
+@app.get("/api/admin/users")
+def admin_list_users(
+    search: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    workspaceId: Optional[str] = Query(None),
+    _ctx: PermissionContext = Depends(require_permission("users.manage")),
+    db=Depends(get_db),
+):
+    workspace_id = _workspace_scope_or_403(_ctx, workspaceId)
+    q = (
+        db.query(ORMUser, WorkspaceMembership, ORMRole)
+        .join(
+            WorkspaceMembership,
+            (WorkspaceMembership.user_id == ORMUser.id)
+            & (WorkspaceMembership.workspace_id == workspace_id),
+        )
+        .outerjoin(ORMRole, ORMRole.id == WorkspaceMembership.role_id)
+    )
+    if status:
+        q = q.filter(ORMUser.status == status)
+    if search:
+        term = f"%{search.strip().lower()}%"
+        q = q.filter(
+            func.lower(ORMUser.email).like(term) | func.lower(func.coalesce(ORMUser.name, "")).like(term)
+        )
+    rows = q.order_by(ORMUser.email.asc()).all()
+    return {
+        "items": [
+            {
+                "id": user.id,
+                "email": user.email,
+                "name": user.name,
+                "status": user.status,
+                "last_login_at": user.last_login_at,
+                "membership_id": membership.id,
+                "membership_status": membership.status,
+                "role_id": membership.role_id,
+                "role_name": role.name if role else None,
+            }
+            for user, membership, role in rows
+        ]
+    }
+
+
+@app.patch("/api/admin/users/{user_id}")
+def admin_update_user(
+    user_id: str,
+    body: AdminUserUpdatePayload,
+    request: Request,
+    _ctx: PermissionContext = Depends(require_permission("users.manage")),
+    db=Depends(get_db),
+):
+    user = db.get(ORMUser, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    membership = (
+        db.query(WorkspaceMembership)
+        .filter(
+            WorkspaceMembership.workspace_id == _ctx.workspace_id,
+            WorkspaceMembership.user_id == user.id,
+        )
+        .first()
+    )
+    if not membership:
+        raise HTTPException(status_code=404, detail="User is not a member of this workspace")
+    user.status = body.status
+    user.updated_at = datetime.utcnow()
+    db.add(user)
+    db.commit()
+    if body.status == "disabled":
+        revoke_all_user_sessions(db, user.id)
+    _write_security_audit(
+        db,
+        actor_user_id=_ctx.user_id,
+        workspace_id=_ctx.workspace_id,
+        action_key="user.status_updated",
+        target_type="user",
+        target_id=user.id,
+        metadata={"status": body.status},
+        request=request,
+    )
+    return {"id": user.id, "status": user.status}
+
+
+@app.post("/api/admin/users/{user_id}/reset-sessions")
+def admin_reset_user_sessions(
+    user_id: str,
+    request: Request,
+    _ctx: PermissionContext = Depends(require_permission("users.manage")),
+    db=Depends(get_db),
+):
+    user = db.get(ORMUser, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    membership = (
+        db.query(WorkspaceMembership)
+        .filter(
+            WorkspaceMembership.workspace_id == _ctx.workspace_id,
+            WorkspaceMembership.user_id == user.id,
+        )
+        .first()
+    )
+    if not membership:
+        raise HTTPException(status_code=404, detail="User is not a member of this workspace")
+    revoked = revoke_all_user_sessions(db, user.id)
+    _write_security_audit(
+        db,
+        actor_user_id=_ctx.user_id,
+        workspace_id=_ctx.workspace_id,
+        action_key="user.sessions_reset",
+        target_type="user",
+        target_id=user.id,
+        metadata={"sessions_revoked": revoked},
+        request=request,
+    )
+    return {"id": user.id, "sessions_revoked": revoked}
+
+
+@app.get("/api/admin/memberships")
+def admin_list_memberships(
+    workspaceId: Optional[str] = Query(None),
+    _ctx: PermissionContext = Depends(require_permission("users.manage")),
+    db=Depends(get_db),
+):
+    workspace_id = _workspace_scope_or_403(_ctx, workspaceId)
+    rows = (
+        db.query(WorkspaceMembership, ORMUser, ORMRole)
+        .join(ORMUser, ORMUser.id == WorkspaceMembership.user_id)
+        .outerjoin(ORMRole, ORMRole.id == WorkspaceMembership.role_id)
+        .filter(WorkspaceMembership.workspace_id == workspace_id)
+        .order_by(WorkspaceMembership.created_at.desc())
+        .all()
+    )
+    return {
+        "items": [
+            {
+                "id": m.id,
+                "workspace_id": m.workspace_id,
+                "user_id": m.user_id,
+                "email": u.email,
+                "name": u.name,
+                "status": m.status,
+                "role_id": m.role_id,
+                "role_name": r.name if r else None,
+                "created_at": m.created_at,
+                "updated_at": m.updated_at,
+            }
+            for m, u, r in rows
+        ]
+    }
+
+
+@app.patch("/api/admin/memberships/{membership_id}")
+def admin_update_membership(
+    membership_id: str,
+    body: AdminMembershipUpdatePayload,
+    request: Request,
+    _ctx: PermissionContext = Depends(require_permission("users.manage")),
+    db=Depends(get_db),
+):
+    membership = db.get(WorkspaceMembership, membership_id)
+    if not membership:
+        raise HTTPException(status_code=404, detail="Membership not found")
+    workspace_id = _workspace_scope_or_403(_ctx, membership.workspace_id)
+    role = db.get(ORMRole, body.role_id)
+    if not role:
+        raise HTTPException(status_code=404, detail="Role not found")
+    if role.workspace_id not in (None, workspace_id):
+        raise HTTPException(status_code=400, detail="Role is not available in this workspace")
+    membership.role_id = role.id
+    membership.updated_at = datetime.utcnow()
+    db.add(membership)
+    db.commit()
+    _write_security_audit(
+        db,
+        actor_user_id=_ctx.user_id,
+        workspace_id=workspace_id,
+        action_key="membership.role_changed",
+        target_type="membership",
+        target_id=membership.id,
+        metadata={"role_id": role.id, "role_name": role.name},
+        request=request,
+    )
+    return {"id": membership.id, "role_id": membership.role_id}
+
+
+@app.delete("/api/admin/memberships/{membership_id}")
+def admin_remove_membership(
+    membership_id: str,
+    request: Request,
+    _ctx: PermissionContext = Depends(require_permission("users.manage")),
+    db=Depends(get_db),
+):
+    membership = db.get(WorkspaceMembership, membership_id)
+    if not membership:
+        raise HTTPException(status_code=404, detail="Membership not found")
+    workspace_id = _workspace_scope_or_403(_ctx, membership.workspace_id)
+    membership.status = "removed"
+    membership.role_id = None
+    membership.updated_at = datetime.utcnow()
+    db.add(membership)
+    db.commit()
+    _write_security_audit(
+        db,
+        actor_user_id=_ctx.user_id,
+        workspace_id=workspace_id,
+        action_key="membership.removed",
+        target_type="membership",
+        target_id=membership.id,
+        metadata={"user_id": membership.user_id},
+        request=request,
+    )
+    return {"id": membership.id, "status": membership.status}
+
+
+@app.post("/api/admin/invitations")
+def admin_create_invitation(
+    body: AdminInvitationCreatePayload,
+    request: Request,
+    _ctx: PermissionContext = Depends(require_permission("users.manage")),
+    db=Depends(get_db),
+):
+    workspace_id = _workspace_scope_or_403(_ctx, body.workspace_id)
+    email = (body.email or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="email is required")
+    role = db.get(ORMRole, body.role_id)
+    if not role:
+        raise HTTPException(status_code=404, detail="Role not found")
+    if role.workspace_id not in (None, workspace_id):
+        raise HTTPException(status_code=400, detail="Role is not available in this workspace")
+    raw_token = _invite_token()
+    inv = ORMInvitation(
+        id=str(uuid.uuid4()),
+        workspace_id=workspace_id,
+        email=email,
+        role_id=role.id,
+        token_hash=_hash_invite_token(raw_token),
+        expires_at=datetime.utcnow() + timedelta(days=body.expires_in_days),
+        invited_by_user_id=_ctx.user_id,
+        accepted_at=None,
+        created_at=datetime.utcnow(),
+    )
+    db.add(inv)
+    db.commit()
+    _write_security_audit(
+        db,
+        actor_user_id=_ctx.user_id,
+        workspace_id=workspace_id,
+        action_key="invitation.created",
+        target_type="invitation",
+        target_id=inv.id,
+        metadata={"email": inv.email, "role_id": inv.role_id},
+        request=request,
+    )
+    return {
+        "id": inv.id,
+        "workspace_id": inv.workspace_id,
+        "email": inv.email,
+        "role_id": inv.role_id,
+        "expires_at": inv.expires_at,
+        "created_at": inv.created_at,
+        "token": raw_token,
+    }
+
+
+@app.get("/api/admin/invitations")
+def admin_list_invitations(
+    workspaceId: Optional[str] = Query(None),
+    _ctx: PermissionContext = Depends(require_permission("users.manage")),
+    db=Depends(get_db),
+):
+    workspace_id = _workspace_scope_or_403(_ctx, workspaceId)
+    rows = (
+        db.query(ORMInvitation, ORMRole, ORMUser)
+        .outerjoin(ORMRole, ORMRole.id == ORMInvitation.role_id)
+        .outerjoin(ORMUser, ORMUser.id == ORMInvitation.invited_by_user_id)
+        .filter(ORMInvitation.workspace_id == workspace_id)
+        .order_by(ORMInvitation.created_at.desc())
+        .all()
+    )
+    return {
+        "items": [
+            {
+                "id": inv.id,
+                "workspace_id": inv.workspace_id,
+                "email": inv.email,
+                "role_id": inv.role_id,
+                "role_name": role.name if role else None,
+                "expires_at": inv.expires_at,
+                "accepted_at": inv.accepted_at,
+                "created_at": inv.created_at,
+                "invited_by_user_id": inv.invited_by_user_id,
+                "invited_by_name": user.name if user else None,
+            }
+            for inv, role, user in rows
+        ]
+    }
+
+
+@app.post("/api/admin/invitations/{invitation_id}/resend")
+def admin_resend_invitation(
+    invitation_id: str,
+    request: Request,
+    _ctx: PermissionContext = Depends(require_permission("users.manage")),
+    db=Depends(get_db),
+):
+    inv = db.get(ORMInvitation, invitation_id)
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invitation not found")
+    workspace_id = _workspace_scope_or_403(_ctx, inv.workspace_id)
+    raw_token = _invite_token()
+    inv.token_hash = _hash_invite_token(raw_token)
+    inv.expires_at = datetime.utcnow() + timedelta(days=7)
+    inv.created_at = datetime.utcnow()
+    db.add(inv)
+    db.commit()
+    _write_security_audit(
+        db,
+        actor_user_id=_ctx.user_id,
+        workspace_id=workspace_id,
+        action_key="invitation.resent",
+        target_type="invitation",
+        target_id=inv.id,
+        metadata={"email": inv.email},
+        request=request,
+    )
+    return {"id": inv.id, "expires_at": inv.expires_at, "token": raw_token}
+
+
+@app.delete("/api/admin/invitations/{invitation_id}/revoke")
+def admin_revoke_invitation(
+    invitation_id: str,
+    request: Request,
+    _ctx: PermissionContext = Depends(require_permission("users.manage")),
+    db=Depends(get_db),
+):
+    inv = db.get(ORMInvitation, invitation_id)
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invitation not found")
+    workspace_id = _workspace_scope_or_403(_ctx, inv.workspace_id)
+    db.delete(inv)
+    db.commit()
+    _write_security_audit(
+        db,
+        actor_user_id=_ctx.user_id,
+        workspace_id=workspace_id,
+        action_key="invitation.revoked",
+        target_type="invitation",
+        target_id=invitation_id,
+        metadata={},
+        request=request,
+    )
+    return {"id": invitation_id, "revoked": True}
+
+
+@app.post("/api/invitations/accept")
+def accept_invitation(
+    body: InvitationAcceptPayload,
+    request: Request,
+    db=Depends(get_db),
+):
+    token = (body.token or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="token is required")
+    token_hash = _hash_invite_token(token)
+    inv = db.query(ORMInvitation).filter(ORMInvitation.token_hash == token_hash).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invitation not found")
+    if inv.accepted_at is not None:
+        raise HTTPException(status_code=400, detail="Invitation already accepted")
+    if inv.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Invitation expired")
+
+    email = inv.email.strip().lower()
+    user = db.query(ORMUser).filter(ORMUser.email == email).first()
+    if not user:
+        user = ORMUser(
+            id=str(uuid.uuid4()),
+            email=email,
+            name=(body.name or email.split("@")[0]),
+            status="active",
+            auth_provider="local",
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        db.add(user)
+        db.flush()
+    membership = (
+        db.query(WorkspaceMembership)
+        .filter(
+            WorkspaceMembership.workspace_id == inv.workspace_id,
+            WorkspaceMembership.user_id == user.id,
+        )
+        .first()
+    )
+    if not membership:
+        membership = WorkspaceMembership(
+            id=str(uuid.uuid4()),
+            workspace_id=inv.workspace_id,
+            user_id=user.id,
+            role_id=inv.role_id,
+            status="active",
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        db.add(membership)
+    else:
+        membership.status = "active"
+        membership.role_id = inv.role_id or membership.role_id
+        membership.updated_at = datetime.utcnow()
+        db.add(membership)
+    inv.accepted_at = datetime.utcnow()
+    db.add(inv)
+    db.commit()
+    _write_security_audit(
+        db,
+        actor_user_id=user.id,
+        workspace_id=inv.workspace_id,
+        action_key="invitation.accepted",
+        target_type="invitation",
+        target_id=inv.id,
+        metadata={"membership_id": membership.id},
+        request=request,
+    )
+    return {
+        "ok": True,
+        "workspace_id": inv.workspace_id,
+        "user_id": user.id,
+        "membership_id": membership.id,
+    }
 
 
 # ==================== Data Quality API ====================
@@ -4349,6 +6096,7 @@ def overview_alerts(
     status: Optional[str] = Query(None, description="Filter: open, resolved, ack"),
     limit: int = Query(50, ge=1, le=200, description="Max alerts to return"),
     db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("alerts.view")),
 ):
     """
     Latest alert events (open + recent resolved) with deep links to drilldown.
@@ -4370,6 +6118,7 @@ def overview_alert_update_status(
     alert_id: int,
     body: OverviewAlertStatusUpdate,
     db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("alerts.manage")),
 ):
     """Update overview alert event status (ack / snooze / resolve)."""
     ev = db.get(AlertEvent, alert_id)
@@ -4393,17 +6142,6 @@ def overview_alert_update_status(
 
 
 # ==================== Alerts API (events + rules) ====================
-# RBAC: only permitted roles (admin, editor) can edit rules and ack/snooze/resolve alerts.
-# All can view alerts and rules. User identity from X-User-Id, role from X-User-Role.
-
-ALERT_EDIT_ROLES = ("admin", "editor")
-
-
-def get_alert_user(x_user_id: Optional[str] = Header(None, alias="X-User-Id"), x_user_role: Optional[str] = Header(None, alias="X-User-Role")):
-    """Dependency: (user_id, can_edit). can_edit=True if X-User-Role in admin/editor."""
-    user_id = x_user_id or "system"
-    can_edit = (x_user_role or "").strip().lower() in ALERT_EDIT_ROLES
-    return user_id, can_edit
 
 
 class AlertSnoozeBody(BaseModel):
@@ -4434,8 +6172,431 @@ class AlertRuleUpdate(BaseModel):
     schedule: Optional[str] = Field(None, pattern="^(hourly|daily)$")
 
 
+class JourneyDefinitionCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = Field(None, max_length=5000)
+    conversion_kpi_id: Optional[str] = Field(None, max_length=64)
+    lookback_window_days: int = Field(30, ge=1, le=365)
+    mode_default: str = Field("conversion_only", pattern="^(conversion_only|all_journeys)$")
+
+
+class JourneyDefinitionUpdate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = Field(None, max_length=5000)
+    conversion_kpi_id: Optional[str] = Field(None, max_length=64)
+    lookback_window_days: int = Field(..., ge=1, le=365)
+    mode_default: str = Field(..., pattern="^(conversion_only|all_journeys)$")
+
+
+class FunnelCreatePayload(BaseModel):
+    journey_definition_id: str = Field(..., min_length=1, max_length=64)
+    name: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = Field(None, max_length=5000)
+    steps: List[str] = Field(..., min_length=2)
+    counting_method: str = Field("ordered", pattern="^(ordered)$")
+    window_days: int = Field(30, ge=1, le=365)
+    workspace_id: Optional[str] = Field("default", max_length=128)
+
+
+class JourneyAlertCreatePayload(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    type: str = Field(..., description="path_cr_drop | path_volume_change | funnel_dropoff_spike | ttc_shift")
+    domain: str = Field(..., description="journeys | funnels")
+    scope: Dict[str, Any] = Field(default_factory=dict)
+    metric: str = Field(..., min_length=1, max_length=128)
+    condition: Dict[str, Any] = Field(default_factory=dict)
+    schedule: Optional[Dict[str, Any]] = None
+    is_enabled: bool = True
+
+
+class JourneyAlertUpdatePayload(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    condition: Optional[Dict[str, Any]] = None
+    schedule: Optional[Dict[str, Any]] = None
+    is_enabled: Optional[bool] = None
+
+
+class JourneyAlertPreviewPayload(BaseModel):
+    type: str = Field(..., description="path_cr_drop | path_volume_change | funnel_dropoff_spike | ttc_shift")
+    scope: Dict[str, Any] = Field(default_factory=dict)
+    metric: str = Field(..., min_length=1, max_length=128)
+    condition: Dict[str, Any] = Field(default_factory=dict)
+
+
+def _validate_conversion_kpi_id(conversion_kpi_id: Optional[str]) -> Optional[str]:
+    value = (conversion_kpi_id or "").strip()
+    if not value:
+        return None
+    available = {d.id for d in KPI_CONFIG.definitions}
+    if value not in available:
+        raise HTTPException(status_code=400, detail=f"conversion_kpi_id '{value}' is not defined in KPI config")
+    return value
+
+
+def _validate_journey_alert_payload(type: str, domain: str, metric: str, condition: Dict[str, Any]) -> None:
+    if type not in JOURNEY_ALERT_TYPES:
+        raise HTTPException(status_code=400, detail=f"type must be one of: {', '.join(sorted(JOURNEY_ALERT_TYPES))}")
+    if domain not in JOURNEY_ALERT_DOMAINS:
+        raise HTTPException(status_code=400, detail=f"domain must be one of: {', '.join(sorted(JOURNEY_ALERT_DOMAINS))}")
+    if not metric.strip():
+        raise HTTPException(status_code=400, detail="metric is required")
+    mode = str((condition or {}).get("comparison_mode") or "previous_period")
+    if mode not in {"previous_period", "rolling_baseline"}:
+        raise HTTPException(status_code=400, detail="condition.comparison_mode must be previous_period or rolling_baseline")
+
+
+@app.get("/api/journeys/definitions")
+def api_list_journey_definitions(
+    page: int = Query(1, ge=1, description="Page number"),
+    per_page: int = Query(20, ge=1, le=100, description="Items per page"),
+    search: Optional[str] = Query(None, description="Search by name/description"),
+    sort: str = Query("desc", pattern="^(asc|desc)$", description="Sort by updated_at: asc|desc"),
+    include_archived: bool = Query(False, description="Include archived definitions"),
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("journeys.view")),
+):
+    """List journey definitions with pagination and search."""
+    try:
+        return list_journey_definitions(
+            db,
+            page=page,
+            per_page=per_page,
+            search=search,
+            sort_dir=sort,
+            include_archived=include_archived,
+        )
+    except Exception as e:
+        logger.warning("List journey definitions failed: %s", e, exc_info=True)
+        return {"items": [], "total": 0, "page": page, "per_page": per_page}
+
+
+@app.post("/api/journeys/definitions")
+def api_create_journey_definition(
+    body: JourneyDefinitionCreate,
+    db=Depends(get_db),
+    ctx: PermissionContext = Depends(require_permission("journeys.manage")),
+):
+    """Create journey definition. Requires edit role."""
+    user_id = ctx.user_id
+    if not body.name.strip():
+        raise HTTPException(status_code=400, detail="name is required")
+    conversion_kpi_id = _validate_conversion_kpi_id(body.conversion_kpi_id)
+    item = create_journey_definition(
+        db,
+        name=body.name,
+        description=body.description,
+        conversion_kpi_id=conversion_kpi_id,
+        lookback_window_days=body.lookback_window_days,
+        mode_default=body.mode_default,
+        created_by=user_id,
+    )
+    return serialize_journey_definition(item)
+
+
+@app.put("/api/journeys/definitions/{definition_id}")
+def api_update_journey_definition(
+    definition_id: str,
+    body: JourneyDefinitionUpdate,
+    db=Depends(get_db),
+    ctx: PermissionContext = Depends(require_permission("journeys.manage")),
+):
+    """Update journey definition. Requires edit role."""
+    user_id = ctx.user_id
+    if not body.name.strip():
+        raise HTTPException(status_code=400, detail="name is required")
+    conversion_kpi_id = _validate_conversion_kpi_id(body.conversion_kpi_id)
+    item = update_journey_definition(
+        db,
+        definition_id,
+        name=body.name,
+        description=body.description,
+        conversion_kpi_id=conversion_kpi_id,
+        lookback_window_days=body.lookback_window_days,
+        mode_default=body.mode_default,
+        updated_by=user_id,
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="Journey definition not found")
+    return serialize_journey_definition(item)
+
+
+@app.delete("/api/journeys/definitions/{definition_id}")
+def api_delete_journey_definition(
+    definition_id: str,
+    db=Depends(get_db),
+    ctx: PermissionContext = Depends(require_permission("journeys.manage")),
+):
+    """Archive journey definition (soft delete). Requires edit role."""
+    user_id = ctx.user_id
+    item = archive_journey_definition(db, definition_id, archived_by=user_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Journey definition not found")
+    return {"id": item.id, "status": "archived"}
+
+
+@app.get("/api/journeys/{definition_id}/paths")
+def api_get_journey_paths(
+    definition_id: str,
+    date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
+    date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
+    mode: str = Query("conversion_only", pattern="^(conversion_only|all_journeys)$"),
+    channel_group: Optional[str] = Query(None),
+    campaign_id: Optional[str] = Query(None),
+    device: Optional[str] = Query(None),
+    country: Optional[str] = Query(None),
+    page: int = Query(1, ge=1, description="Page number"),
+    limit: int = Query(50, ge=1, le=200, description="Items per page (max 200)"),
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("journeys.view")),
+):
+    """Return pre-aggregated journey paths from journey_paths_daily only."""
+    jd = get_journey_definition(db, definition_id)
+    if not jd or jd.is_archived:
+        raise HTTPException(status_code=404, detail="Journey definition not found")
+    try:
+        d_from = datetime.fromisoformat(date_from).date()
+        d_to = datetime.fromisoformat(date_to).date()
+    except Exception:
+        raise HTTPException(status_code=400, detail="date_from/date_to must be YYYY-MM-DD")
+    if d_from > d_to:
+        raise HTTPException(status_code=400, detail="date_from must be <= date_to")
+
+    return list_paths_for_journey_definition(
+        db,
+        journey_definition_id=definition_id,
+        date_from=d_from,
+        date_to=d_to,
+        mode=mode,
+        channel_group=channel_group,
+        campaign_id=campaign_id,
+        device=device,
+        country=country,
+        page=page,
+        limit=limit,
+    )
+
+
+@app.get("/api/journeys/{definition_id}/transitions")
+def api_get_journey_transitions(
+    definition_id: str,
+    date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
+    date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
+    mode: str = Query("conversion_only", pattern="^(conversion_only|all_journeys)$"),
+    channel_group: Optional[str] = Query(None),
+    campaign_id: Optional[str] = Query(None),
+    device: Optional[str] = Query(None),
+    country: Optional[str] = Query(None),
+    min_count: int = Query(5, ge=1, le=100000),
+    max_nodes: int = Query(20, ge=2, le=200),
+    max_depth: int = Query(5, ge=1, le=20),
+    group_other: bool = Query(True, description="Group rare steps into 'Other'"),
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("journeys.view")),
+):
+    """Return Sankey-ready transition graph from journey_transitions_daily."""
+    jd = get_journey_definition(db, definition_id)
+    if not jd or jd.is_archived:
+        raise HTTPException(status_code=404, detail="Journey definition not found")
+    try:
+        d_from = datetime.fromisoformat(date_from).date()
+        d_to = datetime.fromisoformat(date_to).date()
+    except Exception:
+        raise HTTPException(status_code=400, detail="date_from/date_to must be YYYY-MM-DD")
+    if d_from > d_to:
+        raise HTTPException(status_code=400, detail="date_from must be <= date_to")
+
+    return list_transitions_for_journey_definition(
+        db,
+        journey_definition_id=definition_id,
+        date_from=d_from,
+        date_to=d_to,
+        mode=mode,
+        channel_group=channel_group,
+        campaign_id=campaign_id,
+        device=device,
+        country=country,
+        min_count=min_count,
+        max_nodes=max_nodes,
+        max_depth=max_depth,
+        group_other=group_other,
+    )
+
+
+@app.get("/api/journeys/{definition_id}/attribution-summary")
+def api_get_journey_attribution_summary(
+    definition_id: str,
+    date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
+    date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
+    model: str = Query("linear", description="Attribution model"),
+    mode: str = Query("conversion_only", pattern="^(conversion_only|all_journeys)$"),
+    channel_group: Optional[str] = Query(None),
+    campaign_id: Optional[str] = Query(None),
+    device: Optional[str] = Query(None),
+    country: Optional[str] = Query(None),
+    path_hash: Optional[str] = Query(None),
+    include_campaign: bool = Query(False, description="Include campaign-level credit split"),
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("journeys.view")),
+):
+    """Return attribution credit split for a journey definition (and optional path hash)."""
+    jd = get_journey_definition(db, definition_id)
+    if not jd or jd.is_archived:
+        raise HTTPException(status_code=404, detail="Journey definition not found")
+    try:
+        _ = datetime.fromisoformat(date_from).date()
+        _ = datetime.fromisoformat(date_to).date()
+    except Exception:
+        raise HTTPException(status_code=400, detail="date_from/date_to must be YYYY-MM-DD")
+    try:
+        return build_journey_attribution_summary(
+            db,
+            definition=jd,
+            date_from=date_from,
+            date_to=date_to,
+            model=model,
+            mode=mode,
+            channel_group=channel_group,
+            campaign_id=campaign_id,
+            device=device,
+            country=country,
+            path_hash=path_hash,
+            include_campaign=include_campaign,
+            settings_obj=SETTINGS,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/funnels")
+def api_list_funnels(
+    workspace_id: str = Query("default"),
+    user_id: Optional[str] = Query(None),
+    journey_definition_id: Optional[str] = Query(None),
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("funnels.view")),
+):
+    """List non-archived funnel definitions for workspace/user."""
+    return {
+        "items": list_funnels(
+            db,
+            workspace_id=workspace_id,
+            user_id=user_id,
+            journey_definition_id=journey_definition_id,
+        )
+    }
+
+
+@app.post("/api/funnels")
+def api_create_funnel(
+    body: FunnelCreatePayload,
+    db=Depends(get_db),
+    ctx: PermissionContext = Depends(require_permission("funnels.manage")),
+):
+    """Create funnel definition. Requires edit role."""
+    user_id = ctx.user_id
+    jd = get_journey_definition(db, body.journey_definition_id)
+    if not jd or jd.is_archived:
+        raise HTTPException(status_code=404, detail="Journey definition not found")
+    steps = [str(s).strip() for s in (body.steps or []) if str(s).strip()]
+    if len(steps) < 2:
+        raise HTTPException(status_code=400, detail="steps must include at least 2 items")
+    return create_funnel(
+        db,
+        journey_definition_id=body.journey_definition_id,
+        workspace_id=body.workspace_id or "default",
+        user_id=user_id,
+        name=body.name,
+        description=body.description,
+        steps=steps,
+        counting_method=body.counting_method,
+        window_days=body.window_days,
+        actor=user_id,
+    )
+
+
+@app.get("/api/funnels/{funnel_id}/results")
+def api_get_funnel_results(
+    funnel_id: str,
+    date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
+    date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
+    device: Optional[str] = Query(None),
+    channel_group: Optional[str] = Query(None),
+    country: Optional[str] = Query(None),
+    campaign_id: Optional[str] = Query(None),
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("funnels.view")),
+):
+    """Compute funnel results from transitions aggregates when possible, with raw fallback when needed."""
+    funnel = get_funnel(db, funnel_id)
+    if not funnel or funnel.is_archived:
+        raise HTTPException(status_code=404, detail="Funnel not found")
+    jd = get_journey_definition(db, funnel.journey_definition_id)
+    if not jd or jd.is_archived:
+        raise HTTPException(status_code=404, detail="Journey definition not found")
+    try:
+        d_from = datetime.fromisoformat(date_from).date()
+        d_to = datetime.fromisoformat(date_to).date()
+    except Exception:
+        raise HTTPException(status_code=400, detail="date_from/date_to must be YYYY-MM-DD")
+    if d_from > d_to:
+        raise HTTPException(status_code=400, detail="date_from must be <= date_to")
+    return compute_funnel_results(
+        db,
+        funnel=funnel,
+        journey_definition=jd,
+        date_from=d_from,
+        date_to=d_to,
+        device=device,
+        channel_group=channel_group,
+        country=country,
+        campaign_id=campaign_id,
+    )
+
+
+@app.get("/api/funnels/{funnel_id}/diagnostics")
+def api_get_funnel_diagnostics(
+    funnel_id: str,
+    step: str = Query(..., description="Funnel step label to diagnose"),
+    date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
+    date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
+    device: Optional[str] = Query(None),
+    channel_group: Optional[str] = Query(None),
+    country: Optional[str] = Query(None),
+    campaign_id: Optional[str] = Query(None),
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("funnels.view")),
+):
+    """Evidence-based hypotheses for funnel drop-off changes at a specific step."""
+    funnel = get_funnel(db, funnel_id)
+    if not funnel or funnel.is_archived:
+        raise HTTPException(status_code=404, detail="Funnel not found")
+    jd = get_journey_definition(db, funnel.journey_definition_id)
+    if not jd or jd.is_archived:
+        raise HTTPException(status_code=404, detail="Journey definition not found")
+    try:
+        d_from = datetime.fromisoformat(date_from).date()
+        d_to = datetime.fromisoformat(date_to).date()
+    except Exception:
+        raise HTTPException(status_code=400, detail="date_from/date_to must be YYYY-MM-DD")
+    if d_from > d_to:
+        raise HTTPException(status_code=400, detail="date_from must be <= date_to")
+    return compute_funnel_diagnostics(
+        db,
+        funnel=funnel,
+        journey_definition=jd,
+        step=step,
+        date_from=d_from,
+        date_to=d_to,
+        device=device,
+        channel_group=channel_group,
+        country=country,
+        campaign_id=campaign_id,
+    )
+
+
 @app.get("/api/alerts")
 def api_list_alerts(
+    domain: Optional[str] = Query(None, description="journeys | funnels (new journey/funnel alerts domain)"),
     status: str = Query("open", description="open | all"),
     severity: Optional[str] = Query(None, description="Filter by severity"),
     rule_type: Optional[str] = Query(None, description="Filter by rule type"),
@@ -4444,19 +6605,108 @@ def api_list_alerts(
     per_page: int = Query(20, ge=1, le=100, description="Items per page"),
     scope: Optional[str] = Query(None, description="Filter by scope (workspace/account)"),
     db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("alerts.view")),
 ):
     """List alerts with pagination and filters. All roles can view."""
     try:
+        if domain in JOURNEY_ALERT_DOMAINS:
+            return list_journey_alert_definitions(
+                db=db,
+                domain=domain,
+                page=page,
+                per_page=per_page,
+            )
         return list_alerts(db=db, status=status, severity=severity, rule_type=rule_type, search=search, page=page, per_page=per_page, scope=scope)
     except Exception as e:
         logger.warning("List alerts failed (tables or schema may be missing): %s", e, exc_info=True)
         return {"items": [], "total": 0, "page": page, "per_page": per_page}
 
 
+@app.get("/api/alerts/events")
+def api_list_alert_events(
+    domain: Optional[str] = Query(None, description="journeys | funnels"),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=200),
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("alerts.view")),
+):
+    """List recent journey/funnel alert events."""
+    if domain not in JOURNEY_ALERT_DOMAINS:
+        raise HTTPException(status_code=400, detail="domain must be journeys or funnels")
+    try:
+        return list_journey_alert_events(db=db, domain=domain, page=page, per_page=per_page)
+    except Exception as e:
+        logger.warning("List journey alert events failed: %s", e, exc_info=True)
+        return {"items": [], "total": 0, "page": page, "per_page": per_page}
+
+
+@app.post("/api/alerts")
+def api_create_alert(
+    body: JourneyAlertCreatePayload,
+    db=Depends(get_db),
+    ctx: PermissionContext = Depends(require_permission("alerts.manage")),
+):
+    """Create journey/funnel alert definition. Requires edit role."""
+    user_id = ctx.user_id
+    _validate_journey_alert_payload(body.type, body.domain, body.metric, body.condition)
+    return create_journey_alert_definition(
+        db,
+        name=body.name,
+        type=body.type,
+        domain=body.domain,
+        scope=body.scope or {},
+        metric=body.metric,
+        condition=body.condition or {},
+        schedule=body.schedule or {"cadence": "daily"},
+        is_enabled=body.is_enabled,
+        actor=user_id,
+    )
+
+
+@app.put("/api/alerts/{alert_definition_id}")
+def api_update_alert(
+    alert_definition_id: str,
+    body: JourneyAlertUpdatePayload,
+    db=Depends(get_db),
+    ctx: PermissionContext = Depends(require_permission("alerts.manage")),
+):
+    """Update journey/funnel alert definition fields. Requires edit role."""
+    user_id = ctx.user_id
+    out = update_journey_alert_definition(
+        db,
+        definition_id=alert_definition_id,
+        actor=user_id,
+        name=body.name,
+        is_enabled=body.is_enabled,
+        condition=body.condition,
+        schedule=body.schedule,
+    )
+    if not out:
+        raise HTTPException(status_code=404, detail="Alert definition not found")
+    return out
+
+
+@app.post("/api/alerts/preview")
+def api_preview_alert(
+    body: JourneyAlertPreviewPayload,
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("alerts.view")),
+):
+    """Preview baseline/current values for alert authoring."""
+    return preview_journey_alert(
+        db,
+        type=body.type,
+        scope=body.scope or {},
+        metric=body.metric,
+        condition=body.condition or {},
+    )
+
+
 @app.get("/api/alerts/{alert_id}")
 def api_get_alert(
     alert_id: int,
     db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("alerts.view")),
 ):
     """Alert detail including context_json, related_entities, deep_link (entity_type, entity_id, url)."""
     out = get_alert_by_id(db=db, alert_id=alert_id)
@@ -4469,12 +6719,10 @@ def api_get_alert(
 def api_ack_alert(
     alert_id: int,
     db=Depends(get_db),
-    user_info: Tuple[str, bool] = Depends(get_alert_user),
+    ctx: PermissionContext = Depends(require_permission("alerts.manage")),
 ):
     """Acknowledge alert. Requires edit role (X-User-Role: admin or editor)."""
-    user_id, can_edit = user_info
-    if not can_edit:
-        raise HTTPException(status_code=403, detail="Only admin or editor can acknowledge alerts")
+    user_id = ctx.user_id
     ev = ack_alert(db=db, alert_id=alert_id, user_id=user_id)
     if not ev:
         raise HTTPException(status_code=404, detail="Alert not found")
@@ -4486,12 +6734,10 @@ def api_snooze_alert(
     alert_id: int,
     body: AlertSnoozeBody,
     db=Depends(get_db),
-    user_info: Tuple[str, bool] = Depends(get_alert_user),
+    ctx: PermissionContext = Depends(require_permission("alerts.manage")),
 ):
     """Snooze alert for duration_minutes. Requires edit role."""
-    user_id, can_edit = user_info
-    if not can_edit:
-        raise HTTPException(status_code=403, detail="Only admin or editor can snooze alerts")
+    user_id = ctx.user_id
     ev = snooze_alert(db=db, alert_id=alert_id, duration_minutes=body.duration_minutes, user_id=user_id)
     if not ev:
         raise HTTPException(status_code=404, detail="Alert not found")
@@ -4502,12 +6748,10 @@ def api_snooze_alert(
 def api_resolve_alert(
     alert_id: int,
     db=Depends(get_db),
-    user_info: Tuple[str, bool] = Depends(get_alert_user),
+    ctx: PermissionContext = Depends(require_permission("alerts.manage")),
 ):
     """Manually resolve alert. Requires edit role."""
-    user_id, can_edit = user_info
-    if not can_edit:
-        raise HTTPException(status_code=403, detail="Only admin or editor can resolve alerts")
+    user_id = ctx.user_id
     ev = resolve_alert(db=db, alert_id=alert_id, user_id=user_id)
     if not ev:
         raise HTTPException(status_code=404, detail="Alert not found")
@@ -4519,6 +6763,7 @@ def api_list_alert_rules(
     scope: Optional[str] = Query(None),
     is_enabled: Optional[bool] = Query(None, description="Filter by enabled"),
     db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("alerts.view")),
 ):
     """List alert rules. All roles can view."""
     try:
@@ -4532,12 +6777,10 @@ def api_list_alert_rules(
 def api_create_alert_rule(
     body: AlertRuleCreate,
     db=Depends(get_db),
-    user_info: Tuple[str, bool] = Depends(get_alert_user),
+    ctx: PermissionContext = Depends(require_permission("alerts.manage")),
 ):
     """Create alert rule. Requires edit role. params_json validated per rule_type."""
-    user_id, can_edit = user_info
-    if not can_edit:
-        raise HTTPException(status_code=403, detail="Only admin or editor can create alert rules")
+    user_id = ctx.user_id
     try:
         r = create_alert_rule(
             db=db,
@@ -4562,6 +6805,7 @@ def api_create_alert_rule(
 def api_get_alert_rule(
     rule_id: int,
     db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("alerts.view")),
 ):
     """Get single alert rule."""
     out = get_alert_rule_by_id(db=db, rule_id=rule_id)
@@ -4575,12 +6819,10 @@ def api_update_alert_rule(
     rule_id: int,
     body: AlertRuleUpdate,
     db=Depends(get_db),
-    user_info: Tuple[str, bool] = Depends(get_alert_user),
+    ctx: PermissionContext = Depends(require_permission("alerts.manage")),
 ):
     """Update alert rule. Requires edit role. params_json validated."""
-    user_id, can_edit = user_info
-    if not can_edit:
-        raise HTTPException(status_code=403, detail="Only admin or editor can update alert rules")
+    user_id = ctx.user_id
     try:
         r = update_alert_rule(
             db=db,
@@ -4607,12 +6849,10 @@ def api_delete_alert_rule(
     rule_id: int,
     disable_only: bool = Query(True, description="If true, disable rule; if false, delete"),
     db=Depends(get_db),
-    user_info: Tuple[str, bool] = Depends(get_alert_user),
+    ctx: PermissionContext = Depends(require_permission("alerts.manage")),
 ):
     """Disable or delete alert rule. Requires edit role."""
-    user_id, can_edit = user_info
-    if not can_edit:
-        raise HTTPException(status_code=403, detail="Only admin or editor can delete/disable alert rules")
+    user_id = ctx.user_id
     ok = delete_alert_rule(db=db, rule_id=rule_id, updated_by=user_id, disable_only=disable_only)
     if not ok:
         raise HTTPException(status_code=404, detail="Alert rule not found")
@@ -6811,6 +9051,7 @@ def meiro_pull(since: Optional[str] = None, until: Optional[str] = None, db=Depe
     global JOURNEYS
     JOURNEYS = journeys
     persist_journeys_as_conversion_paths(db, JOURNEYS, replace=True)
+    _refresh_journey_aggregates_after_import(db)
     converted = sum(1 for j in journeys if j.get("converted", True))
     ch_set = set()
     for j in journeys:
