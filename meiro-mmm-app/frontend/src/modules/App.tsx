@@ -14,6 +14,10 @@ import MMMWizardShell from './MMMWizardShell'
 import type { SettingsPageHandle, SectionKey } from './Settings'
 import { usePermissions } from '../hooks/usePermissions'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
+import {
+  canAccessPage as canAccessAppPage,
+  canManageJourneyDefinitions,
+} from '../lib/accessControl'
 
 const Overview = lazy(() => import('./Overview'))
 const AlertsPage = lazy(() => import('./Alerts'))
@@ -376,19 +380,20 @@ export default function App() {
     [permissions, rbacEnabled],
   )
   const hasJourneysPermission = hasAnyPermission(['journeys.view', 'journeys.manage'])
-  const hasAlertsPermission = hasAnyPermission(['alerts.view', 'alerts.manage'])
-  const hasSettingsPermission = hasAnyPermission(['settings.view', 'settings.manage'])
+  const canManageJourneys = canManageJourneyDefinitions({
+    rbacEnabled,
+    hasPermission,
+    hasAnyPermission,
+  })
   const canAccessPage = useCallback(
     (nextPage: Page): boolean => {
-      if (!rbacEnabled) return true
-      if (nextPage === 'analytics_journeys' || nextPage === 'paths' || nextPage === 'path_archetypes') {
-        return hasJourneysPermission
-      }
-      if (nextPage === 'alerts') return hasAlertsPermission
-      if (nextPage === 'settings') return hasSettingsPermission
-      return true
+      return canAccessAppPage(nextPage, {
+        rbacEnabled,
+        hasPermission,
+        hasAnyPermission,
+      })
     },
-    [hasAlertsPermission, hasJourneysPermission, hasSettingsPermission, rbacEnabled],
+    [hasAnyPermission, hasPermission, rbacEnabled],
   )
 
   const journeysQuery = useQuery({
@@ -1311,6 +1316,7 @@ export default function App() {
                 <JourneysPage
                   featureEnabled={featureFlags.journeys_enabled}
                   hasPermission={hasJourneysPermission}
+                  canManageDefinitions={canManageJourneys}
                   journeyExamplesEnabled={featureFlags.journey_examples_enabled}
                   funnelBuilderEnabled={featureFlags.funnel_builder_enabled}
                 />

@@ -4,7 +4,8 @@ import { tokens as t } from '../theme/tokens'
 import { DashboardPage, SectionCard, DashboardTable } from '../components/dashboard'
 import AlertDetailDrawer from './alerts/AlertDetailDrawer'
 import AlertRulesTab from './alerts/AlertRulesTab'
-import { apiGetJson, apiSendJson } from '../lib/apiClient'
+import { apiGetJson, apiSendJson, withQuery } from '../lib/apiClient'
+import { buildListQuery, type PaginatedResponse } from '../lib/apiSchemas'
 
 interface AlertListItem {
   id: number
@@ -164,24 +165,22 @@ export default function Alerts() {
   const openDetail = useCallback((id: number) => setDetailAlertId(id), [])
   const closeDetail = useCallback(() => setDetailAlertId(null), [])
 
-  const journeyAlertDefsQuery = useQuery<{ items: JourneyAlertDefinitionItem[]; total: number; page: number; per_page: number }>({
+  const journeyAlertDefsQuery = useQuery<PaginatedResponse<JourneyAlertDefinitionItem>>({
     queryKey: ['journey-alert-definitions', journeyAlertDomain],
     queryFn: async () => {
-      const params = new URLSearchParams({ domain: journeyAlertDomain, page: '1', per_page: '100' })
-      return apiGetJson<{ items: JourneyAlertDefinitionItem[]; total: number; page: number; per_page: number }>(
-        `/api/alerts?${params.toString()}`,
+      return apiGetJson<PaginatedResponse<JourneyAlertDefinitionItem>>(
+        withQuery('/api/alerts', buildListQuery({ domain: journeyAlertDomain, page: 1, perPage: 100 })),
         { fallbackMessage: 'Failed to load journey/funnel alert definitions' },
       )
     },
     enabled: tab === 'journey_alerts',
   })
 
-  const journeyAlertEventsQuery = useQuery<{ items: JourneyAlertEventItem[]; total: number; page: number; per_page: number }>({
+  const journeyAlertEventsQuery = useQuery<PaginatedResponse<JourneyAlertEventItem>>({
     queryKey: ['journey-alert-events', journeyAlertDomain],
     queryFn: async () => {
-      const params = new URLSearchParams({ domain: journeyAlertDomain, page: '1', per_page: '100' })
-      return apiGetJson<{ items: JourneyAlertEventItem[]; total: number; page: number; per_page: number }>(
-        `/api/alerts/events?${params.toString()}`,
+      return apiGetJson<PaginatedResponse<JourneyAlertEventItem>>(
+        withQuery('/api/alerts/events', buildListQuery({ domain: journeyAlertDomain, page: 1, perPage: 100 }, 200)),
         { fallbackMessage: 'Failed to load journey/funnel alert events' },
       )
     },
@@ -192,16 +191,32 @@ export default function Alerts() {
     queryKey: ['journey-alerts-main-rows'],
     queryFn: async () => {
       const [defsJBody, defsFBody, evJBody, evFBody] = await Promise.all([
-        apiGetJson<{ items: JourneyAlertDefinitionItem[] }>('/api/alerts?domain=journeys&page=1&per_page=100', {
+        apiGetJson<PaginatedResponse<JourneyAlertDefinitionItem>>(withQuery('/api/alerts', buildListQuery({
+          domain: 'journeys',
+          page: 1,
+          perPage: 100,
+        })), {
           fallbackMessage: 'Failed to load journey alert definitions',
         }),
-        apiGetJson<{ items: JourneyAlertDefinitionItem[] }>('/api/alerts?domain=funnels&page=1&per_page=100', {
+        apiGetJson<PaginatedResponse<JourneyAlertDefinitionItem>>(withQuery('/api/alerts', buildListQuery({
+          domain: 'funnels',
+          page: 1,
+          perPage: 100,
+        })), {
           fallbackMessage: 'Failed to load funnel alert definitions',
         }),
-        apiGetJson<{ items: JourneyAlertEventItem[] }>('/api/alerts/events?domain=journeys&page=1&per_page=200', {
+        apiGetJson<PaginatedResponse<JourneyAlertEventItem>>(withQuery('/api/alerts/events', buildListQuery({
+          domain: 'journeys',
+          page: 1,
+          perPage: 200,
+        }, 200)), {
           fallbackMessage: 'Failed to load journey alert events',
         }),
-        apiGetJson<{ items: JourneyAlertEventItem[] }>('/api/alerts/events?domain=funnels&page=1&per_page=200', {
+        apiGetJson<PaginatedResponse<JourneyAlertEventItem>>(withQuery('/api/alerts/events', buildListQuery({
+          domain: 'funnels',
+          page: 1,
+          perPage: 200,
+        }, 200)), {
           fallbackMessage: 'Failed to load funnel alert events',
         }),
       ])

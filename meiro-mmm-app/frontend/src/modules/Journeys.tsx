@@ -6,11 +6,13 @@ import DashboardTable from '../components/dashboard/DashboardTable'
 import GlobalFilterBar, { GlobalFiltersState } from '../components/dashboard/GlobalFilterBar'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { tokens as t } from '../theme/tokens'
-import { apiGetJson, apiSendJson, getUserContext } from '../lib/apiClient'
+import { apiGetJson, apiSendJson, getUserContext, withQuery } from '../lib/apiClient'
+import { buildListQuery, type PaginatedResponse } from '../lib/apiSchemas'
 
 interface JourneysProps {
   featureEnabled: boolean
   hasPermission: boolean
+  canManageDefinitions: boolean
   journeyExamplesEnabled: boolean
   funnelBuilderEnabled: boolean
 }
@@ -22,10 +24,6 @@ interface JourneyDefinition {
   conversion_kpi_id?: string | null
   lookback_window_days: number
   mode_default: 'conversion_only' | 'all_journeys'
-}
-
-interface JourneyDefinitionsResponse {
-  items: JourneyDefinition[]
 }
 
 interface JourneyPathRow {
@@ -283,6 +281,7 @@ function creditOverlay(channels: ChannelCredit[], group?: string | null) {
 export default function Journeys({
   featureEnabled,
   hasPermission,
+  canManageDefinitions,
   journeyExamplesEnabled,
   funnelBuilderEnabled,
 }: JourneysProps) {
@@ -337,11 +336,14 @@ export default function Journeys({
     window_days: 30,
   })
 
-  const definitionsQuery = useQuery<JourneyDefinitionsResponse>({
+  const definitionsQuery = useQuery<PaginatedResponse<JourneyDefinition>>({
     queryKey: ['journey-definitions', 'journeys-page'],
     queryFn: async () => {
-      const params = new URLSearchParams({ page: '1', per_page: '100', sort: 'desc' })
-      return apiGetJson<JourneyDefinitionsResponse>(`/api/journeys/definitions?${params.toString()}`, {
+      return apiGetJson<PaginatedResponse<JourneyDefinition>>(withQuery('/api/journeys/definitions', buildListQuery({
+        page: 1,
+        perPage: 100,
+        order: 'desc',
+      })), {
         fallbackMessage: 'Failed to load journey definitions',
       })
     },
@@ -813,7 +815,11 @@ export default function Journeys({
             <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
               <button
                 type="button"
-                onClick={() => setShowCreateModal(true)}
+                onClick={() => {
+                  if (!canManageDefinitions) return
+                  setShowCreateModal(true)
+                }}
+                disabled={!canManageDefinitions}
                 style={{
                   border: `1px solid ${t.color.accent}`,
                   background: t.color.accent,
@@ -822,8 +828,10 @@ export default function Journeys({
                   fontSize: t.font.sizeSm,
                   fontWeight: t.font.weightMedium,
                   padding: '8px 14px',
-                  cursor: 'pointer',
+                  cursor: canManageDefinitions ? 'pointer' : 'not-allowed',
+                  opacity: canManageDefinitions ? 1 : 0.5,
                 }}
+                title={canManageDefinitions ? undefined : 'Only admin or editor can create journey definitions'}
               >
                 Create journey
               </button>
@@ -1489,7 +1497,7 @@ export default function Journeys({
         </>
       )}
 
-      {showCreateModal && (
+      {showCreateModal && canManageDefinitions && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 50, background: 'rgba(15, 23, 42, 0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
           <div style={{ width: 'min(620px, 100%)', background: t.color.surface, borderRadius: t.radius.lg, border: `1px solid ${t.color.border}`, boxShadow: t.shadowLg, padding: t.space.xl, display: 'grid', gap: t.space.md }}>
             <h3 style={{ margin: 0, fontSize: t.font.sizeLg, color: t.color.text }}>Create journey</h3>

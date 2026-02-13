@@ -22,6 +22,7 @@ from app.utils.encrypt import encrypt, decrypt
 from app.utils import datasource_config as ds_config
 from app.utils.taxonomy import load_taxonomy, save_taxonomy, Taxonomy, MatchExpression, ChannelRule
 from app.utils.kpi_config import load_kpi_config, save_kpi_config, KpiConfig, KpiDefinition
+from app.utils.api_params import clamp_int, resolve_per_page, resolve_sort_dir
 from app.db import Base, engine, get_db, SessionLocal
 from app.models_config_dq import (
     ModelConfig as ORMModelConfig,
@@ -6248,26 +6249,38 @@ def _validate_journey_alert_payload(type: str, domain: str, metric: str, conditi
 @app.get("/api/journeys/definitions")
 def api_list_journey_definitions(
     page: int = Query(1, ge=1, description="Page number"),
-    per_page: int = Query(20, ge=1, le=100, description="Items per page"),
+    per_page: Optional[int] = Query(None, description="Items per page"),
+    page_size: Optional[int] = Query(None, description="Alias for per_page"),
+    limit: Optional[int] = Query(None, description="Alias for per_page"),
     search: Optional[str] = Query(None, description="Search by name/description"),
-    sort: str = Query("desc", pattern="^(asc|desc)$", description="Sort by updated_at: asc|desc"),
+    sort: Optional[str] = Query(None, description="Sort direction asc|desc"),
+    order: Optional[str] = Query(None, description="Alias for sort direction asc|desc"),
     include_archived: bool = Query(False, description="Include archived definitions"),
     db=Depends(get_db),
     _ctx: PermissionContext = Depends(require_permission("journeys.view")),
 ):
     """List journey definitions with pagination and search."""
+    resolved_page = clamp_int(page, default=1, minimum=1, maximum=1_000_000)
+    resolved_per_page = resolve_per_page(
+        per_page=per_page,
+        page_size=page_size,
+        limit=limit,
+        default=20,
+        maximum=100,
+    )
+    resolved_sort_dir = resolve_sort_dir(sort=sort, order=order, default="desc")
     try:
         return list_journey_definitions(
             db,
-            page=page,
-            per_page=per_page,
+            page=resolved_page,
+            per_page=resolved_per_page,
             search=search,
-            sort_dir=sort,
+            sort_dir=resolved_sort_dir,
             include_archived=include_archived,
         )
     except Exception as e:
         logger.warning("List journey definitions failed: %s", e, exc_info=True)
-        return {"items": [], "total": 0, "page": page, "per_page": per_page}
+        return {"items": [], "total": 0, "page": resolved_page, "per_page": resolved_per_page}
 
 
 @app.post("/api/journeys/definitions")
@@ -6602,42 +6615,71 @@ def api_list_alerts(
     rule_type: Optional[str] = Query(None, description="Filter by rule type"),
     search: Optional[str] = Query(None, description="Search in title, message, rule name"),
     page: int = Query(1, ge=1, description="Page number"),
-    per_page: int = Query(20, ge=1, le=100, description="Items per page"),
+    per_page: Optional[int] = Query(None, description="Items per page"),
+    page_size: Optional[int] = Query(None, description="Alias for per_page"),
+    limit: Optional[int] = Query(None, description="Alias for per_page"),
     scope: Optional[str] = Query(None, description="Filter by scope (workspace/account)"),
     db=Depends(get_db),
     _ctx: PermissionContext = Depends(require_permission("alerts.view")),
 ):
     """List alerts with pagination and filters. All roles can view."""
+    resolved_page = clamp_int(page, default=1, minimum=1, maximum=1_000_000)
+    resolved_per_page = resolve_per_page(
+        per_page=per_page,
+        page_size=page_size,
+        limit=limit,
+        default=20,
+        maximum=100,
+    )
     try:
         if domain in JOURNEY_ALERT_DOMAINS:
             return list_journey_alert_definitions(
                 db=db,
                 domain=domain,
-                page=page,
-                per_page=per_page,
+                page=resolved_page,
+                per_page=resolved_per_page,
             )
-        return list_alerts(db=db, status=status, severity=severity, rule_type=rule_type, search=search, page=page, per_page=per_page, scope=scope)
+        return list_alerts(
+            db=db,
+            status=status,
+            severity=severity,
+            rule_type=rule_type,
+            search=search,
+            page=resolved_page,
+            per_page=resolved_per_page,
+            scope=scope,
+        )
     except Exception as e:
         logger.warning("List alerts failed (tables or schema may be missing): %s", e, exc_info=True)
-        return {"items": [], "total": 0, "page": page, "per_page": per_page}
+        return {"items": [], "total": 0, "page": resolved_page, "per_page": resolved_per_page}
 
 
 @app.get("/api/alerts/events")
 def api_list_alert_events(
     domain: Optional[str] = Query(None, description="journeys | funnels"),
     page: int = Query(1, ge=1),
-    per_page: int = Query(20, ge=1, le=200),
+    per_page: Optional[int] = Query(None),
+    page_size: Optional[int] = Query(None, description="Alias for per_page"),
+    limit: Optional[int] = Query(None, description="Alias for per_page"),
     db=Depends(get_db),
     _ctx: PermissionContext = Depends(require_permission("alerts.view")),
 ):
     """List recent journey/funnel alert events."""
+    resolved_page = clamp_int(page, default=1, minimum=1, maximum=1_000_000)
+    resolved_per_page = resolve_per_page(
+        per_page=per_page,
+        page_size=page_size,
+        limit=limit,
+        default=20,
+        maximum=200,
+    )
     if domain not in JOURNEY_ALERT_DOMAINS:
         raise HTTPException(status_code=400, detail="domain must be journeys or funnels")
     try:
-        return list_journey_alert_events(db=db, domain=domain, page=page, per_page=per_page)
+        return list_journey_alert_events(db=db, domain=domain, page=resolved_page, per_page=resolved_per_page)
     except Exception as e:
         logger.warning("List journey alert events failed: %s", e, exc_info=True)
-        return {"items": [], "total": 0, "page": page, "per_page": per_page}
+        return {"items": [], "total": 0, "page": resolved_page, "per_page": resolved_per_page}
 
 
 @app.post("/api/alerts")

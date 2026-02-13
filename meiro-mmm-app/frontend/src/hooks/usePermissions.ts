@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { apiGetJson } from '../lib/apiClient'
 
 interface AuthWorkspace {
   id?: string
@@ -23,11 +24,13 @@ export function usePermissions() {
   const authQuery = useQuery<AuthMeResponse>({
     queryKey: ['auth-me'],
     queryFn: async () => {
-      const res = await fetch('/api/auth/me')
-      if (!res.ok) {
+      try {
+        return await apiGetJson<AuthMeResponse>('/api/auth/me', {
+          fallbackMessage: 'Failed to load auth context',
+        })
+      } catch {
         return { permissions: [] }
       }
-      return (await res.json()) as AuthMeResponse
     },
     staleTime: 5 * 60 * 1000,
     gcTime: 30 * 60 * 1000,
