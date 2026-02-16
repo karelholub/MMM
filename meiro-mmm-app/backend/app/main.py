@@ -6474,6 +6474,7 @@ def _compute_total_converted_value_for_period(
         start_d, end_d = end_d, start_d
     allowed = set(channels or [])
     total = 0.0
+    dedupe_seen: set[str] = set()
     for journey in journeys or []:
         if not journey.get("converted", True):
             continue
@@ -6492,7 +6493,22 @@ def _compute_total_converted_value_for_period(
         if day is None:
             continue
         if start_d <= day <= end_d:
-            total += float(journey.get("conversion_value") or 0.0)
+            entries = journey.get("_revenue_entries")
+            if isinstance(entries, list):
+                for entry in entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    dedup_key = str(entry.get("dedup_key") or "")
+                    if dedup_key:
+                        if dedup_key in dedupe_seen:
+                            continue
+                        dedupe_seen.add(dedup_key)
+                    try:
+                        total += float(entry.get("value_in_base") or 0.0)
+                    except Exception:
+                        continue
+            else:
+                total += float(journey.get("conversion_value") or 0.0)
     return total
 
 

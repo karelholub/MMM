@@ -220,8 +220,33 @@ def compute_payload_revenue_value(
     if not isinstance(payload, dict):
         return 0.0
     cfg = normalize_revenue_config(config)
-    selected = {str(name).strip().lower() for name in cfg.get("conversion_names") or []}
+    entries = extract_revenue_entries(
+        payload,
+        cfg,
+        fallback_conversion_id=fallback_conversion_id,
+    )
     total = 0.0
+    for entry in entries:
+        dedup_value = str(entry.get("dedup_key") or "")
+        if dedupe_seen is not None and dedup_value:
+            if dedup_value in dedupe_seen:
+                continue
+            dedupe_seen.add(dedup_value)
+        total += _safe_number(entry.get("value_in_base"))
+    return round(total, 6)
+
+
+def extract_revenue_entries(
+    payload: Optional[Dict[str, Any]],
+    config: Optional[Dict[str, Any]] = None,
+    *,
+    fallback_conversion_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+    cfg = normalize_revenue_config(config)
+    selected = {str(name).strip().lower() for name in cfg.get("conversion_names") or []}
+    out: List[Dict[str, Any]] = []
     for conversion in iter_payload_revenue_conversions(payload):
         name = _conversion_name(conversion, payload).lower()
         if selected and name not in selected:
@@ -232,10 +257,6 @@ def compute_payload_revenue_value(
             fallback_conversion_id=fallback_conversion_id,
             dedup_key=str(cfg.get("dedup_key") or "conversion_id"),
         )
-        if dedupe_seen is not None and dedup_value:
-            if dedup_value in dedupe_seen:
-                continue
-            dedupe_seen.add(dedup_value)
         raw_value, currency = _value_and_currency(
             conversion,
             payload,
@@ -243,5 +264,13 @@ def compute_payload_revenue_value(
             currency_field_path=str(cfg.get("currency_field_path") or "currency"),
             base_currency=str(cfg.get("base_currency") or "EUR"),
         )
-        total += _to_base(raw_value, currency, cfg)
-    return round(total, 6)
+        out.append(
+            {
+                "name": name,
+                "dedup_key": dedup_value,
+                "currency": currency,
+                "value_raw": _safe_number(raw_value),
+                "value_in_base": _safe_number(_to_base(raw_value, currency, cfg)),
+            }
+        )
+    return out

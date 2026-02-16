@@ -77,7 +77,7 @@ def _conversions_and_revenue_from_paths(
     q = db.query(ConversionPath).filter(ConversionPath.conversion_ts >= date_from, ConversionPath.conversion_ts <= date_to)
     if conversion_key:
         q = q.filter(ConversionPath.conversion_key == conversion_key)
-    rows = q.all()
+    rows = q.order_by(ConversionPath.conversion_ts.desc()).all()
     total_value = 0.0
     daily: Dict[str, Dict[str, Any]] = {}
     for r in rows:
@@ -175,7 +175,7 @@ def _series_from_conversion_paths(
     )
     if conversion_key:
         q = q.filter(ConversionPath.conversion_key == conversion_key)
-    rows = q.all()
+    rows = q.order_by(ConversionPath.conversion_ts.desc()).all()
     conv_map: Dict[str, float] = {}
     rev_map: Dict[str, float] = {}
     total_revenue = 0.0
@@ -619,7 +619,7 @@ def get_overview_drivers(
     )
     if conversion_key:
         q = q.filter(ConversionPath.conversion_key == conversion_key)
-    rows = q.all()
+    rows = q.order_by(ConversionPath.conversion_ts.desc()).all()
 
     # Aggregate by channel from paths (revenue/conversions)
     ch_rev: Dict[str, float] = {}
@@ -651,7 +651,7 @@ def get_overview_drivers(
     prev_rows = db.query(ConversionPath).filter(
         ConversionPath.conversion_ts >= prev_from,
         ConversionPath.conversion_ts <= prev_to,
-    ).all()
+    ).order_by(ConversionPath.conversion_ts.desc()).all()
     if conversion_key:
         prev_rows = [r for r in prev_rows if r.conversion_key == conversion_key]
     prev_ch_rev: Dict[str, float] = {}

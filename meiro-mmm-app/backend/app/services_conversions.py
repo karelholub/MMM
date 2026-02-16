@@ -19,7 +19,7 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from .models_config_dq import ConversionPath
-from .services_revenue_config import compute_payload_revenue_value, get_revenue_config
+from .services_revenue_config import compute_payload_revenue_value, extract_revenue_entries, get_revenue_config
 
 
 def _parse_ts(ts: Any):
@@ -246,7 +246,7 @@ def load_journeys_from_db(
     q = db.query(ConversionPath)
     if conversion_key is not None:
         q = q.filter(ConversionPath.conversion_key == conversion_key)
-    rows = q.order_by(ConversionPath.conversion_ts.asc()).limit(limit).all()
+    rows = q.order_by(ConversionPath.conversion_ts.desc()).limit(limit).all()
 
     revenue_config = get_revenue_config()
     dedupe_seen = set()
@@ -255,6 +255,11 @@ def load_journeys_from_db(
         payload = r.path_json
         if isinstance(payload, dict):
             legacy = v2_to_legacy(payload)
+            entries = extract_revenue_entries(
+                payload,
+                revenue_config,
+                fallback_conversion_id=str(getattr(r, "conversion_id", "") or ""),
+            )
             revenue_value = compute_payload_revenue_value(
                 payload,
                 revenue_config,
@@ -262,6 +267,6 @@ def load_journeys_from_db(
                 fallback_conversion_id=str(getattr(r, "conversion_id", "") or ""),
             )
             legacy["conversion_value"] = float(revenue_value)
+            legacy["_revenue_entries"] = entries
             journeys.append(legacy)
     return journeys
-
