@@ -21,5 +21,29 @@
     "excluded_channels": [
       "direct"
     ]
+  },
+  "feature_flags": {
+    "journeys_enabled": true,
+    "journey_examples_enabled": true,
+    "funnel_builder_enabled": true,
+    "funnel_diagnostics_enabled": false,
+    "access_control_enabled": false,
+    "custom_roles_enabled": true,
+    "audit_log_enabled": true,
+    "scim_enabled": false,
+    "sso_enabled": false
+  },
+  "revenue_config": {
+    "conversion_names": [
+      "purchase"
+    ],
+    "value_field_path": "value",
+    "currency_field_path": "currency",
+    "dedup_key": "conversion_id",
+    "base_currency": "EUR",
+    "fx_enabled": false,
+    "fx_mode": "none",
+    "fx_rates_json": {},
+    "source_type": "conversion_event"
   }
 }

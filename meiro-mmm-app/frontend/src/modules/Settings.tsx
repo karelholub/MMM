@@ -14,6 +14,7 @@ import JourneysSettingsSection from './JourneysSettingsSection'
 import AccessControlUsersSection from './AccessControlUsersSection'
 import AccessControlRolesSection from './AccessControlRolesSection'
 import AccessControlAuditLogSection from './AccessControlAuditLogSection'
+import RevenueKpiDefinitionCard from './RevenueKpiDefinitionCard'
 import { usePermissions } from '../hooks/usePermissions'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
 
@@ -154,6 +155,18 @@ interface FeatureFlags {
   sso_enabled: boolean
 }
 
+interface RevenueConfig {
+  conversion_names: string[]
+  value_field_path: string
+  currency_field_path: string
+  dedup_key: 'conversion_id' | 'order_id' | 'event_id'
+  base_currency: string
+  fx_enabled: boolean
+  fx_mode: 'none' | 'static_rates'
+  fx_rates_json: Record<string, number>
+  source_type?: string
+}
+
 type NbaPresetKey = 'conservative' | 'balanced' | 'aggressive'
 
 const NBA_PRESETS: Record<
@@ -187,6 +200,7 @@ interface Settings {
   mmm: MMMSettings
   nba: NBASettings
   feature_flags: FeatureFlags
+  revenue_config: RevenueConfig
 }
 
 type MatchOperator = 'any' | 'contains' | 'equals' | 'regex'
@@ -446,6 +460,17 @@ const DEFAULT_SETTINGS: Settings = {
     audit_log_enabled: false,
     scim_enabled: false,
     sso_enabled: false,
+  },
+  revenue_config: {
+    conversion_names: ['purchase'],
+    value_field_path: 'value',
+    currency_field_path: 'currency',
+    dedup_key: 'conversion_id',
+    base_currency: 'EUR',
+    fx_enabled: false,
+    fx_mode: 'none',
+    fx_rates_json: {},
+    source_type: 'conversion_event',
   },
 }
 
@@ -2962,6 +2987,11 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
             settingsBaseline?.feature_flags ??
             DEFAULT_SETTINGS.feature_flags,
         ),
+        revenue_config: deepClone(
+          overrides.revenue_config ??
+            settingsBaseline?.revenue_config ??
+            DEFAULT_SETTINGS.revenue_config,
+        ),
       }),
       [settingsBaseline],
     )
@@ -3001,6 +3031,8 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                 : prev?.mmm ?? deepClone(DEFAULT_SETTINGS.mmm),
               feature_flags:
                 prev?.feature_flags ?? deepClone(DEFAULT_SETTINGS.feature_flags),
+              revenue_config:
+                prev?.revenue_config ?? deepClone(DEFAULT_SETTINGS.revenue_config),
             }))
             if (settingsSections.includes('attribution')) {
               setAttributionDraft(deepClone(merged.attribution))
@@ -5099,6 +5131,8 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
             KPI drives attribution defaults and ROI calculations, while micro
             conversions enrich reporting and next-best-action models.
           </div>
+
+          <RevenueKpiDefinitionCard />
 
           <div
             style={{

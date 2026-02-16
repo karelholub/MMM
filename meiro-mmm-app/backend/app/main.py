@@ -14,7 +14,9 @@ import hashlib
 import secrets
 import requests
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from sqlalchemy import func
 
 logger = logging.getLogger(__name__)
 from app.utils.token_store import save_token, get_token, delete_token, get_all_connected_platforms
@@ -74,8 +76,11 @@ from app.services_access_control import PERMISSIONS as RBAC_PERMISSIONS
 from app.services_auth import (
     CSRF_HEADER_NAME,
     SESSION_COOKIE_NAME,
+    authenticate_local_user,
     create_session,
+    ensure_local_password_seed_users,
     ensure_user_and_membership,
+    issue_csrf_token,
     require_auth_context,
     resolve_auth_context,
     revoke_all_user_sessions,
@@ -88,7 +93,6 @@ from app.services_conversions import (
     apply_model_config_to_journeys,
     load_journeys_from_db,
     persist_journeys_as_conversion_paths,
-    v2_to_legacy,
 )
 from app.services_journey_ingestion import validate_and_normalize
 from app.services_import_runs import (
@@ -127,6 +131,19 @@ from app.services_data_sources import (
     test_saved_data_source,
     update_data_source,
 )
+from app.services_oauth_connections import (
+    OAUTH_PROVIDER_LABELS,
+    build_authorization_url,
+    complete_oauth_callback,
+    create_oauth_session,
+    disconnect_connection,
+    list_oauth_connections,
+    list_provider_accounts,
+    normalize_provider_key,
+    select_accounts,
+    test_connection_health,
+    get_access_token_for_provider,
+)
 from app.services_journey_alerts import (
     ALERT_DOMAINS as JOURNEY_ALERT_DOMAINS,
     ALERT_TYPES as JOURNEY_ALERT_TYPES,
@@ -157,6 +174,9 @@ from app.services_overview import (
 from app.services_performance_trends import (
     build_channel_trend_response,
     build_campaign_trend_response,
+    build_channel_summary_response,
+    build_campaign_summary_response,
+    resolve_period_windows,
 )
 from app.services_quality import (
     load_config_and_meta,
@@ -165,6 +185,11 @@ from app.services_quality import (
     compute_overall_quality_from_dq,
 )
 from app.services_paths import compute_path_archetypes, compute_path_anomalies
+from app.services_revenue_config import normalize_revenue_config
+from app.services_conversion_paths_adapter import (
+    build_conversion_paths_analysis_from_daily,
+    build_conversion_path_details_from_daily,
+)
 from app.services_mmm_platform import build_mmm_dataset_from_platform
 from app.services_mmm_mapping import build_smart_suggestions, validate_mapping
 from app.services_incrementality import (
@@ -280,11 +305,32 @@ def _ensure_journey_paths_columns():
         logger.debug("Journey paths column check skipped: %s", e)
 
 
+def _ensure_user_auth_columns():
+    """Ensure local credential auth columns exist for SQLite/dev databases."""
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            for stmt in (
+                "ALTER TABLE users ADD COLUMN username VARCHAR(64)",
+                "ALTER TABLE users ADD COLUMN password_hash VARCHAR(255)",
+                "ALTER TABLE users ADD COLUMN password_updated_at TIMESTAMP",
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_username ON users (username)",
+            ):
+                try:
+                    conn.execute(text(stmt))
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+    except Exception as e:
+        logger.debug("User auth column check skipped: %s", e)
+
+
 if "sqlite" in (os.getenv("DATABASE_URL") or "").lower() or not os.getenv("DATABASE_URL"):
     try:
         _ensure_alert_tables_columns()
         _ensure_journey_definition_columns()
         _ensure_journey_paths_columns()
+        _ensure_user_auth_columns()
     except Exception:
         pass
 
@@ -317,8 +363,26 @@ def _maybe_seed_default_journey_definition() -> None:
         db.close()
 
 
+def _maybe_seed_local_auth_users() -> None:
+    """Seed minimal local credential users for dev/demo login."""
+    if not _is_dev_environment():
+        return
+    db = SessionLocal()
+    try:
+        ensure_local_password_seed_users(db, workspace_id=DEFAULT_WORKSPACE_ID)
+    except Exception as e:
+        logger.debug("Local auth seed skipped: %s", e)
+    finally:
+        db.close()
+
+
 try:
     _maybe_seed_default_journey_definition()
+except Exception:
+    pass
+
+try:
+    _maybe_seed_local_auth_users()
 except Exception:
     pass
 
@@ -805,11 +869,24 @@ class FeatureFlags(BaseModel):
     sso_enabled: bool = False
 
 
+class RevenueConfig(BaseModel):
+    conversion_names: List[str] = Field(default_factory=lambda: ["purchase"])
+    value_field_path: str = "value"
+    currency_field_path: str = "currency"
+    dedup_key: str = "conversion_id"
+    base_currency: str = "EUR"
+    fx_enabled: bool = False
+    fx_mode: str = "none"
+    fx_rates_json: Dict[str, float] = Field(default_factory=dict)
+    source_type: str = "conversion_event"
+
+
 class Settings(BaseModel):
     attribution: AttributionSettings = AttributionSettings()
     mmm: MMMSettings = MMMSettings()
     nba: NBASettings = NBASettings()
     feature_flags: FeatureFlags = FeatureFlags()
+    revenue_config: RevenueConfig = RevenueConfig()
 
 
 class AttributionPreviewPayload(BaseModel):
@@ -1761,7 +1838,10 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
 
 class AuthLoginPayload(BaseModel):
-    email: str
+    email: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    provider: str = "bootstrap"
     name: Optional[str] = None
     workspace_id: str = "default"
 
@@ -1857,10 +1937,34 @@ def update_settings(
     _ctx: PermissionContext = Depends(require_permission("settings.manage")),
 ):
     """Update global configuration. Overwrites previous settings."""
-    global SETTINGS
+    global SETTINGS, JOURNEYS
     SETTINGS = new_settings
+    JOURNEYS = []
     _save_settings()
     return SETTINGS
+
+
+@app.get("/api/settings/revenue-config")
+def get_revenue_config_settings(_ctx: PermissionContext = Depends(require_permission("settings.view"))):
+    return normalize_revenue_config(getattr(SETTINGS, "revenue_config", None).model_dump() if getattr(SETTINGS, "revenue_config", None) else None)
+
+
+@app.put("/api/settings/revenue-config")
+def update_revenue_config_settings(
+    payload: RevenueConfig,
+    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
+):
+    global SETTINGS, JOURNEYS
+    SETTINGS = Settings(
+        attribution=SETTINGS.attribution,
+        mmm=SETTINGS.mmm,
+        nba=SETTINGS.nba,
+        feature_flags=SETTINGS.feature_flags,
+        revenue_config=RevenueConfig(**normalize_revenue_config(payload.model_dump())),
+    )
+    JOURNEYS = []
+    _save_settings()
+    return normalize_revenue_config(SETTINGS.revenue_config.model_dump())
 
 
 # ---- Notification settings (channels + user prefs) ----
@@ -3055,14 +3159,54 @@ def get_field_mapping():
 @app.get("/api/datasources/connections")
 def get_datasource_connections(db=Depends(get_db)):
     """Combined connection status for Meiro CDP and ad platforms (for Connections section)."""
-    connected = get_all_connected_platforms()
     config_status = ds_config.get_status()
     meiro_connected = meiro_cdp.is_connected()
+    oauth_items = list_oauth_connections(db, workspace_id="default").get("items", [])
+    by_provider = {row.get("provider_key"): row for row in oauth_items}
+
+    def _status_for(provider_key: str) -> str:
+        row = by_provider.get(provider_key)
+        if not row:
+            return "needs_attention" if not config_status.get(provider_key.split("_", 1)[0], {}).get("configured") else "not_connected"
+        status = (row.get("status") or "").lower()
+        if status in ("connected", "error", "disabled", "needs_reauth"):
+            return status
+        if status == "not_connected":
+            return "not_connected"
+        return "not_connected"
+
     connections = [
         {"id": "meiro", "label": "Meiro CDP", "status": "connected" if meiro_connected else "not_connected", "role": "journeys"},
-        {"id": "meta", "label": "Meta Ads", "status": "connected" if "meta" in connected else ("needs_attention" if not config_status.get("meta", {}).get("configured") else "not_connected"), "role": "spend"},
-        {"id": "google", "label": "Google Ads", "status": "connected" if "google" in connected else ("needs_attention" if not config_status.get("google", {}).get("configured") else "not_connected"), "role": "spend"},
-        {"id": "linkedin", "label": "LinkedIn Ads", "status": "connected" if "linkedin" in connected else ("needs_attention" if not config_status.get("linkedin", {}).get("configured") else "not_connected"), "role": "spend"},
+        {
+            "id": "meta",
+            "provider_key": "meta_ads",
+            "label": "Meta Ads",
+            "status": _status_for("meta_ads"),
+            "role": "spend",
+            "selected_accounts_count": int((by_provider.get("meta_ads") or {}).get("selected_accounts_count") or 0),
+            "last_error": (by_provider.get("meta_ads") or {}).get("last_error"),
+            "last_tested_at": (by_provider.get("meta_ads") or {}).get("last_tested_at"),
+        },
+        {
+            "id": "google",
+            "provider_key": "google_ads",
+            "label": "Google Ads",
+            "status": _status_for("google_ads"),
+            "role": "spend",
+            "selected_accounts_count": int((by_provider.get("google_ads") or {}).get("selected_accounts_count") or 0),
+            "last_error": (by_provider.get("google_ads") or {}).get("last_error"),
+            "last_tested_at": (by_provider.get("google_ads") or {}).get("last_tested_at"),
+        },
+        {
+            "id": "linkedin",
+            "provider_key": "linkedin_ads",
+            "label": "LinkedIn Ads",
+            "status": _status_for("linkedin_ads"),
+            "role": "spend",
+            "selected_accounts_count": int((by_provider.get("linkedin_ads") or {}).get("selected_accounts_count") or 0),
+            "last_error": (by_provider.get("linkedin_ads") or {}).get("last_error"),
+            "last_tested_at": (by_provider.get("linkedin_ads") or {}).get("last_tested_at"),
+        },
     ]
     # Append inventory-backed connectors (warehouses and other future systems).
     try:
@@ -3094,7 +3238,7 @@ class DataSourceCreatePayload(BaseModel):
 
 class DataSourceUpdatePayload(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
-    status: Optional[str] = Field(None, pattern="^(connected|error|disabled)$")
+    status: Optional[str] = Field(None, pattern="^(connected|error|needs_reauth|disabled)$")
     config_json: Optional[Dict[str, Any]] = None
 
 
@@ -3270,7 +3414,7 @@ async def upload_journeys(file: UploadFile = File(...), import_note: Optional[st
     summary = result["import_summary"]
     persist_journeys_as_conversion_paths(db, valid, replace=True)
     _refresh_journey_aggregates_after_import(db)
-    JOURNEYS = [v2_to_legacy(j) for j in valid]
+    JOURNEYS = []
     _save_last_import_result(result)
     errs = [i for i in result.get("validation_items", []) if i.get("severity") == "error"]
     warns = [i for i in result.get("validation_items", []) if i.get("severity") == "warning"]
@@ -3349,9 +3493,9 @@ def import_journeys_from_cdp(
         if cfg:
             journeys = apply_model_config_to_journeys(journeys, cfg.config_json or {})
 
-    JOURNEYS = journeys
-    persist_journeys_as_conversion_paths(db, JOURNEYS, replace=True)
+    persist_journeys_as_conversion_paths(db, journeys, replace=True)
     _refresh_journey_aggregates_after_import(db)
+    JOURNEYS = []
     converted = sum(1 for j in journeys if j.get("converted", True))
     ch_set = set()
     for j in journeys:
@@ -3364,7 +3508,7 @@ def import_journeys_from_cdp(
         preview_rows=[{"customer_id": j.get("customer_id", "?"), "touchpoints": len(j.get("touchpoints", [])), "value": j.get("conversion_value", 0)} for j in journeys[:20]],
         import_note=req.import_note,
     )
-    return {"count": len(JOURNEYS), "message": f"Parsed {len(JOURNEYS)} journeys from CDP data"}
+    return {"count": len(journeys), "message": f"Parsed {len(journeys)} journeys from CDP data"}
 
 class LoadSampleRequest(BaseModel):
     import_note: Optional[str] = None
@@ -3390,7 +3534,7 @@ def load_sample_journeys(req: LoadSampleRequest = Body(default=LoadSampleRequest
     summary = result["import_summary"]
     persist_journeys_as_conversion_paths(db, valid, replace=True)
     _refresh_journey_aggregates_after_import(db)
-    JOURNEYS = [v2_to_legacy(j) for j in valid]
+    JOURNEYS = []
     _save_last_import_result(result)
     errs = [i for i in result.get("validation_items", []) if i.get("severity") == "error"]
     warns = [i for i in result.get("validation_items", []) if i.get("severity") == "warning"]
@@ -3635,6 +3779,46 @@ def get_path_analysis(
     return path_analysis
 
 
+@app.get("/api/conversion-paths/analysis")
+def get_conversion_paths_analysis_aggregated(
+    definition_id: Optional[str] = Query(None, description="Optional journey definition id"),
+    date_from: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    date_to: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    direct_mode: str = Query("include", description="include|exclude"),
+    path_scope: str = Query("converted", description="converted|all"),
+    channel_group: Optional[str] = Query(None),
+    campaign_id: Optional[str] = Query(None),
+    device: Optional[str] = Query(None),
+    country: Optional[str] = Query(None),
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("attribution.view")),
+):
+    d_from = None
+    d_to = None
+    try:
+        if date_from:
+            d_from = datetime.fromisoformat(date_from).date()
+        if date_to:
+            d_to = datetime.fromisoformat(date_to).date()
+    except Exception:
+        raise HTTPException(status_code=400, detail="date_from/date_to must be YYYY-MM-DD")
+    if d_from and d_to and d_from > d_to:
+        raise HTTPException(status_code=400, detail="date_from must be <= date_to")
+    return build_conversion_paths_analysis_from_daily(
+        db,
+        definition_id=definition_id,
+        date_from=d_from,
+        date_to=d_to,
+        direct_mode=(direct_mode or "include").lower(),
+        path_scope=(path_scope or "converted").lower(),
+        channel_group=channel_group,
+        campaign_id=campaign_id,
+        device=device,
+        country=country,
+        nba_config=SETTINGS.nba.model_dump(),
+    )
+
+
 @app.get("/api/paths/details")
 def get_path_details(
     path: str,
@@ -3840,6 +4024,44 @@ def get_path_details(
             "confidence": confidence,
         },
     }
+
+
+@app.get("/api/conversion-paths/details")
+def get_conversion_path_details_aggregated(
+    path: str,
+    definition_id: Optional[str] = Query(None, description="Optional journey definition id"),
+    date_from: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    date_to: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    direct_mode: str = Query("include", description="include|exclude"),
+    path_scope: str = Query("converted", description="converted|all"),
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("attribution.view")),
+):
+    if not path:
+        raise HTTPException(status_code=400, detail="path is required")
+    d_from = None
+    d_to = None
+    try:
+        if date_from:
+            d_from = datetime.fromisoformat(date_from).date()
+        if date_to:
+            d_to = datetime.fromisoformat(date_to).date()
+    except Exception:
+        raise HTTPException(status_code=400, detail="date_from/date_to must be YYYY-MM-DD")
+    if d_from and d_to and d_from > d_to:
+        raise HTTPException(status_code=400, detail="date_from must be <= date_to")
+    try:
+        return build_conversion_path_details_from_daily(
+            db,
+            path=path,
+            definition_id=definition_id,
+            date_from=d_from,
+            date_to=d_to,
+            direct_mode=(direct_mode or "include").lower(),
+            path_scope=(path_scope or "converted").lower(),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.get("/api/paths/archetypes")
@@ -4557,6 +4779,8 @@ def trigger_sync(
             token_data = get_token("meta")
             access_token = token_data.get("access_token") if token_data else None
             if not access_token:
+                access_token = get_access_token_for_provider(db, workspace_id="default", provider_key="meta_ads")
+            if not access_token:
                 raise HTTPException(status_code=401, detail="No Meta access token. Connect your Meta account first.")
             # Need ad_account_id - use first from config or a placeholder
             ad_account_id = ds_config.get_effective("meta", "ad_account_id") or "me"
@@ -4566,6 +4790,8 @@ def trigger_sync(
         elif source == "linkedin_ads":
             token_data = get_token("linkedin")
             access_token = token_data.get("access_token") if token_data else None
+            if not access_token:
+                access_token = get_access_token_for_provider(db, workspace_id="default", provider_key="linkedin_ads")
             if not access_token:
                 raise HTTPException(status_code=401, detail="No LinkedIn access token. Connect your account first.")
             r = fetch_linkedin(since=since, until=until, access_token=access_token)
@@ -4680,22 +4906,49 @@ def get_reconciliation_drilldown(
 @app.post("/api/auth/login")
 def login_with_session(payload: AuthLoginPayload, response: Response, request: Request, db=Depends(get_db)):
     """
-    Dev/session login bootstrap.
-    Creates (or reuses) user + active membership and issues an opaque session cookie.
+    Session login endpoint.
+    - provider=local_password: username/email + password
+    - provider=bootstrap: legacy dev bootstrap by email (no password)
     """
-    try:
-        user = ensure_user_and_membership(
+    provider = (payload.provider or "bootstrap").strip().lower()
+    workspace_id = (payload.workspace_id or DEFAULT_WORKSPACE_ID).strip() or DEFAULT_WORKSPACE_ID
+    if provider not in {"bootstrap", "local_password"}:
+        raise HTTPException(status_code=400, detail="Unsupported auth provider")
+
+    user = None
+    if provider == "local_password":
+        identifier = (payload.username or payload.email or "").strip().lower()
+        if not identifier:
+            raise HTTPException(status_code=400, detail="username or email is required")
+        if not payload.password:
+            raise HTTPException(status_code=400, detail="password is required")
+        ensure_local_password_seed_users(db, workspace_id=workspace_id)
+        user = authenticate_local_user(
             db,
-            email=payload.email,
-            name=payload.name,
-            workspace_id=payload.workspace_id,
+            identifier=identifier,
+            password=payload.password,
+            workspace_id=workspace_id,
         )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+    else:
+        email = (payload.email or "").strip()
+        if not email:
+            raise HTTPException(status_code=400, detail="email is required")
+        try:
+            user = ensure_user_and_membership(
+                db,
+                email=email,
+                name=payload.name,
+                workspace_id=workspace_id,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
     session_tokens = create_session(
         db,
         user=user,
-        workspace_id=payload.workspace_id,
+        workspace_id=workspace_id,
         request=request,
     )
     _set_session_cookie(response, session_tokens["session_id"])
@@ -4717,16 +4970,31 @@ def login_with_session(payload: AuthLoginPayload, response: Response, request: R
         "role": ctx.role.name if ctx.role else None,
         "permissions": sorted(ctx.permissions),
         "csrf_token": session_tokens["csrf_token"],
+        "provider": provider,
+    }
+
+
+@app.get("/api/auth/providers")
+def auth_providers():
+    """Auth provider registry scaffold for future SSO/Google integrations."""
+    return {
+        "providers": [
+            {"id": "local_password", "label": "Username & Password", "enabled": True},
+            {"id": "google_oauth", "label": "Google", "enabled": False, "coming_soon": True},
+            {"id": "sso_oidc", "label": "SSO (OIDC/SAML)", "enabled": False, "coming_soon": True},
+        ]
     }
 
 
 @app.get("/api/auth/me")
 def get_auth_me(request: Request, db=Depends(get_db)):
     ctx = require_auth_context(db, request)
+    csrf_token = issue_csrf_token(db, request.cookies.get(SESSION_COOKIE_NAME))
     return {
         "authenticated": True,
         "user": {
             "id": ctx.user.id,
+            "username": getattr(ctx.user, "username", None),
             "email": ctx.user.email,
             "name": ctx.user.name,
             "status": ctx.user.status,
@@ -4744,6 +5012,7 @@ def get_auth_me(request: Request, db=Depends(get_db)):
             "role_name": ctx.role.name if ctx.role else None,
         },
         "permissions": sorted(ctx.permissions),
+        "csrf_token": csrf_token,
     }
 
 
@@ -4812,48 +5081,183 @@ def auth_status():
         connected.append("meiro_cdp")
     return {"connected": connected}
 
-@app.get("/api/auth/callback/{platform}")
-async def oauth_callback(platform: str, code: Optional[str] = Query(None), error: Optional[str] = Query(None)):
-    if error:
-        return RedirectResponse(url=f"{FRONTEND_URL}/datasources?error={platform}&message={error}")
-    if not code:
-        return RedirectResponse(url=f"{FRONTEND_URL}/datasources?error={platform}&message=no_code")
-    redirect_uri = f"{BASE_URL}/api/auth/callback/{platform}"
+def _resolve_workspace_user_from_request(request: Request, db) -> Tuple[str, str]:
+    raw_session_id = request.cookies.get(SESSION_COOKIE_NAME)
+    if raw_session_id:
+        ctx = require_auth_context(db, request)
+        return ctx.workspace.id, ctx.user.id
+    workspace_id = (request.headers.get("X-Workspace-Id") or request.query_params.get("workspace_id") or "default").strip() or "default"
+    user_id = (request.headers.get("X-User-Id") or request.query_params.get("user_id") or "system").strip() or "system"
+    return workspace_id, user_id
+
+
+def _oauth_redirect_uri(provider_key: str) -> str:
+    return f"{BASE_URL}/oauth/{provider_key}/callback"
+
+
+class OAuthStartPayload(BaseModel):
+    return_url: Optional[str] = None
+
+
+class OAuthSelectAccountsPayload(BaseModel):
+    account_ids: List[str] = Field(default_factory=list)
+
+
+@app.get("/api/connections")
+def api_list_connections(
+    request: Request,
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("settings.view")),
+):
+    workspace_id, _user_id = _resolve_workspace_user_from_request(request, db)
+    return list_oauth_connections(db, workspace_id=workspace_id)
+
+
+@app.post("/api/connections/{provider}/start")
+def api_start_connection(
+    provider: str,
+    body: OAuthStartPayload = Body(default=OAuthStartPayload()),
+    request: Request = None,
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
+):
+    provider_key = normalize_provider_key(provider)
+    if provider_key not in OAUTH_PROVIDER_LABELS:
+        raise HTTPException(status_code=404, detail="Unsupported provider")
+    workspace_id, user_id = _resolve_workspace_user_from_request(request, db)
     try:
-        if platform == "meta":
-            client_id = ds_config.get_effective("meta", "app_id")
-            client_secret = ds_config.get_effective("meta", "app_secret")
-            if not client_id or not client_secret:
-                raise HTTPException(status_code=500, detail="Meta OAuth not configured. Set in Administration.")
-            response = requests.get("https://graph.facebook.com/v19.0/oauth/access_token",
-                params={"client_id": client_id, "client_secret": client_secret, "redirect_uri": redirect_uri, "code": code}, timeout=30)
-            response.raise_for_status()
-            save_token("meta", response.json())
-            return RedirectResponse(url=f"{FRONTEND_URL}/datasources?success=meta")
-        elif platform == "google":
-            client_id = ds_config.get_effective("google", "client_id")
-            client_secret = ds_config.get_effective("google", "client_secret")
-            if not client_id or not client_secret:
-                raise HTTPException(status_code=500, detail="Google OAuth not configured. Set in Administration.")
-            response = requests.post("https://oauth2.googleapis.com/token",
-                data={"code": code, "client_id": client_id, "client_secret": client_secret, "redirect_uri": redirect_uri, "grant_type": "authorization_code"}, timeout=30)
-            response.raise_for_status()
-            save_token("google", response.json())
-            return RedirectResponse(url=f"{FRONTEND_URL}/datasources?success=google")
-        elif platform == "linkedin":
-            client_id = ds_config.get_effective("linkedin", "client_id")
-            client_secret = ds_config.get_effective("linkedin", "client_secret")
-            if not client_id or not client_secret:
-                raise HTTPException(status_code=500, detail="LinkedIn OAuth not configured. Set in Administration.")
-            response = requests.post("https://www.linkedin.com/oauth/v2/accessToken",
-                data={"grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri, "client_id": client_id, "client_secret": client_secret}, timeout=30)
-            response.raise_for_status()
-            save_token("linkedin", response.json())
-            return RedirectResponse(url=f"{FRONTEND_URL}/datasources?success=linkedin")
-        else:
-            return RedirectResponse(url=f"{FRONTEND_URL}/datasources?error={platform}&message=unknown_platform")
-    except requests.RequestException:
-        return RedirectResponse(url=f"{FRONTEND_URL}/datasources?error={platform}&message=token_exchange_failed")
+        session_data = create_oauth_session(
+            db,
+            workspace_id=workspace_id,
+            user_id=user_id,
+            provider_key=provider_key,
+            return_url=body.return_url,
+        )
+        auth_url = build_authorization_url(
+            provider_key=provider_key,
+            state=session_data["state"],
+            code_challenge=session_data["code_challenge"],
+            redirect_uri=_oauth_redirect_uri(provider_key),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"authorization_url": auth_url}
+
+
+@app.post("/api/connections/{provider}/reauth")
+def api_reauth_connection(
+    provider: str,
+    body: OAuthStartPayload = Body(default=OAuthStartPayload()),
+    request: Request = None,
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
+):
+    return api_start_connection(provider=provider, body=body, request=request, db=db)
+
+
+@app.get("/oauth/{provider}/callback")
+def oauth_callback(provider: str, code: Optional[str] = Query(None), state: Optional[str] = Query(None), error: Optional[str] = Query(None), db=Depends(get_db)):
+    provider_key = normalize_provider_key(provider)
+    if provider_key not in OAUTH_PROVIDER_LABELS:
+        return RedirectResponse(url=f"{FRONTEND_URL}/datasources?oauth_error=unsupported_provider")
+
+    if error:
+        return RedirectResponse(url=f"{FRONTEND_URL}/datasources?oauth_provider={provider_key}&oauth_error={error}")
+    if not code or not state:
+        return RedirectResponse(url=f"{FRONTEND_URL}/datasources?oauth_provider={provider_key}&oauth_error=missing_code_or_state")
+    try:
+        connection, return_url, normalized_error = complete_oauth_callback(
+            db,
+            provider_key=provider_key,
+            code=code,
+            state=state,
+            redirect_uri=_oauth_redirect_uri(provider_key),
+        )
+        if normalized_error:
+            message = normalized_error.message.replace(" ", "+")
+            return RedirectResponse(
+                url=f"{FRONTEND_URL}/datasources?oauth_provider={provider_key}&oauth_status=error&oauth_error={normalized_error.code}&oauth_message={message}"
+            )
+        redirect_base = f"{FRONTEND_URL}/datasources"
+        if return_url and (return_url.startswith("/") or return_url.startswith(FRONTEND_URL)):
+            redirect_base = f"{FRONTEND_URL}{return_url}" if return_url.startswith("/") else return_url
+        return RedirectResponse(
+            url=f"{redirect_base}?oauth_provider={provider_key}&oauth_status=connected&accounts={len((connection.config_json or {}).get('available_accounts') or [])}"
+        )
+    except Exception:
+        return RedirectResponse(url=f"{FRONTEND_URL}/datasources?oauth_provider={provider_key}&oauth_status=error&oauth_error=callback_failed")
+
+
+@app.get("/api/connections/{provider}/accounts")
+def api_connection_accounts(
+    provider: str,
+    request: Request,
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("settings.view")),
+):
+    provider_key = normalize_provider_key(provider)
+    workspace_id, _user_id = _resolve_workspace_user_from_request(request, db)
+    try:
+        accounts = list_provider_accounts(db, workspace_id=workspace_id, provider_key=provider_key)
+        return {"provider_key": provider_key, "accounts": accounts}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/connections/{provider}/select-accounts")
+def api_connection_select_accounts(
+    provider: str,
+    body: OAuthSelectAccountsPayload,
+    request: Request,
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
+):
+    provider_key = normalize_provider_key(provider)
+    workspace_id, _user_id = _resolve_workspace_user_from_request(request, db)
+    try:
+        out = select_accounts(
+            db,
+            workspace_id=workspace_id,
+            provider_key=provider_key,
+            account_ids=body.account_ids,
+        )
+        return out
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/api/connections/{provider}/test")
+def api_connection_test(
+    provider: str,
+    request: Request,
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
+):
+    provider_key = normalize_provider_key(provider)
+    workspace_id, _user_id = _resolve_workspace_user_from_request(request, db)
+    try:
+        return test_connection_health(db, workspace_id=workspace_id, provider_key=provider_key)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/api/connections/{provider}/disconnect")
+def api_connection_disconnect(
+    provider: str,
+    request: Request,
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
+):
+    provider_key = normalize_provider_key(provider)
+    workspace_id, _user_id = _resolve_workspace_user_from_request(request, db)
+    try:
+        out = disconnect_connection(db, workspace_id=workspace_id, provider_key=provider_key)
+        return {"ok": True, "connection": out}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
 
 @app.delete("/api/auth/{platform}")
 def disconnect_platform(platform: str):
@@ -4869,6 +5273,7 @@ class DatasourceCredentialUpdate(BaseModel):
     platform: str  # "google" | "meta" | "linkedin"
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
+    developer_token: Optional[str] = None  # Google Ads only
     app_id: Optional[str] = None      # Meta only
     app_secret: Optional[str] = None   # Meta only
 
@@ -4896,6 +5301,8 @@ def update_datasource_config(
                 ds_config.set_stored("google", client_id=body.client_id)
             if body.client_secret is not None:
                 ds_config.set_stored("google", client_secret=body.client_secret)
+            if body.developer_token is not None:
+                ds_config.set_stored("google", developer_token=body.developer_token)
         elif platform == "meta":
             if body.app_id is not None:
                 ds_config.set_stored("meta", app_id=body.app_id)
@@ -4911,24 +5318,28 @@ def update_datasource_config(
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/api/auth/{platform}")
-def start_oauth(platform: str):
-    redirect_uri = f"{BASE_URL}/api/auth/callback/{platform}"
-    if platform == "meta":
-        client_id = ds_config.get_effective("meta", "app_id")
-        if not client_id:
-            raise HTTPException(status_code=500, detail="Meta OAuth not configured. Set credentials in Data Sources → Administration.")
-        return RedirectResponse(url=f"https://www.facebook.com/v19.0/dialog/oauth?client_id={client_id}&redirect_uri={redirect_uri}&scope=ads_read,ads_management,business_management")
-    elif platform == "google":
-        client_id = ds_config.get_effective("google", "client_id")
-        if not client_id:
-            raise HTTPException(status_code=500, detail="Google OAuth not configured. Set credentials in Data Sources → Administration.")
-        return RedirectResponse(url=f"https://accounts.google.com/o/oauth2/v2/auth?client_id={client_id}&redirect_uri={redirect_uri}&response_type=code&scope=https://www.googleapis.com/auth/adwords&access_type=offline&prompt=consent")
-    elif platform == "linkedin":
-        client_id = ds_config.get_effective("linkedin", "client_id")
-        if not client_id:
-            raise HTTPException(status_code=500, detail="LinkedIn OAuth not configured. Set credentials in Data Sources → Administration.")
-        return RedirectResponse(url=f"https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope=r_ads_reporting,r_ads,r_organization_social")
-    raise HTTPException(status_code=400, detail=f"Unknown platform: {platform}")
+def start_oauth(platform: str, request: Request, db=Depends(get_db)):
+    provider_key = normalize_provider_key(platform)
+    if provider_key not in OAUTH_PROVIDER_LABELS:
+        raise HTTPException(status_code=400, detail=f"Unknown platform: {platform}")
+    workspace_id, user_id = _resolve_workspace_user_from_request(request, db)
+    try:
+        session_data = create_oauth_session(
+            db,
+            workspace_id=workspace_id,
+            user_id=user_id,
+            provider_key=provider_key,
+            return_url="/datasources",
+        )
+        auth_url = build_authorization_url(
+            provider_key=provider_key,
+            state=session_data["state"],
+            code_challenge=session_data["code_challenge"],
+            redirect_uri=_oauth_redirect_uri(provider_key),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return RedirectResponse(url=auth_url)
 
 
 class AdminUserUpdatePayload(BaseModel):
@@ -5921,6 +6332,170 @@ class AlertNoteUpdate(BaseModel):
     note: str
 
 
+class PerformanceQueryContext(BaseModel):
+    date_from: str
+    date_to: str
+    timezone: str
+    currency: Optional[str] = None
+    workspace: Optional[str] = None
+    account: Optional[str] = None
+    model_id: Optional[str] = None
+    kpi_key: str = "revenue"
+    grain: str = "auto"
+    compare: bool = True
+    channels: Optional[List[str]] = None
+    conversion_key: Optional[str] = None
+    current_period: Optional[Dict[str, Any]] = None
+    previous_period: Optional[Dict[str, Any]] = None
+
+
+def _normalize_channel_filter(channels: Optional[List[str]]) -> Optional[List[str]]:
+    if not channels:
+        return None
+    normalized: List[str] = []
+    for raw in channels:
+        if raw is None:
+            continue
+        parts = [p.strip() for p in str(raw).split(",")]
+        for part in parts:
+            if not part:
+                continue
+            if part.lower() == "all":
+                return None
+            normalized.append(part)
+    uniq_sorted = sorted(set(normalized))
+    return uniq_sorted or None
+
+
+def _build_performance_query_context(
+    *,
+    date_from: str,
+    date_to: str,
+    timezone: str,
+    currency: Optional[str],
+    workspace: Optional[str],
+    account: Optional[str],
+    model_id: Optional[str],
+    kpi_key: str,
+    grain: str,
+    compare: bool,
+    channels: Optional[List[str]],
+    conversion_key: Optional[str],
+) -> PerformanceQueryContext:
+    windows = resolve_period_windows(date_from=date_from, date_to=date_to, grain=grain)
+    return PerformanceQueryContext(
+        date_from=windows["current_period"]["date_from"],
+        date_to=windows["current_period"]["date_to"],
+        timezone=(timezone or "UTC").strip() or "UTC",
+        currency=currency,
+        workspace=workspace,
+        account=account,
+        model_id=model_id,
+        kpi_key=(kpi_key or "revenue").strip().lower(),
+        grain=grain,
+        compare=bool(compare),
+        channels=_normalize_channel_filter(channels),
+        conversion_key=(conversion_key.strip() if conversion_key else None),
+        current_period=windows.get("current_period"),
+        previous_period=windows.get("previous_period"),
+    )
+
+
+def _safe_zoneinfo(timezone_name: Optional[str]) -> ZoneInfo:
+    try:
+        return ZoneInfo((timezone_name or "UTC").strip() or "UTC")
+    except ZoneInfoNotFoundError:
+        return ZoneInfo("UTC")
+
+
+def _local_date_from_ts(ts_value: Any, timezone_name: Optional[str]) -> Optional[date]:
+    if not ts_value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(ts_value).replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_safe_zoneinfo(timezone_name)).date()
+
+
+def _compute_total_spend_for_period(
+    *,
+    expenses: Any,
+    date_from: str,
+    date_to: str,
+    timezone_name: Optional[str],
+    channels: Optional[List[str]],
+) -> float:
+    start_d = datetime.fromisoformat(date_from[:10]).date()
+    end_d = datetime.fromisoformat(date_to[:10]).date()
+    if end_d < start_d:
+        start_d, end_d = end_d, start_d
+    allowed = set(channels or [])
+    total = 0.0
+    records = expenses.values() if isinstance(expenses, dict) else (expenses or [])
+    for exp in records:
+        if isinstance(exp, dict):
+            status = str(exp.get("status", "active"))
+            channel = exp.get("channel")
+            ts_raw = exp.get("service_period_start")
+            amount = float(exp.get("converted_amount") or exp.get("amount") or 0.0)
+        else:
+            status = str(getattr(exp, "status", "active"))
+            channel = getattr(exp, "channel", None)
+            ts_raw = getattr(exp, "service_period_start", None)
+            amount = float(getattr(exp, "converted_amount", None) or getattr(exp, "amount", 0.0) or 0.0)
+        if status == "deleted" or not channel:
+            continue
+        channel = str(channel)
+        if allowed and channel not in allowed:
+            continue
+        day = _local_date_from_ts(ts_raw, timezone_name)
+        if day is None:
+            continue
+        if start_d <= day <= end_d:
+            total += amount
+    return total
+
+
+def _compute_total_converted_value_for_period(
+    *,
+    journeys: List[Dict[str, Any]],
+    date_from: str,
+    date_to: str,
+    timezone_name: Optional[str],
+    channels: Optional[List[str]],
+    conversion_key: Optional[str],
+) -> float:
+    start_d = datetime.fromisoformat(date_from[:10]).date()
+    end_d = datetime.fromisoformat(date_to[:10]).date()
+    if end_d < start_d:
+        start_d, end_d = end_d, start_d
+    allowed = set(channels or [])
+    total = 0.0
+    for journey in journeys or []:
+        if not journey.get("converted", True):
+            continue
+        if conversion_key:
+            journey_key = str(journey.get("kpi_type") or journey.get("conversion_key") or "")
+            if journey_key != conversion_key:
+                continue
+        touchpoints = journey.get("touchpoints") or []
+        if not touchpoints:
+            continue
+        last_tp = touchpoints[-1] if isinstance(touchpoints[-1], dict) else {}
+        channel = str(last_tp.get("channel") or "unknown")
+        if allowed and channel not in allowed:
+            continue
+        day = _local_date_from_ts(last_tp.get("timestamp"), timezone_name)
+        if day is None:
+            continue
+        if start_d <= day <= end_d:
+            total += float(journey.get("conversion_value") or 0.0)
+    return total
+
+
 @app.post("/api/data-quality/alerts/{alert_id}/status")
 def update_alert_status(alert_id: int, body: AlertStatusUpdate, db=Depends(get_db)):
     alert = db.get(DQAlert, alert_id)
@@ -5958,6 +6533,7 @@ def overview_summary(
     account: Optional[str] = Query(None, description="Account filter"),
     model_id: Optional[str] = Query(None, description="Optional model config id (for metadata only)"),
     db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("attribution.view")),
 ):
     """
     Overview summary: KPI tiles, highlights (what changed), freshness.
@@ -5984,6 +6560,7 @@ def overview_drivers(
     top_campaigns_n: int = Query(10, ge=1, le=50, description="Top N campaigns"),
     conversion_key: Optional[str] = Query(None, description="Filter by conversion key"),
     db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("attribution.view")),
 ):
     """
     Top drivers: by_channel (spend, conversions, revenue, delta), by_campaign (top N), biggest_movers.
@@ -6010,9 +6587,11 @@ def performance_channel_trend(
     channels: Optional[List[str]] = Query(None, description="Optional channel filter list"),
     model_id: Optional[str] = Query(None, description="Optional model config id"),
     kpi_key: str = Query("revenue", description="spend|conversions|revenue|cpa|roas"),
+    conversion_key: Optional[str] = Query(None, description="Optional conversion key filter"),
     grain: str = Query("auto", description="auto|daily|weekly"),
     compare: bool = Query(True, description="Include previous-period series"),
     db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("attribution.view")),
 ):
     """
     Channel performance trend for selected KPI and period.
@@ -6022,25 +6601,150 @@ def performance_channel_trend(
     if not JOURNEYS:
         JOURNEYS = load_journeys_from_db(db)
     try:
-        out = build_channel_trend_response(
-            journeys=JOURNEYS or [],
-            expenses=EXPENSES,
+        query_ctx = _build_performance_query_context(
             date_from=date_from,
             date_to=date_to,
             timezone=timezone,
+            currency=currency,
+            workspace=workspace,
+            account=account,
+            model_id=model_id,
             kpi_key=kpi_key,
             grain=grain,
             compare=compare,
             channels=channels,
+            conversion_key=conversion_key,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    try:
+        out = build_channel_trend_response(
+            journeys=JOURNEYS or [],
+            expenses=EXPENSES,
+            date_from=query_ctx.date_from,
+            date_to=query_ctx.date_to,
+            timezone=query_ctx.timezone,
+            kpi_key=query_ctx.kpi_key,
+            grain=query_ctx.grain,
+            compare=query_ctx.compare,
+            channels=query_ctx.channels,
+            conversion_key=query_ctx.conversion_key,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     out["meta"] = {
-        "workspace": workspace,
-        "account": account,
-        "model_id": model_id,
-        "currency": currency,
-        "kpi_key": kpi_key,
+        "workspace": query_ctx.workspace,
+        "account": query_ctx.account,
+        "model_id": query_ctx.model_id,
+        "currency": query_ctx.currency,
+        "kpi_key": query_ctx.kpi_key,
+        "conversion_key": query_ctx.conversion_key,
+        "timezone": query_ctx.timezone,
+        "channels": query_ctx.channels or [],
+        "query_context": {
+            "current_period": query_ctx.current_period,
+            "previous_period": query_ctx.previous_period,
+            "grain": query_ctx.grain,
+            "compare": query_ctx.compare,
+        },
+    }
+    return out
+
+
+@app.get("/api/performance/channel/summary")
+def performance_channel_summary(
+    date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
+    date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
+    timezone: str = Query("UTC", description="IANA timezone for bucketing"),
+    currency: Optional[str] = Query(None, description="Display currency (metadata only)"),
+    workspace: Optional[str] = Query(None, description="Workspace filter (reserved)"),
+    account: Optional[str] = Query(None, description="Account filter (reserved)"),
+    model_id: Optional[str] = Query(None, description="Optional model config id"),
+    conversion_key: Optional[str] = Query(None, description="Optional conversion key filter"),
+    compare: bool = Query(True, description="Include previous-period summary"),
+    channels: Optional[List[str]] = Query(None, description="Optional channel filter list"),
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("attribution.view")),
+):
+    global JOURNEYS
+    if not JOURNEYS:
+        JOURNEYS = load_journeys_from_db(db)
+    query_ctx = _build_performance_query_context(
+        date_from=date_from,
+        date_to=date_to,
+        timezone=timezone,
+        currency=currency,
+        workspace=workspace,
+        account=account,
+        model_id=model_id,
+        kpi_key="revenue",
+        grain="daily",
+        compare=compare,
+        channels=channels,
+        conversion_key=conversion_key,
+    )
+    _resolved_cfg, config_meta = load_config_and_meta(db, query_ctx.model_id)
+    effective_conversion_key = query_ctx.conversion_key or (config_meta.get("conversion_key") if config_meta else None)
+    out = build_channel_summary_response(
+        journeys=JOURNEYS or [],
+        expenses=EXPENSES,
+        date_from=query_ctx.date_from,
+        date_to=query_ctx.date_to,
+        timezone=query_ctx.timezone,
+        compare=query_ctx.compare,
+        channels=query_ctx.channels,
+        conversion_key=effective_conversion_key,
+    )
+    for item in out.get("items", []):
+        channel_scope_id = item.get("channel")
+        if not channel_scope_id:
+            continue
+        snap = get_latest_quality_for_scope(db, "channel", str(channel_scope_id), effective_conversion_key)
+        if snap:
+            item["confidence"] = {
+                "score": snap.confidence_score,
+                "label": snap.confidence_label,
+                "components": snap.components_json,
+            }
+    mapped_spend = sum(float((row.get("current") or {}).get("spend", 0.0)) for row in out.get("items", []))
+    mapped_value = sum(float((row.get("current") or {}).get("revenue", 0.0)) for row in out.get("items", []))
+    spend_total = _compute_total_spend_for_period(
+        expenses=EXPENSES,
+        date_from=query_ctx.date_from,
+        date_to=query_ctx.date_to,
+        timezone_name=query_ctx.timezone,
+        channels=query_ctx.channels,
+    )
+    value_total = _compute_total_converted_value_for_period(
+        journeys=JOURNEYS or [],
+        date_from=query_ctx.date_from,
+        date_to=query_ctx.date_to,
+        timezone_name=query_ctx.timezone,
+        channels=query_ctx.channels,
+        conversion_key=effective_conversion_key,
+    )
+    out["config"] = config_meta
+    out["mapping_coverage"] = {
+        "spend_mapped_pct": (mapped_spend / spend_total * 100.0) if spend_total > 0 else 0.0,
+        "value_mapped_pct": (mapped_value / value_total * 100.0) if value_total > 0 else 0.0,
+        "spend_mapped": mapped_spend,
+        "spend_total": spend_total,
+        "value_mapped": mapped_value,
+        "value_total": value_total,
+    }
+    out["meta"] = {
+        "workspace": query_ctx.workspace,
+        "account": query_ctx.account,
+        "model_id": query_ctx.model_id,
+        "currency": query_ctx.currency,
+        "timezone": query_ctx.timezone,
+        "channels": query_ctx.channels or [],
+        "conversion_key": effective_conversion_key,
+        "query_context": {
+            "current_period": query_ctx.current_period,
+            "previous_period": query_ctx.previous_period,
+            "compare": query_ctx.compare,
+        },
     }
     return out
 
@@ -6056,9 +6760,11 @@ def performance_campaign_trend(
     channels: Optional[List[str]] = Query(None, description="Optional channel filter list"),
     model_id: Optional[str] = Query(None, description="Optional model config id"),
     kpi_key: str = Query("revenue", description="spend|conversions|revenue|cpa|roas"),
+    conversion_key: Optional[str] = Query(None, description="Optional conversion key filter"),
     grain: str = Query("auto", description="auto|daily|weekly"),
     compare: bool = Query(True, description="Include previous-period series"),
     db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("attribution.view")),
 ):
     """
     Campaign performance trend for selected KPI and period.
@@ -6068,25 +6774,150 @@ def performance_campaign_trend(
     if not JOURNEYS:
         JOURNEYS = load_journeys_from_db(db)
     try:
-        out = build_campaign_trend_response(
-            journeys=JOURNEYS or [],
-            expenses=EXPENSES,
+        query_ctx = _build_performance_query_context(
             date_from=date_from,
             date_to=date_to,
             timezone=timezone,
+            currency=currency,
+            workspace=workspace,
+            account=account,
+            model_id=model_id,
             kpi_key=kpi_key,
             grain=grain,
             compare=compare,
             channels=channels,
+            conversion_key=conversion_key,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    try:
+        out = build_campaign_trend_response(
+            journeys=JOURNEYS or [],
+            expenses=EXPENSES,
+            date_from=query_ctx.date_from,
+            date_to=query_ctx.date_to,
+            timezone=query_ctx.timezone,
+            kpi_key=query_ctx.kpi_key,
+            grain=query_ctx.grain,
+            compare=query_ctx.compare,
+            channels=query_ctx.channels,
+            conversion_key=query_ctx.conversion_key,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     out["meta"] = {
-        "workspace": workspace,
-        "account": account,
-        "model_id": model_id,
-        "currency": currency,
-        "kpi_key": kpi_key,
+        "workspace": query_ctx.workspace,
+        "account": query_ctx.account,
+        "model_id": query_ctx.model_id,
+        "currency": query_ctx.currency,
+        "kpi_key": query_ctx.kpi_key,
+        "conversion_key": query_ctx.conversion_key,
+        "timezone": query_ctx.timezone,
+        "channels": query_ctx.channels or [],
+        "query_context": {
+            "current_period": query_ctx.current_period,
+            "previous_period": query_ctx.previous_period,
+            "grain": query_ctx.grain,
+            "compare": query_ctx.compare,
+        },
+    }
+    return out
+
+
+@app.get("/api/performance/campaign/summary")
+def performance_campaign_summary(
+    date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
+    date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
+    timezone: str = Query("UTC", description="IANA timezone for bucketing"),
+    currency: Optional[str] = Query(None, description="Display currency (metadata only)"),
+    workspace: Optional[str] = Query(None, description="Workspace filter (reserved)"),
+    account: Optional[str] = Query(None, description="Account filter (reserved)"),
+    model_id: Optional[str] = Query(None, description="Optional model config id"),
+    conversion_key: Optional[str] = Query(None, description="Optional conversion key filter"),
+    compare: bool = Query(True, description="Include previous-period summary"),
+    channels: Optional[List[str]] = Query(None, description="Optional channel filter list"),
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("attribution.view")),
+):
+    global JOURNEYS
+    if not JOURNEYS:
+        JOURNEYS = load_journeys_from_db(db)
+    query_ctx = _build_performance_query_context(
+        date_from=date_from,
+        date_to=date_to,
+        timezone=timezone,
+        currency=currency,
+        workspace=workspace,
+        account=account,
+        model_id=model_id,
+        kpi_key="revenue",
+        grain="daily",
+        compare=compare,
+        channels=channels,
+        conversion_key=conversion_key,
+    )
+    _resolved_cfg, config_meta = load_config_and_meta(db, query_ctx.model_id)
+    effective_conversion_key = query_ctx.conversion_key or (config_meta.get("conversion_key") if config_meta else None)
+    out = build_campaign_summary_response(
+        journeys=JOURNEYS or [],
+        expenses=EXPENSES,
+        date_from=query_ctx.date_from,
+        date_to=query_ctx.date_to,
+        timezone=query_ctx.timezone,
+        compare=query_ctx.compare,
+        channels=query_ctx.channels,
+        conversion_key=effective_conversion_key,
+    )
+    for item in out.get("items", []):
+        scope_id = item.get("campaign_id")
+        if not scope_id:
+            continue
+        snap = get_latest_quality_for_scope(db, "campaign", str(scope_id), effective_conversion_key)
+        if snap:
+            item["confidence"] = {
+                "score": snap.confidence_score,
+                "label": snap.confidence_label,
+                "components": snap.components_json,
+            }
+    mapped_spend = sum(float((row.get("current") or {}).get("spend", 0.0)) for row in out.get("items", []))
+    mapped_value = sum(float((row.get("current") or {}).get("revenue", 0.0)) for row in out.get("items", []))
+    spend_total = _compute_total_spend_for_period(
+        expenses=EXPENSES,
+        date_from=query_ctx.date_from,
+        date_to=query_ctx.date_to,
+        timezone_name=query_ctx.timezone,
+        channels=query_ctx.channels,
+    )
+    value_total = _compute_total_converted_value_for_period(
+        journeys=JOURNEYS or [],
+        date_from=query_ctx.date_from,
+        date_to=query_ctx.date_to,
+        timezone_name=query_ctx.timezone,
+        channels=query_ctx.channels,
+        conversion_key=effective_conversion_key,
+    )
+    out["config"] = config_meta
+    out["mapping_coverage"] = {
+        "spend_mapped_pct": (mapped_spend / spend_total * 100.0) if spend_total > 0 else 0.0,
+        "value_mapped_pct": (mapped_value / value_total * 100.0) if value_total > 0 else 0.0,
+        "spend_mapped": mapped_spend,
+        "spend_total": spend_total,
+        "value_mapped": mapped_value,
+        "value_total": value_total,
+    }
+    out["meta"] = {
+        "workspace": query_ctx.workspace,
+        "account": query_ctx.account,
+        "model_id": query_ctx.model_id,
+        "currency": query_ctx.currency,
+        "timezone": query_ctx.timezone,
+        "channels": query_ctx.channels or [],
+        "conversion_key": effective_conversion_key,
+        "query_context": {
+            "current_period": query_ctx.current_period,
+            "previous_period": query_ctx.previous_period,
+            "compare": query_ctx.compare,
+        },
     }
     return out
 
@@ -8672,8 +9503,16 @@ def fetch_meta(ad_account_id: str, since: str, until: str, avg_aov: float = 0.0,
     if not access_token:
         token_data = get_token("meta")
         if not token_data or not token_data.get("access_token"):
-            raise HTTPException(status_code=401, detail="No Meta access token. Connect your Meta account first.")
-        access_token = token_data["access_token"]
+            db = SessionLocal()
+            try:
+                token_from_conn = get_access_token_for_provider(db, workspace_id="default", provider_key="meta_ads")
+            finally:
+                db.close()
+            if not token_from_conn:
+                raise HTTPException(status_code=401, detail="No Meta access token. Connect your Meta account first.")
+            access_token = token_from_conn
+        else:
+            access_token = token_data["access_token"]
     out_path = DATA_DIR / "meta_ads.csv"
     url = f"https://graph.facebook.com/v19.0/{ad_account_id}/ads"
     params = {"access_token": access_token, "fields": "campaign_name,spend,impressions,clicks,actions,updated_time", "time_range": json.dumps({"since": since, "until": until}), "limit": 500}
@@ -8755,8 +9594,16 @@ def fetch_linkedin(since: str, until: str, access_token: Optional[str] = None):
     if not access_token:
         token_data = get_token("linkedin")
         if not token_data or not token_data.get("access_token"):
-            raise HTTPException(status_code=401, detail="No LinkedIn access token. Connect your LinkedIn account first.")
-        access_token = token_data["access_token"]
+            db = SessionLocal()
+            try:
+                token_from_conn = get_access_token_for_provider(db, workspace_id="default", provider_key="linkedin_ads")
+            finally:
+                db.close()
+            if not token_from_conn:
+                raise HTTPException(status_code=401, detail="No LinkedIn access token. Connect your LinkedIn account first.")
+            access_token = token_from_conn
+        else:
+            access_token = token_data["access_token"]
     out_path = DATA_DIR / "linkedin_ads.csv"
     headers = {"Authorization": f"Bearer {access_token}"}
     rows = []

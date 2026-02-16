@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from .models_config_dq import ConversionPath
 from .models_overview_alerts import AlertEvent, AlertRule
+from .services_revenue_config import compute_payload_revenue_value, get_revenue_config
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +72,8 @@ def _conversions_and_revenue_from_paths(
     conversion_key: Optional[str],
 ) -> Tuple[int, float, List[Dict[str, Any]]]:
     """Returns (conversions_count, total_revenue, daily_series for sparkline)."""
+    revenue_config = get_revenue_config()
+    dedupe_seen = set()
     q = db.query(ConversionPath).filter(ConversionPath.conversion_ts >= date_from, ConversionPath.conversion_ts <= date_to)
     if conversion_key:
         q = q.filter(ConversionPath.conversion_key == conversion_key)
@@ -79,12 +82,12 @@ def _conversions_and_revenue_from_paths(
     daily: Dict[str, Dict[str, Any]] = {}
     for r in rows:
         payload = r.path_json or {}
-        convs = payload.get("conversions") or []
-        val = 0.0
-        if convs and isinstance(convs[0], dict):
-            val = float(convs[0].get("value", 0))
-        else:
-            val = float(payload.get("conversion_value", 0))
+        val = compute_payload_revenue_value(
+            payload,
+            revenue_config,
+            dedupe_seen=dedupe_seen,
+            fallback_conversion_id=str(getattr(r, "conversion_id", "") or ""),
+        )
         total_value += val
         d = r.conversion_ts.date().isoformat() if hasattr(r.conversion_ts, "date") else str(r.conversion_ts)[:10]
         if d not in daily:
@@ -164,6 +167,8 @@ def _series_from_conversion_paths(
     grain: str,
     conversion_key: Optional[str] = None,
 ) -> Dict[str, Any]:
+    revenue_config = get_revenue_config()
+    dedupe_seen = set()
     q = db.query(ConversionPath).filter(
         ConversionPath.conversion_ts >= start,
         ConversionPath.conversion_ts <= end,
@@ -176,11 +181,12 @@ def _series_from_conversion_paths(
     total_revenue = 0.0
     for row in rows:
         payload = row.path_json or {}
-        convs = payload.get("conversions") or []
-        if convs and isinstance(convs[0], dict):
-            value = float(convs[0].get("value", 0))
-        else:
-            value = float(payload.get("conversion_value", 0))
+        value = compute_payload_revenue_value(
+            payload,
+            revenue_config,
+            dedupe_seen=dedupe_seen,
+            fallback_conversion_id=str(getattr(row, "conversion_id", "") or ""),
+        )
         total_revenue += value
         key = _bucket_key(row.conversion_ts, grain)
         conv_map[key] = conv_map.get(key, 0.0) + 1.0
@@ -591,6 +597,10 @@ def get_overview_drivers(
     Top drivers: by_channel (spend, conversions, revenue, delta), by_campaign (top N), biggest_movers.
     Uses ConversionPath + expenses only; does not block on MMM.
     """
+    revenue_config = get_revenue_config()
+    dedupe_seen_current = set()
+    dedupe_seen_prev = set()
+
     dt_from = _parse_dt(date_from)
     dt_to = _parse_dt(date_to)
     if not dt_from or not dt_to:
@@ -618,8 +628,12 @@ def get_overview_drivers(
     camp_conv: Dict[str, int] = {}
     for r in rows:
         payload = r.path_json or {}
-        convs = payload.get("conversions") or []
-        val = float(convs[0].get("value", 0)) if convs and isinstance(convs[0], dict) else float(payload.get("conversion_value", 0))
+        val = compute_payload_revenue_value(
+            payload,
+            revenue_config,
+            dedupe_seen=dedupe_seen_current,
+            fallback_conversion_id=str(getattr(r, "conversion_id", "") or ""),
+        )
         tps = payload.get("touchpoints") or []
         for idx, tp in enumerate(tps):
             ch = tp.get("channel", "unknown") if isinstance(tp, dict) else "unknown"
@@ -645,8 +659,12 @@ def get_overview_drivers(
     prev_camp_rev: Dict[str, float] = {}
     for r in prev_rows:
         payload = r.path_json or {}
-        convs = payload.get("conversions") or []
-        val = float(convs[0].get("value", 0)) if convs and isinstance(convs[0], dict) else float(payload.get("conversion_value", 0))
+        val = compute_payload_revenue_value(
+            payload,
+            revenue_config,
+            dedupe_seen=dedupe_seen_prev,
+            fallback_conversion_id=str(getattr(r, "conversion_id", "") or ""),
+        )
         tps = payload.get("touchpoints") or []
         for tp in tps:
             ch = tp.get("channel", "unknown") if isinstance(tp, dict) else "unknown"
@@ -759,3 +777,6 @@ def get_overview_alerts(
             "deep_link": link,
         })
     return {"alerts": out, "total": len(out)}
+    revenue_config = get_revenue_config()
+    dedupe_seen_current = set()
+    dedupe_seen_prev = set()
