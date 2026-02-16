@@ -8,7 +8,14 @@ import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { tokens as t } from '../theme/tokens'
 import { apiGetJson, apiSendJson, getUserContext, withQuery } from '../lib/apiClient'
 import { buildListQuery, type PaginatedResponse } from '../lib/apiSchemas'
+import { defaultRecentDateRange } from '../lib/dateRange'
 import CreateJourneyModal from './journeys/CreateJourneyModal'
+import {
+  createJourneyAlert,
+  previewJourneyAlert,
+  type JourneyAlertCreatePayload,
+  type JourneyAlertPreviewResponse,
+} from './alerts/api'
 
 interface JourneysProps {
   featureEnabled: boolean
@@ -127,29 +134,6 @@ interface CreateFunnelDraft {
   window_days: number
 }
 
-interface JourneyAlertCreatePayload {
-  name: string
-  type: 'path_cr_drop' | 'path_volume_change' | 'funnel_dropoff_spike' | 'ttc_shift'
-  domain: 'journeys' | 'funnels'
-  scope: Record<string, unknown>
-  metric: string
-  condition: Record<string, unknown>
-  schedule?: Record<string, unknown>
-  is_enabled: boolean
-}
-
-interface AlertPreviewResponse {
-  current_value: number | null
-  baseline_value: number | null
-  delta_pct: number | null
-  window: {
-    current_from: string
-    current_to: string
-    baseline_from: string
-    baseline_to: string
-  }
-}
-
 interface AlertDraft {
   name: string
   type: JourneyAlertCreatePayload['type']
@@ -174,9 +158,10 @@ const ATTR_MODELS = [
 ]
 
 function buildInitialFilters(dateMin?: string | null, dateMax?: string | null): GlobalFiltersState {
+  const fallback = defaultRecentDateRange(30)
   return {
-    dateFrom: dateMin?.slice(0, 10) ?? '2026-01-01',
-    dateTo: dateMax?.slice(0, 10) ?? '2026-01-31',
+    dateFrom: dateMin?.slice(0, 10) ?? fallback.dateFrom,
+    dateTo: dateMax?.slice(0, 10) ?? fallback.dateTo,
     channel: 'all',
     campaign: 'all',
     device: 'all',
@@ -310,7 +295,7 @@ export default function Journeys({
   const [showCreateAlertModal, setShowCreateAlertModal] = useState(false)
   const [createAlertError, setCreateAlertError] = useState<string | null>(null)
   const [alertScope, setAlertScope] = useState<Record<string, unknown>>({})
-  const [alertPreview, setAlertPreview] = useState<AlertPreviewResponse | null>(null)
+  const [alertPreview, setAlertPreview] = useState<JourneyAlertPreviewResponse | null>(null)
   const [alertDraft, setAlertDraft] = useState<AlertDraft>({
     name: '',
     type: 'path_volume_change',
@@ -571,9 +556,7 @@ export default function Journeys({
 
   const createAlertMutation = useMutation({
     mutationFn: async (payload: JourneyAlertCreatePayload) => {
-      return apiSendJson<any>('/api/alerts', 'POST', payload, {
-        fallbackMessage: 'Failed to create alert',
-      })
+      return createJourneyAlert(payload)
     },
     onSuccess: async () => {
       setShowCreateAlertModal(false)
@@ -582,15 +565,14 @@ export default function Journeys({
       await queryClient.invalidateQueries({ queryKey: ['alerts-list'] })
       await queryClient.invalidateQueries({ queryKey: ['journey-alert-definitions'] })
       await queryClient.invalidateQueries({ queryKey: ['journey-alert-events'] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-alerts-main-rows'] })
     },
     onError: (err) => setCreateAlertError((err as Error).message || 'Failed to create alert'),
   })
 
   const previewAlertMutation = useMutation({
     mutationFn: async (payload: { type: AlertDraft['type']; scope: Record<string, unknown>; metric: string; condition: Record<string, unknown> }) => {
-      return apiSendJson<AlertPreviewResponse>('/api/alerts/preview', 'POST', payload, {
-        fallbackMessage: 'Failed to preview alert',
-      })
+      return previewJourneyAlert(payload)
     },
     onSuccess: (data) => setAlertPreview(data),
     onError: (err) => setCreateAlertError((err as Error).message || 'Failed to preview alert'),

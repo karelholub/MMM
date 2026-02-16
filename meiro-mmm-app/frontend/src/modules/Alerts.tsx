@@ -4,8 +4,14 @@ import { tokens as t } from '../theme/tokens'
 import { DashboardPage, SectionCard, DashboardTable } from '../components/dashboard'
 import AlertDetailDrawer from './alerts/AlertDetailDrawer'
 import AlertRulesTab from './alerts/AlertRulesTab'
-import { apiGetJson, apiSendJson, withQuery } from '../lib/apiClient'
-import { buildListQuery, type PaginatedResponse } from '../lib/apiSchemas'
+import { apiGetJson, apiSendJson } from '../lib/apiClient'
+import { type PaginatedResponse } from '../lib/apiSchemas'
+import {
+  listJourneyAlertDefinitions,
+  listJourneyAlertEvents,
+  type JourneyAlertDefinitionItem,
+  type JourneyAlertEventItem,
+} from './alerts/api'
 
 interface AlertListItem {
   id: number
@@ -20,25 +26,6 @@ interface AlertListItem {
   snooze_until: string | null
   deep_link: { entity_type: string; entity_id: string | null; url: string }
   created_at: string | null
-}
-
-interface JourneyAlertDefinitionItem {
-  id: string
-  name: string
-  type: string
-  domain: 'journeys' | 'funnels'
-  scope: Record<string, unknown>
-  metric: string
-  is_enabled: boolean
-}
-
-interface JourneyAlertEventItem {
-  id: string
-  alert_definition_id: string
-  domain: 'journeys' | 'funnels'
-  triggered_at: string | null
-  severity: string
-  summary: string
 }
 
 interface DisplayAlertItem {
@@ -60,6 +47,7 @@ type TabId = 'alerts' | 'rules' | 'journey_alerts'
 
 const STATUS_OPTIONS = [
   { value: 'open', label: 'Open' },
+  { value: 'pending_eval', label: 'Pending evaluation' },
   { value: 'ack', label: 'Acknowledged' },
   { value: 'snoozed', label: 'Snoozed' },
   { value: 'resolved', label: 'Resolved' },
@@ -168,10 +156,7 @@ export default function Alerts() {
   const journeyAlertDefsQuery = useQuery<PaginatedResponse<JourneyAlertDefinitionItem>>({
     queryKey: ['journey-alert-definitions', journeyAlertDomain],
     queryFn: async () => {
-      return apiGetJson<PaginatedResponse<JourneyAlertDefinitionItem>>(
-        withQuery('/api/alerts', buildListQuery({ domain: journeyAlertDomain, page: 1, perPage: 100 })),
-        { fallbackMessage: 'Failed to load journey/funnel alert definitions' },
-      )
+      return listJourneyAlertDefinitions(journeyAlertDomain, { page: 1, perPage: 100 })
     },
     enabled: tab === 'journey_alerts',
   })
@@ -179,10 +164,7 @@ export default function Alerts() {
   const journeyAlertEventsQuery = useQuery<PaginatedResponse<JourneyAlertEventItem>>({
     queryKey: ['journey-alert-events', journeyAlertDomain],
     queryFn: async () => {
-      return apiGetJson<PaginatedResponse<JourneyAlertEventItem>>(
-        withQuery('/api/alerts/events', buildListQuery({ domain: journeyAlertDomain, page: 1, perPage: 100 }, 200)),
-        { fallbackMessage: 'Failed to load journey/funnel alert events' },
-      )
+      return listJourneyAlertEvents(journeyAlertDomain, { page: 1, perPage: 100 })
     },
     enabled: tab === 'journey_alerts',
   })
@@ -191,34 +173,10 @@ export default function Alerts() {
     queryKey: ['journey-alerts-main-rows'],
     queryFn: async () => {
       const [defsJBody, defsFBody, evJBody, evFBody] = await Promise.all([
-        apiGetJson<PaginatedResponse<JourneyAlertDefinitionItem>>(withQuery('/api/alerts', buildListQuery({
-          domain: 'journeys',
-          page: 1,
-          perPage: 100,
-        })), {
-          fallbackMessage: 'Failed to load journey alert definitions',
-        }),
-        apiGetJson<PaginatedResponse<JourneyAlertDefinitionItem>>(withQuery('/api/alerts', buildListQuery({
-          domain: 'funnels',
-          page: 1,
-          perPage: 100,
-        })), {
-          fallbackMessage: 'Failed to load funnel alert definitions',
-        }),
-        apiGetJson<PaginatedResponse<JourneyAlertEventItem>>(withQuery('/api/alerts/events', buildListQuery({
-          domain: 'journeys',
-          page: 1,
-          perPage: 200,
-        }, 200)), {
-          fallbackMessage: 'Failed to load journey alert events',
-        }),
-        apiGetJson<PaginatedResponse<JourneyAlertEventItem>>(withQuery('/api/alerts/events', buildListQuery({
-          domain: 'funnels',
-          page: 1,
-          perPage: 200,
-        }, 200)), {
-          fallbackMessage: 'Failed to load funnel alert events',
-        }),
+        listJourneyAlertDefinitions('journeys', { page: 1, perPage: 100 }),
+        listJourneyAlertDefinitions('funnels', { page: 1, perPage: 100 }),
+        listJourneyAlertEvents('journeys', { page: 1, perPage: 200 }),
+        listJourneyAlertEvents('funnels', { page: 1, perPage: 200 }),
       ])
       return {
         defs: [...(defsJBody.items ?? []), ...(defsFBody.items ?? [])],
@@ -265,7 +223,11 @@ export default function Alerts() {
     const filtered = combined.filter((a) => {
       if (severityFilter && a.severity !== severityFilter) return false
       if (typeFilter && a.rule_type !== typeFilter) return false
-      if (statusFilter !== 'all' && a.status !== statusFilter) return false
+      if (statusFilter === 'open') {
+        if (!['open', 'pending_eval'].includes(a.status)) return false
+      } else if (statusFilter !== 'all' && a.status !== statusFilter) {
+        return false
+      }
       if (q && !`${a.title} ${a.message} ${a.rule_name || ''}`.toLowerCase().includes(q)) return false
       return true
     })

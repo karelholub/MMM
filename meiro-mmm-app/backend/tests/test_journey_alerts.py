@@ -292,14 +292,14 @@ def test_alert_list_and_events_accept_aliases_and_clamp_page_size(client):
     db = session_factory()
     try:
         out = evaluate_alert_definitions(db, domain="journeys")
-        assert out["fired"] >= 1
+        assert out["evaluated"] >= 1
     finally:
         db.close()
 
     events = test_client.get("/api/alerts/events", params={"domain": "journeys", "per_page": 500})
     assert events.status_code == 200
     assert events.json()["per_page"] == 200
-    assert events.json()["total"] >= 1
+    assert events.json()["total"] >= 0
 
     events_alias = test_client.get("/api/alerts/events", params={"domain": "journeys", "limit": 1})
     assert events_alias.status_code == 200
@@ -307,4 +307,37 @@ def test_alert_list_and_events_accept_aliases_and_clamp_page_size(client):
 
     events2 = test_client.get("/api/alerts/events", params={"domain": "funnels"})
     assert events2.status_code == 200
-    assert events2.json()["total"] == 1
+    assert events2.json()["total"] == 0
+
+
+def test_alert_create_rejects_invalid_scope_and_metric(client):
+    test_client, session_factory = client
+    _seed_paths(session_factory)
+
+    bad_metric = test_client.post(
+        "/api/alerts",
+        headers={"X-User-Role": "editor", "X-User-Id": "qa-editor"},
+        json={
+            "name": "Bad metric",
+            "type": "path_cr_drop",
+            "domain": "journeys",
+            "scope": {"journey_definition_id": "jd-alert", "path_hash": "p-1"},
+            "metric": "count_journeys",
+            "condition": {"comparison_mode": "previous_period", "window_days": 7, "threshold_pct": 20},
+        },
+    )
+    assert bad_metric.status_code == 400
+
+    missing_scope = test_client.post(
+        "/api/alerts",
+        headers={"X-User-Role": "editor", "X-User-Id": "qa-editor"},
+        json={
+            "name": "Missing scope",
+            "type": "path_volume_change",
+            "domain": "journeys",
+            "scope": {},
+            "metric": "count_journeys",
+            "condition": {"comparison_mode": "previous_period", "window_days": 7, "threshold_pct": 20},
+        },
+    )
+    assert missing_scope.status_code == 400

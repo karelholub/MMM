@@ -7086,11 +7086,48 @@ def _validate_journey_alert_payload(type: str, domain: str, metric: str, conditi
         raise HTTPException(status_code=400, detail=f"type must be one of: {', '.join(sorted(JOURNEY_ALERT_TYPES))}")
     if domain not in JOURNEY_ALERT_DOMAINS:
         raise HTTPException(status_code=400, detail=f"domain must be one of: {', '.join(sorted(JOURNEY_ALERT_DOMAINS))}")
-    if not metric.strip():
+    metric_clean = (metric or "").strip()
+    if not metric_clean:
         raise HTTPException(status_code=400, detail="metric is required")
     mode = str((condition or {}).get("comparison_mode") or "previous_period")
     if mode not in {"previous_period", "rolling_baseline"}:
         raise HTTPException(status_code=400, detail="condition.comparison_mode must be previous_period or rolling_baseline")
+
+
+def _validate_journey_alert_scope_and_metric(
+    type: str,
+    scope: Dict[str, Any],
+    metric: str,
+) -> None:
+    scope = scope or {}
+    metric = (metric or "").strip()
+    allowed_metrics = {
+        "path_cr_drop": {"conversion_rate"},
+        "path_volume_change": {"count_journeys"},
+        "funnel_dropoff_spike": {"dropoff_rate"},
+        "ttc_shift": {"p50_time_to_convert_sec"},
+    }
+    if metric not in allowed_metrics.get(type, set()):
+        raise HTTPException(
+            status_code=400,
+            detail=f"metric '{metric}' is not valid for alert type '{type}'",
+        )
+
+    if type in {"path_cr_drop", "path_volume_change", "ttc_shift"}:
+        journey_definition_id = str(scope.get("journey_definition_id") or "").strip()
+        if not journey_definition_id:
+            raise HTTPException(status_code=400, detail="scope.journey_definition_id is required")
+
+    if type == "funnel_dropoff_spike":
+        funnel_id = str(scope.get("funnel_id") or "").strip()
+        if not funnel_id:
+            raise HTTPException(status_code=400, detail="scope.funnel_id is required")
+        try:
+            step_index = int(scope.get("step_index"))
+        except Exception:
+            raise HTTPException(status_code=400, detail="scope.step_index is required")
+        if step_index < 0:
+            raise HTTPException(status_code=400, detail="scope.step_index must be >= 0")
 
 
 @app.get("/api/journeys/definitions")
@@ -7538,6 +7575,7 @@ def api_create_alert(
     """Create journey/funnel alert definition. Requires edit role."""
     user_id = ctx.user_id
     _validate_journey_alert_payload(body.type, body.domain, body.metric, body.condition)
+    _validate_journey_alert_scope_and_metric(body.type, body.scope or {}, body.metric)
     return create_journey_alert_definition(
         db,
         name=body.name,
@@ -7582,6 +7620,8 @@ def api_preview_alert(
     _ctx: PermissionContext = Depends(require_permission("alerts.view")),
 ):
     """Preview baseline/current values for alert authoring."""
+    _validate_journey_alert_payload(body.type, "journeys" if body.type != "funnel_dropoff_spike" else "funnels", body.metric, body.condition)
+    _validate_journey_alert_scope_and_metric(body.type, body.scope or {}, body.metric)
     return preview_journey_alert(
         db,
         type=body.type,
