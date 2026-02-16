@@ -15,6 +15,7 @@ import type { SettingsPageHandle, SectionKey } from './Settings'
 import { usePermissions } from '../hooks/usePermissions'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
 import ProtectedPage from '../components/ProtectedPage'
+import LoginPage from '../components/LoginPage'
 import {
   canAccessPage as canAccessAppPage,
   canManageJourneyDefinitions,
@@ -423,6 +424,11 @@ export default function App() {
   const blockedReason = pageBlockedByFeature
     ? 'Journeys feature is disabled for this workspace.'
     : 'Your role does not have permission to view this page.'
+  const showLogin = !permissions.isLoading && permissions.auth?.authenticated !== true
+
+  if (showLogin) {
+    return <LoginPage />
+  }
 
   return (
     <WorkspaceContext.Provider
@@ -446,7 +452,7 @@ export default function App() {
           backgroundColor: tokens.color.bg,
           display: 'grid',
           gridTemplateColumns: sidebarCollapsed ? '60px 1fr' : '240px 1fr',
-          gridTemplateRows: '56px auto',
+          gridTemplateRows: 'auto 1fr',
         }}
       >
         <AppSidebar
