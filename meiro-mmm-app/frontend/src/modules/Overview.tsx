@@ -4,6 +4,12 @@ import { tokens as t } from '../theme/tokens'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { apiGetJson, apiSendJson, withQuery } from '../lib/apiClient'
 import {
+  listJourneyAlertDefinitions,
+  listJourneyAlertEvents,
+  type JourneyAlertDefinitionItem,
+  type JourneyAlertEventItem,
+} from './alerts/api'
+import {
   DashboardPage,
   KpiTile,
   SectionCard,
@@ -140,13 +146,26 @@ interface OverviewAlertsResponse {
   total: number
 }
 
-interface DomainAlertEvent {
+interface JourneyOverviewAlertRow {
   id: string
-  alert_definition_id: string
   domain: 'journeys' | 'funnels'
-  triggered_at: string
+  status: 'open' | 'pending_eval' | 'disabled'
   severity: string
+  title: string
   summary: string
+  triggered_at: string | null
+}
+
+interface RecentAlertRow {
+  id: string
+  source: 'legacy' | 'journey_funnel'
+  severity: string
+  status: string
+  title: string
+  summary: string
+  ts: string | null
+  deep_link?: string
+  legacy_id?: number
 }
 
 // --- Helpers ---
@@ -228,20 +247,19 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
     },
   })
 
-  const journeyFunnelAlertsQuery = useQuery<{ items: DomainAlertEvent[]; total: number }>({
-    queryKey: ['journey-funnel-alert-events'],
+  const journeyFunnelAlertsQuery = useQuery<{ defs: JourneyAlertDefinitionItem[]; events: JourneyAlertEventItem[] }>({
+    queryKey: ['overview-journey-funnel-alerts'],
     queryFn: async () => {
-      const [jBody, fBody] = await Promise.all([
-        apiGetJson<{ items: DomainAlertEvent[] }>('/api/alerts/events?domain=journeys&page=1&per_page=10', {
-          fallbackMessage: 'Failed to load journey alerts',
-        }),
-        apiGetJson<{ items: DomainAlertEvent[] }>('/api/alerts/events?domain=funnels&page=1&per_page=10', {
-          fallbackMessage: 'Failed to load funnel alerts',
-        }),
+      const [defsJourneys, defsFunnels, eventsJourneys, eventsFunnels] = await Promise.all([
+        listJourneyAlertDefinitions('journeys', { page: 1, perPage: 100 }),
+        listJourneyAlertDefinitions('funnels', { page: 1, perPage: 100 }),
+        listJourneyAlertEvents('journeys', { page: 1, perPage: 200 }),
+        listJourneyAlertEvents('funnels', { page: 1, perPage: 200 }),
       ])
-      const items: DomainAlertEvent[] = [...(jBody.items || []), ...(fBody.items || [])]
-      items.sort((a, b) => new Date(b.triggered_at).getTime() - new Date(a.triggered_at).getTime())
-      return { items, total: items.length }
+      return {
+        defs: [...(defsJourneys.items ?? []), ...(defsFunnels.items ?? [])],
+        events: [...(eventsJourneys.items ?? []), ...(eventsFunnels.items ?? [])],
+      }
     },
   })
 
@@ -260,8 +278,59 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
   const summary = summaryQuery.data
   const drivers = driversQuery.data
   const openAlerts = alertsQuery.data?.alerts ?? []
-  const domainAlerts = journeyFunnelAlertsQuery.data?.items ?? []
-  const needsAttentionCount = domainAlerts.filter((a) => a.severity === 'critical' || a.severity === 'warn').length
+  const journeyFunnelRows = useMemo<JourneyOverviewAlertRow[]>(() => {
+    const defs = journeyFunnelAlertsQuery.data?.defs ?? []
+    const events = journeyFunnelAlertsQuery.data?.events ?? []
+    return defs
+      .map((def) => {
+        const latest = events
+          .filter((ev) => ev.alert_definition_id === def.id)
+          .sort((a, b) => new Date(b.triggered_at || 0).getTime() - new Date(a.triggered_at || 0).getTime())[0]
+        const status: JourneyOverviewAlertRow['status'] = !def.is_enabled
+          ? 'disabled'
+          : latest
+            ? 'open'
+            : 'pending_eval'
+        return {
+          id: def.id,
+          domain: def.domain,
+          status,
+          severity: latest?.severity ?? 'info',
+          title: def.name,
+          summary: latest?.summary ?? 'Definition created. Waiting for evaluation run.',
+          triggered_at: latest?.triggered_at ?? def.updated_at ?? def.created_at ?? null,
+        }
+      })
+      .sort((a, b) => new Date(b.triggered_at || 0).getTime() - new Date(a.triggered_at || 0).getTime())
+  }, [journeyFunnelAlertsQuery.data?.defs, journeyFunnelAlertsQuery.data?.events])
+  const needsAttentionCount = journeyFunnelRows.filter((a) => a.status !== 'disabled' && (a.severity === 'critical' || a.severity === 'warn')).length
+  const recentAlerts = useMemo<RecentAlertRow[]>(() => {
+    const legacyRows: RecentAlertRow[] = openAlerts.map((a) => ({
+      id: `legacy-${a.id}`,
+      source: 'legacy',
+      severity: a.severity || 'info',
+      status: a.status || 'open',
+      title: a.title || a.rule_name || 'Alert',
+      summary: a.message || a.title || 'Alert triggered',
+      ts: a.ts_detected || null,
+      deep_link: a.deep_link,
+      legacy_id: a.id,
+    }))
+    const jfRows: RecentAlertRow[] = journeyFunnelRows
+      .filter((row) => row.status === 'open' || row.status === 'pending_eval')
+      .map((row) => ({
+        id: `jf-${row.id}`,
+        source: 'journey_funnel',
+        severity: row.severity,
+        status: row.status,
+        title: row.title,
+        summary: row.summary,
+        ts: row.triggered_at,
+      }))
+    return [...legacyRows, ...jfRows]
+      .sort((a, b) => new Date(b.ts || 0).getTime() - new Date(a.ts || 0).getTime())
+      .slice(0, 12)
+  }, [journeyFunnelRows, openAlerts])
   const kpiTiles = summary?.kpi_tiles ?? []
   const highlights = summary?.highlights ?? []
   const byChannel = drivers?.by_channel ?? []
@@ -271,7 +340,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
   const hasAnyData =
     kpiTiles.some((k) => typeof k.value === 'number' && Number.isFinite(k.value) && k.value !== 0) ||
     byChannel.length > 0 ||
-    openAlerts.length > 0 ||
+    recentAlerts.length > 0 ||
     highlights.length > 0
   const isEmpty = !summaryQuery.isLoading && !summaryQuery.error && !hasAnyData
   const periodDays = daysInPeriod(summary?.current_period?.date_from, summary?.current_period?.date_to)
@@ -560,7 +629,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
           <div style={{ display: 'grid', gap: t.space.sm }}>
             {highlights.length === 0 && (
               <span style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                No significant changes or alerts in this period. Insights will appear here when KPIs move or rules fire.
+              No significant changes or alerts in this period. Insights will appear here when KPIs move or rules fire.
               </span>
             )}
             {highlights.slice(0, 8).map((h, idx) => (
@@ -714,12 +783,17 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
             }
           >
             <div style={{ display: 'grid', gap: t.space.sm }}>
-              {domainAlerts.length === 0 && (
+              {journeyFunnelAlertsQuery.isError && (
+                <span style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>
+                  {(journeyFunnelAlertsQuery.error as Error)?.message ?? 'Failed to load Journey/Funnel alerts.'}
+                </span>
+              )}
+              {!journeyFunnelAlertsQuery.isError && journeyFunnelRows.length === 0 && (
                 <span style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
                   No recent Journeys/Funnels alerts.
                 </span>
               )}
-              {domainAlerts.slice(0, 5).map((alert) => (
+              {journeyFunnelRows.slice(0, 6).map((alert) => (
                 <div
                   key={alert.id}
                   style={{
@@ -732,10 +806,11 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
                   }}
                 >
                   <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
-                    {(alert.domain || 'journeys').toUpperCase()} · {(alert.severity || 'info').toUpperCase()}
+                    {alert.domain.toUpperCase()} · {alert.status === 'pending_eval' ? 'PENDING EVALUATION' : (alert.severity || 'info').toUpperCase()}
                   </div>
-                  <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{alert.summary}</div>
-                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{new Date(alert.triggered_at).toLocaleString()}</div>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>{alert.title}</div>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{alert.summary}</div>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{alert.triggered_at ? new Date(alert.triggered_at).toLocaleString() : '—'}</div>
                 </div>
               ))}
             </div>
@@ -766,12 +841,17 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
             }
           >
             <div style={{ display: 'grid', gap: t.space.sm }}>
-              {openAlerts.length === 0 && (
-                <span style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                  No open alerts. Resolved and acknowledged alerts appear on the Alerts page.
+              {alertsQuery.isError && (
+                <span style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>
+                  {(alertsQuery.error as Error)?.message ?? 'Failed to load alerts.'}
                 </span>
               )}
-              {openAlerts.slice(0, 8).map((alert) => (
+              {!alertsQuery.isError && recentAlerts.length === 0 && (
+                <span style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  No recent alerts. Create rules in Alerts to start monitoring.
+                </span>
+              )}
+              {recentAlerts.map((alert) => (
                 <div
                   key={alert.id}
                   style={{
@@ -793,7 +873,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
                         color:
                           alert.severity === 'critical'
                             ? t.color.danger
-                            : alert.severity === 'warning'
+                            : alert.severity === 'warning' || alert.severity === 'warn'
                               ? t.color.warning
                               : t.color.accent,
                       }}
@@ -801,66 +881,89 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
                       {(alert.severity ?? 'info').toUpperCase()}
                     </span>
                     <span style={{ marginLeft: t.space.sm, fontSize: t.font.sizeSm, color: t.color.text, wordBreak: 'break-word' }}>
-                      {alert.title || alert.message}
+                      {alert.title}
                     </span>
                     <span style={{ display: 'block', fontSize: t.font.sizeXs, color: t.color.textMuted, marginTop: 2 }}>
-                      {new Date(alert.ts_detected).toLocaleString()}
+                      {alert.ts ? new Date(alert.ts).toLocaleString() : '—'}
                     </span>
                   </div>
                   <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        updateAlertStatusMutation.mutate({ alertId: alert.id, status: 'ack' })
-                      }
-                      disabled={updateAlertStatusMutation.isPending}
-                      style={{
-                        padding: `${t.space.xs}px ${t.space.sm}px`,
-                        borderRadius: t.radius.sm,
-                        border: `1px solid ${t.color.border}`,
-                        background: t.color.surface,
-                        fontSize: t.font.sizeXs,
-                        cursor: updateAlertStatusMutation.isPending ? 'wait' : 'pointer',
-                      }}
-                    >
-                      Ack
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        updateAlertStatusMutation.mutate({
-                          alertId: alert.id,
-                          status: 'snoozed',
-                          snooze_until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-                        })
-                      }
-                      disabled={updateAlertStatusMutation.isPending}
-                      style={{
-                        padding: `${t.space.xs}px ${t.space.sm}px`,
-                        borderRadius: t.radius.sm,
-                        border: `1px solid ${t.color.border}`,
-                        background: t.color.surface,
-                        fontSize: t.font.sizeXs,
-                        cursor: updateAlertStatusMutation.isPending ? 'wait' : 'pointer',
-                      }}
-                    >
-                      Snooze 24h
-                    </button>
-                    <a
-                      href={alert.deep_link}
-                      style={{
-                        padding: `${t.space.xs}px ${t.space.sm}px`,
-                        borderRadius: t.radius.sm,
-                        border: `1px solid ${t.color.accent}`,
-                        background: t.color.accentMuted,
-                        fontSize: t.font.sizeXs,
-                        color: t.color.accent,
-                        textDecoration: 'none',
-                        fontWeight: t.font.weightMedium,
-                      }}
-                    >
-                      Details
-                    </a>
+                    {alert.source === 'legacy' && alert.legacy_id != null ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateAlertStatusMutation.mutate({ alertId: alert.legacy_id!, status: 'ack' })
+                          }
+                          disabled={updateAlertStatusMutation.isPending}
+                          style={{
+                            padding: `${t.space.xs}px ${t.space.sm}px`,
+                            borderRadius: t.radius.sm,
+                            border: `1px solid ${t.color.border}`,
+                            background: t.color.surface,
+                            fontSize: t.font.sizeXs,
+                            cursor: updateAlertStatusMutation.isPending ? 'wait' : 'pointer',
+                          }}
+                        >
+                          Ack
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateAlertStatusMutation.mutate({
+                              alertId: alert.legacy_id!,
+                              status: 'snoozed',
+                              snooze_until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+                            })
+                          }
+                          disabled={updateAlertStatusMutation.isPending}
+                          style={{
+                            padding: `${t.space.xs}px ${t.space.sm}px`,
+                            borderRadius: t.radius.sm,
+                            border: `1px solid ${t.color.border}`,
+                            background: t.color.surface,
+                            fontSize: t.font.sizeXs,
+                            cursor: updateAlertStatusMutation.isPending ? 'wait' : 'pointer',
+                          }}
+                        >
+                          Snooze 24h
+                        </button>
+                        {alert.deep_link ? (
+                          <a
+                            href={alert.deep_link}
+                            style={{
+                              padding: `${t.space.xs}px ${t.space.sm}px`,
+                              borderRadius: t.radius.sm,
+                              border: `1px solid ${t.color.accent}`,
+                              background: t.color.accentMuted,
+                              fontSize: t.font.sizeXs,
+                              color: t.color.accent,
+                              textDecoration: 'none',
+                              fontWeight: t.font.weightMedium,
+                            }}
+                          >
+                            Details
+                          </a>
+                        ) : null}
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => onNavigate('alerts')}
+                        style={{
+                          padding: `${t.space.xs}px ${t.space.sm}px`,
+                          borderRadius: t.radius.sm,
+                          border: `1px solid ${t.color.accent}`,
+                          background: t.color.accentMuted,
+                          fontSize: t.font.sizeXs,
+                          color: t.color.accent,
+                          cursor: 'pointer',
+                          fontWeight: t.font.weightMedium,
+                        }}
+                      >
+                        Open alerts
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
