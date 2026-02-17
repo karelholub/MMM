@@ -1,0 +1,24 @@
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+.pytest_cache/
+.venv/
+*.pyc
+
+# Backend runtime artifacts
+backend/meiro_mmm.db
+backend/app/data/*.json
+backend/app/data/*.csv
+backend/app/data/mmm_platform/*.csv
+
+# Frontend build/runtime artifacts
+frontend/node_modules/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo
+
+# Logs
+*.log

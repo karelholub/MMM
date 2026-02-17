@@ -121,3 +121,25 @@ def test_run_attribution_wraps_core_models_and_shapes_output():
     channel_credit = result["channel_credit"]
     assert math.isclose(sum(channel_credit.values()), 150.0, rel_tol=1e-6)
     assert isinstance(result["channels"], list)
+
+
+def test_run_attribution_uses_revenue_entries_with_cross_journey_dedup():
+    journeys = [
+        {
+            "customer_id": "c1",
+            "touchpoints": [{"channel": "email"}, {"channel": "direct"}],
+            "converted": True,
+            "_revenue_entries": [{"dedup_key": "order:1", "value_in_base": 120.0}],
+        },
+        {
+            "customer_id": "c2",
+            "touchpoints": [{"channel": "google"}],
+            "converted": True,
+            "_revenue_entries": [{"dedup_key": "order:1", "value_in_base": 120.0}],
+        },
+    ]
+    result = run_attribution(journeys, model="last_touch")
+    assert result["total_conversions"] == 2
+    # Same dedup key should be counted once in configured revenue.
+    assert result["total_value"] == 120.0
+    assert math.isclose(sum(result["channel_credit"].values()), 120.0, rel_tol=1e-6)

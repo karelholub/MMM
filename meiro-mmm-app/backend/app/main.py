@@ -16,7 +16,6 @@ import secrets
 import requests
 import logging
 from datetime import date, datetime, timedelta, timezone
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import func
 
 logger = logging.getLogger(__name__)
@@ -114,6 +113,10 @@ from app.services_journey_definitions import (
 from app.services_journey_paths import list_paths_for_journey_definition
 from app.services_journey_transitions import list_transitions_for_journey_definition
 from app.services_journey_aggregates import run_daily_journey_aggregates
+from app.services_journeys_health import (
+    build_journeys_preview,
+    build_journeys_summary,
+)
 from app.services_funnels import (
     create_funnel,
     get_funnel,
@@ -177,7 +180,15 @@ from app.services_performance_trends import (
     build_campaign_trend_response,
     build_channel_summary_response,
     build_campaign_summary_response,
-    resolve_period_windows,
+)
+from app.services_performance_helpers import (
+    build_performance_query_context as _build_performance_query_context,
+    build_performance_meta as _build_performance_meta,
+    build_mapping_coverage as _build_mapping_coverage,
+    compute_campaign_trends as _compute_campaign_trends,
+    compute_total_spend_for_period as _perf_compute_total_spend_for_period,
+    compute_total_converted_value_for_period as _perf_compute_total_converted_value_for_period,
+    summarize_mapped_current as _summarize_mapped_current,
 )
 from app.services_quality import (
     load_config_and_meta,
@@ -187,6 +198,7 @@ from app.services_quality import (
 )
 from app.services_paths import compute_path_archetypes, compute_path_anomalies
 from app.services_revenue_config import normalize_revenue_config
+from app.services_metrics import derive_efficiency, journey_revenue_value, safe_ratio
 from app.services_conversion_paths_adapter import (
     build_conversion_paths_analysis_from_daily,
     build_conversion_path_details_from_daily,
@@ -1127,57 +1139,71 @@ def compute_campaign_uplift(journeys: List[Dict]) -> Dict[str, Dict[str, Any]]:
 
 
 def compute_campaign_trends(journeys: List[Dict]) -> Dict[str, Any]:
-    """
-    Build simple time series per campaign step (channel:campaign or channel):
-      - transactions: number of converted journeys attributed to that campaign (last touch)
-      - revenue: sum of conversion_value for those journeys
+    return _compute_campaign_trends(journeys)
 
-    Conversion date is taken as the timestamp of the last touchpoint.
-    """
-    if not journeys:
-        return {"campaigns": [], "dates": [], "series": {}}
 
-    series: Dict[str, Dict[str, Dict[str, float]]] = {}
-    all_dates: set[str] = set()
+def _compute_total_spend_for_period(
+    *,
+    expenses: Any,
+    date_from: str,
+    date_to: str,
+    timezone_name: Optional[str],
+    channels: Optional[List[str]],
+) -> float:
+    return _perf_compute_total_spend_for_period(
+        expenses=expenses,
+        date_from=date_from,
+        date_to=date_to,
+        timezone_name=timezone_name,
+        channels=channels,
+    )
 
-    for j in journeys:
-        if not j.get("converted", True):
+
+def _compute_total_converted_value_for_period(
+    *,
+    journeys: List[Dict[str, Any]],
+    date_from: str,
+    date_to: str,
+    timezone_name: Optional[str],
+    channels: Optional[List[str]],
+    conversion_key: Optional[str],
+) -> float:
+    return _perf_compute_total_converted_value_for_period(
+        journeys=journeys,
+        date_from=date_from,
+        date_to=date_to,
+        timezone_name=timezone_name,
+        channels=channels,
+        conversion_key=conversion_key,
+    )
+
+
+def _attach_scope_confidence(
+    *,
+    db: Any,
+    items: List[Dict[str, Any]],
+    scope_type: str,
+    id_field: str,
+    conversion_key: Optional[str],
+) -> None:
+    for item in items:
+        scope_id = item.get(id_field)
+        if not scope_id:
             continue
-        tps = j.get("touchpoints", [])
-        if not tps:
-            continue
-        last_tp = tps[-1]
-        ts = last_tp.get("timestamp")
-        if not ts:
-            continue
-        try:
-            dt = datetime.fromisoformat(ts)
-            date_key = dt.date().isoformat()
-        except Exception:
-            date_key = str(ts)
+        snap = get_latest_quality_for_scope(db, scope_type, str(scope_id), conversion_key)
+        if snap:
+            item["confidence"] = {
+                "score": snap.confidence_score,
+                "label": snap.confidence_label,
+                "components": snap.components_json,
+            }
 
-        channel = last_tp.get("channel", "unknown")
-        campaign = last_tp.get("campaign")
-        step = f"{channel}:{campaign}" if campaign else channel
 
-        all_dates.add(date_key)
-        step_series = series.setdefault(step, {})
-        entry = step_series.setdefault(date_key, {"transactions": 0.0, "revenue": 0.0})
-        entry["transactions"] += 1.0
-        entry["revenue"] += float(j.get("conversion_value", 0.0) or 0.0)
-
-    sorted_dates = sorted(all_dates)
-    campaigns = sorted(series.keys())
-
-    out_series: Dict[str, List[Dict[str, Any]]] = {}
-    for step, date_map in series.items():
-        points = []
-        for d in sorted_dates:
-            val = date_map.get(d, {"transactions": 0.0, "revenue": 0.0})
-            points.append({"date": d, "transactions": int(val["transactions"]), "revenue": val["revenue"]})
-        out_series[step] = points
-
-    return {"campaigns": campaigns, "dates": sorted_dates, "series": out_series}
+def _ensure_journeys_loaded(db: Any) -> List[Dict[str, Any]]:
+    global JOURNEYS
+    if not JOURNEYS:
+        JOURNEYS = load_journeys_from_db(db)
+    return JOURNEYS or []
 
 
 # ==================== Model Config Versioning API ====================
@@ -1451,10 +1477,8 @@ def preview_model_config(
     if not isinstance(cfg_json, dict):
         return {"preview_available": False, "reason": "Config JSON must be an object"}
 
-    global JOURNEYS
-    if not JOURNEYS:
-        JOURNEYS = load_journeys_from_db(db)
-    if not JOURNEYS:
+    journeys = _ensure_journeys_loaded(db)
+    if not journeys:
         return {"preview_available": False, "reason": "No journeys loaded"}
 
     baseline_cfg: Optional[ORMModelConfig] = (
@@ -1469,10 +1493,10 @@ def preview_model_config(
     baseline_json = baseline_cfg.config_json if baseline_cfg else {}
 
     baseline_journeys = apply_model_config_to_journeys(
-        JOURNEYS,
+        journeys,
         baseline_json or {},
     )
-    draft_journeys = apply_model_config_to_journeys(JOURNEYS, cfg_json)
+    draft_journeys = apply_model_config_to_journeys(journeys, cfg_json)
 
     baseline_metrics = _compute_journey_metrics(baseline_journeys)
     draft_metrics = _compute_journey_metrics(draft_journeys)
@@ -2692,10 +2716,8 @@ def get_kpis():
 @app.post("/api/kpis/test")
 def test_kpi_definition(payload: KpiTestPayload, db=Depends(get_db)):
     """Evaluate a KPI definition against loaded journeys for quick validation."""
-    global JOURNEYS
-    if not JOURNEYS:
-        JOURNEYS = load_journeys_from_db(db)
-    if not JOURNEYS:
+    journeys = _ensure_journeys_loaded(db)
+    if not journeys:
         return {
             "testAvailable": False,
             "eventsMatched": 0,
@@ -2710,7 +2732,7 @@ def test_kpi_definition(payload: KpiTestPayload, db=Depends(get_db)):
         }
 
     definition = payload.definition
-    total_journeys = len(JOURNEYS)
+    total_journeys = len(journeys)
     target_event = (definition.event_name or definition.id or "").strip().lower()
     matched_events = 0
     journeys_matched = 0
@@ -2726,7 +2748,7 @@ def test_kpi_definition(payload: KpiTestPayload, db=Depends(get_db)):
             if value in (None, "", []):
                 missing_value_count += 1
 
-    for journey in JOURNEYS:
+    for journey in journeys:
         journey_matches = False
         events = journey.get("events") or []
 
@@ -2811,73 +2833,12 @@ def list_attribution_models():
     """List available attribution models."""
     return {"models": ATTRIBUTION_MODELS}
 
-def _compute_journey_validation(journeys: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Compute validation summary: error/warn counts and top issues."""
-    error_list: List[str] = []
-    warn_list: List[str] = []
-    seen_ids: Dict[str, int] = {}
-    for j in journeys:
-        pid = str(j.get("customer_id") or j.get("profile_id") or j.get("id") or "")
-        if not pid or pid.startswith("anon-"):
-            warn_list.append("Missing or anonymous customer_id")
-        else:
-            seen_ids[pid] = seen_ids.get(pid, 0) + 1
-        tps = j.get("touchpoints") or []
-        if not tps:
-            error_list.append("Journey has no touchpoints")
-        for tp in tps:
-            if not tp.get("channel") and not tp.get("source"):
-                warn_list.append("Touchpoint missing channel/source")
-            if not tp.get("timestamp"):
-                warn_list.append("Touchpoint missing timestamp")
-    dup_ids = [pid for pid, c in seen_ids.items() if c > 1]
-    if dup_ids:
-        warn_list.append(f"Duplicate customer_ids: {len(dup_ids)} ids")
-    top_errors = list(dict.fromkeys(error_list))[:5]
-    top_warnings = list(dict.fromkeys(warn_list))[:5]
-    return {
-        "error_count": len(error_list),
-        "warn_count": len(warn_list),
-        "top_errors": top_errors,
-        "top_warnings": top_warnings,
-        "duplicate_ids_count": len(dup_ids),
-    }
-
-
-def _compute_data_freshness_hours(last_ts) -> Optional[float]:
-    """Hours since last touchpoint. None if no timestamps."""
-    if last_ts is None:
-        return None
-    try:
-        dt = pd.to_datetime(last_ts, errors="coerce") if isinstance(last_ts, str) else last_ts
-        if dt is None or pd.isna(dt):
-            return None
-        delta = datetime.utcnow() - (dt.to_pydatetime() if hasattr(dt, "to_pydatetime") else dt)
-        return delta.total_seconds() / 3600.0
-    except Exception:
-        return None
-
-
-def _derive_system_state(loaded: bool, count: int, last_import_at: Optional[str], freshness_hours: Optional[float], error_count: int, warn_count: int) -> str:
-    """Derive system state: Empty / Loading / Data Loaded / Stale / Partial / Error."""
-    if not loaded or count == 0:
-        return "empty"
-    if error_count > 0:
-        return "error"
-    if warn_count > 0 and warn_count >= count * 0.1:
-        return "partial"
-    if freshness_hours is not None and freshness_hours > 168:  # > 7 days
-        return "stale"
-    return "data_loaded"
-
 
 @app.get("/api/attribution/journeys")
 def get_journeys_summary(db=Depends(get_db)):
     """Get summary of currently loaded conversion journeys including status, freshness, and system state."""
-    global JOURNEYS
-    if not JOURNEYS:
-        JOURNEYS = load_journeys_from_db(db)
-    if not JOURNEYS:
+    journeys = _ensure_journeys_loaded(db)
+    if not journeys:
         runs = get_import_runs(limit=1)
         last_run = runs[0] if runs and runs[0].get("status") == "success" else None
         return {
@@ -2892,115 +2853,20 @@ def get_journeys_summary(db=Depends(get_db)):
             "validation": {"error_count": 0, "warn_count": 0},
         }
 
-    converted = [j for j in JOURNEYS if j.get("converted", True)]
-    channels: set = set()
-    first_ts = None
-    last_ts = None
-    for j in JOURNEYS:
-        for tp in j.get("touchpoints", []):
-            channels.add(tp.get("channel", "unknown"))
-            ts = tp.get("timestamp")
-            if not ts:
-                continue
-            try:
-                dt = pd.to_datetime(ts, errors="coerce")
-            except Exception:
-                dt = None
-            if dt is None or pd.isna(dt):
-                continue
-            if first_ts is None or dt < first_ts:
-                first_ts = dt
-            if last_ts is None or dt > last_ts:
-                last_ts = dt
-
-    kpi_counts: Dict[str, int] = {}
-    for j in JOURNEYS:
-        ktype = j.get("kpi_type")
-        if isinstance(ktype, str):
-            kpi_counts[ktype] = kpi_counts.get(ktype, 0) + 1
-
-    primary_kpi_id = KPI_CONFIG.primary_kpi_id
-    primary_kpi_label = None
-    if primary_kpi_id:
-        for d in KPI_CONFIG.definitions:
-            if d.id == primary_kpi_id:
-                primary_kpi_label = d.label
-                break
-    primary_count = kpi_counts.get(primary_kpi_id, len(converted) if primary_kpi_id else len(converted))
-
-    runs = get_import_runs(limit=50)
-    last_run = next((r for r in runs if r.get("status") == "success"), None)
-    last_import_at = last_run.get("at") if last_run else None
-    last_import_source = last_run.get("source") if last_run else None
-    freshness_hours = _compute_data_freshness_hours(last_ts)
-    validation = _compute_journey_validation(JOURNEYS)
-    system_state = _derive_system_state(
-        True, len(JOURNEYS), last_import_at, freshness_hours,
-        validation["error_count"], validation["warn_count"],
+    return build_journeys_summary(
+        journeys=journeys,
+        kpi_config=KPI_CONFIG,
+        get_import_runs_fn=get_import_runs,
     )
-
-    return {
-        "loaded": True,
-        "count": len(JOURNEYS),
-        "converted": len(converted),
-        "non_converted": len(JOURNEYS) - len(converted),
-        "channels": sorted(channels),
-        "total_value": sum(j.get("conversion_value", 0) for j in converted),
-        "primary_kpi_id": primary_kpi_id,
-        "primary_kpi_label": primary_kpi_label,
-        "primary_kpi_count": primary_count,
-        "kpi_counts": kpi_counts,
-        "date_min": first_ts.isoformat() if first_ts is not None else None,
-        "date_max": last_ts.isoformat() if last_ts is not None else None,
-        "last_import_at": last_import_at,
-        "last_import_source": last_import_source,
-        "data_freshness_hours": round(freshness_hours, 1) if freshness_hours is not None else None,
-        "system_state": system_state,
-        "validation": validation,
-    }
 
 
 @app.get("/api/attribution/journeys/preview")
 def get_journeys_preview(limit: int = Query(20, ge=1, le=100), db=Depends(get_db)):
-    """Preview first N parsed journeys: customer_id, touchpoints_count, first_ts, last_ts, converted, conversion_value, channels_list."""
-    global JOURNEYS
-    if not JOURNEYS:
-        JOURNEYS = load_journeys_from_db(db)
-    if not JOURNEYS:
+    """Preview first N parsed journeys with both legacy and configured revenue values."""
+    journeys = _ensure_journeys_loaded(db)
+    if not journeys:
         return {"rows": [], "columns": [], "total": 0}
-    rows = []
-    for idx, j in enumerate(JOURNEYS[:limit]):
-        tps = j.get("touchpoints") or []
-        first_ts = None
-        last_ts = None
-        for tp in tps:
-            ts = tp.get("timestamp")
-            if ts:
-                try:
-                    dt = pd.to_datetime(ts, errors="coerce")
-                    if dt is not None and not pd.isna(dt):
-                        if first_ts is None or dt < first_ts:
-                            first_ts = dt
-                        if last_ts is None or dt > last_ts:
-                            last_ts = dt
-                except Exception:
-                    pass
-        channels = list(dict.fromkeys(tp.get("channel", "?") for tp in tps))
-        rows.append({
-            "validIndex": idx,
-            "customer_id": j.get("customer_id") or j.get("profile_id") or j.get("id") or "—",
-            "touchpoints_count": len(tps),
-            "first_ts": first_ts.isoformat() if first_ts is not None else None,
-            "last_ts": last_ts.isoformat() if last_ts is not None else None,
-            "converted": j.get("converted", True),
-            "conversion_value": j.get("conversion_value"),
-            "channels_list": channels,
-        })
-    return {
-        "rows": rows,
-        "columns": ["customer_id", "touchpoints_count", "first_ts", "last_ts", "converted", "conversion_value", "channels_list"],
-        "total": len(JOURNEYS),
-    }
+    return build_journeys_preview(journeys=journeys, limit=limit)
 
 
 @app.get("/api/attribution/journeys/validation")
@@ -3508,7 +3374,14 @@ def import_journeys_from_cdp(
         "meiro_webhook", len(journeys), "success",
         total=len(journeys), valid=len(journeys), converted=converted, channels_detected=sorted(ch_set),
         config_snapshot={"mapping_preset": "saved", "schema_version": "1.0"},
-        preview_rows=[{"customer_id": j.get("customer_id", "?"), "touchpoints": len(j.get("touchpoints", [])), "value": j.get("conversion_value", 0)} for j in journeys[:20]],
+        preview_rows=[
+            {
+                "customer_id": j.get("customer_id", "?"),
+                "touchpoints": len(j.get("touchpoints", [])),
+                "value": journey_revenue_value(j),
+            }
+            for j in journeys[:20]
+        ],
         import_note=req.import_note,
     )
     return {"count": len(journeys), "message": f"Parsed {len(journeys)} journeys from CDP data"}
@@ -3563,18 +3436,15 @@ def run_attribution_model(model: str = "linear", config_id: Optional[str] = None
 
     Optional config_id applies time windows and conversion keys before attribution.
     """
-    global JOURNEYS
-    if not JOURNEYS:
-        # Lazy-load from normalised storage if nothing is in memory yet.
-        JOURNEYS = load_journeys_from_db(db)
-    if not JOURNEYS:
+    journeys = _ensure_journeys_loaded(db)
+    if not journeys:
         raise HTTPException(status_code=400, detail="No journeys loaded. Upload, import, or persist data first.")
     if model not in ATTRIBUTION_MODELS:
         raise HTTPException(status_code=400, detail=f"Unknown model: {model}. Available: {ATTRIBUTION_MODELS}")
     resolved_cfg, meta = load_config_and_meta(db, config_id)
-    journeys_for_model = JOURNEYS
+    journeys_for_model = journeys
     if resolved_cfg:
-        journeys_for_model = apply_model_config_to_journeys(JOURNEYS, resolved_cfg.config_json or {})
+        journeys_for_model = apply_model_config_to_journeys(journeys, resolved_cfg.config_json or {})
 
     kwargs: Dict[str, Any] = {}
     if model == "time_decay":
@@ -3592,15 +3462,13 @@ def run_attribution_model(model: str = "linear", config_id: Optional[str] = None
 @app.post("/api/attribution/run-all")
 def run_all_attribution_models(config_id: Optional[str] = None, db=Depends(get_db)):
     """Run all attribution models on loaded journeys."""
-    global JOURNEYS
-    if not JOURNEYS:
-        JOURNEYS = load_journeys_from_db(db)
-    if not JOURNEYS:
+    journeys = _ensure_journeys_loaded(db)
+    if not journeys:
         raise HTTPException(status_code=400, detail="No journeys loaded. Upload, import, or persist data first.")
     resolved_cfg, meta = load_config_and_meta(db, config_id)
-    journeys_for_model = JOURNEYS
+    journeys_for_model = journeys
     if resolved_cfg:
-        journeys_for_model = apply_model_config_to_journeys(JOURNEYS, resolved_cfg.config_json or {})
+        journeys_for_model = apply_model_config_to_journeys(journeys, resolved_cfg.config_json or {})
 
     results = []
     for model in ATTRIBUTION_MODELS:
@@ -3705,10 +3573,8 @@ def get_attribution_weekly(
     db=Depends(get_db),
 ):
     """Return attributed value (or conversions) per week for reconciliation with MMM KPI series."""
-    global JOURNEYS
-    if not JOURNEYS:
-        JOURNEYS = load_journeys_from_db(db, limit=50000)
-    series = _attribution_weekly_series(JOURNEYS, model, date_start, date_end, config_id, db)
+    journeys = _ensure_journeys_loaded(db)
+    series = _attribution_weekly_series(journeys, model, date_start, date_end, config_id, db)
     return {"model": model, "config_id": config_id, "series": series}
 
 
@@ -3723,16 +3589,14 @@ def get_path_analysis(
 
     Optional config_id pins to a specific model config; response includes config metadata.
     """
-    global JOURNEYS
-    if not JOURNEYS:
-        JOURNEYS = load_journeys_from_db(db)
-    if not JOURNEYS:
+    journeys = _ensure_journeys_loaded(db)
+    if not journeys:
         raise HTTPException(status_code=400, detail="No journeys loaded.")
 
     resolved_cfg, meta = load_config_and_meta(db, config_id)
-    journeys_for_analysis = JOURNEYS
+    journeys_for_analysis = journeys
     if resolved_cfg:
-        journeys_for_analysis = apply_model_config_to_journeys(JOURNEYS, resolved_cfg.config_json or {})
+        journeys_for_analysis = apply_model_config_to_journeys(journeys, resolved_cfg.config_json or {})
 
     # Apply lightweight view filters that affect only the analysis, not the
     # underlying stored journeys.
@@ -3840,16 +3704,14 @@ def get_path_details(
     if not path:
         raise HTTPException(status_code=400, detail="path is required")
 
-    global JOURNEYS
-    if not JOURNEYS:
-        JOURNEYS = load_journeys_from_db(db)
-    if not JOURNEYS:
+    journeys = _ensure_journeys_loaded(db)
+    if not journeys:
         raise HTTPException(status_code=400, detail="No journeys loaded.")
 
     resolved_cfg, meta = load_config_and_meta(db, config_id)
-    journeys_for_analysis = JOURNEYS
+    journeys_for_analysis = journeys
     if resolved_cfg:
-        journeys_for_analysis = apply_model_config_to_journeys(JOURNEYS, resolved_cfg.config_json or {})
+        journeys_for_analysis = apply_model_config_to_journeys(journeys, resolved_cfg.config_json or {})
 
     direct_mode_normalized = (direct_mode or "include").lower()
     if direct_mode_normalized not in ("include", "exclude"):
@@ -4081,15 +3943,14 @@ def get_path_archetypes(
     db=Depends(get_db),
 ):
     """Return simple path archetypes for current journeys."""
-    global JOURNEYS, PATH_ARCHETYPES_CACHE
-    if not JOURNEYS:
-        JOURNEYS = load_journeys_from_db(db)
-    if not JOURNEYS:
+    global PATH_ARCHETYPES_CACHE
+    journeys = _ensure_journeys_loaded(db)
+    if not journeys:
         raise HTTPException(status_code=400, detail="No journeys loaded.")
     resolved_cfg, _meta = load_config_and_meta(db, config_id)
-    journeys_for_analysis = JOURNEYS
+    journeys_for_analysis = journeys
     if resolved_cfg:
-        journeys_for_analysis = apply_model_config_to_journeys(JOURNEYS, resolved_cfg.config_json or {})
+        journeys_for_analysis = apply_model_config_to_journeys(journeys, resolved_cfg.config_json or {})
     # Apply direct handling as a view filter, similar to /api/attribution/paths.
     direct_mode_normalized = (direct_mode or "include").lower()
     if direct_mode_normalized not in ("include", "exclude"):
@@ -4144,25 +4005,23 @@ def get_path_archetypes(
 @app.get("/api/paths/anomalies")
 def get_path_anomalies(conversion_key: Optional[str] = None, config_id: Optional[str] = None, db=Depends(get_db)):
     """Return simple anomaly hints for current journeys' paths."""
-    global JOURNEYS
-    if not JOURNEYS:
-        JOURNEYS = load_journeys_from_db(db)
-    if not JOURNEYS:
+    journeys = _ensure_journeys_loaded(db)
+    if not journeys:
         return {"anomalies": []}
     resolved_cfg, _meta = load_config_and_meta(db, config_id)
-    journeys_for_analysis = JOURNEYS
+    journeys_for_analysis = journeys
     if resolved_cfg:
-        journeys_for_analysis = apply_model_config_to_journeys(JOURNEYS, resolved_cfg.config_json or {})
+        journeys_for_analysis = apply_model_config_to_journeys(journeys, resolved_cfg.config_json or {})
     anomalies = compute_path_anomalies(journeys_for_analysis, conversion_key)
     return {"anomalies": anomalies}
 
 
-def _next_best_action_impl(path_so_far: str = "", level: str = "channel"):
-    if not JOURNEYS:
+def _next_best_action_impl(journeys: List[Dict[str, Any]], path_so_far: str = "", level: str = "channel"):
+    if not journeys:
         raise HTTPException(status_code=400, detail="No journeys loaded.")
     prefix = path_so_far.strip().replace(",", " > ").replace("  ", " ").strip()
-    use_level = "campaign" if level == "campaign" and has_any_campaign(JOURNEYS) else "channel"
-    nba_raw = compute_next_best_action(JOURNEYS, level=use_level)
+    use_level = "campaign" if level == "campaign" and has_any_campaign(journeys) else "channel"
+    nba_raw = compute_next_best_action(journeys, level=use_level)
     filtered_map, _stats = _filter_nba_recommendations(nba_raw, SETTINGS.nba)
     recs = filtered_map.get(prefix, [])
     filtered = recs[:10]
@@ -4178,7 +4037,7 @@ def _next_best_action_impl(path_so_far: str = "", level: str = "channel"):
         direct_unknown_counts: dict[str, int] = _dd(int)
         total_for_prefix = 0
 
-        for j in JOURNEYS:
+        for j in journeys:
             steps = [_step_string(tp, use_level) for tp in j.get("touchpoints", [])]
             if len(steps) < len(prefix_steps):
                 continue
@@ -4227,12 +4086,10 @@ def get_next_best_action(path_so_far: str = "", level: str = "channel", db=Depen
     Given a path prefix (e.g. 'google_ads' or 'google_ads > email'), return recommended next channels
     (or channel:campaign when level=campaign and data has campaign). Use comma or ' > ' to separate steps.
     """
-    global JOURNEYS
-    if not JOURNEYS:
-        JOURNEYS = load_journeys_from_db(db)
-    if not JOURNEYS:
+    journeys = _ensure_journeys_loaded(db)
+    if not journeys:
         raise HTTPException(status_code=400, detail="No journeys loaded.")
-    return _next_best_action_impl(path_so_far=path_so_far, level=level)
+    return _next_best_action_impl(journeys=journeys, path_so_far=path_so_far, level=level)
 
 @app.get("/api/attribution/performance")
 def get_channel_performance(model: str = "linear", config_id: Optional[str] = None, db=Depends(get_db)):
@@ -4242,18 +4099,14 @@ def get_channel_performance(model: str = "linear", config_id: Optional[str] = No
     """
     # Resolve config (for now only surfaced in metadata, attribution math unchanged)
     resolved_cfg, meta = load_config_and_meta(db, config_id)
-    global JOURNEYS
-    if not JOURNEYS:
-        JOURNEYS = load_journeys_from_db(db)
-    journeys_for_model = JOURNEYS
+    journeys = _ensure_journeys_loaded(db)
+    journeys_for_model = journeys
     if resolved_cfg:
-        journeys_for_model = apply_model_config_to_journeys(JOURNEYS, resolved_cfg.config_json or {})
+        journeys_for_model = apply_model_config_to_journeys(journeys, resolved_cfg.config_json or {})
 
     result = ATTRIBUTION_RESULTS.get(model)
     if not result:
-        if not JOURNEYS:
-            JOURNEYS = load_journeys_from_db(db)
-        if not JOURNEYS:
+        if not journeys:
             raise HTTPException(status_code=400, detail="No journeys loaded.")
         kwargs: Dict[str, Any] = {}
         if model == "time_decay":
@@ -4305,12 +4158,10 @@ def get_campaign_performance(
     db=Depends(get_db),
 ):
     """Campaign-level attribution (channel:campaign). Requires touchpoints with campaign. Returns campaigns with attributed value and optional suggested next (NBA)."""
-    global JOURNEYS
-    if not JOURNEYS:
-        JOURNEYS = load_journeys_from_db(db)
-    if not JOURNEYS:
+    journeys = _ensure_journeys_loaded(db)
+    if not journeys:
         raise HTTPException(status_code=400, detail="No journeys loaded.")
-    if not has_any_campaign(JOURNEYS):
+    if not has_any_campaign(journeys):
         return {
             "model": model,
             "campaigns": [],
@@ -4320,9 +4171,9 @@ def get_campaign_performance(
         }
     # Resolve config and apply to journeys
     resolved_cfg, meta = load_config_and_meta(db, config_id)
-    journeys_for_model = JOURNEYS
+    journeys_for_model = journeys
     if resolved_cfg:
-        journeys_for_model = apply_model_config_to_journeys(JOURNEYS, resolved_cfg.config_json or {})
+        journeys_for_model = apply_model_config_to_journeys(journeys, resolved_cfg.config_json or {})
 
     # Optional filter by conversion key (kpi_type on journeys).
     # If no explicit conversion_key is provided, fall back to model config's primary conversion when present.
@@ -4362,9 +4213,11 @@ def get_campaign_performance(
         attr_val = ch["attributed_value"]
         attr_conv = ch.get("attributed_conversions", 0)
         mapped_value += attr_val
-        roi = ((attr_val - spend) / spend) if spend and spend > 0 else None  # ratio, e.g. 1.5 = 150%
-        roas = (attr_val / spend) if spend and spend > 0 else None
-        cpa = (spend / attr_conv) if spend and attr_conv and attr_conv > 0 else None
+        efficiency = derive_efficiency(
+            spend=float(spend or 0.0),
+            conversions=float(attr_conv or 0.0),
+            revenue=float(attr_val or 0.0),
+        )
         campaigns_list.append({
             "campaign": step,
             "channel": channel_name,
@@ -4373,9 +4226,9 @@ def get_campaign_performance(
             "attributed_share": ch["attributed_share"],
             "attributed_conversions": ch.get("attributed_conversions", 0),
             "spend": round(spend, 2),
-            "roi": round(roi, 4) if roi is not None else None,
-            "roas": round(roas, 2) if roas is not None else None,
-            "cpa": round(cpa, 2) if cpa is not None else None,
+            "roi": round(efficiency["roi"], 4) if efficiency["roi"] is not None else None,
+            "roas": round(efficiency["roas"], 2) if efficiency["roas"] is not None else None,
+            "cpa": round(efficiency["cpa"], 2) if efficiency["cpa"] is not None else None,
         })
 
     # Attach NBA suggestion (campaign-level) and uplift vs synthetic holdout
@@ -4438,7 +4291,7 @@ def get_campaign_performance_trends(db=Depends(get_db)):
     """
     Time series for campaign performance:
       - transactions: number of converted journeys (last-touch attribution)
-      - revenue: sum of conversion_value for those journeys
+      - revenue: sum of configured revenue for those journeys
 
     Output:
       {
@@ -4450,12 +4303,10 @@ def get_campaign_performance_trends(db=Depends(get_db)):
         }
       }
     """
-    global JOURNEYS
-    if not JOURNEYS:
-        JOURNEYS = load_journeys_from_db(db)
-    if not JOURNEYS:
+    journeys = _ensure_journeys_loaded(db)
+    if not journeys:
         raise HTTPException(status_code=400, detail="No journeys loaded.")
-    return compute_campaign_trends(JOURNEYS)
+    return compute_campaign_trends(journeys)
 
 
 # ==================== Expense Management ====================
@@ -6335,186 +6186,6 @@ class AlertNoteUpdate(BaseModel):
     note: str
 
 
-class PerformanceQueryContext(BaseModel):
-    date_from: str
-    date_to: str
-    timezone: str
-    currency: Optional[str] = None
-    workspace: Optional[str] = None
-    account: Optional[str] = None
-    model_id: Optional[str] = None
-    kpi_key: str = "revenue"
-    grain: str = "auto"
-    compare: bool = True
-    channels: Optional[List[str]] = None
-    conversion_key: Optional[str] = None
-    current_period: Optional[Dict[str, Any]] = None
-    previous_period: Optional[Dict[str, Any]] = None
-
-
-def _normalize_channel_filter(channels: Optional[List[str]]) -> Optional[List[str]]:
-    if not channels:
-        return None
-    normalized: List[str] = []
-    for raw in channels:
-        if raw is None:
-            continue
-        parts = [p.strip() for p in str(raw).split(",")]
-        for part in parts:
-            if not part:
-                continue
-            if part.lower() == "all":
-                return None
-            normalized.append(part)
-    uniq_sorted = sorted(set(normalized))
-    return uniq_sorted or None
-
-
-def _build_performance_query_context(
-    *,
-    date_from: str,
-    date_to: str,
-    timezone: str,
-    currency: Optional[str],
-    workspace: Optional[str],
-    account: Optional[str],
-    model_id: Optional[str],
-    kpi_key: str,
-    grain: str,
-    compare: bool,
-    channels: Optional[List[str]],
-    conversion_key: Optional[str],
-) -> PerformanceQueryContext:
-    windows = resolve_period_windows(date_from=date_from, date_to=date_to, grain=grain)
-    return PerformanceQueryContext(
-        date_from=windows["current_period"]["date_from"],
-        date_to=windows["current_period"]["date_to"],
-        timezone=(timezone or "UTC").strip() or "UTC",
-        currency=currency,
-        workspace=workspace,
-        account=account,
-        model_id=model_id,
-        kpi_key=(kpi_key or "revenue").strip().lower(),
-        grain=grain,
-        compare=bool(compare),
-        channels=_normalize_channel_filter(channels),
-        conversion_key=(conversion_key.strip() if conversion_key else None),
-        current_period=windows.get("current_period"),
-        previous_period=windows.get("previous_period"),
-    )
-
-
-def _safe_zoneinfo(timezone_name: Optional[str]) -> ZoneInfo:
-    try:
-        return ZoneInfo((timezone_name or "UTC").strip() or "UTC")
-    except ZoneInfoNotFoundError:
-        return ZoneInfo("UTC")
-
-
-def _local_date_from_ts(ts_value: Any, timezone_name: Optional[str]) -> Optional[date]:
-    if not ts_value:
-        return None
-    try:
-        dt = datetime.fromisoformat(str(ts_value).replace("Z", "+00:00"))
-    except Exception:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(_safe_zoneinfo(timezone_name)).date()
-
-
-def _compute_total_spend_for_period(
-    *,
-    expenses: Any,
-    date_from: str,
-    date_to: str,
-    timezone_name: Optional[str],
-    channels: Optional[List[str]],
-) -> float:
-    start_d = datetime.fromisoformat(date_from[:10]).date()
-    end_d = datetime.fromisoformat(date_to[:10]).date()
-    if end_d < start_d:
-        start_d, end_d = end_d, start_d
-    allowed = set(channels or [])
-    total = 0.0
-    records = expenses.values() if isinstance(expenses, dict) else (expenses or [])
-    for exp in records:
-        if isinstance(exp, dict):
-            status = str(exp.get("status", "active"))
-            channel = exp.get("channel")
-            ts_raw = exp.get("service_period_start")
-            amount = float(exp.get("converted_amount") or exp.get("amount") or 0.0)
-        else:
-            status = str(getattr(exp, "status", "active"))
-            channel = getattr(exp, "channel", None)
-            ts_raw = getattr(exp, "service_period_start", None)
-            amount = float(getattr(exp, "converted_amount", None) or getattr(exp, "amount", 0.0) or 0.0)
-        if status == "deleted" or not channel:
-            continue
-        channel = str(channel)
-        if allowed and channel not in allowed:
-            continue
-        day = _local_date_from_ts(ts_raw, timezone_name)
-        if day is None:
-            continue
-        if start_d <= day <= end_d:
-            total += amount
-    return total
-
-
-def _compute_total_converted_value_for_period(
-    *,
-    journeys: List[Dict[str, Any]],
-    date_from: str,
-    date_to: str,
-    timezone_name: Optional[str],
-    channels: Optional[List[str]],
-    conversion_key: Optional[str],
-) -> float:
-    start_d = datetime.fromisoformat(date_from[:10]).date()
-    end_d = datetime.fromisoformat(date_to[:10]).date()
-    if end_d < start_d:
-        start_d, end_d = end_d, start_d
-    allowed = set(channels or [])
-    total = 0.0
-    dedupe_seen: set[str] = set()
-    for journey in journeys or []:
-        if not journey.get("converted", True):
-            continue
-        if conversion_key:
-            journey_key = str(journey.get("kpi_type") or journey.get("conversion_key") or "")
-            if journey_key != conversion_key:
-                continue
-        touchpoints = journey.get("touchpoints") or []
-        if not touchpoints:
-            continue
-        last_tp = touchpoints[-1] if isinstance(touchpoints[-1], dict) else {}
-        channel = str(last_tp.get("channel") or "unknown")
-        if allowed and channel not in allowed:
-            continue
-        day = _local_date_from_ts(last_tp.get("timestamp"), timezone_name)
-        if day is None:
-            continue
-        if start_d <= day <= end_d:
-            entries = journey.get("_revenue_entries")
-            if isinstance(entries, list):
-                for entry in entries:
-                    if not isinstance(entry, dict):
-                        continue
-                    dedup_key = str(entry.get("dedup_key") or "")
-                    if dedup_key:
-                        if dedup_key in dedupe_seen:
-                            continue
-                        dedupe_seen.add(dedup_key)
-                    try:
-                        total += float(entry.get("value_in_base") or 0.0)
-                    except Exception:
-                        continue
-            else:
-                total += float(journey.get("conversion_value") or 0.0)
-    return total
-
-
 @app.post("/api/data-quality/alerts/{alert_id}/status")
 def update_alert_status(alert_id: int, body: AlertStatusUpdate, db=Depends(get_db)):
     alert = db.get(DQAlert, alert_id)
@@ -6616,9 +6287,7 @@ def performance_channel_trend(
     Channel performance trend for selected KPI and period.
     Returns current period series and optional previous period series.
     """
-    global JOURNEYS
-    if not JOURNEYS:
-        JOURNEYS = load_journeys_from_db(db)
+    journeys = _ensure_journeys_loaded(db)
     try:
         query_ctx = _build_performance_query_context(
             date_from=date_from,
@@ -6638,7 +6307,7 @@ def performance_channel_trend(
         raise HTTPException(status_code=400, detail=str(e))
     try:
         out = build_channel_trend_response(
-            journeys=JOURNEYS or [],
+            journeys=journeys,
             expenses=EXPENSES,
             date_from=query_ctx.date_from,
             date_to=query_ctx.date_to,
@@ -6651,22 +6320,7 @@ def performance_channel_trend(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    out["meta"] = {
-        "workspace": query_ctx.workspace,
-        "account": query_ctx.account,
-        "model_id": query_ctx.model_id,
-        "currency": query_ctx.currency,
-        "kpi_key": query_ctx.kpi_key,
-        "conversion_key": query_ctx.conversion_key,
-        "timezone": query_ctx.timezone,
-        "channels": query_ctx.channels or [],
-        "query_context": {
-            "current_period": query_ctx.current_period,
-            "previous_period": query_ctx.previous_period,
-            "grain": query_ctx.grain,
-            "compare": query_ctx.compare,
-        },
-    }
+    out["meta"] = _build_performance_meta(ctx=query_ctx, include_kpi=True)
     return out
 
 
@@ -6685,9 +6339,7 @@ def performance_channel_summary(
     db=Depends(get_db),
     _ctx: PermissionContext = Depends(require_permission("attribution.view")),
 ):
-    global JOURNEYS
-    if not JOURNEYS:
-        JOURNEYS = load_journeys_from_db(db)
+    journeys = _ensure_journeys_loaded(db)
     query_ctx = _build_performance_query_context(
         date_from=date_from,
         date_to=date_to,
@@ -6705,7 +6357,7 @@ def performance_channel_summary(
     _resolved_cfg, config_meta = load_config_and_meta(db, query_ctx.model_id)
     effective_conversion_key = query_ctx.conversion_key or (config_meta.get("conversion_key") if config_meta else None)
     out = build_channel_summary_response(
-        journeys=JOURNEYS or [],
+        journeys=journeys,
         expenses=EXPENSES,
         date_from=query_ctx.date_from,
         date_to=query_ctx.date_to,
@@ -6714,57 +6366,27 @@ def performance_channel_summary(
         channels=query_ctx.channels,
         conversion_key=effective_conversion_key,
     )
-    for item in out.get("items", []):
-        channel_scope_id = item.get("channel")
-        if not channel_scope_id:
-            continue
-        snap = get_latest_quality_for_scope(db, "channel", str(channel_scope_id), effective_conversion_key)
-        if snap:
-            item["confidence"] = {
-                "score": snap.confidence_score,
-                "label": snap.confidence_label,
-                "components": snap.components_json,
-            }
-    mapped_spend = sum(float((row.get("current") or {}).get("spend", 0.0)) for row in out.get("items", []))
-    mapped_value = sum(float((row.get("current") or {}).get("revenue", 0.0)) for row in out.get("items", []))
-    spend_total = _compute_total_spend_for_period(
-        expenses=EXPENSES,
-        date_from=query_ctx.date_from,
-        date_to=query_ctx.date_to,
-        timezone_name=query_ctx.timezone,
-        channels=query_ctx.channels,
+    _attach_scope_confidence(
+        db=db,
+        items=out.get("items", []),
+        scope_type="channel",
+        id_field="channel",
+        conversion_key=effective_conversion_key,
     )
-    value_total = _compute_total_converted_value_for_period(
-        journeys=JOURNEYS or [],
+    mapped = _summarize_mapped_current(out.get("items", []))
+    out["config"] = config_meta
+    out["mapping_coverage"] = _build_mapping_coverage(
+        mapped_spend=mapped["mapped_spend"],
+        mapped_value=mapped["mapped_value"],
+        expenses=EXPENSES,
+        journeys=journeys,
         date_from=query_ctx.date_from,
         date_to=query_ctx.date_to,
         timezone_name=query_ctx.timezone,
         channels=query_ctx.channels,
         conversion_key=effective_conversion_key,
     )
-    out["config"] = config_meta
-    out["mapping_coverage"] = {
-        "spend_mapped_pct": (mapped_spend / spend_total * 100.0) if spend_total > 0 else 0.0,
-        "value_mapped_pct": (mapped_value / value_total * 100.0) if value_total > 0 else 0.0,
-        "spend_mapped": mapped_spend,
-        "spend_total": spend_total,
-        "value_mapped": mapped_value,
-        "value_total": value_total,
-    }
-    out["meta"] = {
-        "workspace": query_ctx.workspace,
-        "account": query_ctx.account,
-        "model_id": query_ctx.model_id,
-        "currency": query_ctx.currency,
-        "timezone": query_ctx.timezone,
-        "channels": query_ctx.channels or [],
-        "conversion_key": effective_conversion_key,
-        "query_context": {
-            "current_period": query_ctx.current_period,
-            "previous_period": query_ctx.previous_period,
-            "compare": query_ctx.compare,
-        },
-    }
+    out["meta"] = _build_performance_meta(ctx=query_ctx, conversion_key=effective_conversion_key)
     return out
 
 
@@ -6789,9 +6411,7 @@ def performance_campaign_trend(
     Campaign performance trend for selected KPI and period.
     Returns current period series and optional previous period series.
     """
-    global JOURNEYS
-    if not JOURNEYS:
-        JOURNEYS = load_journeys_from_db(db)
+    journeys = _ensure_journeys_loaded(db)
     try:
         query_ctx = _build_performance_query_context(
             date_from=date_from,
@@ -6811,7 +6431,7 @@ def performance_campaign_trend(
         raise HTTPException(status_code=400, detail=str(e))
     try:
         out = build_campaign_trend_response(
-            journeys=JOURNEYS or [],
+            journeys=journeys,
             expenses=EXPENSES,
             date_from=query_ctx.date_from,
             date_to=query_ctx.date_to,
@@ -6824,22 +6444,7 @@ def performance_campaign_trend(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    out["meta"] = {
-        "workspace": query_ctx.workspace,
-        "account": query_ctx.account,
-        "model_id": query_ctx.model_id,
-        "currency": query_ctx.currency,
-        "kpi_key": query_ctx.kpi_key,
-        "conversion_key": query_ctx.conversion_key,
-        "timezone": query_ctx.timezone,
-        "channels": query_ctx.channels or [],
-        "query_context": {
-            "current_period": query_ctx.current_period,
-            "previous_period": query_ctx.previous_period,
-            "grain": query_ctx.grain,
-            "compare": query_ctx.compare,
-        },
-    }
+    out["meta"] = _build_performance_meta(ctx=query_ctx, include_kpi=True)
     return out
 
 
@@ -6858,9 +6463,7 @@ def performance_campaign_summary(
     db=Depends(get_db),
     _ctx: PermissionContext = Depends(require_permission("attribution.view")),
 ):
-    global JOURNEYS
-    if not JOURNEYS:
-        JOURNEYS = load_journeys_from_db(db)
+    journeys = _ensure_journeys_loaded(db)
     query_ctx = _build_performance_query_context(
         date_from=date_from,
         date_to=date_to,
@@ -6878,7 +6481,7 @@ def performance_campaign_summary(
     _resolved_cfg, config_meta = load_config_and_meta(db, query_ctx.model_id)
     effective_conversion_key = query_ctx.conversion_key or (config_meta.get("conversion_key") if config_meta else None)
     out = build_campaign_summary_response(
-        journeys=JOURNEYS or [],
+        journeys=journeys,
         expenses=EXPENSES,
         date_from=query_ctx.date_from,
         date_to=query_ctx.date_to,
@@ -6887,57 +6490,27 @@ def performance_campaign_summary(
         channels=query_ctx.channels,
         conversion_key=effective_conversion_key,
     )
-    for item in out.get("items", []):
-        scope_id = item.get("campaign_id")
-        if not scope_id:
-            continue
-        snap = get_latest_quality_for_scope(db, "campaign", str(scope_id), effective_conversion_key)
-        if snap:
-            item["confidence"] = {
-                "score": snap.confidence_score,
-                "label": snap.confidence_label,
-                "components": snap.components_json,
-            }
-    mapped_spend = sum(float((row.get("current") or {}).get("spend", 0.0)) for row in out.get("items", []))
-    mapped_value = sum(float((row.get("current") or {}).get("revenue", 0.0)) for row in out.get("items", []))
-    spend_total = _compute_total_spend_for_period(
-        expenses=EXPENSES,
-        date_from=query_ctx.date_from,
-        date_to=query_ctx.date_to,
-        timezone_name=query_ctx.timezone,
-        channels=query_ctx.channels,
+    _attach_scope_confidence(
+        db=db,
+        items=out.get("items", []),
+        scope_type="campaign",
+        id_field="campaign_id",
+        conversion_key=effective_conversion_key,
     )
-    value_total = _compute_total_converted_value_for_period(
-        journeys=JOURNEYS or [],
+    mapped = _summarize_mapped_current(out.get("items", []))
+    out["config"] = config_meta
+    out["mapping_coverage"] = _build_mapping_coverage(
+        mapped_spend=mapped["mapped_spend"],
+        mapped_value=mapped["mapped_value"],
+        expenses=EXPENSES,
+        journeys=journeys,
         date_from=query_ctx.date_from,
         date_to=query_ctx.date_to,
         timezone_name=query_ctx.timezone,
         channels=query_ctx.channels,
         conversion_key=effective_conversion_key,
     )
-    out["config"] = config_meta
-    out["mapping_coverage"] = {
-        "spend_mapped_pct": (mapped_spend / spend_total * 100.0) if spend_total > 0 else 0.0,
-        "value_mapped_pct": (mapped_value / value_total * 100.0) if value_total > 0 else 0.0,
-        "spend_mapped": mapped_spend,
-        "spend_total": spend_total,
-        "value_mapped": mapped_value,
-        "value_total": value_total,
-    }
-    out["meta"] = {
-        "workspace": query_ctx.workspace,
-        "account": query_ctx.account,
-        "model_id": query_ctx.model_id,
-        "currency": query_ctx.currency,
-        "timezone": query_ctx.timezone,
-        "channels": query_ctx.channels or [],
-        "conversion_key": effective_conversion_key,
-        "query_context": {
-            "current_period": query_ctx.current_period,
-            "previous_period": query_ctx.previous_period,
-            "compare": query_ctx.compare,
-        },
-    }
+    out["meta"] = _build_performance_meta(ctx=query_ctx, conversion_key=effective_conversion_key)
     return out
 
 
@@ -8068,10 +7641,8 @@ def explainability_summary(
     - scope=paths: path length and time-to-convert drivers.
     Narrative ties explanations to config and data changes.
     """
-    global JOURNEYS
-    if not JOURNEYS:
-        JOURNEYS = load_journeys_from_db(db)
-    if not JOURNEYS:
+    journeys = _ensure_journeys_loaded(db)
+    if not journeys:
         raise HTTPException(status_code=400, detail="No journeys loaded.")
 
     # Parse period
@@ -8105,7 +7676,6 @@ def explainability_summary(
     prev_start = start - delta
 
     resolved_cfg, meta = load_config_and_meta(db, config_id)
-    journeys = JOURNEYS
     if resolved_cfg:
         journeys = apply_model_config_to_journeys(journeys, resolved_cfg.config_json or {})
 
@@ -8241,13 +7811,10 @@ def explainability_summary(
                 curr_spend_ch = float(curr_spend.get(cid, 0.0) or 0.0)
                 prev_spend_ch = float(prev_spend.get(cid, 0.0) or 0.0)
 
-                def _safe_ratio(num: float, den: float) -> Optional[float]:
-                    return num / den if den > 0 else None
-
-                curr_roas = _safe_ratio(curr_val_ch, curr_spend_ch)
-                prev_roas = _safe_ratio(prev_val_ch, prev_spend_ch)
-                curr_cpa = _safe_ratio(curr_spend_ch, curr_conv_ch)
-                prev_cpa = _safe_ratio(prev_spend_ch, prev_conv_ch)
+                curr_roas = safe_ratio(curr_val_ch, curr_spend_ch)
+                prev_roas = safe_ratio(prev_val_ch, prev_spend_ch)
+                curr_cpa = safe_ratio(curr_spend_ch, curr_conv_ch)
+                prev_cpa = safe_ratio(prev_spend_ch, prev_conv_ch)
 
                 channel_breakdowns[cid] = {
                     "channel": cid,
@@ -8560,6 +8127,7 @@ def explainability_summary(
     # Simple timeline: daily attributed value in current period (optionally used for "When did it change?")
     timeline: List[Dict[str, Any]] = []
     daily_values: Dict[str, float] = {}
+    dedupe_seen_timeline: set[str] = set()
     for j in curr_j:
         tps = j.get("touchpoints", [])
         if not tps:
@@ -8572,7 +8140,10 @@ def explainability_summary(
         except Exception:
             continue
         day_str = dt.date().isoformat()
-        daily_values[day_str] = daily_values.get(day_str, 0.0) + float(j.get("conversion_value", 0.0) or 0.0)
+        daily_values[day_str] = daily_values.get(day_str, 0.0) + journey_revenue_value(
+            j,
+            dedupe_seen=dedupe_seen_timeline,
+        )
     for day in sorted(daily_values.keys()):
         timeline.append({"date": day, "attributed_value": round(daily_values[day], 2)})
 
@@ -10327,7 +9898,7 @@ def meiro_pull(since: Optional[str] = None, until: Optional[str] = None, db=Depe
         "meiro_pull", len(journeys), "success",
         total=len(journeys), valid=len(journeys), converted=converted, channels_detected=sorted(ch_set),
         config_snapshot={"lookback_days": pull_cfg.get("lookback_days"), "session_gap_minutes": pull_cfg.get("session_gap_minutes"), "conversion_selector": pull_cfg.get("conversion_selector")},
-        preview_rows=[{"customer_id": j.get("customer_id", "?"), "touchpoints": len(j.get("touchpoints", [])), "value": j.get("conversion_value", 0)} for j in journeys[:20]],
+        preview_rows=[{"customer_id": j.get("customer_id", "?"), "touchpoints": len(j.get("touchpoints", [])), "value": journey_revenue_value(j)} for j in journeys[:20]],
     )
     return {"count": len(journeys), "message": f"Pulled {len(journeys)} journeys from Meiro"}
 
@@ -10377,7 +9948,7 @@ def meiro_dry_run(limit: int = 100):
                     sample_channels.add(ch)
         if not any(c for c in sample_channels if "email" in str(c).lower() or "click" in str(c).lower()):
             warnings.append("No email click tracking detected; channel coverage may be incomplete")
-    preview = [{"id": j.get("customer_id", j.get("id", "?")), "touchpoints": len(j.get("touchpoints", [])), "value": j.get("conversion_value", 0)} for j in journeys[:20]]
+    preview = [{"id": j.get("customer_id", j.get("id", "?")), "touchpoints": len(j.get("touchpoints", [])), "value": journey_revenue_value(j)} for j in journeys[:20]]
     return {"count": len(journeys), "preview": preview, "warnings": warnings, "validation": {"ok": len(warnings) == 0}}
 
 

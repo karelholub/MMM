@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
+from .services_metrics import journey_revenue_value
 
 # Week start: Monday (pandas 'W-MON')
 WEEK_FREQ = "W-MON"
@@ -40,7 +41,8 @@ def _aggregate_kpi_by_week(
     date_start: pd.Timestamp,
     date_end: pd.Timestamp,
 ) -> pd.Series:
-    """Aggregate KPI by week. kpi_target: 'sales' => sum(conversion_value), 'attribution' => count."""
+    """Aggregate KPI by week. kpi_target: 'sales' => sum(configured revenue), 'attribution' => count."""
+    dedupe_seen: set[str] = set()
     week_to_value: Dict[pd.Timestamp, float] = {}
     for j in journeys:
         if not j.get("converted", True):
@@ -52,7 +54,7 @@ def _aggregate_kpi_by_week(
         week_start = ts.normalize().to_period(WEEK_FREQ).start_time
         if date_start <= week_start <= date_end:
             if kpi_target == "sales":
-                val = float(j.get("conversion_value") or 0)
+                val = journey_revenue_value(j, dedupe_seen=dedupe_seen)
             else:
                 val = 1.0  # count conversions
             week_to_value[week_start] = week_to_value.get(week_start, 0) + val
@@ -132,7 +134,7 @@ def build_mmm_dataset_from_platform(
     Build a wide-format MMM dataset from platform journeys and expenses.
 
     - date_start / date_end: ISO date strings (inclusive week range).
-    - kpi_target: 'sales' (sum conversion_value) or 'attribution' (count conversions).
+    - kpi_target: 'sales' (sum configured revenue) or 'attribution' (count conversions).
     - spend_channels: list of channel names matching expense.channel.
     - covariates: optional list; if provided we add placeholder columns (0) for now.
 

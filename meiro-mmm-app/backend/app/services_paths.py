@@ -18,6 +18,7 @@ import math
 import logging
 
 import pandas as pd
+from .services_metrics import journey_revenue_value
 
 # Optional ML stack. The app can run in "minimal" mode without clustering.
 try:
@@ -549,7 +550,8 @@ def compute_path_archetypes(
             for a, b in zip(safe_channels, safe_channels[1:]):
                 cluster_transitions[cl][(a, b)] += 1
 
-    # Conversion value (if present on journeys) – best-effort cluster summary.
+    # Configured revenue value – best-effort cluster summary.
+    dedupe_seen: set[str] = set()
     for j in journeys or []:
         tps = j.get("touchpoints") or []
         channels = [_safe_channel(tp.get("channel")) for tp in tps] or ["unknown"]
@@ -557,9 +559,9 @@ def compute_path_archetypes(
         cl = path_to_cluster.get(path)
         if cl is None:
             continue
-        value = j.get("conversion_value")
+        value = journey_revenue_value(j, dedupe_seen=dedupe_seen)
         if isinstance(value, (int, float)):
-            cluster_value_sums[cl] += float(value)
+            cluster_value_sums[cl] += value
             cluster_value_counts[cl] += 1
 
     # Per-path counts for representativeness and variants/outliers.

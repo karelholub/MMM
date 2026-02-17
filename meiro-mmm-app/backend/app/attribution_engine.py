@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from app.services_metrics import journey_revenue_value
 from app.utils.taxonomy import normalize_touchpoint, load_taxonomy
 
 logger = logging.getLogger(__name__)
@@ -52,35 +53,38 @@ ATTRIBUTION_MODELS = [
 def last_touch(journeys: List[Dict]) -> Dict[str, float]:
     """100% credit to the last touchpoint before conversion."""
     credit: Dict[str, float] = defaultdict(float)
+    dedupe_seen: set[str] = set()
     for j in journeys:
         if not j.get("converted", True) or not j.get("touchpoints"):
             continue
         last_tp = j["touchpoints"][-1]
         channel = last_tp.get("channel", "unknown")
-        credit[channel] += j.get("conversion_value", 1.0)
+        credit[channel] += journey_revenue_value(j, dedupe_seen=dedupe_seen)
     return dict(credit)
 
 
 def first_touch(journeys: List[Dict]) -> Dict[str, float]:
     """100% credit to the first touchpoint."""
     credit: Dict[str, float] = defaultdict(float)
+    dedupe_seen: set[str] = set()
     for j in journeys:
         if not j.get("converted", True) or not j.get("touchpoints"):
             continue
         first_tp = j["touchpoints"][0]
         channel = first_tp.get("channel", "unknown")
-        credit[channel] += j.get("conversion_value", 1.0)
+        credit[channel] += journey_revenue_value(j, dedupe_seen=dedupe_seen)
     return dict(credit)
 
 
 def linear(journeys: List[Dict]) -> Dict[str, float]:
     """Equal credit distributed across all touchpoints."""
     credit: Dict[str, float] = defaultdict(float)
+    dedupe_seen: set[str] = set()
     for j in journeys:
         if not j.get("converted", True) or not j.get("touchpoints"):
             continue
         tps = j["touchpoints"]
-        value = j.get("conversion_value", 1.0)
+        value = journey_revenue_value(j, dedupe_seen=dedupe_seen)
         share = value / len(tps) if tps else 0
         for tp in tps:
             channel = tp.get("channel", "unknown")
@@ -91,11 +95,12 @@ def linear(journeys: List[Dict]) -> Dict[str, float]:
 def time_decay(journeys: List[Dict], half_life_days: float = 7.0) -> Dict[str, float]:
     """More credit to touchpoints closer to conversion. Exponential decay."""
     credit: Dict[str, float] = defaultdict(float)
+    dedupe_seen: set[str] = set()
     for j in journeys:
         if not j.get("converted", True) or not j.get("touchpoints"):
             continue
         tps = j["touchpoints"]
-        value = j.get("conversion_value", 1.0)
+        value = journey_revenue_value(j, dedupe_seen=dedupe_seen)
 
         # Parse timestamps for decay calculation
         timestamps = []
@@ -138,11 +143,12 @@ def position_based(journeys: List[Dict], first_pct: float = 0.4, last_pct: float
     middle_pct = 1.0 - first_pct - last_pct
     credit: Dict[str, float] = defaultdict(float)
 
+    dedupe_seen: set[str] = set()
     for j in journeys:
         if not j.get("converted", True) or not j.get("touchpoints"):
             continue
         tps = j["touchpoints"]
-        value = j.get("conversion_value", 1.0)
+        value = journey_revenue_value(j, dedupe_seen=dedupe_seen)
         n = len(tps)
 
         if n == 1:
@@ -170,11 +176,12 @@ def position_based(journeys: List[Dict], first_pct: float = 0.4, last_pct: float
 
     # Fix the 2-touchpoint case by re-processing
     credit_fixed: Dict[str, float] = defaultdict(float)
+    dedupe_seen_second_pass: set[str] = set()
     for j in journeys:
         if not j.get("converted", True) or not j.get("touchpoints"):
             continue
         tps = j["touchpoints"]
-        value = j.get("conversion_value", 1.0)
+        value = journey_revenue_value(j, dedupe_seen=dedupe_seen_second_pass)
         n = len(tps)
 
         if n == 1:
@@ -205,6 +212,7 @@ def markov(journeys: List[Dict]) -> Dict[str, float]:
     total_conversions = 0
     total_value = 0.0
 
+    dedupe_seen: set[str] = set()
     for j in journeys:
         tps = j.get("touchpoints", [])
         converted = j.get("converted", True)
@@ -212,7 +220,7 @@ def markov(journeys: List[Dict]) -> Dict[str, float]:
         if converted:
             channels.append("__conversion__")
             total_conversions += 1
-            total_value += j.get("conversion_value", 1.0)
+            total_value += journey_revenue_value(j, dedupe_seen=dedupe_seen)
         else:
             channels.append("__null__")
 
@@ -486,7 +494,8 @@ def run_attribution(
     fn = MODEL_FN[model]
     converted_journeys = [j for j in journeys if j.get("converted", True)]
     total_conversions = len(converted_journeys)
-    total_value = sum(j.get("conversion_value", 1.0) for j in converted_journeys)
+    dedupe_seen: set[str] = set()
+    total_value = sum(journey_revenue_value(j, dedupe_seen=dedupe_seen) for j in converted_journeys)
 
     credit = fn(converted_journeys, **kwargs) if kwargs else fn(converted_journeys)
     diagnostics: Optional[Dict[str, Any]] = None
@@ -903,12 +912,13 @@ def compute_next_best_action(
     step_stats: Dict[Tuple[str, str], Dict[str, Any]] = defaultdict(
         lambda: {"count": 0, "conversions": 0, "total_value": 0.0}
     )
+    dedupe_seen: set[str] = set()
 
     for j in journeys:
         tps = j.get("touchpoints", [])
         steps = [_step_string(tp, level) for tp in tps]
         converted = j.get("converted", True)
-        value = float(j.get("conversion_value", 0) or 0)
+        value = journey_revenue_value(j, dedupe_seen=dedupe_seen)
 
         for i in range(len(steps)):
             prefix = " > ".join(steps[:i]) if i > 0 else ""

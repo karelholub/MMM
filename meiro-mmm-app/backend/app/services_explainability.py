@@ -27,6 +27,7 @@ from .models_config_dq import (
     AttributionQualitySnapshot,
     DQSnapshot,
 )
+from .services_metrics import derive_efficiency
 from .services_quality import get_latest_quality_for_scope
 
 logger = logging.getLogger(__name__)
@@ -475,9 +476,11 @@ def explain_campaign_performance(
     efficiency = {}
     if spend_data and campaign_id in spend_data:
         campaign_spend = spend_data[campaign_id]
-        efficiency["cpa"] = campaign_spend / campaign_conversions if campaign_conversions > 0 else None
-        efficiency["roi"] = (campaign_value - campaign_spend) / campaign_spend if campaign_spend > 0 else None
-        efficiency["roas"] = campaign_value / campaign_spend if campaign_spend > 0 else None
+        efficiency = derive_efficiency(
+            spend=float(campaign_spend or 0.0),
+            conversions=float(campaign_conversions or 0.0),
+            revenue=float(campaign_value or 0.0),
+        )
     
     # Compare to average
     avg_conversions_per_campaign = total_conversions / len(channels) if channels else 0

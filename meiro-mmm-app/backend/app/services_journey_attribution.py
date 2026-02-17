@@ -15,6 +15,7 @@ from .attribution_engine import ATTRIBUTION_MODELS, run_attribution, run_attribu
 from .models_config_dq import ConversionPath, JourneyDefinition
 from .services_conversions import v2_to_legacy
 from .services_journey_aggregates import _build_journey_steps, _path_hash
+from .services_metrics import journey_revenue_value
 
 PAID_CHANNEL_TOKENS = {
     "google_ads",
@@ -192,7 +193,8 @@ def build_journey_attribution_summary(
                 }
             )
 
-    observed_total = float(sum((j.get("conversion_value") or 0.0) for j in journeys))
+    dedupe_seen: set[str] = set()
+    observed_total = float(sum(journey_revenue_value(j, dedupe_seen=dedupe_seen) for j in journeys))
     delta_abs = round(total_attr - observed_total, 4)
     delta_pct = round((delta_abs / observed_total), 6) if observed_total > 0 else 0.0
 

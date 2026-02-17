@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from .models_config_dq import ConversionPath
 from .models_overview_alerts import AlertEvent, AlertRule
+from .services_metrics import delta_pct
 from .services_revenue_config import compute_payload_revenue_value, get_revenue_config
 
 
@@ -678,11 +679,6 @@ def get_overview_drivers(
                 camp = camp.get("name", "unknown")
             prev_camp_rev[camp] = prev_camp_rev.get(camp, 0) + val
 
-    def _delta(curr: float, prev: float) -> Optional[float]:
-        if prev == 0:
-            return 100.0 if curr > 0 else 0.0
-        return round((curr - prev) / prev * 100.0, 1)
-
     channels = sorted(set(expense_by_channel.keys()) | set(ch_rev.keys()))
     by_channel = []
     for ch in channels:
@@ -697,9 +693,9 @@ def get_overview_drivers(
             "spend": round(spend, 2),
             "conversions": conv,
             "revenue": round(rev, 2),
-            "delta_spend_pct": _delta(spend, prev_spend),
-            "delta_conversions_pct": _delta(float(conv), float(prev_conv)),
-            "delta_revenue_pct": _delta(rev, prev_rev),
+            "delta_spend_pct": delta_pct(spend, prev_spend),
+            "delta_conversions_pct": delta_pct(float(conv), float(prev_conv)),
+            "delta_revenue_pct": delta_pct(rev, prev_rev),
         })
     by_channel.sort(key=lambda x: -x["revenue"])
 
@@ -709,7 +705,7 @@ def get_overview_drivers(
             "campaign": c,
             "revenue": round(camp_rev[c], 2),
             "conversions": camp_conv.get(c, 0),
-            "delta_revenue_pct": _delta(camp_rev.get(c, 0), prev_camp_rev.get(c, 0)),
+            "delta_revenue_pct": delta_pct(camp_rev.get(c, 0), prev_camp_rev.get(c, 0)),
         }
         for c in campaigns_sorted
     ]

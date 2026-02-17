@@ -3,9 +3,13 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from app.services_metrics import (
+    SUPPORTED_KPIS,
+    journey_revenue_value,
+    metric_value,
+    summarize_rows,
+)
 
-
-SUPPORTED_KPIS = {"spend", "conversions", "revenue", "cpa", "roas"}
 
 
 def _safe_tz(timezone_name: Optional[str]) -> ZoneInfo:
@@ -96,22 +100,6 @@ def _add_metric_rollup(
     bucket_entry["revenue"] += revenue
 
 
-def _metric_value(metric_row: Dict[str, float], kpi_key: str) -> Optional[float]:
-    spend = metric_row.get("spend", 0.0)
-    conversions = metric_row.get("conversions", 0.0)
-    revenue = metric_row.get("revenue", 0.0)
-    if kpi_key == "spend":
-        return spend
-    if kpi_key == "conversions":
-        return conversions
-    if kpi_key == "revenue":
-        return revenue
-    if kpi_key == "cpa":
-        return (spend / conversions) if conversions > 0 else None
-    if kpi_key == "roas":
-        return (revenue / spend) if spend > 0 else None
-    return None
-
 
 def _expense_records(expenses: Any) -> Iterable[Any]:
     if isinstance(expenses, dict):
@@ -131,31 +119,6 @@ def _expense_fields(exp: Any) -> Tuple[Optional[str], Optional[str], float, str]
     amount = float(getattr(exp, "converted_amount", None) or getattr(exp, "amount", 0.0) or 0.0)
     status = str(getattr(exp, "status", "active"))
     return channel, start, amount, status
-
-
-def _journey_revenue_value(
-    journey: Dict[str, Any],
-    *,
-    dedupe_seen: Optional[set[str]] = None,
-) -> float:
-    entries = journey.get("_revenue_entries")
-    if not isinstance(entries, list):
-        value = float(journey.get("conversion_value") or 0.0)
-        return value
-    total = 0.0
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        dedup_key = str(entry.get("dedup_key") or "")
-        if dedupe_seen is not None and dedup_key:
-            if dedup_key in dedupe_seen:
-                continue
-            dedupe_seen.add(dedup_key)
-        try:
-            total += float(entry.get("value_in_base") or 0.0)
-        except Exception:
-            continue
-    return total
 
 
 def _collect_channel_rollups(
@@ -199,10 +162,10 @@ def _collect_channel_rollups(
             continue
         bucket = _bucket_start(day, resolved_grain).isoformat()
         if curr_from <= day <= curr_to:
-            revenue = _journey_revenue_value(journey, dedupe_seen=dedupe_curr)
+            revenue = journey_revenue_value(journey, dedupe_seen=dedupe_curr)
             _add_metric_rollup(curr_store, channel, bucket, conversions=1.0, revenue=revenue)
         elif compare and prev_from <= day <= prev_to:
-            revenue = _journey_revenue_value(journey, dedupe_seen=dedupe_prev)
+            revenue = journey_revenue_value(journey, dedupe_seen=dedupe_prev)
             _add_metric_rollup(prev_store, channel, bucket, conversions=1.0, revenue=revenue)
 
     for exp in _expense_records(expenses):
@@ -276,10 +239,10 @@ def _collect_campaign_rollups(
             continue
         bucket = _bucket_start(day, resolved_grain).isoformat()
         if curr_from <= day <= curr_to:
-            revenue = _journey_revenue_value(journey, dedupe_seen=dedupe_curr)
+            revenue = journey_revenue_value(journey, dedupe_seen=dedupe_curr)
             _add_metric_rollup(curr_store, c_key, bucket, conversions=1.0, revenue=revenue)
         elif compare and prev_from <= day <= prev_to:
-            revenue = _journey_revenue_value(journey, dedupe_seen=dedupe_prev)
+            revenue = journey_revenue_value(journey, dedupe_seen=dedupe_prev)
             _add_metric_rollup(prev_store, c_key, bucket, conversions=1.0, revenue=revenue)
 
     # Spend remains channel-level in source data. Allocate channel spend to campaign keys
@@ -385,7 +348,7 @@ def build_channel_trend_response(
     for ch in dims:
         for key in current_keys:
             metric_row = curr_store.get(ch, {}).get(key, {})
-            val = _metric_value(metric_row, kpi_key) if metric_row else None
+            val = metric_value(metric_row, kpi_key) if metric_row else None
             series.append({"ts": key, "channel": ch, "value": val})
 
     out: Dict[str, Any] = {
@@ -398,7 +361,7 @@ def build_channel_trend_response(
         for ch in dims:
             for key in prev_keys:
                 metric_row = prev_store.get(ch, {}).get(key, {})
-                val = _metric_value(metric_row, kpi_key) if metric_row else None
+                val = metric_value(metric_row, kpi_key) if metric_row else None
                 series_prev.append({"ts": key, "channel": ch, "value": val})
         out["series_prev"] = series_prev
     return out
@@ -447,7 +410,7 @@ def build_campaign_trend_response(
         dim_meta = meta.get(dim, {"campaign_id": dim, "campaign_name": None, "channel": dim.split(":", 1)[0], "platform": None})
         for key in current_keys:
             metric_row = curr_store.get(dim, {}).get(key, {})
-            val = _metric_value(metric_row, kpi_key) if metric_row else None
+            val = metric_value(metric_row, kpi_key) if metric_row else None
             series.append(
                 {
                     "ts": key,
@@ -470,7 +433,7 @@ def build_campaign_trend_response(
             dim_meta = meta.get(dim, {"campaign_id": dim, "campaign_name": None, "channel": dim.split(":", 1)[0], "platform": None})
             for key in prev_keys:
                 metric_row = prev_store.get(dim, {}).get(key, {})
-                val = _metric_value(metric_row, kpi_key) if metric_row else None
+                val = metric_value(metric_row, kpi_key) if metric_row else None
                 series_prev.append(
                     {
                         "ts": key,
@@ -517,24 +480,14 @@ def build_channel_summary_response(
     dims = sorted(set(curr_store.keys()) | (set(prev_store.keys()) if compare else set()))
     items: List[Dict[str, Any]] = []
     for dim in dims:
-        curr_totals = {"spend": 0.0, "conversions": 0.0, "revenue": 0.0}
-        prev_totals = {"spend": 0.0, "conversions": 0.0, "revenue": 0.0}
-        for row in curr_store.get(dim, {}).values():
-            curr_totals["spend"] += row.get("spend", 0.0)
-            curr_totals["conversions"] += row.get("conversions", 0.0)
-            curr_totals["revenue"] += row.get("revenue", 0.0)
-        for row in prev_store.get(dim, {}).values():
-            prev_totals["spend"] += row.get("spend", 0.0)
-            prev_totals["conversions"] += row.get("conversions", 0.0)
-            prev_totals["revenue"] += row.get("revenue", 0.0)
-        curr_roas = (curr_totals["revenue"] / curr_totals["spend"]) if curr_totals["spend"] > 0 else None
-        curr_cpa = (curr_totals["spend"] / curr_totals["conversions"]) if curr_totals["conversions"] > 0 else None
+        curr_totals, curr_derived = summarize_rows(curr_store.get(dim, {}))
+        prev_totals, _ = summarize_rows(prev_store.get(dim, {}))
         items.append(
             {
                 "channel": dim,
                 "current": curr_totals,
                 "previous": prev_totals if compare else None,
-                "derived": {"roas": curr_roas, "cpa": curr_cpa},
+                "derived": {"roas": curr_derived["roas"], "cpa": curr_derived["cpa"]},
             }
         )
     totals_current = {"spend": 0.0, "conversions": 0.0, "revenue": 0.0}
@@ -590,18 +543,8 @@ def build_campaign_summary_response(
     dims = sorted(set(curr_store.keys()) | (set(prev_store.keys()) if compare else set()))
     items: List[Dict[str, Any]] = []
     for dim in dims:
-        curr_totals = {"spend": 0.0, "conversions": 0.0, "revenue": 0.0}
-        prev_totals = {"spend": 0.0, "conversions": 0.0, "revenue": 0.0}
-        for row in curr_store.get(dim, {}).values():
-            curr_totals["spend"] += row.get("spend", 0.0)
-            curr_totals["conversions"] += row.get("conversions", 0.0)
-            curr_totals["revenue"] += row.get("revenue", 0.0)
-        for row in prev_store.get(dim, {}).values():
-            prev_totals["spend"] += row.get("spend", 0.0)
-            prev_totals["conversions"] += row.get("conversions", 0.0)
-            prev_totals["revenue"] += row.get("revenue", 0.0)
-        curr_roas = (curr_totals["revenue"] / curr_totals["spend"]) if curr_totals["spend"] > 0 else None
-        curr_cpa = (curr_totals["spend"] / curr_totals["conversions"]) if curr_totals["conversions"] > 0 else None
+        curr_totals, curr_derived = summarize_rows(curr_store.get(dim, {}))
+        prev_totals, _ = summarize_rows(prev_store.get(dim, {}))
         m = meta.get(dim, {"campaign_id": dim, "campaign_name": None, "channel": dim.split(":", 1)[0], "platform": None})
         items.append(
             {
@@ -611,7 +554,7 @@ def build_campaign_summary_response(
                 "platform": m.get("platform"),
                 "current": curr_totals,
                 "previous": prev_totals if compare else None,
-                "derived": {"roas": curr_roas, "cpa": curr_cpa},
+                "derived": {"roas": curr_derived["roas"], "cpa": curr_derived["cpa"]},
             }
         )
     totals_current = {"spend": 0.0, "conversions": 0.0, "revenue": 0.0}
