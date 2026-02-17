@@ -1,23 +1,137 @@
 [
   {
-    "customer_id": "c003",
+    "journey_id": "j_4b7ef2f4-74e0-478a-b4c3-6b9d1fba35ad",
+    "customer": {
+      "id": "4b7ef2f4-74e0-478a-b4c3-6b9d1fba35ad",
+      "type": "profile_id"
+    },
     "touchpoints": [
       {
-        "channel": "google_ads",
-        "campaign": "Xmass",
-        "timestamp": "2024-01-02"
-      },
-      {
-        "channel": "email",
-        "campaign": "Newsletter",
-        "timestamp": "2024-01-05"
-      },
-      {
+        "id": "tp_1",
+        "ts": "2026-01-19T14:41:32.88+00:00",
         "channel": "direct",
-        "timestamp": "2024-01-07"
+        "campaign": {
+          "name": "not_set",
+          "id": null
+        }
+      },
+      {
+        "id": "tp_2",
+        "ts": "2026-01-19T15:29:44.491+00:00",
+        "channel": "google",
+        "campaign": {
+          "name": "not_set",
+          "id": null
+        }
+      },
+      {
+        "id": "tp_3",
+        "ts": "2026-01-19T15:34:56.294+00:00",
+        "channel": "google",
+        "campaign": {
+          "name": "not_set",
+          "id": null
+        }
+      },
+      {
+        "id": "tp_4",
+        "ts": "2026-01-20T08:25:21.757+00:00",
+        "channel": "direct",
+        "campaign": {
+          "name": "not_set",
+          "id": null
+        }
+      },
+      {
+        "id": "tp_5",
+        "ts": "2026-01-20T08:27:00.093+00:00",
+        "channel": "direct",
+        "campaign": {
+          "name": "not_set",
+          "id": null
+        }
+      },
+      {
+        "id": "tp_6",
+        "ts": "2026-01-20T08:28:03.342+00:00",
+        "channel": "direct",
+        "campaign": {
+          "name": "not_set",
+          "id": null
+        }
+      },
+      {
+        "id": "tp_7",
+        "ts": "2026-01-20T08:28:14.635+00:00",
+        "channel": "direct",
+        "campaign": {
+          "name": "not_set",
+          "id": null
+        }
+      },
+      {
+        "id": "tp_8",
+        "ts": "2026-01-20T10:24:05.989+00:00",
+        "channel": "direct",
+        "campaign": {
+          "name": "not_set",
+          "id": null
+        }
+      },
+      {
+        "id": "tp_9",
+        "ts": "2026-01-20T11:46:22.948+00:00",
+        "channel": "direct",
+        "campaign": {
+          "name": "not_set",
+          "id": null
+        }
+      },
+      {
+        "id": "tp_10",
+        "ts": "2026-01-21T08:23:43.521+00:00",
+        "channel": "direct",
+        "campaign": {
+          "name": "not_set",
+          "id": null
+        }
+      },
+      {
+        "id": "tp_11",
+        "ts": "2026-01-21T08:34:33.543+00:00",
+        "channel": "direct",
+        "campaign": {
+          "name": "not_set",
+          "id": null
+        }
+      },
+      {
+        "id": "tp_12",
+        "ts": "2026-02-16T09:07:56.362+00:00",
+        "channel": "direct",
+        "campaign": {
+          "name": "not_set",
+          "id": null
+        }
+      },
+      {
+        "id": "tp_13",
+        "ts": "2026-02-17T09:18:49.227+00:00",
+        "channel": "direct",
+        "campaign": {
+          "name": "not_set",
+          "id": null
+        }
       }
     ],
-    "conversion_value": 120.0,
-    "converted": true
+    "conversions": [
+      {
+        "id": "cv_1",
+        "ts": "2026-02-17T11:41:50.517+00:00",
+        "name": "store_order",
+        "value": 0,
+        "currency": "EUR"
+      }
+    ]
   }
 ]

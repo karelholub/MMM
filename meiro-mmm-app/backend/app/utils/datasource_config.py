@@ -9,13 +9,17 @@ CONFIG_PATH = Path(__file__).parent.parent / "data" / "datasource_config.json"
 
 # Keys we store per platform (aligned with env: META_APP_ID -> app_id, etc.)
 PLATFORM_KEYS = {
-    "google": ["client_id", "client_secret"],
+    "google": ["client_id", "client_secret", "developer_token"],
     "meta": ["app_id", "app_secret"],
     "linkedin": ["client_id", "client_secret"],
 }
 
 ENV_TO_STORED = {
-    "google": {"GOOGLE_CLIENT_ID": "client_id", "GOOGLE_CLIENT_SECRET": "client_secret"},
+    "google": {
+        "GOOGLE_CLIENT_ID": "client_id",
+        "GOOGLE_CLIENT_SECRET": "client_secret",
+        "GOOGLE_ADS_DEVELOPER_TOKEN": "developer_token",
+    },
     "meta": {"META_APP_ID": "app_id", "META_APP_SECRET": "app_secret"},
     "linkedin": {"LINKEDIN_CLIENT_ID": "client_id", "LINKEDIN_CLIENT_SECRET": "client_secret"},
 }
@@ -68,7 +72,11 @@ def get_effective(platform: str, key: str) -> str:
     """Return effective value: env var first, then stored. key is stored key (client_id, app_id, etc.)."""
     import os
     env_map = {
-        "google": {"client_id": "GOOGLE_CLIENT_ID", "client_secret": "GOOGLE_CLIENT_SECRET"},
+        "google": {
+            "client_id": "GOOGLE_CLIENT_ID",
+            "client_secret": "GOOGLE_CLIENT_SECRET",
+            "developer_token": "GOOGLE_ADS_DEVELOPER_TOKEN",
+        },
         "meta": {"app_id": "META_APP_ID", "app_secret": "META_APP_SECRET"},
         "linkedin": {"client_id": "LINKEDIN_CLIENT_ID", "client_secret": "LINKEDIN_CLIENT_SECRET"},
     }
@@ -82,7 +90,7 @@ def get_effective(platform: str, key: str) -> str:
 
 def get_platform_configured(platform: str) -> bool:
     """True if we have at least the required credentials to start OAuth (e.g. client_id for Google)."""
-    keys = PLATFORM_KEYS.get(platform, [])
+    keys = [k for k in PLATFORM_KEYS.get(platform, []) if k != "developer_token"]
     return all(get_effective(platform, k) for k in keys)
 
 

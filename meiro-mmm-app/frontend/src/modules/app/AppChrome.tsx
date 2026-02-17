@@ -1,4 +1,4 @@
-import type { CSSProperties, Dispatch, SetStateAction } from 'react'
+import { useEffect, useState, type CSSProperties, type Dispatch, type SetStateAction } from 'react'
 import { tokens } from '../../theme/tokens'
 
 export type AppPage =
@@ -323,6 +323,8 @@ interface ModelConfigOption {
 interface AppTopBarProps {
   isMobileHeader: boolean
   periodLabel: string
+  periodDateFrom: string
+  periodDateTo: string
   conversionLabel: string
   selectedModel: string
   selectedConfigId: string | null
@@ -339,11 +341,14 @@ interface AppTopBarProps {
   onConfigChange: (value: string | null) => void
   onLoadSample: () => void
   onRunModels: () => void
+  onPeriodChange: (next: { dateFrom: string; dateTo: string }) => void
 }
 
 export function AppTopBar({
   isMobileHeader,
   periodLabel,
+  periodDateFrom,
+  periodDateTo,
   conversionLabel,
   selectedModel,
   selectedConfigId,
@@ -360,7 +365,20 @@ export function AppTopBar({
   onConfigChange,
   onLoadSample,
   onRunModels,
+  onPeriodChange,
 }: AppTopBarProps) {
+  const [draftDateFrom, setDraftDateFrom] = useState(periodDateFrom)
+  const [draftDateTo, setDraftDateTo] = useState(periodDateTo)
+  useEffect(() => {
+    setDraftDateFrom(periodDateFrom)
+    setDraftDateTo(periodDateTo)
+  }, [periodDateFrom, periodDateTo])
+  const canApplyPeriod =
+    !!draftDateFrom &&
+    !!draftDateTo &&
+    draftDateFrom <= draftDateTo &&
+    (draftDateFrom !== periodDateFrom || draftDateTo !== periodDateTo)
+
   return (
     <header
       style={{
@@ -390,9 +408,30 @@ export function AppTopBar({
       </div>
 
       <div style={{ gridArea: 'period', display: 'inline-flex', alignItems: 'center', justifyContent: isMobileHeader ? 'flex-start' : 'flex-end', minWidth: 0 }}>
-        <div style={{ padding: '6px 10px', borderRadius: 999, backgroundColor: 'rgba(15,23,42,0.65)', border: '1px solid rgba(148,163,184,0.5)', fontSize: tokens.font.sizeXs, display: 'inline-flex', alignItems: 'center', gap: 6, minHeight: 28, width: isMobileHeader ? '100%' : 'clamp(180px, 20vw, 320px)', maxWidth: '100%' }}>
+        <div style={{ padding: '6px 10px', borderRadius: 999, backgroundColor: 'rgba(15,23,42,0.65)', border: '1px solid rgba(148,163,184,0.5)', fontSize: tokens.font.sizeXs, display: 'inline-flex', alignItems: 'center', gap: 6, minHeight: 28, width: isMobileHeader ? '100%' : 'clamp(280px, 26vw, 420px)', maxWidth: '100%' }}>
           <span style={{ opacity: 0.85, flex: '0 0 auto' }}>Period</span>
-          <span style={{ fontWeight: tokens.font.weightMedium, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block' }}>
+          <input
+            type="date"
+            value={draftDateFrom}
+            onChange={(e) => setDraftDateFrom(e.target.value)}
+            style={{ height: 24, borderRadius: tokens.radius.sm, border: '1px solid rgba(148,163,184,0.6)', backgroundColor: '#0b1220', color: '#e5e7eb', padding: '0 6px', fontSize: tokens.font.sizeXs, minWidth: 0 }}
+          />
+          <span style={{ opacity: 0.8 }}>–</span>
+          <input
+            type="date"
+            value={draftDateTo}
+            onChange={(e) => setDraftDateTo(e.target.value)}
+            style={{ height: 24, borderRadius: tokens.radius.sm, border: '1px solid rgba(148,163,184,0.6)', backgroundColor: '#0b1220', color: '#e5e7eb', padding: '0 6px', fontSize: tokens.font.sizeXs, minWidth: 0 }}
+          />
+          <button
+            type="button"
+            onClick={() => onPeriodChange({ dateFrom: draftDateFrom, dateTo: draftDateTo })}
+            disabled={!canApplyPeriod}
+            style={{ height: 24, borderRadius: tokens.radius.sm, border: '1px solid rgba(148,163,184,0.6)', backgroundColor: canApplyPeriod ? '#1d4ed8' : '#334155', color: '#e5e7eb', padding: '0 8px', fontSize: tokens.font.sizeXs, cursor: canApplyPeriod ? 'pointer' : 'not-allowed', opacity: canApplyPeriod ? 1 : 0.7 }}
+          >
+            Apply
+          </button>
+          <span style={{ fontWeight: tokens.font.weightMedium, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: isMobileHeader ? 'none' : 'inline-block', opacity: 0.75 }}>
             {periodLabel}
           </span>
         </div>

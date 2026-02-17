@@ -140,7 +140,9 @@ def test_journey_definition_validation_and_permissions(client: TestClient):
         json={"name": "Blocked", "conversion_kpi_id": "purchase", "lookback_window_days": 30, "mode_default": "conversion_only"},
     )
     assert no_perm.status_code == 403
-    assert "Only admin or editor" in no_perm.json()["detail"]
+    assert isinstance(no_perm.json().get("detail"), dict)
+    assert no_perm.json()["detail"]["code"] == "permission_denied"
+    assert no_perm.json()["detail"]["permission"] == "journeys.manage"
 
     blank_name = client.post(
         "/api/journeys/definitions",

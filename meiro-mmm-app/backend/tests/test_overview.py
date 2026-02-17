@@ -20,11 +20,16 @@ def _unit_db_session():
     return sessionmaker(bind=engine)()
 
 
+def _admin_headers():
+    return {"X-User-Role": "admin", "X-User-Id": "qa-admin"}
+
+
 def test_overview_summary_returns_consistent_shape():
     """GET /api/overview/summary returns kpi_tiles, highlights, freshness."""
     resp = client.get(
         "/api/overview/summary",
         params={"date_from": "2024-01-01", "date_to": "2024-01-31"},
+        headers=_admin_headers(),
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -57,6 +62,7 @@ def test_overview_summary_previous_period_is_equal_length():
     resp = client.get(
         "/api/overview/summary",
         params={"date_from": "2024-02-01", "date_to": "2024-02-14"},
+        headers=_admin_headers(),
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -74,6 +80,7 @@ def test_overview_summary_empty_series_do_not_fake_flat_lines():
     resp = client.get(
         "/api/overview/summary",
         params={"date_from": "2024-03-01", "date_to": "2024-03-07"},
+        headers=_admin_headers(),
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -94,6 +101,7 @@ def test_overview_summary_optional_params():
             "workspace": "ws1",
             "model_id": "cfg-1",
         },
+        headers=_admin_headers(),
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -104,7 +112,7 @@ def test_overview_summary_optional_params():
 
 def test_overview_summary_missing_dates_validation():
     """Summary requires date_from and date_to."""
-    resp = client.get("/api/overview/summary", params={"date_from": "2024-01-01"})
+    resp = client.get("/api/overview/summary", params={"date_from": "2024-01-01"}, headers=_admin_headers())
     assert resp.status_code == 422
 
 
@@ -113,6 +121,7 @@ def test_overview_drivers_returns_consistent_shape():
     resp = client.get(
         "/api/overview/drivers",
         params={"date_from": "2024-01-01", "date_to": "2024-01-31"},
+        headers=_admin_headers(),
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -138,6 +147,7 @@ def test_overview_drivers_top_n():
             "date_to": "2024-01-31",
             "top_campaigns_n": 5,
         },
+        headers=_admin_headers(),
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -146,7 +156,7 @@ def test_overview_drivers_top_n():
 
 def test_overview_alerts_returns_consistent_shape():
     """GET /api/overview/alerts returns alerts list with deep_link."""
-    resp = client.get("/api/overview/alerts")
+    resp = client.get("/api/overview/alerts", headers=_admin_headers())
     assert resp.status_code == 200
     body = resp.json()
     assert "alerts" in body
@@ -164,6 +174,7 @@ def test_overview_alerts_optional_filters():
     resp = client.get(
         "/api/overview/alerts",
         params={"scope": "default", "limit": 10},
+        headers=_admin_headers(),
     )
     assert resp.status_code == 200
     body = resp.json()

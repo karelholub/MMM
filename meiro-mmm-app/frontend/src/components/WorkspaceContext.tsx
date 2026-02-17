@@ -26,6 +26,9 @@ export interface WorkspaceContextValue {
   // Journeys / measurement context
   journeysSummary?: JourneysSummary
   journeysLoaded: boolean
+  globalDateFrom: string
+  globalDateTo: string
+  setGlobalDateRange: (next: { dateFrom: string; dateTo: string }) => void
 
   // Global actions
   isRunningAttribution: boolean
@@ -43,4 +46,3 @@ export function useWorkspaceContext(): WorkspaceContextValue {
   }
   return ctx
 }
-

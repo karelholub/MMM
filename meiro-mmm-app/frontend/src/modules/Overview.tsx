@@ -181,16 +181,6 @@ function formatKpiValue(kpiKey: string, value: number): string {
   return value.toLocaleString()
 }
 
-function getDefaultDateRange(): { date_from: string; date_to: string } {
-  const end = new Date()
-  const start = new Date()
-  start.setDate(start.getDate() - 30)
-  return {
-    date_from: start.toISOString().slice(0, 10),
-    date_to: end.toISOString().slice(0, 10),
-  }
-}
-
 function daysInPeriod(fromIso?: string, toIso?: string): number {
   if (!fromIso || !toIso) return 0
   const from = new Date(fromIso)
@@ -203,20 +193,17 @@ function daysInPeriod(fromIso?: string, toIso?: string): number {
 // --- Cover Dashboard ---
 export default function Overview({ lastPage, onNavigate, onConnectDataSources, canCreateAlerts }: OverviewProps) {
   const {
-    journeysSummary,
+    globalDateFrom,
+    globalDateTo,
     isLoadingSampleJourneys,
     loadSampleJourneys,
   } = useWorkspaceContext()
 
   const dateRange = useMemo(() => {
-    if (journeysSummary?.date_min && journeysSummary?.date_max) {
-      return {
-        date_from: journeysSummary.date_min.slice(0, 10),
-        date_to: journeysSummary.date_max.slice(0, 10),
-      }
-    }
-    return getDefaultDateRange()
-  }, [journeysSummary?.date_min, journeysSummary?.date_max])
+    const dateFrom = globalDateFrom || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    const dateTo = globalDateTo || new Date().toISOString().slice(0, 10)
+    return { date_from: dateFrom, date_to: dateTo }
+  }, [globalDateFrom, globalDateTo])
 
   const summaryQuery = useQuery<OverviewSummaryResponse>({
     queryKey: ['overview-summary', dateRange.date_from, dateRange.date_to],

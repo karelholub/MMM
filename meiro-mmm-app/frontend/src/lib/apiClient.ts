@@ -24,6 +24,14 @@ export function authHeaders(): Record<string, string> {
   const headers: Record<string, string> = {}
   if (role) headers['X-User-Role'] = role
   if (userId) headers['X-User-Id'] = userId
+  if (isBrowser()) {
+    try {
+      const csrf = (window.localStorage.getItem('mmm-csrf-token') || '').trim()
+      if (csrf) headers['X-CSRF-Token'] = csrf
+    } catch {
+      // ignore storage errors
+    }
+  }
   return headers
 }
 

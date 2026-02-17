@@ -1,50 +1,23 @@
 {
   "definitions": [
     {
-      "id": "purchase",
-      "label": "Purchase",
+      "id": "contact_form",
+      "label": "Contact Form",
       "type": "primary",
-      "event_name": "purchase",
-      "value_field": "revenue",
+      "event_name": "contact_form",
+      "value_field": "value",
       "weight": 1.0,
-      "lookback_days": null
+      "lookback_days": 30
     },
     {
-      "id": "lead",
-      "label": "Lead",
-      "type": "primary",
-      "event_name": "lead_submitted",
+      "id": "store_order",
+      "label": "Store Order",
+      "type": "micro",
+      "event_name": "store_order",
       "value_field": null,
       "weight": 0.5,
-      "lookback_days": null
-    },
-    {
-      "id": "signup",
-      "label": "Sign-up",
-      "type": "primary",
-      "event_name": "signup",
-      "value_field": null,
-      "weight": 0.5,
-      "lookback_days": null
-    },
-    {
-      "id": "add_to_cart",
-      "label": "Add to cart",
-      "type": "micro",
-      "event_name": "add_to_cart",
-      "value_field": null,
-      "weight": 1.0,
-      "lookback_days": null
-    },
-    {
-      "id": "product_view",
-      "label": "Product view",
-      "type": "micro",
-      "event_name": "product_view",
-      "value_field": null,
-      "weight": 1.0,
-      "lookback_days": null
+      "lookback_days": 14
     }
   ],
-  "primary_kpi_id": "purchase"
+  "primary_kpi_id": "contact_form"
 }

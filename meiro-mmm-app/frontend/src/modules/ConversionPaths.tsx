@@ -207,13 +207,15 @@ export default function ConversionPaths() {
   })
 
   const pathsQuery = useQuery<PathAnalysis>({
-    queryKey: ['path-analysis', directMode, pathScope],
+    queryKey: ['path-analysis', directMode, pathScope, journeysQuery.data?.date_min, journeysQuery.data?.date_max],
     queryFn: async () => {
       const params = new URLSearchParams({
         direct_mode: directMode,
         path_scope: pathScope === 'all' ? 'all' : 'converted',
       })
-      return apiGetJson<PathAnalysis>(`/api/attribution/paths?${params.toString()}`, {
+      if (journeysQuery.data?.date_min) params.set('date_from', journeysQuery.data.date_min.slice(0, 10))
+      if (journeysQuery.data?.date_max) params.set('date_to', journeysQuery.data.date_max.slice(0, 10))
+      return apiGetJson<PathAnalysis>(`/api/conversion-paths/analysis?${params.toString()}`, {
         fallbackMessage: 'Failed to fetch path analysis',
       })
     },
@@ -1294,7 +1296,9 @@ export default function ConversionPaths() {
                         direct_mode: directMode,
                         path_scope: pathScope === 'all' ? 'all' : 'converted',
                       })
-                      const json = await apiGetJson<PathDetails>(`/api/paths/details?${params.toString()}`, {
+                      if (journeysQuery.data?.date_min) params.set('date_from', journeysQuery.data.date_min.slice(0, 10))
+                      if (journeysQuery.data?.date_max) params.set('date_to', journeysQuery.data.date_max.slice(0, 10))
+                      const json = await apiGetJson<PathDetails>(`/api/conversion-paths/details?${params.toString()}`, {
                         fallbackMessage: 'Failed to load path details',
                       })
                       setSelectedPathDetails(json)

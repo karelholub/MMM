@@ -35,7 +35,7 @@
   },
   "revenue_config": {
     "conversion_names": [
-      "purchase"
+      "form_submit"
     ],
     "value_field_path": "value",
     "currency_field_path": "currency",

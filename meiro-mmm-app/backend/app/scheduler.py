@@ -23,16 +23,22 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from .db import get_db
+from .db import Base, engine, get_db
 from .services_alerts_engine import run_alerts_engine
 from .services_delivery import run_daily_digest, trigger_realtime_for_new_open_events
 from .services_incrementality import run_nightly_report
+from .services_journey_aggregates import run_daily_journey_aggregates
+from .services_journey_alerts import evaluate_alert_definitions as run_journey_alerts_evaluator
+from .services_journey_settings import get_active_journey_settings
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+# Ensure local SQLite/dev runs can execute scheduled tasks without a separate bootstrap.
+Base.metadata.create_all(bind=engine)
 
 
 def run_nightly_report_task(db: Session) -> None:
@@ -125,6 +131,55 @@ def run_daily_digest_task(db: Session, base_url: str = "") -> dict:
         raise
 
 
+def run_journey_daily_aggregates_task(db: Session, reprocess_days: int = 3) -> dict:
+    """Compute daily journey path/transition aggregates with incremental backfill."""
+    active = get_active_journey_settings(db, use_cache=True)
+    configured_reprocess = (
+        ((active.get("settings_json") or {}).get("performance_guardrails") or {}).get(
+            "aggregation_reprocess_window_days",
+            reprocess_days,
+        )
+    )
+    effective_reprocess_days = max(1, int(configured_reprocess or reprocess_days))
+    logger.info(
+        "Starting journey daily aggregates (reprocess_days=%s)",
+        effective_reprocess_days,
+    )
+    try:
+        metrics = run_daily_journey_aggregates(db, reprocess_days=effective_reprocess_days)
+        logger.info(
+            "Journey daily aggregates completed: definitions=%s days_processed=%s source_rows=%s lag_minutes=%s duration_ms=%s",
+            metrics.get("definitions", 0),
+            metrics.get("days_processed", 0),
+            metrics.get("source_rows_processed", 0),
+            metrics.get("lag_minutes"),
+            metrics.get("duration_ms", 0),
+        )
+        return metrics
+    except Exception as e:
+        logger.error("Journey daily aggregates failed: %s", e, exc_info=True)
+        raise
+
+
+def run_journey_alerts_task(db: Session, domain: Optional[str] = None) -> dict:
+    """Evaluate enabled journey/funnel alerts and emit alert events."""
+    logger.info("Starting journey alerts evaluator (domain=%s)", domain or "all")
+    try:
+        metrics = run_journey_alerts_evaluator(db, domain=domain)
+        logger.info(
+            "Journey alerts evaluator completed: evaluated=%s fired=%s skipped_cooldown=%s errors=%s duration_ms=%s",
+            metrics.get("evaluated", 0),
+            metrics.get("fired", 0),
+            metrics.get("skipped_cooldown", 0),
+            metrics.get("errors", 0),
+            metrics.get("duration_ms", 0),
+        )
+        return metrics
+    except Exception as e:
+        logger.error("Journey alerts evaluator failed: %s", e, exc_info=True)
+        raise
+
+
 def send_notifications(report: dict) -> None:
     """
     Send notifications for experiment alerts.
@@ -182,8 +237,26 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
 
+    # Daily journey path/transition aggregates shortly after midnight
+    scheduler.add_job(
+        func=lambda: run_journey_daily_aggregates_task(next(get_db()), reprocess_days=3),
+        trigger=CronTrigger(hour=0, minute=20),
+        id="journey_daily_aggregates",
+        name="Journey daily aggregates",
+        replace_existing=True,
+    )
+
+    # Daily journey/funnel alert evaluation after aggregate build.
+    scheduler.add_job(
+        func=lambda: run_journey_alerts_task(next(get_db())),
+        trigger=CronTrigger(hour=0, minute=35),
+        id="journey_alerts_evaluator",
+        name="Journey alerts evaluator",
+        replace_existing=True,
+    )
+
     scheduler.start()
-    logger.info("Scheduler started. Nightly report at 2 AM; alerts engine hourly; digest at 9 AM.")
+    logger.info("Scheduler started. Nightly report at 2 AM; alerts engine hourly; digest at 9 AM; journey aggregates at 00:20; journey alerts at 00:35.")
 
 
 def main():
@@ -191,12 +264,14 @@ def main():
     parser = argparse.ArgumentParser(description="Run scheduled tasks for incrementality experiments")
     parser.add_argument(
         "--task",
-        choices=["nightly-report", "run-alerts", "alert-daily-digest"],
+        choices=["nightly-report", "run-alerts", "alert-daily-digest", "journey-daily-aggs", "journey-alerts"],
         required=True,
         help="Task to run",
     )
     parser.add_argument("--scope", default="default", help="Scope for run-alerts (default: default)")
+    parser.add_argument("--domain", default="", help="Domain for journey-alerts: journeys|funnels|empty")
     parser.add_argument("--base-url", default="", help="Base URL for alert links (e.g. https://app.example.com)")
+    parser.add_argument("--reprocess-days", type=int, default=3, help="Days to reprocess for journey-daily-aggs (default: 3)")
 
     args = parser.parse_args()
 
@@ -209,6 +284,11 @@ def main():
             run_alerts_task(db, scope=args.scope, base_url=args.base_url)
         elif args.task == "alert-daily-digest":
             run_daily_digest_task(db, base_url=args.base_url)
+        elif args.task == "journey-daily-aggs":
+            run_journey_daily_aggregates_task(db, reprocess_days=max(1, args.reprocess_days))
+        elif args.task == "journey-alerts":
+            dom = (args.domain or "").strip().lower() or None
+            run_journey_alerts_task(db, domain=dom)
         else:
             logger.error("Unknown task: %s", args.task)
             sys.exit(1)

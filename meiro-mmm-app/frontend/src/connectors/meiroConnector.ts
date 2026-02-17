@@ -21,6 +21,16 @@ export interface MeiroMapping {
   channel_mapping?: Record<string, string>
 }
 
+export interface MeiroWebhookEvent {
+  received_at: string
+  received_count: number
+  stored_total: number
+  replace: boolean
+  ip?: string | null
+  user_agent?: string | null
+  payload_shape?: string | null
+}
+
 export async function connectMeiroCDP(params: { api_base_url: string; api_key: string }) {
   return apiSendJson<any>('/api/connectors/meiro/connect', 'POST', params, { fallbackMessage: 'Connection failed' })
 }
@@ -115,6 +125,13 @@ export async function meiroRotateWebhookSecret(): Promise<{ secret: string }> {
   return apiSendJson<{ secret: string }>('/api/connectors/meiro/webhook/rotate-secret', 'POST', undefined, {
     fallbackMessage: 'Rotate failed',
   })
+}
+
+export async function getMeiroWebhookEvents(limit = 100): Promise<{ items: MeiroWebhookEvent[]; total: number }> {
+  return apiGetJson<{ items: MeiroWebhookEvent[]; total: number }>(
+    withQuery('/api/connectors/meiro/webhook/events', { limit }),
+    { fallbackMessage: 'Failed to fetch webhook event log' },
+  )
 }
 
 export async function meiroDryRun(limit = 100): Promise<{

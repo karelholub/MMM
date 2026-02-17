@@ -8,6 +8,7 @@ from pathlib import Path
 import io
 import json
 import os
+import re
 import time
 import uuid
 import hashlib
@@ -208,7 +209,9 @@ from app.services_incrementality import (
 from app.mmm_engine import fit_model as mmm_fit_model, engine_info
 from app.connectors import meiro_cdp
 from app.utils.meiro_config import (
+    append_webhook_event,
     get_last_test_at,
+    get_webhook_events,
     get_webhook_last_received_at,
     get_webhook_received_count,
     get_webhook_secret,
@@ -9850,6 +9853,7 @@ async def meiro_receive_profiles(
     Body (JSON):
       - Array of profile objects: [ { "customer_id": "...", "touchpoints": [...], ... }, ... ]
       - Or object: { "profiles": [ ... ], "replace": true }
+      - Or journeys envelope: { "schema_version": "2.0", "journeys": [ ... ], "defaults": {...} }
         - replace: true (default) = replace stored profiles with this payload
         - replace: false = append to existing profiles
 
@@ -9866,14 +9870,140 @@ async def meiro_receive_profiles(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
 
+    def _safe_json_excerpt(value: Any, max_chars: int = 20000) -> tuple[str, bool, int]:
+        try:
+            raw = json.dumps(value, ensure_ascii=False, indent=2)
+        except Exception:
+            raw = str(value)
+        raw_bytes = len(raw.encode("utf-8", errors="ignore"))
+        if len(raw) <= max_chars:
+            return raw, False, raw_bytes
+        suffix = "\n... [truncated]"
+        return f"{raw[:max_chars]}{suffix}", True, raw_bytes
+
+    def _extract_payload_hints(payload_profiles: list[Any]) -> tuple[list[str], list[str]]:
+        conversion_names: set[str] = set()
+        channels: set[str] = set()
+        for profile in payload_profiles[:100]:
+            if not isinstance(profile, dict):
+                continue
+            for conversion in (profile.get("conversions") or [])[:100]:
+                if not isinstance(conversion, dict):
+                    continue
+                name = conversion.get("name")
+                if isinstance(name, str) and name.strip():
+                    conversion_names.add(name.strip())
+            for touchpoint in (profile.get("touchpoints") or [])[:100]:
+                if not isinstance(touchpoint, dict):
+                    continue
+                channel = touchpoint.get("channel")
+                if isinstance(channel, str) and channel.strip():
+                    channels.add(channel.strip())
+        return sorted(conversion_names)[:20], sorted(channels)[:20]
+
+    def _analyze_payload(payload_profiles: list[Any]) -> Dict[str, Any]:
+        conversion_event_counts: Dict[str, int] = {}
+        channel_counts: Dict[str, int] = {}
+        source_counts: Dict[str, int] = {}
+        medium_counts: Dict[str, int] = {}
+        campaign_counts: Dict[str, int] = {}
+        value_field_counts: Dict[str, int] = {}
+        currency_field_counts: Dict[str, int] = {}
+        dedup_key_counts: Dict[str, int] = {"conversion_id": 0, "order_id": 0, "event_id": 0}
+        conversion_count = 0
+        touchpoint_count = 0
+
+        def _inc(target: Dict[str, int], key: Optional[str]) -> None:
+            if not isinstance(key, str):
+                return
+            normalized = key.strip()
+            if not normalized:
+                return
+            target[normalized] = target.get(normalized, 0) + 1
+
+        for profile in payload_profiles[:200]:
+            if not isinstance(profile, dict):
+                continue
+            conversions = profile.get("conversions") or []
+            if isinstance(conversions, list):
+                for conversion in conversions[:300]:
+                    if not isinstance(conversion, dict):
+                        continue
+                    conversion_count += 1
+                    _inc(conversion_event_counts, str(conversion.get("name") or "").strip().lower())
+                    for dedup_key in ("conversion_id", "order_id", "event_id"):
+                        if conversion.get(dedup_key):
+                            dedup_key_counts[dedup_key] = dedup_key_counts.get(dedup_key, 0) + 1
+                    for key, value in conversion.items():
+                        if key in {"id", "name", "ts", "timestamp"}:
+                            continue
+                        if isinstance(value, (int, float)):
+                            value_field_counts[key] = value_field_counts.get(key, 0) + 1
+                        elif isinstance(value, str):
+                            raw = value.strip()
+                            if len(raw) == 3 and raw.upper() == raw and raw.isalpha():
+                                currency_field_counts[key] = currency_field_counts.get(key, 0) + 1
+
+            touchpoints = profile.get("touchpoints") or []
+            if isinstance(touchpoints, list):
+                for tp in touchpoints[:500]:
+                    if not isinstance(tp, dict):
+                        continue
+                    touchpoint_count += 1
+                    _inc(channel_counts, tp.get("channel"))
+                    _inc(source_counts, tp.get("source"))
+                    _inc(medium_counts, tp.get("medium"))
+                    _inc(campaign_counts, tp.get("campaign"))
+                    utm = tp.get("utm")
+                    if isinstance(utm, dict):
+                        _inc(source_counts, utm.get("source"))
+                        _inc(medium_counts, utm.get("medium"))
+                        _inc(campaign_counts, utm.get("campaign"))
+                    source_obj = tp.get("source")
+                    if isinstance(source_obj, dict):
+                        _inc(source_counts, source_obj.get("platform"))
+                        _inc(campaign_counts, source_obj.get("campaign_name"))
+                    campaign_obj = tp.get("campaign")
+                    if isinstance(campaign_obj, dict):
+                        _inc(campaign_counts, campaign_obj.get("name"))
+
+        return {
+            "conversion_count": conversion_count,
+            "touchpoint_count": touchpoint_count,
+            "conversion_event_counts": conversion_event_counts,
+            "channel_counts": channel_counts,
+            "source_counts": source_counts,
+            "medium_counts": medium_counts,
+            "campaign_counts": campaign_counts,
+            "value_field_counts": value_field_counts,
+            "currency_field_counts": currency_field_counts,
+            "dedup_key_counts": dedup_key_counts,
+        }
+
     if isinstance(body, list):
         profiles = body
         replace = True
     elif isinstance(body, dict):
-        profiles = body.get("profiles", body.get("data", []))
+        profiles = body.get("profiles")
+        if not isinstance(profiles, list):
+            data_payload = body.get("data")
+            if isinstance(data_payload, list):
+                profiles = data_payload
+            elif isinstance(data_payload, dict):
+                nested_profiles = data_payload.get("profiles")
+                profiles = nested_profiles if isinstance(nested_profiles, list) else None
+        if not isinstance(profiles, list):
+            journeys_payload = body.get("journeys")
+            if isinstance(journeys_payload, list):
+                profiles = journeys_payload
+        if not isinstance(profiles, list):
+            profiles = []
         replace = body.get("replace", True)
         if not isinstance(profiles, list):
-            raise HTTPException(status_code=400, detail="Body must be an array of profiles or { 'profiles': [...] }")
+            raise HTTPException(
+                status_code=400,
+                detail="Body must be an array, { 'profiles': [...] }, { 'data': [...] }, or { 'journeys': [...] }",
+            )
     else:
         raise HTTPException(status_code=400, detail="Body must be JSON array or object with 'profiles' key")
 
@@ -9890,7 +10020,30 @@ async def meiro_receive_profiles(
             to_store = profiles
 
     out_path.write_text(json.dumps(to_store, indent=2))
-    set_webhook_received(count_delta=len(profiles))
+    now_iso = datetime.utcnow().isoformat() + "Z"
+    set_webhook_received(count_delta=len(profiles), last_received_at=now_iso)
+    payload_excerpt, payload_truncated, payload_bytes = _safe_json_excerpt(body)
+    conversion_names, channels_detected = _extract_payload_hints(profiles)
+    payload_analysis = _analyze_payload(profiles)
+    append_webhook_event(
+        {
+            "received_at": now_iso,
+            "received_count": int(len(profiles)),
+            "stored_total": int(len(to_store)),
+            "replace": bool(replace),
+            "ip": request.client.host if request.client else None,
+            "user_agent": (request.headers.get("user-agent") or "")[:256] or None,
+            "payload_shape": "array" if isinstance(body, list) else "object",
+            "payload_excerpt": payload_excerpt,
+            "payload_truncated": payload_truncated,
+            "payload_bytes": payload_bytes,
+            "payload_json_valid": True,
+            "conversion_event_names": conversion_names,
+            "channels_detected": channels_detected,
+            "payload_analysis": payload_analysis,
+        },
+        max_items=100,
+    )
     return {"received": len(profiles), "stored_total": len(to_store), "message": "Profiles saved. Use Import from CDP in Data Sources to load into attribution."}
 
 
@@ -9899,6 +10052,174 @@ def meiro_webhook_rotate():
     """Rotate webhook secret. Returns new secret (show once)."""
     secret = rotate_webhook_secret()
     return {"message": "Webhook secret rotated", "secret": secret}
+
+
+@app.get("/api/connectors/meiro/webhook/events")
+def meiro_webhook_events(
+    limit: int = Query(100, ge=1, le=500),
+    include_payload: bool = Query(False, description="Include payload excerpts for debugging"),
+):
+    events = get_webhook_events(limit=limit)
+    if not include_payload:
+        events = [
+            {
+                k: v
+                for k, v in event.items()
+                if k not in {"payload_excerpt"}
+            }
+            for event in events
+        ]
+    return {"items": events, "total": len(events)}
+
+
+@app.get("/api/connectors/meiro/webhook/suggestions")
+def meiro_webhook_suggestions(limit: int = Query(100, ge=1, le=500)):
+    events = get_webhook_events(limit=limit)
+    conversion_event_counts: Dict[str, int] = {}
+    channel_counts: Dict[str, int] = {}
+    source_counts: Dict[str, int] = {}
+    medium_counts: Dict[str, int] = {}
+    value_field_counts: Dict[str, int] = {}
+    dedup_key_counts: Dict[str, int] = {"conversion_id": 0, "order_id": 0, "event_id": 0}
+    total_conversions = 0
+    total_touchpoints = 0
+
+    def _merge_counts(target: Dict[str, int], incoming: Dict[str, Any]) -> None:
+        for k, v in (incoming or {}).items():
+            try:
+                iv = int(v)
+            except Exception:
+                continue
+            if not k:
+                continue
+            target[k] = target.get(k, 0) + iv
+
+    for event in events:
+        analysis = event.get("payload_analysis") if isinstance(event, dict) else None
+        if not isinstance(analysis, dict):
+            continue
+        total_conversions += int(analysis.get("conversion_count") or 0)
+        total_touchpoints += int(analysis.get("touchpoint_count") or 0)
+        _merge_counts(conversion_event_counts, analysis.get("conversion_event_counts") or {})
+        _merge_counts(channel_counts, analysis.get("channel_counts") or {})
+        _merge_counts(source_counts, analysis.get("source_counts") or {})
+        _merge_counts(medium_counts, analysis.get("medium_counts") or {})
+        _merge_counts(value_field_counts, analysis.get("value_field_counts") or {})
+        for key in ("conversion_id", "order_id", "event_id"):
+            dedup_key_counts[key] = dedup_key_counts.get(key, 0) + int((analysis.get("dedup_key_counts") or {}).get(key, 0) or 0)
+
+    def _top_items(values: Dict[str, int], n: int = 10) -> List[Tuple[str, int]]:
+        return sorted(values.items(), key=lambda kv: kv[1], reverse=True)[:n]
+
+    top_conversion_names = _top_items(conversion_event_counts, n=10)
+    top_value_fields = _top_items(value_field_counts, n=5)
+    top_sources = _top_items(source_counts, n=15)
+    top_mediums = _top_items(medium_counts, n=15)
+    top_channels = _top_items(channel_counts, n=15)
+    best_dedup_key = sorted(dedup_key_counts.items(), key=lambda kv: kv[1], reverse=True)[0][0]
+
+    kpi_suggestions = []
+    for idx, (event_name, count) in enumerate(top_conversion_names):
+        if not event_name:
+            continue
+        event_id = re.sub(r"[^a-z0-9_]+", "_", event_name.lower()).strip("_")[:64] or f"event_{idx+1}"
+        coverage = (count / total_conversions) if total_conversions > 0 else 0.0
+        value_field = top_value_fields[0][0] if top_value_fields else None
+        kpi_suggestions.append(
+            {
+                "id": event_id,
+                "label": event_name.replace("_", " ").title(),
+                "type": "primary" if idx == 0 else "micro",
+                "event_name": event_name,
+                "value_field": value_field if idx == 0 else None,
+                "weight": 1.0 if idx == 0 else 0.5,
+                "lookback_days": 30 if idx == 0 else 14,
+                "coverage_pct": round(coverage * 100, 2),
+            }
+        )
+
+    primary_kpi_id = kpi_suggestions[0]["id"] if kpi_suggestions else None
+
+    taxonomy_rules = []
+    priority = 10
+    for channel, count in top_channels:
+        if channel.lower() in {"unknown", "other", "(none)"}:
+            continue
+        taxonomy_rules.append(
+            {
+                "name": f"Auto: {channel}",
+                "channel": channel,
+                "priority": priority,
+                "enabled": True,
+                "source": {"operator": "any", "value": ""},
+                "medium": {"operator": "any", "value": ""},
+                "campaign": {"operator": "any", "value": ""},
+                "observed_count": count,
+            }
+        )
+        priority += 10
+        if len(taxonomy_rules) >= 12:
+            break
+
+    source_aliases = {}
+    for source, _count in top_sources:
+        lower = source.lower()
+        if lower in {"fb", "ig", "yt", "li"}:
+            mapped = {"fb": "facebook", "ig": "instagram", "yt": "youtube", "li": "linkedin"}[lower]
+            source_aliases[lower] = mapped
+    medium_aliases = {}
+    for medium, _count in top_mediums:
+        lower = medium.lower()
+        if lower in {"ppc", "paid", "paidsearch"}:
+            medium_aliases[lower] = "cpc"
+
+    kpi_apply_payload = {
+        "definitions": [
+            {
+                "id": item["id"],
+                "label": item["label"],
+                "type": item["type"],
+                "event_name": item["event_name"],
+                "value_field": item["value_field"],
+                "weight": item["weight"],
+                "lookback_days": item["lookback_days"],
+            }
+            for item in kpi_suggestions
+        ],
+        "primary_kpi_id": primary_kpi_id,
+    }
+    taxonomy_apply_payload = {
+        "channel_rules": [
+            {k: v for k, v in rule.items() if k != "observed_count"}
+            for rule in taxonomy_rules
+        ],
+        "source_aliases": source_aliases,
+        "medium_aliases": medium_aliases,
+    }
+
+    return {
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "events_analyzed": len(events),
+        "total_conversions_observed": total_conversions,
+        "total_touchpoints_observed": total_touchpoints,
+        "dedup_key_suggestion": best_dedup_key,
+        "kpi_suggestions": kpi_suggestions,
+        "conversion_event_suggestions": [
+            {"event_name": name, "count": count}
+            for name, count in top_conversion_names
+        ],
+        "taxonomy_suggestions": {
+            "channel_rules": taxonomy_rules,
+            "source_aliases": source_aliases,
+            "medium_aliases": medium_aliases,
+            "top_sources": [{"source": name, "count": count} for name, count in top_sources],
+            "top_mediums": [{"medium": name, "count": count} for name, count in top_mediums],
+        },
+        "apply_payloads": {
+            "kpis": kpi_apply_payload,
+            "taxonomy": taxonomy_apply_payload,
+        },
+    }
 
 
 MEIRO_MAPPING_PRESETS = {

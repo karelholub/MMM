@@ -214,5 +214,78 @@
 "created_at": "2026-02-11T15:13:54Z",
 "updated_at": "2026-02-11T15:13:54Z",
 "dataset_id": "platform-mmm-1f72ded1e511"
+},
+"mmm_1aa4d49fb8f1": {
+"status": "finished",
+"config": {
+"dataset_id": "platform-mmm-9ebee8b799ae",
+"frequency": "W",
+"kpi_mode": "conversions",
+"kpi": "sales",
+"spend_channels": [
+"google_ads",
+"linkedin_ads",
+"meta_ads"
+],
+"covariates": [],
+"priors": {
+"adstock": {
+"alpha_mean": 0.5,
+"alpha_sd": 0.2
+},
+"saturation": {
+"lam_mean": 0.001,
+"lam_sd": 0.0005
+}
+},
+"mcmc": {
+"draws": 1000,
+"tune": 1000,
+"chains": 4,
+"target_accept": 0.9
+},
+"use_adstock": true,
+"use_saturation": true,
+"holdout_weeks": 8,
+"random_seed": null,
+"channel_display_names": null
+},
+"kpi_mode": "conversions",
+"created_at": "2026-02-13T08:27:14Z",
+"updated_at": "2026-02-13T08:43:10Z",
+"dataset_id": "platform-mmm-9ebee8b799ae",
+"r2": 0.0,
+"contrib": [
+{
+"channel": "google_ads",
+"beta": 0.0,
+"mean_share": 0.0
+},
+{
+"channel": "linkedin_ads",
+"beta": 0.0,
+"mean_share": 0.0
+},
+{
+"channel": "meta_ads",
+"beta": 0.0,
+"mean_share": 0.0
+}
+],
+"roi": [
+{
+"channel": "google_ads",
+"roi": 0.0
+},
+{
+"channel": "linkedin_ads",
+"roi": 0.0
+},
+{
+"channel": "meta_ads",
+"roi": 0.0
+}
+],
+"engine": "ridge-fallback"
 }
 }

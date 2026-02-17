@@ -18,6 +18,7 @@ import {
 } from 'recharts'
 import { tokens } from '../theme/tokens'
 import { apiGetJson, withQuery } from '../lib/apiClient'
+import { useWorkspaceContext } from '../components/WorkspaceContext'
 
 interface ChannelPerformanceProps {
   model: string
@@ -36,20 +37,6 @@ interface ChannelData {
   roas: number
   cpa: number
   confidence?: Confidence
-}
-
-interface JourneysSummary {
-  loaded: boolean
-  count: number
-  converted: number
-  non_converted: number
-  total_value: number
-  primary_kpi_id?: string | null
-  primary_kpi_label?: string | null
-  primary_kpi_count?: number
-  kpi_counts?: Record<string, number>
-  date_min?: string | null
-  date_max?: string | null
 }
 
 interface ExplainabilityDriver {
@@ -71,25 +58,6 @@ interface ExplainabilitySummaryLite {
   drivers: ExplainabilityDriver[]
 }
 
-interface PerformanceResponse {
-  model: string
-  channels: ChannelData[]
-  total_spend: number
-  total_attributed_value: number
-  total_conversions: number
-  config?: {
-    config_id?: string
-    config_version?: number
-    conversion_key?: string | null
-    time_window?: {
-      click_lookback_days?: number | null
-      impression_lookback_days?: number | null
-      session_timeout_minutes?: number | null
-      conversion_latency_days?: number | null
-    }
-  } | null
-}
-
 interface ChannelTrendRow {
   ts: string
   channel: string
@@ -101,6 +69,44 @@ interface ChannelTrendResponse {
   previous_period: { date_from: string; date_to: string }
   series: ChannelTrendRow[]
   series_prev?: ChannelTrendRow[]
+}
+
+interface ChannelSummaryItem {
+  channel: string
+  current: { spend: number; conversions: number; revenue: number }
+  previous?: { spend: number; conversions: number; revenue: number } | null
+  derived?: { roas?: number | null; cpa?: number | null }
+  confidence?: Confidence | null
+}
+
+interface ChannelSummaryResponse {
+  current_period: { date_from: string; date_to: string; grain?: string }
+  previous_period: { date_from: string; date_to: string }
+  items: ChannelSummaryItem[]
+  totals?: {
+    current: { spend: number; conversions: number; revenue: number }
+    previous?: { spend: number; conversions: number; revenue: number } | null
+  }
+  config?: {
+    config_id?: string
+    config_version?: number
+    conversion_key?: string | null
+    time_window?: {
+      click_lookback_days?: number | null
+      impression_lookback_days?: number | null
+      session_timeout_minutes?: number | null
+      conversion_latency_days?: number | null
+    }
+  } | null
+  mapping_coverage?: {
+    spend_mapped_pct: number
+    value_mapped_pct: number
+    spend_mapped: number
+    spend_total: number
+    value_mapped: number
+    value_total: number
+  } | null
+  meta?: { query_context?: { compare?: boolean } }
 }
 
 const MODEL_LABELS: Record<string, string> = {
@@ -182,6 +188,7 @@ type SortKey = keyof ChannelData | 'attributed_share'
 type SortDir = 'asc' | 'desc'
 
 export default function ChannelPerformance({ model, modelsReady, configId }: ChannelPerformanceProps) {
+  const { globalDateFrom, globalDateTo } = useWorkspaceContext()
   const initialTrendParams = useMemo(() => {
     const params = new URLSearchParams(window.location.search)
     const kpiRaw = (params.get('kpi') || '').toLowerCase()
@@ -205,26 +212,6 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
   const [onlyLowConfidence, setOnlyLowConfidence] = useState(false)
   const [selectedTrendChannels, setSelectedTrendChannels] = useState<string[]>([])
 
-  const journeysQuery = useQuery<JourneysSummary>({
-    queryKey: ['journeys-summary-for-channels'],
-    queryFn: async () => apiGetJson<JourneysSummary>('/api/attribution/journeys', {
-      fallbackMessage: 'Failed to load journeys summary',
-    }),
-  })
-
-  const perfQuery = useQuery<PerformanceResponse>({
-    queryKey: ['channel-performance', model, configId ?? 'default'],
-    queryFn: async () => {
-      const params: Record<string, string> = { model }
-      if (configId) params.config_id = configId
-      return apiGetJson<PerformanceResponse>(withQuery('/api/attribution/performance', params), {
-        fallbackMessage: 'Failed to fetch performance',
-      })
-    },
-    enabled: modelsReady,
-    refetchInterval: false,
-  })
-
   const explainabilityQuery = useQuery<ExplainabilitySummaryLite>({
     queryKey: ['explainability-lite-channel', model, configId ?? 'default'],
     queryFn: async () => {
@@ -242,12 +229,19 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
   })
 
   const trendChannelsParam = selectedTrendChannels.length ? selectedTrendChannels.join(',') : 'all'
+  const trendDateRange = useMemo(() => {
+    const fallbackTo = new Date().toISOString().slice(0, 10)
+    const fallbackFrom = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    const dateFrom = globalDateFrom || fallbackFrom
+    const dateTo = globalDateTo || fallbackTo
+    return { dateFrom, dateTo, fromJourneys: !!(globalDateFrom && globalDateTo) }
+  }, [globalDateFrom, globalDateTo])
   const trendQuery = useQuery<ChannelTrendResponse>({
     queryKey: ['channel-trend-panel', trendKpi, trendGrain, comparePrevious, trendChannelsParam],
     queryFn: async () => {
       const params = new URLSearchParams({
-        date_from: journeysQuery.data?.date_min?.slice(0, 10) || '2026-01-01',
-        date_to: journeysQuery.data?.date_max?.slice(0, 10) || '2026-01-31',
+        date_from: trendDateRange.dateFrom,
+        date_to: trendDateRange.dateTo,
         timezone: 'UTC',
         kpi_key: trendKpi,
         grain: trendGrain,
@@ -258,17 +252,59 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
         fallbackMessage: 'Failed to load channel trend',
       })
     },
-    enabled: modelsReady && !!journeysQuery.data?.date_min && !!journeysQuery.data?.date_max,
+    enabled: modelsReady && !!trendDateRange.dateFrom && !!trendDateRange.dateTo,
     refetchInterval: false,
   })
 
-  const data = perfQuery.data
-  const loading = perfQuery.isLoading || !modelsReady
+  const summaryQuery = useQuery<ChannelSummaryResponse>({
+    queryKey: ['channel-summary-panel', trendDateRange.dateFrom, trendDateRange.dateTo, comparePrevious, trendChannelsParam],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        date_from: trendDateRange.dateFrom,
+        date_to: trendDateRange.dateTo,
+        timezone: 'UTC',
+        compare: comparePrevious ? '1' : '0',
+      })
+      selectedTrendChannels.forEach((ch) => params.append('channels', ch))
+      return apiGetJson<ChannelSummaryResponse>(`/api/performance/channel/summary?${params.toString()}`, {
+        fallbackMessage: 'Failed to load channel summary',
+      })
+    },
+    enabled: modelsReady && !!trendDateRange.dateFrom && !!trendDateRange.dateTo,
+    refetchInterval: false,
+  })
+
+  const loading = !modelsReady || summaryQuery.isLoading
+
+  const channelRows = useMemo(() => {
+    const rows = summaryQuery.data?.items ?? []
+    if (!rows.length) return []
+    const revenueTotal = rows.reduce((sum, row) => sum + (row.current.revenue || 0), 0)
+    return rows.map((row) => {
+      const spend = row.current.spend || 0
+      const revenue = row.current.revenue || 0
+      const conversions = row.current.conversions || 0
+      const roas = row.derived?.roas != null ? row.derived.roas : spend > 0 ? revenue / spend : 0
+      const cpa = row.derived?.cpa != null ? row.derived.cpa : conversions > 0 ? spend / conversions : 0
+      const roi = spend > 0 ? (revenue - spend) / spend : 0
+      return {
+        channel: row.channel,
+        spend,
+        attributed_value: revenue,
+        attributed_conversions: conversions,
+        attributed_share: revenueTotal > 0 ? revenue / revenueTotal : 0,
+        roi,
+        roas,
+        cpa,
+        confidence: row.confidence || undefined,
+      } as ChannelData
+    })
+  }, [summaryQuery.data?.items])
 
   const sortedChannels = useMemo(() => {
-    if (!data?.channels?.length) return []
+    if (!channelRows.length) return []
     const q = channelSearch.trim().toLowerCase()
-    const base = data.channels.filter((ch) => {
+    const base = channelRows.filter((ch) => {
       if (directMode === 'exclude' && ch.channel === 'direct') return false
       if (onlyLowConfidence && (!ch.confidence || ch.confidence.score >= 70)) return false
       if (!q) return true
@@ -281,11 +317,11 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
       const cmp = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb))
       return sortDir === 'asc' ? cmp : -cmp
     })
-  }, [data?.channels, sortKey, sortDir, directMode, channelSearch, onlyLowConfidence])
+  }, [channelRows, sortKey, sortDir, directMode, channelSearch, onlyLowConfidence])
 
   const filteredForCharts = useMemo(
-    () => (data?.channels ?? []).filter((ch) => (directMode === 'exclude' && ch.channel === 'direct' ? false : true)),
-    [data?.channels, directMode],
+    () => channelRows.filter((ch) => (directMode === 'exclude' && ch.channel === 'direct' ? false : true)),
+    [channelRows, directMode],
   )
 
   useEffect(() => {
@@ -395,7 +431,28 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     )
   }
 
-  if (!data || !data.channels?.length) {
+  if (summaryQuery.isError && !channelRows.length) {
+    return (
+      <div
+        style={{
+          background: t.color.surface,
+          border: `1px solid ${t.color.danger}`,
+          borderRadius: t.radius.lg,
+          padding: t.space.xxl,
+          boxShadow: t.shadowSm,
+        }}
+      >
+        <h3 style={{ margin: '0 0 8px', fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.danger }}>
+          Failed to load
+        </h3>
+        <p style={{ margin: 0, fontSize: t.font.sizeMd, color: t.color.textSecondary }}>
+          {(summaryQuery.error as Error)?.message}
+        </p>
+      </div>
+    )
+  }
+
+  if (!channelRows.length) {
     return (
       <div
         style={{
@@ -416,23 +473,22 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     )
   }
 
-  const totalSpend = filteredForCharts.reduce((s, ch) => s + ch.spend, 0)
-  const totalValue = filteredForCharts.reduce((s, ch) => s + ch.attributed_value, 0)
-  const totalConversions = filteredForCharts.reduce((s, ch) => s + ch.attributed_conversions, 0)
+  const summaryCurrent = summaryQuery.data?.totals?.current ?? { spend: 0, revenue: 0, conversions: 0 }
+  const summaryPrevious = summaryQuery.data?.totals?.previous ?? { spend: 0, revenue: 0, conversions: 0 }
+  const totalSpend = summaryCurrent.spend
+  const totalValue = summaryCurrent.revenue
+  const totalConversions = summaryCurrent.conversions
 
   const totalROAS = totalSpend > 0 ? totalValue / totalSpend : 0
   const avgCPA = totalConversions > 0 ? totalSpend / totalConversions : 0
 
-  const journeys = journeysQuery.data
   const periodLabel =
-    journeys?.date_min && journeys?.date_max
-      ? `${journeys.date_min.slice(0, 10)} – ${journeys.date_max.slice(0, 10)}`
+    globalDateFrom && globalDateTo
+      ? `${globalDateFrom} – ${globalDateTo}`
       : 'current dataset'
 
   const conversionLabel =
-    journeys?.primary_kpi_label ||
-    journeys?.primary_kpi_id ||
-    (journeys?.kpi_counts && Object.keys(journeys.kpi_counts)[0]) ||
+    summaryQuery.data?.config?.conversion_key ||
     'All conversions'
 
   const exp = explainabilityQuery.data
@@ -443,19 +499,27 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
 
   const kpiDeltas = comparePrevious
     ? {
-        totalSpend: null as number | null,
-        totalSpendPct: null as number | null,
-        totalValue: revDelta,
-        totalValuePct: revPct,
-        totalConversions: null as number | null,
-        totalConversionsPct: null as number | null,
+        totalSpend: totalSpend - summaryPrevious.spend,
+        totalSpendPct:
+          Math.abs(summaryPrevious.spend) > 1e-9
+            ? ((totalSpend - summaryPrevious.spend) / summaryPrevious.spend) * 100
+            : null as number | null,
+        totalValue: totalValue - summaryPrevious.revenue,
+        totalValuePct:
+          Math.abs(summaryPrevious.revenue) > 1e-9
+            ? ((totalValue - summaryPrevious.revenue) / summaryPrevious.revenue) * 100
+            : revPct,
+        totalConversions: totalConversions - summaryPrevious.conversions,
+        totalConversionsPct:
+          Math.abs(summaryPrevious.conversions) > 1e-9
+            ? ((totalConversions - summaryPrevious.conversions) / summaryPrevious.conversions) * 100
+            : null as number | null,
         totalROAS: null as number | null,
         totalROASPct: null as number | null,
         avgCPA: null as number | null,
         avgCPAPct: null as number | null,
       }
     : null
-
   const kpis = [
     { label: 'Total Spend', value: formatCurrency(totalSpend), def: METRIC_DEFINITIONS['Total Spend'] },
     { label: 'Attributed Revenue', value: formatCurrency(totalValue), def: METRIC_DEFINITIONS['Attributed Revenue'] },
@@ -518,18 +582,18 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
           <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
             <strong>Conversion:</strong> {conversionLabel} (read‑only)
           </div>
-          {data.config?.time_window && (
+          {summaryQuery.data?.config?.time_window && (
             <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
               <strong>Config:</strong>{' '}
               {[
-                data.config.time_window.click_lookback_days != null
-                  ? `Click ${data.config.time_window.click_lookback_days}d`
+                summaryQuery.data.config.time_window.click_lookback_days != null
+                  ? `Click ${summaryQuery.data.config.time_window.click_lookback_days}d`
                   : null,
-                data.config.time_window.impression_lookback_days != null
-                  ? `Impr. ${data.config.time_window.impression_lookback_days}d`
+                summaryQuery.data.config.time_window.impression_lookback_days != null
+                  ? `Impr. ${summaryQuery.data.config.time_window.impression_lookback_days}d`
                   : null,
-                data.config.time_window.session_timeout_minutes != null
-                  ? `Session ${data.config.time_window.session_timeout_minutes}m`
+                summaryQuery.data.config.time_window.session_timeout_minutes != null
+                  ? `Session ${summaryQuery.data.config.time_window.session_timeout_minutes}m`
                   : null,
               ]
                 .filter(Boolean)
@@ -585,6 +649,22 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
         </div>
       </div>
 
+      {summaryQuery.isError && (
+        <div
+          style={{
+            marginBottom: t.space.md,
+            padding: `${t.space.sm}px ${t.space.md}px`,
+            borderRadius: t.radius.sm,
+            border: `1px solid ${t.color.danger}`,
+            background: t.color.dangerSubtle,
+            color: t.color.danger,
+            fontSize: t.font.sizeXs,
+          }}
+        >
+          Unified channel summary is currently unavailable. KPI totals and deltas depend on `/api/performance/channel/summary`.
+        </div>
+      )}
+
       {showWhy && (
         <div style={{ marginBottom: t.space.lg }}>
           <ExplainabilityPanel scope="channel" configId={configId ?? undefined} model={model} />
@@ -599,35 +679,65 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
             gap: t.space.sm,
           }}
         >
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: t.space.sm, alignItems: 'center' }}>
+          <div style={{ display: 'grid', gap: t.space.xs }}>
             <label style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Channels</label>
-            <select
-              multiple
-              value={selectedTrendChannels}
-              onChange={(e) => {
-                const values = Array.from(e.target.selectedOptions).map((o) => o.value)
-                setSelectedTrendChannels(values.length ? values : availableTrendChannels)
-              }}
+            <div
               style={{
-                minWidth: 220,
-                maxWidth: 360,
-                padding: `${t.space.xs}px ${t.space.sm}px`,
-                border: `1px solid ${t.color.border}`,
-                borderRadius: t.radius.sm,
-                fontSize: t.font.sizeSm,
-                background: t.color.surface,
-                color: t.color.text,
+                display: 'flex',
+                gap: t.space.xs,
+                alignItems: 'center',
+                overflowX: 'auto',
+                flexWrap: 'nowrap',
+                whiteSpace: 'nowrap',
+                paddingBottom: 2,
               }}
             >
-              {availableTrendChannels.map((ch) => (
-                <option key={ch} value={ch}>
-                  {ch}
-                </option>
-              ))}
-            </select>
-            <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
-              Hold Cmd/Ctrl to multi-select
-            </span>
+              <button
+                type="button"
+                onClick={() => setSelectedTrendChannels(availableTrendChannels)}
+                style={{
+                  border: `1px solid ${selectedTrendChannels.length === availableTrendChannels.length ? t.color.accent : t.color.borderLight}`,
+                  background: selectedTrendChannels.length === availableTrendChannels.length ? t.color.accentMuted : t.color.surface,
+                  color: selectedTrendChannels.length === availableTrendChannels.length ? t.color.accent : t.color.textSecondary,
+                  borderRadius: t.radius.full,
+                  padding: '6px 10px',
+                  cursor: 'pointer',
+                  fontSize: t.font.sizeSm,
+                  fontWeight: selectedTrendChannels.length === availableTrendChannels.length ? t.font.weightSemibold : t.font.weightMedium,
+                  flex: '0 0 auto',
+                }}
+              >
+                All
+              </button>
+              {availableTrendChannels.map((ch) => {
+                const isActive = selectedTrendChannels.includes(ch)
+                return (
+                  <button
+                    key={ch}
+                    type="button"
+                    onClick={() => {
+                      const next = isActive
+                        ? selectedTrendChannels.filter((value) => value !== ch)
+                        : [...selectedTrendChannels, ch]
+                      setSelectedTrendChannels(next.length ? next : availableTrendChannels)
+                    }}
+                    style={{
+                      border: `1px solid ${isActive ? t.color.accent : t.color.borderLight}`,
+                      background: isActive ? t.color.accentMuted : t.color.surface,
+                      color: isActive ? t.color.accent : t.color.textSecondary,
+                      borderRadius: t.radius.full,
+                      padding: '6px 10px',
+                      cursor: 'pointer',
+                      fontSize: t.font.sizeSm,
+                      fontWeight: isActive ? t.font.weightSemibold : t.font.weightMedium,
+                      flex: '0 0 auto',
+                    }}
+                  >
+                    {ch}
+                  </button>
+                )
+              })}
+            </div>
           </div>
         </div>
         <TrendPanel
@@ -647,6 +757,11 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
           baselineLabel={`vs previous ${trendQuery.data?.current_period ? ((new Date(trendQuery.data.current_period.date_to).getTime() - new Date(trendQuery.data.current_period.date_from).getTime()) / (24 * 60 * 60 * 1000) + 1).toFixed(0) : '0'} days`}
           infoTooltip="Observed values for selected channels and KPI. Toggle channels above to verify composition."
           noDataMessage="No data for selected filters and date range"
+          footerNote={
+            trendDateRange.fromJourneys
+              ? undefined
+              : 'Using default last 30 days because journey date range is not available.'
+          }
         />
       </div>
 
@@ -893,7 +1008,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
           ROI & ROAS by Channel
         </h3>
         <ResponsiveContainer width="100%" height={260}>
-          <BarChart data={data.channels} margin={{ top: 8, right: 16, left: 8 }}>
+          <BarChart data={filteredForCharts} margin={{ top: 8, right: 16, left: 8 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
             <XAxis dataKey="channel" tick={{ fontSize: t.font.sizeSm, fill: t.color.text }} />
             <YAxis tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }} />
@@ -934,8 +1049,8 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
               exportTableCSV(filteredForCharts, {
                 model,
                 periodLabel,
-                conversionKey: data.config?.conversion_key ?? null,
-                configVersion: data.config?.config_version ?? null,
+                conversionKey: summaryQuery.data?.config?.conversion_key ?? null,
+                configVersion: summaryQuery.data?.config?.config_version ?? null,
                 directMode,
               })
             }

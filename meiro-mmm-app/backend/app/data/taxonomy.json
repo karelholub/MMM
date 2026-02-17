@@ -1,17 +1,17 @@
 {
   "channel_rules": [
     {
-      "name": "Paid Search",
-      "channel": "paid_search",
+      "name": "Auto: direct",
+      "channel": "direct",
       "priority": 10,
       "enabled": true,
       "source": {
-        "operator": "regex",
-        "value": "google|bing|baidu"
+        "operator": "any",
+        "value": ""
       },
       "medium": {
-        "operator": "regex",
-        "value": "cpc|ppc|paid_search"
+        "operator": "any",
+        "value": ""
       },
       "campaign": {
         "operator": "any",
@@ -19,53 +19,17 @@
       }
     },
     {
-      "name": "Paid Social",
-      "channel": "paid_social",
+      "name": "Auto: google",
+      "channel": "google",
       "priority": 20,
       "enabled": true,
       "source": {
-        "operator": "regex",
-        "value": "facebook|meta|instagram|linkedin|twitter|tiktok"
-      },
-      "medium": {
-        "operator": "regex",
-        "value": "cpc|paid_social|social"
-      },
-      "campaign": {
-        "operator": "any",
-        "value": ""
-      }
-    },
-    {
-      "name": "Email",
-      "channel": "email",
-      "priority": 30,
-      "enabled": true,
-      "source": {
         "operator": "any",
         "value": ""
       },
       "medium": {
-        "operator": "contains",
-        "value": "email"
-      },
-      "campaign": {
         "operator": "any",
         "value": ""
-      }
-    },
-    {
-      "name": "Direct",
-      "channel": "direct",
-      "priority": 40,
-      "enabled": true,
-      "source": {
-        "operator": "any",
-        "value": ""
-      },
-      "medium": {
-        "operator": "regex",
-        "value": "(none|direct)"
       },
       "campaign": {
         "operator": "any",
@@ -73,13 +37,6 @@
       }
     }
   ],
-  "source_aliases": {
-    "fb": "facebook",
-    "ig": "instagram",
-    "g": "google"
-  },
-  "medium_aliases": {
-    "paid": "cpc",
-    "cpm": "display"
-  }
+  "source_aliases": {},
+  "medium_aliases": {}
 }

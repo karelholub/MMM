@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { Fragment, useState, useCallback, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { tokens as t } from '../theme/tokens'
 import { apiGetJson, apiSendJson, withQuery } from '../lib/apiClient'
@@ -50,6 +50,62 @@ interface RunResult {
   alerts_created: number
   latest_bucket: string | null
   duration_ms?: number
+}
+
+interface MeiroWebhookEvent {
+  received_at: string
+  received_count: number
+  stored_total: number
+  replace: boolean
+  ip?: string | null
+  user_agent?: string | null
+  payload_shape?: string | null
+  payload_excerpt?: string | null
+  payload_truncated?: boolean
+  payload_bytes?: number
+  payload_json_valid?: boolean
+  conversion_event_names?: string[]
+  channels_detected?: string[]
+}
+
+interface MeiroWebhookSuggestions {
+  generated_at: string
+  events_analyzed: number
+  total_conversions_observed: number
+  total_touchpoints_observed: number
+  dedup_key_suggestion: string
+  kpi_suggestions: Array<{
+    id: string
+    label: string
+    type: string
+    event_name: string
+    value_field?: string | null
+    coverage_pct?: number
+  }>
+  taxonomy_suggestions: {
+    channel_rules: Array<{ name: string; channel: string; observed_count?: number }>
+    source_aliases: Record<string, string>
+    medium_aliases: Record<string, string>
+  }
+  apply_payloads: {
+    kpis: {
+      definitions: Array<{
+        id: string
+        label: string
+        type: string
+        event_name: string
+        value_field?: string | null
+        weight: number
+        lookback_days?: number | null
+      }>
+      primary_kpi_id?: string | null
+    }
+    taxonomy: {
+      channel_rules: Array<Record<string, unknown>>
+      source_aliases: Record<string, string>
+      medium_aliases: Record<string, string>
+    }
+  }
 }
 
 // --- Threshold config per metric ---
@@ -127,6 +183,8 @@ export default function DataQuality() {
   const [alertSourceFilter, setAlertSourceFilter] = useState<string>('')
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
   const [lastRunMeta, setLastRunMeta] = useState<{ bucket: string | null; duration_ms?: number } | null>(null)
+  const [expandedWebhookRow, setExpandedWebhookRow] = useState<number | null>(null)
+  const [showApplyAllPreview, setShowApplyAllPreview] = useState(false)
 
   const showToast = useCallback((message: string, type: 'success' | 'error') => {
     setToast({ message, type })
@@ -179,6 +237,50 @@ export default function DataQuality() {
         fallbackMessage: 'Failed to load data quality alerts',
       })
     },
+  })
+
+  const meiroWebhookEventsQuery = useQuery<{ items: MeiroWebhookEvent[]; total: number }>({
+    queryKey: ['meiro-webhook-events-dq'],
+    queryFn: async () =>
+      apiGetJson<{ items: MeiroWebhookEvent[]; total: number }>(
+        withQuery('/api/connectors/meiro/webhook/events', { limit: 100, include_payload: 1 }),
+        { fallbackMessage: 'Failed to load Meiro webhook debug log' },
+      ),
+  })
+
+  const meiroWebhookSuggestionsQuery = useQuery<MeiroWebhookSuggestions>({
+    queryKey: ['meiro-webhook-suggestions'],
+    queryFn: async () =>
+      apiGetJson<MeiroWebhookSuggestions>(
+        withQuery('/api/connectors/meiro/webhook/suggestions', { limit: 100 }),
+        { fallbackMessage: 'Failed to build webhook suggestions' },
+      ),
+  })
+
+  const applyKpiSuggestionsMutation = useMutation({
+    mutationFn: async (payload: MeiroWebhookSuggestions['apply_payloads']['kpis']) =>
+      apiSendJson('/api/kpis', 'POST', payload, { fallbackMessage: 'Failed to apply KPI suggestions' }),
+    onSuccess: () => showToast('KPI suggestions applied.', 'success'),
+    onError: (err: Error) => showToast(err.message || 'Failed to apply KPI suggestions', 'error'),
+  })
+
+  const applyTaxonomySuggestionsMutation = useMutation({
+    mutationFn: async (payload: MeiroWebhookSuggestions['apply_payloads']['taxonomy']) =>
+      apiSendJson('/api/taxonomy', 'POST', payload, { fallbackMessage: 'Failed to apply taxonomy suggestions' }),
+    onSuccess: () => showToast('Taxonomy suggestions applied.', 'success'),
+    onError: (err: Error) => showToast(err.message || 'Failed to apply taxonomy suggestions', 'error'),
+  })
+
+  const applyAllSuggestionsMutation = useMutation({
+    mutationFn: async (payloads: MeiroWebhookSuggestions['apply_payloads']) => {
+      await apiSendJson('/api/kpis', 'POST', payloads.kpis, { fallbackMessage: 'Failed to apply KPI suggestions' })
+      await apiSendJson('/api/taxonomy', 'POST', payloads.taxonomy, { fallbackMessage: 'Failed to apply taxonomy suggestions' })
+    },
+    onSuccess: () => {
+      setShowApplyAllPreview(false)
+      showToast('Applied KPI and taxonomy suggestions.', 'success')
+    },
+    onError: (err: Error) => showToast(err.message || 'Failed to apply all suggestions', 'error'),
   })
 
   const drilldownQuery = useQuery<DQDrilldown>({
@@ -565,6 +667,345 @@ export default function DataQuality() {
         />
       </div>
 
+      {/* Meiro webhook debug log */}
+      <div
+        style={{
+          background: t.color.surface,
+          border: `1px solid ${t.color.borderLight}`,
+          borderRadius: t.radius.lg,
+          padding: t.space.xl,
+          boxShadow: t.shadowSm,
+          marginBottom: t.space.xl,
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: t.space.md,
+            marginBottom: t.space.md,
+          }}
+        >
+          <div>
+            <h2 style={{ margin: '0 0 4px', fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+              Meiro webhook event log
+            </h2>
+            <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Last 100 webhook requests with payload excerpts for ingestion debugging.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => meiroWebhookEventsQuery.refetch()}
+            style={{
+              padding: `${t.space.xs}px ${t.space.md}px`,
+              fontSize: t.font.sizeSm,
+              color: t.color.textSecondary,
+              background: 'transparent',
+              border: `1px solid ${t.color.border}`,
+              borderRadius: t.radius.sm,
+              cursor: 'pointer',
+            }}
+          >
+            Refresh
+          </button>
+        </div>
+
+        {meiroWebhookEventsQuery.isLoading ? (
+          <p style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading webhook events…</p>
+        ) : meiroWebhookEventsQuery.isError ? (
+          <p style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>
+            {(meiroWebhookEventsQuery.error as Error)?.message || 'Failed to load webhook events'}
+          </p>
+        ) : (meiroWebhookEventsQuery.data?.items?.length || 0) > 0 ? (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: t.font.sizeSm }}>
+              <thead>
+                <tr style={{ borderBottom: `2px solid ${t.color.border}` }}>
+                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Received</th>
+                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right' }}>Profiles</th>
+                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Mode</th>
+                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right' }}>Payload size</th>
+                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Detected events</th>
+                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Detected channels</th>
+                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Source</th>
+                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'center' }}>Payload</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(meiroWebhookEventsQuery.data?.items || []).map((event, idx) => {
+                  const isExpanded = expandedWebhookRow === idx
+                  return (
+                    <Fragment key={`evt-${idx}`}>
+                      <tr style={{ borderBottom: `1px solid ${t.color.borderLight}` }}>
+                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px` }}>
+                          {event.received_at ? new Date(event.received_at).toLocaleString() : '—'}
+                        </td>
+                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right' }}>
+                          {(event.received_count ?? 0).toLocaleString()}
+                        </td>
+                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px` }}>{event.replace ? 'replace' : 'append'}</td>
+                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right' }}>
+                          {event.payload_bytes != null ? `${event.payload_bytes.toLocaleString()} B` : '—'}
+                        </td>
+                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px` }}>
+                          {event.conversion_event_names?.length ? event.conversion_event_names.join(', ') : '—'}
+                        </td>
+                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px` }}>
+                          {event.channels_detected?.length ? event.channels_detected.join(', ') : '—'}
+                        </td>
+                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px` }}>
+                          {event.ip || '—'}
+                          {event.user_agent ? (
+                            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {event.user_agent}
+                            </div>
+                          ) : null}
+                        </td>
+                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'center' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, flexWrap: 'wrap' }}>
+                            <span
+                              style={{
+                                padding: '2px 6px',
+                                borderRadius: 999,
+                                fontSize: t.font.sizeXs,
+                                fontWeight: t.font.weightMedium,
+                                background: event.payload_json_valid === false ? t.color.dangerMuted : t.color.successMuted,
+                                color: event.payload_json_valid === false ? t.color.danger : t.color.success,
+                              }}
+                            >
+                              {event.payload_json_valid === false ? 'JSON invalid' : 'JSON valid'}
+                            </span>
+                            {event.payload_truncated ? (
+                              <span style={{ fontSize: t.font.sizeXs, color: t.color.warning }}>Truncated</span>
+                            ) : null}
+                            <button
+                              type="button"
+                              onClick={() => setExpandedWebhookRow(isExpanded ? null : idx)}
+                              style={{
+                                padding: '2px 8px',
+                                fontSize: t.font.sizeXs,
+                                color: t.color.textSecondary,
+                                background: 'transparent',
+                                border: `1px solid ${t.color.border}`,
+                                borderRadius: t.radius.sm,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              {isExpanded ? 'Hide' : 'View'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  await navigator.clipboard.writeText(event.payload_excerpt || '')
+                                  showToast('Payload copied to clipboard.', 'success')
+                                } catch {
+                                  showToast('Failed to copy payload.', 'error')
+                                }
+                              }}
+                              style={{
+                                padding: '2px 8px',
+                                fontSize: t.font.sizeXs,
+                                color: t.color.textSecondary,
+                                background: 'transparent',
+                                border: `1px solid ${t.color.border}`,
+                                borderRadius: t.radius.sm,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              Copy
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                      {isExpanded && (
+                        <tr style={{ borderBottom: `1px solid ${t.color.borderLight}` }}>
+                          <td colSpan={8} style={{ padding: `${t.space.sm}px ${t.space.md}px` }}>
+                            <pre
+                              style={{
+                                margin: 0,
+                                fontSize: t.font.sizeXs,
+                                background: t.color.bgSubtle,
+                                border: `1px solid ${t.color.borderLight}`,
+                                borderRadius: t.radius.sm,
+                                padding: t.space.sm,
+                                whiteSpace: 'pre-wrap',
+                                wordBreak: 'break-word',
+                                maxHeight: 260,
+                                overflow: 'auto',
+                              }}
+                            >
+                              {event.payload_excerpt || 'No payload captured'}
+                              {event.payload_truncated ? '\n\n[Payload truncated in log]' : ''}
+                            </pre>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+            No webhook events captured yet. Send data to `/api/connectors/meiro/profiles` first.
+          </p>
+        )}
+      </div>
+
+      {/* Webhook-based setup suggestions */}
+      <div
+        style={{
+          background: t.color.surface,
+          border: `1px solid ${t.color.borderLight}`,
+          borderRadius: t.radius.lg,
+          padding: t.space.xl,
+          boxShadow: t.shadowSm,
+          marginBottom: t.space.xl,
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: t.space.md, flexWrap: 'wrap' }}>
+          <div>
+            <h2 style={{ margin: '0 0 4px', fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+              Auto-setup suggestions from Meiro payloads
+            </h2>
+            <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Suggested KPI/conversion and taxonomy defaults based on recent webhook events.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => meiroWebhookSuggestionsQuery.refetch()}
+            style={{
+              padding: `${t.space.xs}px ${t.space.md}px`,
+              fontSize: t.font.sizeSm,
+              color: t.color.textSecondary,
+              background: 'transparent',
+              border: `1px solid ${t.color.border}`,
+              borderRadius: t.radius.sm,
+              cursor: 'pointer',
+            }}
+          >
+            Refresh suggestions
+          </button>
+        </div>
+
+        {meiroWebhookSuggestionsQuery.isLoading ? (
+          <p style={{ marginTop: t.space.md, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Analyzing webhook payloads…</p>
+        ) : meiroWebhookSuggestionsQuery.isError ? (
+          <p style={{ marginTop: t.space.md, fontSize: t.font.sizeSm, color: t.color.danger }}>
+            {(meiroWebhookSuggestionsQuery.error as Error)?.message || 'Failed to generate suggestions'}
+          </p>
+        ) : meiroWebhookSuggestionsQuery.data ? (
+          <div style={{ marginTop: t.space.md, display: 'grid', gap: t.space.md }}>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Analyzed <strong>{meiroWebhookSuggestionsQuery.data.events_analyzed}</strong> events,
+              {' '}<strong>{meiroWebhookSuggestionsQuery.data.total_conversions_observed.toLocaleString()}</strong> conversions,
+              {' '}<strong>{meiroWebhookSuggestionsQuery.data.total_touchpoints_observed.toLocaleString()}</strong> touchpoints.
+              {' '}Suggested dedup key: <strong>{meiroWebhookSuggestionsQuery.data.dedup_key_suggestion}</strong>.
+            </div>
+
+            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md }}>
+              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, marginBottom: t.space.xs }}>
+                KPI / conversion suggestions
+              </div>
+              {(meiroWebhookSuggestionsQuery.data.kpi_suggestions || []).length ? (
+                <div style={{ display: 'grid', gap: 6 }}>
+                  {meiroWebhookSuggestionsQuery.data.kpi_suggestions.slice(0, 6).map((kpi) => (
+                    <div key={kpi.id} style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                      <strong>{kpi.label}</strong> ({kpi.type}) · event: <code>{kpi.event_name}</code>
+                      {kpi.value_field ? <> · value field: <code>{kpi.value_field}</code></> : null}
+                      {kpi.coverage_pct != null ? <> · coverage: {kpi.coverage_pct.toFixed(1)}%</> : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>No KPI suggestions yet.</div>
+              )}
+              <div style={{ marginTop: t.space.sm }}>
+                <button
+                  type="button"
+                  onClick={() => applyKpiSuggestionsMutation.mutate(meiroWebhookSuggestionsQuery.data.apply_payloads.kpis)}
+                  disabled={applyKpiSuggestionsMutation.isPending || !(meiroWebhookSuggestionsQuery.data.apply_payloads.kpis.definitions || []).length}
+                  style={{
+                    padding: `${t.space.xs}px ${t.space.md}px`,
+                    fontSize: t.font.sizeSm,
+                    color: '#fff',
+                    background: t.color.accent,
+                    border: 'none',
+                    borderRadius: t.radius.sm,
+                    cursor: applyKpiSuggestionsMutation.isPending ? 'wait' : 'pointer',
+                    opacity: applyKpiSuggestionsMutation.isPending ? 0.75 : 1,
+                  }}
+                >
+                  {applyKpiSuggestionsMutation.isPending ? 'Applying…' : 'Apply KPI suggestions'}
+                </button>
+              </div>
+            </div>
+
+            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md }}>
+              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, marginBottom: t.space.xs }}>
+                Taxonomy suggestions
+              </div>
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                {(meiroWebhookSuggestionsQuery.data.taxonomy_suggestions.channel_rules || []).length} channel rules,
+                {' '}{Object.keys(meiroWebhookSuggestionsQuery.data.taxonomy_suggestions.source_aliases || {}).length} source aliases,
+                {' '}{Object.keys(meiroWebhookSuggestionsQuery.data.taxonomy_suggestions.medium_aliases || {}).length} medium aliases.
+              </div>
+              {(meiroWebhookSuggestionsQuery.data.taxonomy_suggestions.channel_rules || []).slice(0, 5).map((rule) => (
+                <div key={rule.name} style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary, marginTop: 4 }}>
+                  <strong>{rule.name}</strong> → <code>{rule.channel}</code>
+                  {rule.observed_count != null ? <> · observed: {rule.observed_count}</> : null}
+                </div>
+              ))}
+              <div style={{ marginTop: t.space.sm }}>
+                <button
+                  type="button"
+                  onClick={() => applyTaxonomySuggestionsMutation.mutate(meiroWebhookSuggestionsQuery.data.apply_payloads.taxonomy)}
+                  disabled={applyTaxonomySuggestionsMutation.isPending}
+                  style={{
+                    padding: `${t.space.xs}px ${t.space.md}px`,
+                    fontSize: t.font.sizeSm,
+                    color: '#fff',
+                    background: t.color.accent,
+                    border: 'none',
+                    borderRadius: t.radius.sm,
+                    cursor: applyTaxonomySuggestionsMutation.isPending ? 'wait' : 'pointer',
+                    opacity: applyTaxonomySuggestionsMutation.isPending ? 0.75 : 1,
+                  }}
+                >
+                  {applyTaxonomySuggestionsMutation.isPending ? 'Applying…' : 'Apply taxonomy suggestions'}
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => setShowApplyAllPreview(true)}
+                disabled={applyAllSuggestionsMutation.isPending}
+                style={{
+                  padding: `${t.space.xs}px ${t.space.md}px`,
+                  fontSize: t.font.sizeSm,
+                  color: '#fff',
+                  background: t.color.accent,
+                  border: 'none',
+                  borderRadius: t.radius.sm,
+                  cursor: applyAllSuggestionsMutation.isPending ? 'wait' : 'pointer',
+                  opacity: applyAllSuggestionsMutation.isPending ? 0.75 : 1,
+                }}
+              >
+                Apply all (preview first)
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+
       {/* Alerts */}
       <div
         style={{
@@ -788,6 +1229,112 @@ export default function DataQuality() {
             loading={drilldownQuery.isLoading}
             onClose={() => setDrilldownMetric(null)}
           />
+        </>
+      )}
+
+      {/* Apply-all dry-run preview */}
+      {showApplyAllPreview && meiroWebhookSuggestionsQuery.data && (
+        <>
+          <div
+            role="presentation"
+            onClick={() => setShowApplyAllPreview(false)}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0,0,0,0.3)',
+              zIndex: 999,
+            }}
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Apply all suggestions preview"
+            style={{
+              position: 'fixed',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              width: 'min(860px, calc(100vw - 32px))',
+              maxHeight: '80vh',
+              overflow: 'auto',
+              background: t.color.surface,
+              border: `1px solid ${t.color.borderLight}`,
+              borderRadius: t.radius.lg,
+              boxShadow: t.shadowSm,
+              zIndex: 1000,
+              padding: t.space.lg,
+              display: 'grid',
+              gap: t.space.md,
+            }}
+          >
+            <div>
+              <h3 style={{ margin: 0, fontSize: t.font.sizeLg, color: t.color.text }}>Apply all suggestions (dry-run preview)</h3>
+              <p style={{ margin: '6px 0 0', fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                This preview shows what will be saved to KPI and taxonomy settings.
+              </p>
+            </div>
+
+            <div style={{ display: 'grid', gap: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              <div>
+                KPI definitions to save: <strong>{meiroWebhookSuggestionsQuery.data.apply_payloads.kpis.definitions.length}</strong>
+                {' '}· primary KPI: <strong>{meiroWebhookSuggestionsQuery.data.apply_payloads.kpis.primary_kpi_id || '—'}</strong>
+              </div>
+              <div>
+                Taxonomy rules to save: <strong>{meiroWebhookSuggestionsQuery.data.apply_payloads.taxonomy.channel_rules.length}</strong>
+                {' '}· source aliases: <strong>{Object.keys(meiroWebhookSuggestionsQuery.data.apply_payloads.taxonomy.source_aliases || {}).length}</strong>
+                {' '}· medium aliases: <strong>{Object.keys(meiroWebhookSuggestionsQuery.data.apply_payloads.taxonomy.medium_aliases || {}).length}</strong>
+              </div>
+            </div>
+
+            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.bgSubtle }}>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, marginBottom: 6 }}>KPI payload preview</div>
+              <pre style={{ margin: 0, fontSize: t.font.sizeXs, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                {JSON.stringify(meiroWebhookSuggestionsQuery.data.apply_payloads.kpis, null, 2)}
+              </pre>
+            </div>
+
+            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.bgSubtle }}>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, marginBottom: 6 }}>Taxonomy payload preview</div>
+              <pre style={{ margin: 0, fontSize: t.font.sizeXs, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                {JSON.stringify(meiroWebhookSuggestionsQuery.data.apply_payloads.taxonomy, null, 2)}
+              </pre>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: t.space.sm }}>
+              <button
+                type="button"
+                onClick={() => setShowApplyAllPreview(false)}
+                style={{
+                  padding: `${t.space.xs}px ${t.space.md}px`,
+                  fontSize: t.font.sizeSm,
+                  color: t.color.textSecondary,
+                  background: 'transparent',
+                  border: `1px solid ${t.color.border}`,
+                  borderRadius: t.radius.sm,
+                  cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => applyAllSuggestionsMutation.mutate(meiroWebhookSuggestionsQuery.data.apply_payloads)}
+                disabled={applyAllSuggestionsMutation.isPending}
+                style={{
+                  padding: `${t.space.xs}px ${t.space.md}px`,
+                  fontSize: t.font.sizeSm,
+                  color: '#fff',
+                  background: t.color.accent,
+                  border: 'none',
+                  borderRadius: t.radius.sm,
+                  cursor: applyAllSuggestionsMutation.isPending ? 'wait' : 'pointer',
+                  opacity: applyAllSuggestionsMutation.isPending ? 0.75 : 1,
+                }}
+              >
+                {applyAllSuggestionsMutation.isPending ? 'Applying…' : 'Confirm apply all'}
+              </button>
+            </div>
+          </div>
         </>
       )}
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>

@@ -65,6 +65,26 @@ def set_webhook_received(count_delta: int = 1, last_received_at: Optional[str] =
     _save(d)
 
 
+def append_webhook_event(entry: Dict[str, Any], max_items: int = 100) -> None:
+    d = _load()
+    events = d.get("webhook_events")
+    if not isinstance(events, list):
+        events = []
+    events.append(entry)
+    keep = max(1, min(1000, int(max_items)))
+    d["webhook_events"] = events[-keep:]
+    _save(d)
+
+
+def get_webhook_events(limit: int = 100) -> list[Dict[str, Any]]:
+    d = _load()
+    events = d.get("webhook_events")
+    if not isinstance(events, list):
+        return []
+    keep = max(1, min(1000, int(limit)))
+    return list(reversed(events[-keep:]))
+
+
 def get_mapping() -> Dict[str, Any]:
     return _load().get("mapping", {})
 

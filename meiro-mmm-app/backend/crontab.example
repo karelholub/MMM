@@ -10,6 +10,9 @@
 # Nightly incrementality experiment report (runs at 2 AM daily)
 0 2 * * * cd /path/to/meiro-mmm-app/backend && /path/to/python -m app.scheduler --task nightly-report >> /var/log/mmm-nightly-report.log 2>&1
 
+# Daily journey path/transition aggregates with late-arrival reprocessing (runs at 00:20 daily)
+20 0 * * * cd /path/to/meiro-mmm-app/backend && /path/to/python -m app.scheduler --task journey-daily-aggs --reprocess-days 3 >> /var/log/mmm-journey-aggs.log 2>&1
+
 # Weekly data quality snapshots (runs at 3 AM every Monday)
 # 0 3 * * 1 cd /path/to/meiro-mmm-app/backend && /path/to/python -m app.tasks --task weekly-dq-snapshot >> /var/log/mmm-dq-snapshot.log 2>&1
 

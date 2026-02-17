@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "e2e:cypress": "cypress run",
+    "e2e:cypress:rbac": "cypress run --spec cypress/e2e/access_control_rbac.cy.ts",
+    "e2e:cypress:uat": "cypress run --spec cypress/e2e/uat_performance_parity.cy.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.51.1",

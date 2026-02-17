@@ -428,9 +428,11 @@ export default function TrendPanel({
               <Tooltip
                 contentStyle={{ fontSize: t.font.sizeSm, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
                 labelFormatter={(label) => `Date: ${formatAxisLabel(String(label), resolvedGrain)}`}
-                formatter={(value: number | null, name: string) => {
+                formatter={(value, name) => {
+                  const numeric = typeof value === 'number' ? value : Number(value)
+                  const label = name === 'previous' ? 'Previous' : 'Current'
                   if (value == null) return ['—', name === 'previous' ? 'Previous' : 'Current']
-                  return [formatter(value), name === 'previous' ? 'Previous' : 'Current']
+                  return [Number.isFinite(numeric) ? formatter(numeric) : String(value), label]
                 }}
               />
               {hasPrevious ? (

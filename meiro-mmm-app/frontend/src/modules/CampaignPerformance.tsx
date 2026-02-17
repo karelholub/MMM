@@ -6,26 +6,12 @@ import ConfidenceBadge, { Confidence } from '../components/ConfidenceBadge'
 import ExplainabilityPanel from '../components/ExplainabilityPanel'
 import TrendPanel from '../components/dashboard/TrendPanel'
 import { apiGetJson } from '../lib/apiClient'
+import { useWorkspaceContext } from '../components/WorkspaceContext'
 
 interface CampaignPerformanceProps {
   model: string
   modelsReady: boolean
   configId?: string | null
-}
-
-interface JourneysSummary {
-  loaded: boolean
-  count: number
-  converted: number
-  non_converted: number
-  channels: string[]
-  total_value: number
-  primary_kpi_id?: string | null
-  primary_kpi_label?: string | null
-  primary_kpi_count?: number
-  kpi_counts?: Record<string, number>
-  date_min?: string | null
-  date_max?: string | null
 }
 
 interface SuggestedNext {
@@ -58,13 +44,41 @@ interface CampaignData {
   confidence_score?: number
 }
 
-interface CampaignPerformanceResponse {
-  model: string
-  campaigns: CampaignData[]
-  total_conversions: number
-  total_value: number
-  total_spend?: number
-  message?: string
+interface CampaignTrendV2Row {
+  ts: string
+  campaign_id: string
+  campaign_name?: string | null
+  channel: string
+  platform?: string | null
+  value: number | null
+}
+
+interface CampaignTrendV2Response {
+  current_period: { date_from: string; date_to: string; grain: 'daily' | 'weekly' }
+  previous_period: { date_from: string; date_to: string }
+  series: CampaignTrendV2Row[]
+  series_prev?: CampaignTrendV2Row[]
+}
+
+interface CampaignSummaryItem {
+  campaign_id: string
+  campaign_name?: string | null
+  channel: string
+  platform?: string | null
+  current: { spend: number; conversions: number; revenue: number }
+  previous?: { spend: number; conversions: number; revenue: number } | null
+  derived?: { roas?: number | null; cpa?: number | null }
+  confidence?: Confidence | null
+}
+
+interface CampaignSummaryResponse {
+  current_period: { date_from: string; date_to: string; grain?: string }
+  previous_period: { date_from: string; date_to: string }
+  items: CampaignSummaryItem[]
+  totals?: {
+    current: { spend: number; conversions: number; revenue: number }
+    previous?: { spend: number; conversions: number; revenue: number } | null
+  }
   config?: {
     config_id?: string
     config_version?: number
@@ -84,22 +98,7 @@ interface CampaignPerformanceResponse {
     value_mapped: number
     value_total: number
   } | null
-}
-
-interface CampaignTrendV2Row {
-  ts: string
-  campaign_id: string
-  campaign_name?: string | null
-  channel: string
-  platform?: string | null
-  value: number | null
-}
-
-interface CampaignTrendV2Response {
-  current_period: { date_from: string; date_to: string; grain: 'daily' | 'weekly' }
-  previous_period: { date_from: string; date_to: string }
-  series: CampaignTrendV2Row[]
-  series_prev?: CampaignTrendV2Row[]
+  notes?: string[]
 }
 
 const MODEL_LABELS: Record<string, string> = {
@@ -179,6 +178,7 @@ type SortKey = keyof CampaignData
 type SortDir = 'asc' | 'desc'
 
 export default function CampaignPerformance({ model, modelsReady, configId }: CampaignPerformanceProps) {
+  const { globalDateFrom, globalDateTo, journeysSummary } = useWorkspaceContext()
   const initialTrendParams = useMemo(() => {
     const params = new URLSearchParams(window.location.search)
     const kpiRaw = (params.get('kpi') || '').toLowerCase()
@@ -204,39 +204,21 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
   const [trendCampaignSearch, setTrendCampaignSearch] = useState('')
   const [selectedTrendCampaign, setSelectedTrendCampaign] = useState<string>('all')
 
-  const journeysQuery = useQuery<JourneysSummary>({
-    queryKey: ['journeys-summary-for-campaigns'],
-    queryFn: async () => apiGetJson<JourneysSummary>('/api/attribution/journeys', {
-      fallbackMessage: 'Failed to load journeys summary',
-    }),
-  })
-
-  const perfQuery = useQuery<CampaignPerformanceResponse>({
-    queryKey: ['campaign-performance', model, configId ?? 'default', conversionKey || 'all'],
-    queryFn: async () => {
-      const params = new URLSearchParams({ model })
-      if (configId) params.append('config_id', configId)
-      if (conversionKey) params.append('conversion_key', conversionKey)
-      return apiGetJson<CampaignPerformanceResponse>(`/api/attribution/campaign-performance?${params.toString()}`, {
-        fallbackMessage: 'Failed to fetch campaign performance',
-      })
-    },
-    enabled: modelsReady,
-    refetchInterval: false,
-  })
-
-  const data = perfQuery.data
-  const loading = perfQuery.isLoading || !modelsReady
-  const campaigns = data?.campaigns ?? []
+  const trendDateRange = useMemo(() => {
+    const fallbackTo = new Date().toISOString().slice(0, 10)
+    const fallbackFrom = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    return { dateFrom: globalDateFrom || fallbackFrom, dateTo: globalDateTo || fallbackTo }
+  }, [globalDateFrom, globalDateTo])
 
   const trendQuery = useQuery<CampaignTrendV2Response>({
-    queryKey: ['campaign-performance-trend-v2', trendKpi, trendGrain, comparePrevious],
+    queryKey: ['campaign-performance-trend-v2', trendDateRange.dateFrom, trendDateRange.dateTo, trendKpi, trendGrain, comparePrevious, conversionKey || 'all'],
     queryFn: async () => {
       const params = new URLSearchParams({
-        date_from: (journeysQuery.data?.date_min || '2026-01-01').slice(0, 10),
-        date_to: (journeysQuery.data?.date_max || '2026-01-31').slice(0, 10),
+        date_from: trendDateRange.dateFrom,
+        date_to: trendDateRange.dateTo,
         timezone: 'UTC',
         kpi_key: trendKpi,
+        conversion_key: conversionKey || '',
         grain: trendGrain,
         compare: comparePrevious ? '1' : '0',
       })
@@ -244,9 +226,63 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
         fallbackMessage: 'Failed to fetch campaign trends',
       })
     },
-    enabled: !!campaigns.length && !!journeysQuery.data?.date_min && !!journeysQuery.data?.date_max,
+    enabled: modelsReady && !!trendDateRange.dateFrom && !!trendDateRange.dateTo,
     refetchInterval: false,
   })
+
+  const summaryQuery = useQuery<CampaignSummaryResponse>({
+    queryKey: ['campaign-summary-v1', trendDateRange.dateFrom, trendDateRange.dateTo, comparePrevious, conversionKey || 'all'],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        date_from: trendDateRange.dateFrom,
+        date_to: trendDateRange.dateTo,
+        timezone: 'UTC',
+        compare: comparePrevious ? '1' : '0',
+      })
+      if (conversionKey) params.set('conversion_key', conversionKey)
+      return apiGetJson<CampaignSummaryResponse>(`/api/performance/campaign/summary?${params.toString()}`, {
+        fallbackMessage: 'Failed to fetch campaign summary',
+      })
+    },
+    enabled: modelsReady && !!trendDateRange.dateFrom && !!trendDateRange.dateTo,
+    refetchInterval: false,
+  })
+
+  const campaigns = useMemo(() => {
+    const items = summaryQuery.data?.items ?? []
+    if (!items.length) return []
+    const totalRevenue = items.reduce((sum, item) => sum + (item.current.revenue || 0), 0)
+    return items.map((item) => {
+      const spend = item.current.spend || 0
+      const revenue = item.current.revenue || 0
+      const conversions = item.current.conversions || 0
+      const roas = item.derived?.roas ?? (spend > 0 ? revenue / spend : null)
+      const cpa = item.derived?.cpa ?? (conversions > 0 ? spend / conversions : null)
+      const roi = spend > 0 ? (revenue - spend) / spend : null
+      return {
+        campaign: item.campaign_id,
+        channel: item.channel,
+        campaign_name: item.campaign_name ?? null,
+        attributed_value: revenue,
+        attributed_share: totalRevenue > 0 ? revenue / totalRevenue : 0,
+        attributed_conversions: conversions,
+        spend,
+        roi,
+        roas,
+        cpa,
+        suggested_next: null,
+        treatment_rate: undefined,
+        holdout_rate: undefined,
+        uplift_abs: undefined,
+        uplift_rel: null,
+        treatment_n: undefined,
+        holdout_n: undefined,
+        confidence: item.confidence || undefined,
+        confidence_score: item.confidence?.score,
+      } as CampaignData
+    })
+  }, [summaryQuery.data?.items])
+  const loading = !modelsReady || summaryQuery.isLoading
 
   const filteredCampaigns = useMemo(() => {
     if (!campaigns.length) return []
@@ -374,14 +410,15 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
 
   const t = tokens
 
-  const journeysKpis = journeysQuery.data?.kpi_counts ?? {}
+  const journeysKpis = journeysSummary?.kpi_counts ?? {}
   const availableKpis = Object.keys(journeysKpis)
-  const primaryKpiId = journeysQuery.data?.primary_kpi_id ?? null
+  const primaryKpiId = journeysSummary?.primary_kpi_id ?? null
 
-  // Initialise conversion key lazily from primary KPI when both are loaded
-  if (!conversionKey && primaryKpiId && availableKpis.length && !perfQuery.isLoading && journeysQuery.isSuccess) {
-    setConversionKey(primaryKpiId)
-  }
+  useEffect(() => {
+    if (!conversionKey && primaryKpiId && availableKpis.length) {
+      setConversionKey(primaryKpiId)
+    }
+  }, [availableKpis.length, conversionKey, primaryKpiId])
 
   if (loading) {
     return (
@@ -402,7 +439,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
     )
   }
 
-  if (perfQuery.isError) {
+  if (summaryQuery.isError && !campaigns.length) {
     return (
       <div
         style={{
@@ -417,13 +454,13 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
           Failed to load
         </h3>
         <p style={{ margin: 0, fontSize: t.font.sizeMd, color: t.color.textSecondary }}>
-          {(perfQuery.error as Error)?.message}
+          {(summaryQuery.error as Error)?.message}
         </p>
       </div>
     )
   }
 
-  if (!data || !campaigns.length) {
+  if (!campaigns.length) {
     return (
       <div
         style={{
@@ -438,25 +475,27 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
           No campaign data
         </h3>
         <p style={{ margin: 0, fontSize: t.font.sizeMd, color: t.color.textSecondary }}>
-          {data?.message || 'Load conversion journeys with a "campaign" field on touchpoints (e.g. load sample data), then run attribution models.'}
+          {'Load conversion journeys with a "campaign" field on touchpoints (e.g. load sample data), then run attribution models.'}
         </p>
       </div>
     )
   }
 
-  const totalSpend = data.total_spend ?? campaigns.reduce((s, c) => s + c.spend, 0)
-  const totalROAS = totalSpend > 0 ? data.total_value / totalSpend : 0
-  const avgCPA = data.total_conversions > 0 ? totalSpend / data.total_conversions : 0
+  const summaryCurrent = summaryQuery.data?.totals?.current ?? { spend: 0, revenue: 0, conversions: 0 }
+  const totalSpend = summaryCurrent.spend
+  const totalValue = summaryCurrent.revenue
+  const totalConversions = summaryCurrent.conversions
+  const totalROAS = totalSpend > 0 ? totalValue / totalSpend : 0
+  const avgCPA = totalConversions > 0 ? totalSpend / totalConversions : 0
   const filteredTotalSpend = filteredCampaigns.reduce((s, c) => s + c.spend, 0)
   const kpis = [
     { label: 'Total Spend', value: formatCurrency(totalSpend), def: METRIC_DEFINITIONS['Total Spend'] },
-    { label: 'Attributed Revenue', value: formatCurrency(data.total_value), def: METRIC_DEFINITIONS['Attributed Revenue'] },
-    { label: 'Conversions', value: data.total_conversions.toLocaleString(), def: '' },
+    { label: 'Attributed Revenue', value: formatCurrency(totalValue), def: METRIC_DEFINITIONS['Attributed Revenue'] },
+    { label: 'Conversions', value: totalConversions.toLocaleString(), def: '' },
     { label: 'ROAS', value: `${totalROAS.toFixed(2)}×`, def: '' },
     { label: 'Avg CPA', value: formatCurrency(avgCPA), def: '' },
   ]
-
-  const coverage = data.mapping_coverage
+  const coverage = summaryQuery.data?.mapping_coverage
 
   const chartData = filteredCampaigns.map((c) => ({
     name: c.campaign_name ? `${c.channel} / ${c.campaign_name}` : c.campaign,
@@ -498,12 +537,12 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
           >
             Attribution model:{' '}
             <strong style={{ color: t.color.accent }}>{MODEL_LABELS[model] || model}</strong>
-            {data.config?.conversion_key && (
+            {summaryQuery.data?.config?.conversion_key && (
               <>
                 {' '}
                 · Conversion:{' '}
                 <strong>
-                  {data.config.conversion_key}
+                  {summaryQuery.data.config.conversion_key}
                 </strong>
               </>
             )}
@@ -527,6 +566,22 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
           Why?
         </button>
       </div>
+
+      {summaryQuery.isError && (
+        <div
+          style={{
+            marginBottom: t.space.md,
+            padding: `${t.space.sm}px ${t.space.md}px`,
+            borderRadius: t.radius.sm,
+            border: `1px solid ${t.color.danger}`,
+            background: t.color.dangerSubtle,
+            color: t.color.danger,
+            fontSize: t.font.sizeXs,
+          }}
+        >
+          Unified campaign summary is currently unavailable. KPI totals and deltas depend on `/api/performance/campaign/summary`.
+        </div>
+      )}
 
       <div style={{ marginBottom: t.space.xl }}>
         <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', alignItems: 'center', marginBottom: t.space.sm }}>
@@ -708,12 +763,12 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
             maxWidth: 360,
           }}
         >
-          {data.config?.time_window ? (
+          {summaryQuery.data?.config?.time_window ? (
             <>
               Click lookback:{' '}
-              {data.config.time_window.click_lookback_days ?? '—'}d · Impression lookback:{' '}
-              {data.config.time_window.impression_lookback_days ?? '—'}d · Session timeout:{' '}
-              {data.config.time_window.session_timeout_minutes ?? '—'}min
+              {summaryQuery.data.config.time_window.click_lookback_days ?? '—'}d · Impression lookback:{' '}
+              {summaryQuery.data.config.time_window.impression_lookback_days ?? '—'}d · Session timeout:{' '}
+              {summaryQuery.data.config.time_window.session_timeout_minutes ?? '—'}min
             </>
           ) : (
             <>Measurement windows not configured for this model.</>
@@ -1011,7 +1066,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
             onClick={() =>
               exportCampaignsCSV(filteredCampaigns, {
                 conversionKey,
-                configVersion: data.config?.config_version ?? null,
+                configVersion: summaryQuery.data?.config?.config_version ?? null,
                 directMode,
               })
             }

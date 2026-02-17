@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { apiGetJson } from '../lib/apiClient'
 
@@ -9,15 +9,18 @@ interface AuthWorkspace {
 }
 
 interface AuthMeResponse {
+  authenticated?: boolean
   user?: {
     id?: string
     email?: string | null
+    username?: string | null
     name?: string | null
     role_name?: string | null
     status?: string | null
   }
   workspace?: AuthWorkspace
   permissions?: string[]
+  csrf_token?: string | null
 }
 
 export function usePermissions() {
@@ -38,6 +41,16 @@ export function usePermissions() {
   })
 
   const permissions = useMemo(() => new Set(authQuery.data?.permissions ?? []), [authQuery.data?.permissions])
+
+  useEffect(() => {
+    const csrf = (authQuery.data?.csrf_token || '').trim()
+    if (!csrf || typeof window === 'undefined') return
+    try {
+      window.localStorage.setItem('mmm-csrf-token', csrf)
+    } catch {
+      // ignore storage errors
+    }
+  }, [authQuery.data?.csrf_token])
 
   const hasPermission = (key: string): boolean => permissions.has(key)
   const hasAnyPermission = (keys: string[]): boolean => keys.some((k) => permissions.has(k))

@@ -1,5 +1,7 @@
 from app.services_performance_trends import (
+    build_campaign_summary_response,
     build_campaign_trend_response,
+    build_channel_summary_response,
     build_channel_trend_response,
     resolve_period_windows,
 )
@@ -121,3 +123,136 @@ def test_build_trend_empty_data_returns_empty_series():
     assert out_campaign["series"] == []
     assert "series_prev" not in out_campaign
 
+
+def test_build_channel_summary_uses_same_source_rollups():
+    journeys = [
+        {
+            "converted": True,
+            "conversion_value": 100.0,
+            "touchpoints": [{"timestamp": "2026-02-01T10:00:00Z", "channel": "google_ads"}],
+        },
+        {
+            "converted": True,
+            "conversion_value": 50.0,
+            "touchpoints": [{"timestamp": "2026-02-02T10:00:00Z", "channel": "google_ads"}],
+        },
+    ]
+    expenses = [
+        {"channel": "google_ads", "service_period_start": "2026-02-01T08:00:00Z", "amount": 80.0},
+        {"channel": "google_ads", "service_period_start": "2026-02-02T08:00:00Z", "amount": 20.0},
+    ]
+    out = build_channel_summary_response(
+        journeys=journeys,
+        expenses=expenses,
+        date_from="2026-02-01",
+        date_to="2026-02-02",
+        compare=True,
+    )
+    assert out["items"]
+    row = out["items"][0]
+    assert row["channel"] == "google_ads"
+    assert row["current"]["revenue"] == 150.0
+    assert row["current"]["conversions"] == 2.0
+    assert row["current"]["spend"] == 100.0
+    assert round(row["derived"]["roas"], 4) == 1.5
+    assert out["totals"]["current"]["spend"] == 100.0
+    assert out["totals"]["current"]["revenue"] == 150.0
+
+
+def test_build_campaign_summary_shape_and_notes():
+    journeys = [
+        {
+            "converted": True,
+            "conversion_value": 120.0,
+            "touchpoints": [{"timestamp": "2026-02-01T10:00:00Z", "channel": "meta_ads", "campaign": "Spring"}],
+        }
+    ]
+    expenses = [
+        {"channel": "meta_ads", "service_period_start": "2026-02-01T08:00:00Z", "amount": 30.0},
+    ]
+    out = build_campaign_summary_response(
+        journeys=journeys,
+        expenses=expenses,
+        date_from="2026-02-01",
+        date_to="2026-02-02",
+        compare=False,
+    )
+    assert "notes" in out and out["notes"]
+    assert out["items"]
+    row = out["items"][0]
+    assert row["campaign_id"] == "meta_ads:Spring"
+    assert row["current"]["revenue"] == 120.0
+    assert row["current"]["conversions"] == 1.0
+    assert out["totals"]["current"]["spend"] == 30.0
+    assert out["totals"]["current"]["revenue"] == 120.0
+
+
+def test_campaign_summary_spend_is_allocated_without_double_counting():
+    journeys = [
+        {
+            "converted": True,
+            "conversion_value": 100.0,
+            "touchpoints": [{"timestamp": "2026-02-01T10:00:00Z", "channel": "meta_ads", "campaign": "A"}],
+        },
+        {
+            "converted": True,
+            "conversion_value": 300.0,
+            "touchpoints": [{"timestamp": "2026-02-01T11:00:00Z", "channel": "meta_ads", "campaign": "B"}],
+        },
+    ]
+    expenses = [
+        {"channel": "meta_ads", "service_period_start": "2026-02-01T08:00:00Z", "amount": 80.0},
+    ]
+    out = build_campaign_summary_response(
+        journeys=journeys,
+        expenses=expenses,
+        date_from="2026-02-01",
+        date_to="2026-02-01",
+        compare=False,
+    )
+    rows = {r["campaign_id"]: r for r in out["items"]}
+    assert round(rows["meta_ads:A"]["current"]["spend"], 4) == 20.0
+    assert round(rows["meta_ads:B"]["current"]["spend"], 4) == 60.0
+    assert round(out["totals"]["current"]["spend"], 4) == 80.0
+
+
+def test_trend_and_summary_respect_conversion_key_filter():
+    journeys = [
+        {
+            "converted": True,
+            "kpi_type": "purchase",
+            "conversion_value": 100.0,
+            "touchpoints": [{"timestamp": "2026-02-01T10:00:00Z", "channel": "google_ads", "campaign": "A"}],
+        },
+        {
+            "converted": True,
+            "kpi_type": "signup",
+            "conversion_value": 30.0,
+            "touchpoints": [{"timestamp": "2026-02-01T11:00:00Z", "channel": "google_ads", "campaign": "B"}],
+        },
+    ]
+    expenses = [{"channel": "google_ads", "service_period_start": "2026-02-01T08:00:00Z", "amount": 50.0}]
+
+    trend = build_campaign_trend_response(
+        journeys=journeys,
+        expenses=expenses,
+        date_from="2026-02-01",
+        date_to="2026-02-02",
+        kpi_key="revenue",
+        compare=False,
+        conversion_key="purchase",
+    )
+    values = [r["value"] for r in trend["series"] if r["campaign_id"] == "google_ads:A" and r["value"] is not None]
+    assert values and values[0] == 100.0
+
+    summary = build_campaign_summary_response(
+        journeys=journeys,
+        expenses=expenses,
+        date_from="2026-02-01",
+        date_to="2026-02-02",
+        compare=False,
+        conversion_key="purchase",
+    )
+    ids = {r["campaign_id"] for r in summary["items"]}
+    assert "google_ads:A" in ids
+    assert "google_ads:B" not in ids

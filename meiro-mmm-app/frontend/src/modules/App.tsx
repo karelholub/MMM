@@ -86,6 +86,13 @@ function pageToPathname(page: AppPage): string {
   return '/'
 }
 
+function isIsoDateOnly(value?: string | null): value is string {
+  if (!value) return false
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const d = new Date(`${value}T00:00:00Z`)
+  return !Number.isNaN(d.getTime())
+}
+
 export default function App() {
   const [page, setPage] = useState<AppPage>(() => {
     if (typeof window === 'undefined') return 'overview'
@@ -126,6 +133,23 @@ export default function App() {
     return window.innerWidth
   })
   const [navSearch, setNavSearch] = useState('')
+  const [globalDateRange, setGlobalDateRange] = useState<{ dateFrom: string; dateTo: string }>(() => {
+    if (typeof window === 'undefined') return { dateFrom: '', dateTo: '' }
+    const params = new URLSearchParams(window.location.search)
+    const dateFrom = params.get('date_from')
+    const dateTo = params.get('date_to')
+    if (isIsoDateOnly(dateFrom) && isIsoDateOnly(dateTo) && dateFrom <= dateTo) {
+      return { dateFrom, dateTo }
+    }
+    return { dateFrom: '', dateTo: '' }
+  })
+  const [hasCustomGlobalDateRange, setHasCustomGlobalDateRange] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    const params = new URLSearchParams(window.location.search)
+    const dateFrom = params.get('date_from')
+    const dateTo = params.get('date_to')
+    return !!(isIsoDateOnly(dateFrom) && isIsoDateOnly(dateTo) && dateFrom <= dateTo)
+  })
   const permissions = usePermissions()
 
   const settingsQuery = useQuery<AppSettings>({
@@ -276,6 +300,15 @@ export default function App() {
     if (typeof window === 'undefined') return
     const onPopState = () => {
       setPage(parseInitialPage(window.location.pathname))
+      const params = new URLSearchParams(window.location.search)
+      const dateFrom = params.get('date_from')
+      const dateTo = params.get('date_to')
+      if (isIsoDateOnly(dateFrom) && isIsoDateOnly(dateTo) && dateFrom <= dateTo) {
+        setGlobalDateRange({ dateFrom, dateTo })
+        setHasCustomGlobalDateRange(true)
+      } else {
+        setHasCustomGlobalDateRange(false)
+      }
     }
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
@@ -308,10 +341,28 @@ export default function App() {
   const primaryKpiId: string | undefined = journeysQuery.data?.primary_kpi_id ?? undefined
   const primaryKpiCount: number | undefined = journeysQuery.data?.primary_kpi_count
   const channels = useMemo(() => journeysQuery.data?.channels ?? [], [journeysQuery.data?.channels])
+  useEffect(() => {
+    const min = journeysQuery.data?.date_min?.slice(0, 10)
+    const max = journeysQuery.data?.date_max?.slice(0, 10)
+    if (!isIsoDateOnly(min) || !isIsoDateOnly(max) || min > max) return
+    if (hasCustomGlobalDateRange) return
+    setGlobalDateRange({ dateFrom: min, dateTo: max })
+  }, [hasCustomGlobalDateRange, journeysQuery.data?.date_max, journeysQuery.data?.date_min])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (!isIsoDateOnly(globalDateRange.dateFrom) || !isIsoDateOnly(globalDateRange.dateTo)) return
+    const params = new URLSearchParams(window.location.search)
+    params.set('date_from', globalDateRange.dateFrom)
+    params.set('date_to', globalDateRange.dateTo)
+    const next = `${window.location.pathname}?${params.toString()}${window.location.hash}`
+    window.history.replaceState({}, '', next)
+  }, [globalDateRange.dateFrom, globalDateRange.dateTo])
+
   const isMobileHeader = viewportWidth < 768
-  const periodReady = !!(journeysLoaded && journeysQuery.data?.date_min && journeysQuery.data?.date_max)
+  const periodReady = !!(isIsoDateOnly(globalDateRange.dateFrom) && isIsoDateOnly(globalDateRange.dateTo))
   const periodLabel = periodReady
-    ? `${journeysQuery.data?.date_min?.slice(0, 10)} – ${journeysQuery.data?.date_max?.slice(0, 10)}`
+    ? `${globalDateRange.dateFrom} – ${globalDateRange.dateTo}`
     : 'Loading period…'
   const conversionLabel = primaryKpiLabel || primaryKpiId || (journeysQuery.isLoading ? 'Loading conversion…' : 'Primary KPI')
   const visibleNavItems = useMemo(
@@ -439,6 +490,13 @@ export default function App() {
         setSelectedConfigId,
         journeysSummary: journeysQuery.data as JourneysSummary | undefined,
         journeysLoaded,
+        globalDateFrom: globalDateRange.dateFrom,
+        globalDateTo: globalDateRange.dateTo,
+        setGlobalDateRange: ({ dateFrom, dateTo }) => {
+          if (!isIsoDateOnly(dateFrom) || !isIsoDateOnly(dateTo) || dateFrom > dateTo) return
+          setGlobalDateRange({ dateFrom, dateTo })
+          setHasCustomGlobalDateRange(true)
+        },
         isRunningAttribution: runAllMutation.isPending,
         isLoadingSampleJourneys: loadSampleMutation.isPending,
         runAllAttribution: () => runAllMutation.mutate(),
@@ -480,6 +538,8 @@ export default function App() {
         <AppTopBar
           isMobileHeader={isMobileHeader}
           periodLabel={periodLabel}
+          periodDateFrom={globalDateRange.dateFrom}
+          periodDateTo={globalDateRange.dateTo}
           conversionLabel={conversionLabel}
           selectedModel={selectedModel}
           selectedConfigId={selectedConfigId}
@@ -496,6 +556,11 @@ export default function App() {
           onConfigChange={setSelectedConfigId}
           onLoadSample={() => loadSampleMutation.mutate()}
           onRunModels={() => runAllMutation.mutate()}
+          onPeriodChange={(next) => {
+            if (!isIsoDateOnly(next.dateFrom) || !isIsoDateOnly(next.dateTo) || next.dateFrom > next.dateTo) return
+            setGlobalDateRange(next)
+            setHasCustomGlobalDateRange(true)
+          }}
         />
 
         {/* Main content with page-level header + breadcrumbs */}
