@@ -1,6 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMemo, useState } from 'react'
 import { tokens as t } from '../../theme/tokens'
 import { apiGetJson, apiSendJson } from '../../lib/apiClient'
+import AdsActionsDrawer from '../../components/ads/AdsActionsDrawer'
+import { type AdsProviderKey } from '../../connectors/adsManagerConnector'
 
 export interface AlertDetail {
   id: number
@@ -45,11 +48,20 @@ function severityColor(severity: string): string {
   }
 }
 
+function inferProvider(input?: string | null): AdsProviderKey | null {
+  const key = (input || '').toLowerCase()
+  if (key.includes('google')) return 'google_ads'
+  if (key.includes('meta') || key.includes('facebook') || key.includes('fb')) return 'meta_ads'
+  if (key.includes('linkedin')) return 'linkedin_ads'
+  return null
+}
+
 export default function AlertDetailDrawer({
   alertId,
   onClose,
   onNavigate,
 }: AlertDetailDrawerProps) {
+  const [adsDrawerOpen, setAdsDrawerOpen] = useState(false)
   const queryClient = useQueryClient()
   const { data: alert, isLoading, error } = useQuery<AlertDetail>({
     queryKey: ['alert-detail', alertId],
@@ -95,6 +107,23 @@ export default function AlertDetailDrawer({
   const dims = ctx?.dimensions ?? ctx?.dims
   const related = alert?.related_entities as Record<string, unknown> | undefined
   const link = alert?.deep_link
+  const adsContext = useMemo(() => {
+    const provider =
+      inferProvider((related?.provider as string | undefined) || (related?.channel as string | undefined) || link?.url || null)
+    const entityTypeRaw =
+      (related?.entity_type as string | undefined) ||
+      (link?.entity_type as string | undefined) ||
+      'campaign'
+    const entityType = entityTypeRaw === 'adset' || entityTypeRaw === 'adgroup' ? entityTypeRaw : 'campaign'
+    const entityId =
+      (related?.entity_id as string | undefined) ||
+      (related?.campaign_id as string | undefined) ||
+      link?.entity_id ||
+      null
+    const accountId = (related?.account_id as string | undefined) || 'default'
+    if (!provider || !entityId) return null
+    return { provider, entityType: entityType as 'campaign' | 'adset' | 'adgroup', entityId, accountId }
+  }, [link?.entity_id, link?.entity_type, link?.url, related])
 
   return (
     <>
@@ -289,6 +318,23 @@ export default function AlertDetailDrawer({
                         Open {link.entity_type || 'entity'} →
                       </a>
                     )}
+                    {adsContext && (
+                      <button
+                        type="button"
+                        onClick={() => setAdsDrawerOpen(true)}
+                        style={{
+                          fontSize: t.font.sizeSm,
+                          color: t.color.text,
+                          background: t.color.surface,
+                          border: `1px solid ${t.color.border}`,
+                          borderRadius: t.radius.sm,
+                          padding: `2px ${t.space.sm}px`,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Propose action
+                      </button>
+                    )}
                     {Object.entries(related as Record<string, unknown>).map(([k, v]) =>
                       v != null && v !== '' ? (
                         <span
@@ -413,6 +459,17 @@ export default function AlertDetailDrawer({
           )}
         </div>
       </div>
+      {adsContext && (
+        <AdsActionsDrawer
+          open={adsDrawerOpen}
+          onClose={() => setAdsDrawerOpen(false)}
+          provider={adsContext.provider}
+          accountId={adsContext.accountId}
+          entityType={adsContext.entityType}
+          entityId={adsContext.entityId}
+          entityName={alert?.title || adsContext.entityId}
+        />
+      )}
     </>
   )
 }

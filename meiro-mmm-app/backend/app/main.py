@@ -148,6 +148,19 @@ from app.services_oauth_connections import (
     test_connection_health,
     get_access_token_for_provider,
 )
+from app.services_ads_ops import (
+    ENTITY_TYPES as ADS_ENTITY_TYPES,
+    PROVIDER_KEYS as ADS_PROVIDER_KEYS,
+    approve_change_request as ads_approve_change_request,
+    apply_change_request as ads_apply_change_request,
+    create_change_request as ads_create_change_request,
+    fetch_ads_state as ads_fetch_state,
+    get_ads_deep_link as ads_get_deep_link,
+    list_ads_audit as ads_list_audit,
+    list_ads_entities as ads_list_entities,
+    list_change_requests as ads_list_change_requests,
+    reject_change_request as ads_reject_change_request,
+)
 from app.services_journey_alerts import (
     ALERT_DOMAINS as JOURNEY_ALERT_DOMAINS,
     ALERT_TYPES as JOURNEY_ALERT_TYPES,
@@ -726,6 +739,8 @@ MMM_PLATFORM_DIR.mkdir(parents=True, exist_ok=True)
 RUNS_FILE = DATA_DIR / "mmm_runs.json"
 IMPORT_RUNS_FILE = DATA_DIR / "import_runs.json"
 LAST_IMPORT_RESULT_FILE = DATA_DIR / "last_import_result.json"
+JOURNEY_SOURCE_STATE_FILE = DATA_DIR / "journey_source_state.json"
+LATEST_UPLOAD_FILE = DATA_DIR / "journeys_upload_latest.json"
 
 
 def _load_runs():
@@ -836,6 +851,53 @@ def _load_last_import_result() -> Dict[str, Any]:
         return {"import_summary": {}, "validation_items": [], "items_detail": []}
 
 
+def _normalize_journey_source(value: Optional[str]) -> Optional[str]:
+    raw = (value or "").strip().lower()
+    if raw in {"meiro", "meiro_webhook", "meiro_pull"}:
+        return "meiro"
+    if raw in {"sample", "upload"}:
+        return raw
+    return None
+
+
+def _get_journey_source_state() -> Dict[str, Any]:
+    if not JOURNEY_SOURCE_STATE_FILE.exists():
+        return {}
+    try:
+        data = json.loads(JOURNEY_SOURCE_STATE_FILE.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {}
+
+
+def _set_active_journey_source(source: str) -> None:
+    normalized = _normalize_journey_source(source)
+    if not normalized:
+        return
+    try:
+        payload = {
+            "active_source": normalized,
+            "updated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        }
+        JOURNEY_SOURCE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        JOURNEY_SOURCE_STATE_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _journey_source_availability() -> List[Dict[str, Any]]:
+    meiro_available = (DATA_DIR / "meiro_cdp_profiles.json").exists() or (DATA_DIR / "meiro_cdp.csv").exists()
+    upload_available = LATEST_UPLOAD_FILE.exists()
+    sample_available = (SAMPLE_DIR / "sample-conversion-paths.json").exists()
+    return [
+        {"key": "sample", "label": "Sample data", "available": sample_available},
+        {"key": "upload", "label": "Uploaded JSON", "available": upload_available},
+        {"key": "meiro", "label": "Meiro CDP", "available": meiro_available},
+    ]
+
+
 # ==================== Settings ====================
 
 
@@ -884,6 +946,11 @@ class FeatureFlags(BaseModel):
     sso_enabled: bool = False
 
 
+class AdsGovernanceSettings(BaseModel):
+    require_approval: bool = True
+    max_budget_change_pct: float = 30.0
+
+
 class RevenueConfig(BaseModel):
     conversion_names: List[str] = Field(default_factory=lambda: ["purchase"])
     value_field_path: str = "value"
@@ -901,6 +968,7 @@ class Settings(BaseModel):
     mmm: MMMSettings = MMMSettings()
     nba: NBASettings = NBASettings()
     feature_flags: FeatureFlags = FeatureFlags()
+    ads_governance: AdsGovernanceSettings = AdsGovernanceSettings()
     revenue_config: RevenueConfig = RevenueConfig()
 
 
@@ -1266,6 +1334,23 @@ class JourneySettingsActivatePayload(BaseModel):
     actor: str = "system"
     activation_note: Optional[str] = None
     confirm: bool = False
+
+
+class AdsChangeRequestCreatePayload(BaseModel):
+    provider: str
+    account_id: str
+    entity_type: str
+    entity_id: str
+    action_type: str
+    action_payload: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AdsChangeRequestRejectPayload(BaseModel):
+    reason: Optional[str] = None
+
+
+class AdsChangeRequestApplyPayload(BaseModel):
+    admin_override: bool = False
 
 
 def _serialize_journey_settings_version(item: ORMJourneySettingsVersion) -> Dict[str, Any]:
@@ -1987,11 +2072,232 @@ def update_revenue_config_settings(
         mmm=SETTINGS.mmm,
         nba=SETTINGS.nba,
         feature_flags=SETTINGS.feature_flags,
+        ads_governance=getattr(SETTINGS, "ads_governance", AdsGovernanceSettings()),
         revenue_config=RevenueConfig(**normalize_revenue_config(payload.model_dump())),
     )
     JOURNEYS = []
     _save_settings()
     return normalize_revenue_config(SETTINGS.revenue_config.model_dump())
+
+
+def _ads_governance_settings() -> AdsGovernanceSettings:
+    cfg = getattr(SETTINGS, "ads_governance", None)
+    if isinstance(cfg, AdsGovernanceSettings):
+        return cfg
+    if isinstance(cfg, dict):
+        try:
+            return AdsGovernanceSettings(**cfg)
+        except Exception:
+            return AdsGovernanceSettings()
+    return AdsGovernanceSettings()
+
+
+@app.get("/api/ads/entities")
+def get_ads_entities(
+    provider: Optional[str] = Query(default=None),
+    entity_type: Optional[str] = Query(default=None),
+    search: Optional[str] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    db=Depends(get_db),
+    ctx: PermissionContext = Depends(require_permission("ads.view")),
+):
+    workspace_id = _workspace_scope_or_403(ctx, None)
+    try:
+        if provider and provider not in ADS_PROVIDER_KEYS:
+            raise ValueError("Unsupported provider")
+        if entity_type and entity_type not in ADS_ENTITY_TYPES:
+            raise ValueError("Unsupported entity_type")
+        return ads_list_entities(
+            db,
+            workspace_id=workspace_id,
+            provider=provider,
+            entity_type=entity_type,
+            search=search,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/ads/deeplink")
+def get_ads_deeplink(
+    provider: str = Query(...),
+    account_id: Optional[str] = Query(default=None),
+    entity_type: str = Query(...),
+    entity_id: str = Query(..., min_length=1),
+    db=Depends(get_db),
+    ctx: PermissionContext = Depends(require_permission("ads.view")),
+):
+    workspace_id = _workspace_scope_or_403(ctx, None)
+    try:
+        url = ads_get_deep_link(
+            db,
+            workspace_id=workspace_id,
+            provider=provider,
+            account_id=account_id,
+            entity_type=entity_type,
+            entity_id=entity_id,
+        )
+        return {"provider": provider, "entity_type": entity_type, "entity_id": entity_id, "url": url}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/ads/state")
+def get_ads_state(
+    provider: str = Query(...),
+    account_id: str = Query(..., min_length=1),
+    entity_type: str = Query(...),
+    entity_id: str = Query(..., min_length=1),
+    db=Depends(get_db),
+    ctx: PermissionContext = Depends(require_permission("ads.view")),
+):
+    workspace_id = _workspace_scope_or_403(ctx, None)
+    try:
+        return ads_fetch_state(
+            db,
+            workspace_id=workspace_id,
+            provider=provider,
+            account_id=account_id,
+            entity_type=entity_type,
+            entity_id=entity_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/ads/change-requests")
+def create_ads_change_request(
+    payload: AdsChangeRequestCreatePayload,
+    db=Depends(get_db),
+    ctx: PermissionContext = Depends(require_permission("ads.propose")),
+):
+    workspace_id = _workspace_scope_or_403(ctx, None)
+    governance = _ads_governance_settings()
+    try:
+        return ads_create_change_request(
+            db,
+            workspace_id=workspace_id,
+            requested_by_user_id=ctx.user_id,
+            provider=payload.provider,
+            account_id=payload.account_id,
+            entity_type=payload.entity_type,
+            entity_id=payload.entity_id,
+            action_type=payload.action_type,
+            action_payload=payload.action_payload,
+            approval_required=bool(governance.require_approval),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/ads/change-requests")
+def get_ads_change_requests(
+    status: Optional[str] = Query(default=None),
+    provider: Optional[str] = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+    db=Depends(get_db),
+    ctx: PermissionContext = Depends(require_permission("ads.view")),
+):
+    workspace_id = _workspace_scope_or_403(ctx, None)
+    try:
+        if status and status not in {"draft", "pending_approval", "approved", "rejected", "applied", "failed", "cancelled"}:
+            raise ValueError("Unsupported status")
+        if provider and provider not in ADS_PROVIDER_KEYS:
+            raise ValueError("Unsupported provider")
+        return ads_list_change_requests(
+            db,
+            workspace_id=workspace_id,
+            status=status,
+            provider=provider,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/ads/change-requests/{request_id}/approve")
+def approve_ads_change_request(
+    request_id: str,
+    db=Depends(get_db),
+    ctx: PermissionContext = Depends(require_permission("ads.apply")),
+):
+    workspace_id = _workspace_scope_or_403(ctx, None)
+    try:
+        return ads_approve_change_request(
+            db,
+            workspace_id=workspace_id,
+            request_id=request_id,
+            actor_user_id=ctx.user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/ads/change-requests/{request_id}/reject")
+def reject_ads_change_request(
+    request_id: str,
+    payload: AdsChangeRequestRejectPayload,
+    db=Depends(get_db),
+    ctx: PermissionContext = Depends(require_permission("ads.apply")),
+):
+    workspace_id = _workspace_scope_or_403(ctx, None)
+    try:
+        return ads_reject_change_request(
+            db,
+            workspace_id=workspace_id,
+            request_id=request_id,
+            actor_user_id=ctx.user_id,
+            reason=payload.reason,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/ads/change-requests/{request_id}/apply")
+def apply_ads_change_request(
+    request_id: str,
+    payload: AdsChangeRequestApplyPayload,
+    db=Depends(get_db),
+    ctx: PermissionContext = Depends(require_permission("ads.apply")),
+):
+    workspace_id = _workspace_scope_or_403(ctx, None)
+    governance = _ads_governance_settings()
+    try:
+        return ads_apply_change_request(
+            db,
+            workspace_id=workspace_id,
+            request_id=request_id,
+            actor_user_id=ctx.user_id,
+            require_approval=bool(governance.require_approval),
+            budget_change_limit_pct=max(0.0, float(governance.max_budget_change_pct)),
+            admin_override=bool(payload.admin_override),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/ads/audit")
+def get_ads_audit(
+    provider: Optional[str] = Query(default=None),
+    entity_id: Optional[str] = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+    db=Depends(get_db),
+    ctx: PermissionContext = Depends(require_permission("ads.view")),
+):
+    workspace_id = _workspace_scope_or_403(ctx, None)
+    try:
+        if provider and provider not in ADS_PROVIDER_KEYS:
+            raise ValueError("Unsupported provider")
+        return ads_list_audit(
+            db,
+            workspace_id=workspace_id,
+            provider=provider,
+            entity_id=entity_id,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ---- Notification settings (channels + user prefs) ----
@@ -2860,6 +3166,77 @@ def get_journeys_summary(db=Depends(get_db)):
     )
 
 
+@app.get("/api/attribution/journeys/source-state")
+def get_journeys_source_state():
+    state = _get_journey_source_state()
+    active = _normalize_journey_source(state.get("active_source"))
+    runs = get_import_runs(status="success", limit=50)
+    last_success = _normalize_journey_source((runs[0] or {}).get("source")) if runs else None
+    if not active:
+        active = last_success
+    return {
+        "active_source": active,
+        "last_success_source": last_success,
+        "available_sources": _journey_source_availability(),
+        "updated_at": state.get("updated_at"),
+    }
+
+
+class JourneySourceActivatePayload(BaseModel):
+    source: str = Field(..., pattern="^(sample|upload|meiro)$")
+    import_note: Optional[str] = None
+
+
+@app.post("/api/attribution/journeys/activate-source")
+def activate_journey_source(payload: JourneySourceActivatePayload, db=Depends(get_db)):
+    source = _normalize_journey_source(payload.source)
+    if source not in {"sample", "upload", "meiro"}:
+        raise HTTPException(status_code=400, detail="Unsupported source")
+
+    if source == "sample":
+        result = load_sample_journeys(LoadSampleRequest(import_note=payload.import_note), db)
+        _set_active_journey_source("sample")
+        return {"ok": True, "active_source": "sample", "result": result}
+
+    if source == "meiro":
+        result = import_journeys_from_cdp(FromCDPRequest(import_note=payload.import_note), db)
+        _set_active_journey_source("meiro")
+        return {"ok": True, "active_source": "meiro", "result": result}
+
+    # upload
+    if not LATEST_UPLOAD_FILE.exists():
+        raise HTTPException(status_code=404, detail="No uploaded JSON source available. Upload a file first.")
+    try:
+        data = json.loads(LATEST_UPLOAD_FILE.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read uploaded source: {e}")
+
+    result = validate_and_normalize(data)
+    valid = result["valid_journeys"]
+    summary = result["import_summary"]
+    persist_journeys_as_conversion_paths(db, valid, replace=True)
+    _refresh_journey_aggregates_after_import(db)
+    _save_last_import_result(result)
+    errs = [i for i in result.get("validation_items", []) if i.get("severity") == "error"]
+    warns = [i for i in result.get("validation_items", []) if i.get("severity") == "warning"]
+    _append_import_run(
+        "upload",
+        len(valid),
+        "success",
+        total=summary.get("total", 0),
+        valid=summary.get("valid", 0),
+        invalid=summary.get("invalid", 0),
+        converted=summary.get("converted", 0),
+        channels_detected=summary.get("channels_detected"),
+        validation_summary={"top_errors": errs[:10], "top_warnings": warns[:10]},
+        config_snapshot={"schema_version": result.get("schema_version", "1.0"), "activated_from": "source_selector"},
+        preview_rows=[{"customer_id": j.get("customer", {}).get("id", "?"), "touchpoints": len(j.get("touchpoints", [])), "converted": bool(j.get("conversions"))} for j in valid[:20]],
+        import_note=payload.import_note,
+    )
+    _set_active_journey_source("upload")
+    return {"ok": True, "active_source": "upload", "result": {"count": len(valid), "message": f"Loaded {len(valid)} valid journeys"}}
+
+
 @app.get("/api/attribution/journeys/preview")
 def get_journeys_preview(limit: int = Query(20, ge=1, le=100), db=Depends(get_db)):
     """Preview first N parsed journeys with both legacy and configured revenue values."""
@@ -3278,6 +3655,12 @@ async def upload_journeys(file: UploadFile = File(...), import_note: Optional[st
         _append_import_run("upload", 0, "error", str(e))
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
 
+    try:
+        LATEST_UPLOAD_FILE.parent.mkdir(parents=True, exist_ok=True)
+        LATEST_UPLOAD_FILE.write_text(json.dumps(data, ensure_ascii=True), encoding="utf-8")
+    except Exception:
+        pass
+
     result = validate_and_normalize(data)
     valid = result["valid_journeys"]
     summary = result["import_summary"]
@@ -3296,6 +3679,7 @@ async def upload_journeys(file: UploadFile = File(...), import_note: Optional[st
         preview_rows=[{"customer_id": j.get("customer", {}).get("id", "?"), "touchpoints": len(j.get("touchpoints", [])), "converted": bool(j.get("conversions"))} for j in valid[:20]],
         import_note=import_note,
     )
+    _set_active_journey_source("upload")
     return {
         "count": len(valid),
         "message": f"Loaded {len(valid)} valid journeys",
@@ -3371,7 +3755,7 @@ def import_journeys_from_cdp(
         for tp in j.get("touchpoints", []):
             ch_set.add(tp.get("channel", "unknown"))
     _append_import_run(
-        "meiro_webhook", len(journeys), "success",
+        source_label, len(journeys), "success",
         total=len(journeys), valid=len(journeys), converted=converted, channels_detected=sorted(ch_set),
         config_snapshot={"mapping_preset": "saved", "schema_version": "1.0"},
         preview_rows=[
@@ -3384,6 +3768,7 @@ def import_journeys_from_cdp(
         ],
         import_note=req.import_note,
     )
+    _set_active_journey_source("meiro")
     return {"count": len(journeys), "message": f"Parsed {len(journeys)} journeys from CDP data"}
 
 class LoadSampleRequest(BaseModel):
@@ -3423,6 +3808,7 @@ def load_sample_journeys(req: LoadSampleRequest = Body(default=LoadSampleRequest
         preview_rows=[{"customer_id": j.get("customer", {}).get("id", "?"), "touchpoints": len(j.get("touchpoints", [])), "converted": bool(j.get("conversions"))} for j in valid[:20]],
         import_note=req.import_note,
     )
+    _set_active_journey_source("sample")
     return {
         "count": len(valid),
         "message": f"Loaded {len(valid)} valid journeys",
@@ -9900,6 +10286,7 @@ def meiro_pull(since: Optional[str] = None, until: Optional[str] = None, db=Depe
         config_snapshot={"lookback_days": pull_cfg.get("lookback_days"), "session_gap_minutes": pull_cfg.get("session_gap_minutes"), "conversion_selector": pull_cfg.get("conversion_selector")},
         preview_rows=[{"customer_id": j.get("customer_id", "?"), "touchpoints": len(j.get("touchpoints", [])), "value": journey_revenue_value(j)} for j in journeys[:20]],
     )
+    _set_active_journey_source("meiro")
     return {"count": len(journeys), "message": f"Pulled {len(journeys)} journeys from Meiro"}
 
 

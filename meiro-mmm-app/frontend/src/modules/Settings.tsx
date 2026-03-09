@@ -155,6 +155,11 @@ interface FeatureFlags {
   sso_enabled: boolean
 }
 
+interface AdsGovernanceSettings {
+  require_approval: boolean
+  max_budget_change_pct: number
+}
+
 interface RevenueConfig {
   conversion_names: string[]
   value_field_path: string
@@ -200,6 +205,7 @@ interface Settings {
   mmm: MMMSettings
   nba: NBASettings
   feature_flags: FeatureFlags
+  ads_governance: AdsGovernanceSettings
   revenue_config: RevenueConfig
 }
 
@@ -460,6 +466,10 @@ const DEFAULT_SETTINGS: Settings = {
     audit_log_enabled: false,
     scim_enabled: false,
     sso_enabled: false,
+  },
+  ads_governance: {
+    require_approval: true,
+    max_budget_change_pct: 30,
   },
   revenue_config: {
     conversion_names: ['purchase'],
@@ -1044,6 +1054,9 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
     )
     const [mmmDraft, setMmmDraft] = useState<MMMSettings>(
       deepClone(DEFAULT_SETTINGS.mmm),
+    )
+    const [adsGovernanceDraft, setAdsGovernanceDraft] = useState<AdsGovernanceSettings>(
+      deepClone(DEFAULT_SETTINGS.ads_governance),
     )
 
     const [taxonomyBaseline, setTaxonomyBaseline] =
@@ -2453,6 +2466,9 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
           setAttributionDraft(deepClone(settingsQuery.data.attribution))
           setNbaDraft(deepClone(settingsQuery.data.nba))
           setMmmDraft(deepClone(settingsQuery.data.mmm))
+          setAdsGovernanceDraft(
+            deepClone(settingsQuery.data.ads_governance ?? DEFAULT_SETTINGS.ads_governance),
+          )
         }
       }
     }, [settingsQuery.data, settingsBaseline])
@@ -2868,13 +2884,17 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       () => ({
         attribution:
           !!settingsBaseline &&
-          !deepEqual(attributionDraft, settingsBaseline.attribution),
+          (!deepEqual(attributionDraft, settingsBaseline.attribution) ||
+            !deepEqual(
+              adsGovernanceDraft,
+              settingsBaseline.ads_governance ?? DEFAULT_SETTINGS.ads_governance,
+            )),
         nba:
           !!settingsBaseline && !deepEqual(nbaDraft, settingsBaseline.nba),
         mmm:
           !!settingsBaseline && !deepEqual(mmmDraft, settingsBaseline.mmm),
       }),
-      [attributionDraft, mmmDraft, nbaDraft, settingsBaseline],
+      [adsGovernanceDraft, attributionDraft, mmmDraft, nbaDraft, settingsBaseline],
     )
 
     const sourceAliasIssues = useMemo(
@@ -2987,6 +3007,11 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
             settingsBaseline?.feature_flags ??
             DEFAULT_SETTINGS.feature_flags,
         ),
+        ads_governance: deepClone(
+          overrides.ads_governance ??
+            settingsBaseline?.ads_governance ??
+            DEFAULT_SETTINGS.ads_governance,
+        ),
         revenue_config: deepClone(
           overrides.revenue_config ??
             settingsBaseline?.revenue_config ??
@@ -3010,6 +3035,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
             const payload = settingsPayload({})
             if (settingsSections.includes('attribution')) {
               payload.attribution = deepClone(attributionDraft)
+              payload.ads_governance = deepClone(adsGovernanceDraft)
             }
             if (settingsSections.includes('nba')) {
               payload.nba = deepClone(nbaDraft)
@@ -3031,11 +3057,15 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                 : prev?.mmm ?? deepClone(DEFAULT_SETTINGS.mmm),
               feature_flags:
                 prev?.feature_flags ?? deepClone(DEFAULT_SETTINGS.feature_flags),
+              ads_governance: settingsSections.includes('attribution')
+                ? deepClone(merged.ads_governance ?? DEFAULT_SETTINGS.ads_governance)
+                : prev?.ads_governance ?? deepClone(DEFAULT_SETTINGS.ads_governance),
               revenue_config:
                 prev?.revenue_config ?? deepClone(DEFAULT_SETTINGS.revenue_config),
             }))
             if (settingsSections.includes('attribution')) {
               setAttributionDraft(deepClone(merged.attribution))
+              setAdsGovernanceDraft(deepClone(merged.ads_governance ?? DEFAULT_SETTINGS.ads_governance))
             }
             if (settingsSections.includes('nba')) {
               setNbaDraft(deepClone(merged.nba))
@@ -3250,6 +3280,9 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
             case 'attribution':
               if (settingsBaseline) {
                 setAttributionDraft(deepClone(settingsBaseline.attribution))
+                setAdsGovernanceDraft(
+                  deepClone(settingsBaseline.ads_governance ?? DEFAULT_SETTINGS.ads_governance),
+                )
               }
               break
             case 'nba':
@@ -3934,6 +3967,69 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                     {attributionErrors.min_conversion_value}
                   </span>
                 )}
+              </label>
+            </div>
+
+            <div style={cardStyle}>
+              <div style={{ display: 'grid', gap: t.space.xs }}>
+                <h3
+                  style={{
+                    margin: 0,
+                    fontSize: t.font.sizeMd,
+                    fontWeight: t.font.weightSemibold,
+                    color: t.color.text,
+                  }}
+                >
+                  Ads governance
+                </h3>
+                <p style={helperTextStyle}>
+                  Control whether ad-platform actions require approval and enforce a safe budget change cap.
+                </p>
+              </div>
+              <label
+                style={{
+                  display: 'flex',
+                  gap: t.space.sm,
+                  padding: `${t.space.sm}px ${t.space.md}px`,
+                  border: `1px solid ${t.color.borderLight}`,
+                  borderRadius: t.radius.sm,
+                  background: t.color.bgSubtle,
+                  alignItems: 'flex-start',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={adsGovernanceDraft.require_approval}
+                  onChange={(e) =>
+                    setAdsGovernanceDraft((prev) => ({ ...prev, require_approval: e.target.checked }))
+                  }
+                  style={{ marginTop: 4 }}
+                />
+                <div style={{ display: 'grid', gap: 4 }}>
+                  <span style={{ fontSize: t.font.sizeSm, color: t.color.text }}>Require approval before apply</span>
+                  <span style={helperTextStyle}>
+                    When enabled, ad change requests must be approved before they can be applied.
+                  </span>
+                </div>
+              </label>
+              <label style={{ display: 'grid', gap: 6 }}>
+                <span style={labelStyle}>Max budget change per request (%)</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={adsGovernanceDraft.max_budget_change_pct}
+                  onChange={(e) =>
+                    setAdsGovernanceDraft((prev) => ({
+                      ...prev,
+                      max_budget_change_pct: Number(e.target.value),
+                    }))
+                  }
+                  style={inputBaseStyle}
+                />
+                <span style={helperTextStyle}>
+                  Requests above this percentage are blocked unless apply uses admin override.
+                </span>
               </label>
             </div>
           </div>

@@ -35,6 +35,24 @@
         "operator": "any",
         "value": ""
       }
+    },
+    {
+      "name": "Auto: google_ads",
+      "channel": "google_ads",
+      "priority": 30,
+      "enabled": true,
+      "source": {
+        "operator": "any",
+        "value": ""
+      },
+      "medium": {
+        "operator": "any",
+        "value": ""
+      },
+      "campaign": {
+        "operator": "any",
+        "value": ""
+      }
     }
   ],
   "source_aliases": {},

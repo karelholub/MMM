@@ -624,3 +624,71 @@ class OAuthSession(Base):
     __table_args__ = (
         Index("ix_oauth_sessions_workspace_provider", "workspace_id", "provider_key"),
     )
+
+
+class AdsEntityMap(Base):
+    __tablename__ = "ads_entity_map"
+
+    id = Column(String(36), primary_key=True)
+    workspace_id = Column(String(128), nullable=False, index=True, default="default")
+    provider = Column(String(32), nullable=False, index=True)  # google_ads | meta_ads | linkedin_ads
+    account_id = Column(String(128), nullable=False, default="default", index=True)
+    entity_type = Column(String(32), nullable=False, index=True)  # campaign | adset | adgroup
+    entity_id = Column(String(128), nullable=False, index=True)
+    entity_name = Column(String(255), nullable=True)
+    last_seen_ts = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index(
+            "ix_ads_entity_map_ws_provider_entity",
+            "workspace_id",
+            "provider",
+            "entity_type",
+            "entity_id",
+            unique=True,
+        ),
+    )
+
+
+class AdsChangeRequest(Base):
+    __tablename__ = "ads_change_requests"
+
+    id = Column(String(36), primary_key=True)
+    workspace_id = Column(String(128), nullable=False, index=True, default="default")
+    requested_by_user_id = Column(String(128), nullable=False, index=True)
+    provider = Column(String(32), nullable=False, index=True)
+    account_id = Column(String(128), nullable=False, index=True)
+    entity_type = Column(String(32), nullable=False, index=True)
+    entity_id = Column(String(128), nullable=False, index=True)
+    action_type = Column(String(64), nullable=False, index=True)  # pause | enable | update_budget
+    action_payload_json = Column(JSON, nullable=False, default={})
+    status = Column(String(32), nullable=False, index=True, default="draft")
+    approval_required = Column(Boolean, nullable=False, default=True)
+    approved_by_user_id = Column(String(128), nullable=True, index=True)
+    approved_at = Column(DateTime, nullable=True)
+    applied_at = Column(DateTime, nullable=True)
+    error_message = Column(Text, nullable=True)
+    idempotency_key = Column(String(128), nullable=True, index=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_ads_change_requests_ws_status", "workspace_id", "status"),
+    )
+
+
+class AdsAuditLog(Base):
+    __tablename__ = "ads_audit_log"
+
+    id = Column(String(36), primary_key=True)
+    workspace_id = Column(String(128), nullable=False, index=True, default="default")
+    actor_user_id = Column(String(128), nullable=False, index=True)
+    provider = Column(String(32), nullable=False, index=True)
+    account_id = Column(String(128), nullable=False, index=True)
+    entity_type = Column(String(32), nullable=False, index=True)
+    entity_id = Column(String(128), nullable=False, index=True)
+    event_type = Column(String(64), nullable=False, index=True)
+    event_payload_json = Column(JSON, nullable=False, default={})
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)

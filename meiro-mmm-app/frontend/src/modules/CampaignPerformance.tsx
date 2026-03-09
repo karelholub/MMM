@@ -7,6 +7,8 @@ import ExplainabilityPanel from '../components/ExplainabilityPanel'
 import TrendPanel from '../components/dashboard/TrendPanel'
 import { apiGetJson } from '../lib/apiClient'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
+import AdsActionsDrawer from '../components/ads/AdsActionsDrawer'
+import { getAdsDeepLink, type AdsProviderKey } from '../connectors/adsManagerConnector'
 
 interface CampaignPerformanceProps {
   model: string
@@ -123,6 +125,14 @@ function formatCurrency(val: number): string {
   return `$${val.toFixed(0)}`
 }
 
+function providerFromChannel(channel: string): AdsProviderKey | null {
+  const key = (channel || '').toLowerCase()
+  if (key.includes('google')) return 'google_ads'
+  if (key.includes('meta') || key.includes('facebook') || key.includes('fb')) return 'meta_ads'
+  if (key.includes('linkedin')) return 'linkedin_ads'
+  return null
+}
+
 function exportCampaignsCSV(
   campaigns: CampaignData[],
   opts: {
@@ -203,6 +213,20 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
   const [trendGrain, setTrendGrain] = useState<'auto' | 'daily' | 'weekly'>(initialTrendParams.grain)
   const [trendCampaignSearch, setTrendCampaignSearch] = useState('')
   const [selectedTrendCampaign, setSelectedTrendCampaign] = useState<string>('all')
+  const [adsDrawerContext, setAdsDrawerContext] = useState<{
+    provider: AdsProviderKey
+    accountId: string
+    entityType: 'campaign'
+    entityId: string
+    entityName?: string | null
+    previewMetrics?: {
+      spend7d?: number | null
+      conversions7d?: number | null
+      revenue7d?: number | null
+      roas?: number | null
+      cpa?: number | null
+    }
+  } | null>(null)
 
   const trendDateRange = useMemo(() => {
     const fallbackTo = new Date().toISOString().slice(0, 10)
@@ -253,6 +277,8 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
     if (!items.length) return []
     const totalRevenue = items.reduce((sum, item) => sum + (item.current.revenue || 0), 0)
     return items.map((item) => {
+      const channel = String(item.channel || 'unknown')
+      const campaignId = String(item.campaign_id || item.campaign_name || `${channel}:unknown`)
       const spend = item.current.spend || 0
       const revenue = item.current.revenue || 0
       const conversions = item.current.conversions || 0
@@ -260,8 +286,8 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       const cpa = item.derived?.cpa ?? (conversions > 0 ? spend / conversions : null)
       const roi = spend > 0 ? (revenue - spend) / spend : null
       return {
-        campaign: item.campaign_id,
-        channel: item.channel,
+        campaign: campaignId,
+        channel,
         campaign_name: item.campaign_name ?? null,
         attributed_value: revenue,
         attributed_share: totalRevenue > 0 ? revenue / totalRevenue : 0,
@@ -408,17 +434,46 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
     }
   }
 
+  const openProviderLink = useCallback(async (campaign: CampaignData) => {
+    const provider = providerFromChannel(campaign.channel)
+    if (!provider || !campaign.campaign) return
+    try {
+      const deeplink = await getAdsDeepLink({
+        provider,
+        accountId: 'default',
+        entityType: 'campaign',
+        entityId: campaign.campaign,
+      })
+      window.open(deeplink.url, '_blank', 'noopener,noreferrer')
+    } catch {
+      // keep table interaction non-blocking
+    }
+  }, [])
+
+  const openAdsDrawer = useCallback((campaign: CampaignData) => {
+    const provider = providerFromChannel(campaign.channel)
+    if (!provider || !campaign.campaign) return
+    setAdsDrawerContext({
+      provider,
+      accountId: 'default',
+      entityType: 'campaign',
+      entityId: campaign.campaign,
+      entityName: campaign.campaign_name || campaign.campaign,
+      previewMetrics: {
+        spend7d: campaign.spend,
+        conversions7d: campaign.attributed_conversions,
+        revenue7d: campaign.attributed_value,
+        roas: campaign.roas,
+        cpa: campaign.cpa,
+      },
+    })
+  }, [])
+
   const t = tokens
 
   const journeysKpis = journeysSummary?.kpi_counts ?? {}
   const availableKpis = Object.keys(journeysKpis)
   const primaryKpiId = journeysSummary?.primary_kpi_id ?? null
-
-  useEffect(() => {
-    if (!conversionKey && primaryKpiId && availableKpis.length) {
-      setConversionKey(primaryKpiId)
-    }
-  }, [availableKpis.length, conversionKey, primaryKpiId])
 
   if (loading) {
     return (
@@ -676,7 +731,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
               minWidth: 140,
             }}
           >
-            {availableKpis.length === 0 && <option value="">Primary KPI</option>}
+            <option value="">All conversions</option>
             {availableKpis.map((k) => (
               <option key={k} value={k}>
                 {k}
@@ -1124,6 +1179,17 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
                 <th
                   style={{
                     padding: `${t.space.md}px ${t.space.lg}px`,
+                    textAlign: 'left',
+                    fontWeight: t.font.weightSemibold,
+                    color: t.color.textSecondary,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  Actions
+                </th>
+                <th
+                  style={{
+                    padding: `${t.space.md}px ${t.space.lg}px`,
                     textAlign: 'right',
                     fontWeight: t.font.weightSemibold,
                     color: t.color.textSecondary,
@@ -1204,6 +1270,54 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
                       </span>
                     ) : (
                       <span style={{ color: t.color.textMuted, fontSize: t.font.sizeXs }}>—</span>
+                    )}
+                  </td>
+                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, whiteSpace: 'nowrap' }}>
+                    {providerFromChannel(c.channel) && c.campaign ? (
+                      <div style={{ display: 'inline-flex', gap: t.space.xs }}>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            void openProviderLink(c)
+                          }}
+                          style={{
+                            border: `1px solid ${t.color.border}`,
+                            background: t.color.surface,
+                            color: t.color.accent,
+                            borderRadius: t.radius.sm,
+                            padding: `2px ${t.space.xs}px`,
+                            fontSize: t.font.sizeXs,
+                            cursor: 'pointer',
+                          }}
+                          title="Open this campaign in provider UI"
+                        >
+                          Open ↗
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            openAdsDrawer(c)
+                          }}
+                          style={{
+                            border: `1px solid ${t.color.border}`,
+                            background: t.color.bg,
+                            color: t.color.text,
+                            borderRadius: t.radius.sm,
+                            padding: `2px ${t.space.xs}px`,
+                            fontSize: t.font.sizeXs,
+                            cursor: 'pointer',
+                          }}
+                          title="Propose pause/enable/budget changes"
+                        >
+                          Manage
+                        </button>
+                      </div>
+                    ) : (
+                      <span style={{ color: t.color.textMuted, fontSize: t.font.sizeXs }} title="Missing provider entity id">
+                        —
+                      </span>
                     )}
                   </td>
                   <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right' }}>
@@ -1302,6 +1416,18 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
           </p>
         )}
       </div>
+      {adsDrawerContext && (
+        <AdsActionsDrawer
+          open={!!adsDrawerContext}
+          onClose={() => setAdsDrawerContext(null)}
+          provider={adsDrawerContext.provider}
+          accountId={adsDrawerContext.accountId}
+          entityType={adsDrawerContext.entityType}
+          entityId={adsDrawerContext.entityId}
+          entityName={adsDrawerContext.entityName}
+          previewMetrics={adsDrawerContext.previewMetrics}
+        />
+      )}
     </div>
   )
 }

@@ -33,6 +33,9 @@ PERMISSIONS: List[Dict[str, str]] = [
     {"key": "alerts.manage", "description": "Manage alert rules and states", "category": "analytics"},
     {"key": "audiences.manage", "description": "Manage audience activation", "category": "activation"},
     {"key": "exports.manage", "description": "Manage exports and downstream delivery", "category": "activation"},
+    {"key": "ads.view", "description": "View ads entities and deep links", "category": "activation"},
+    {"key": "ads.propose", "description": "Propose ads operational changes", "category": "activation"},
+    {"key": "ads.apply", "description": "Approve/apply ads operational changes", "category": "activation"},
     {"key": "settings.view", "description": "View settings", "category": "admin"},
     {"key": "settings.manage", "description": "Manage workspace settings", "category": "admin"},
     {"key": "users.manage", "description": "Manage users and memberships", "category": "admin"},
@@ -52,6 +55,19 @@ SYSTEM_ROLE_PERMISSIONS: Dict[str, List[str]] = {
         "attribution.manage",
         "alerts.view",
         "alerts.manage",
+        "ads.view",
+        "ads.propose",
+        "settings.view",
+    ],
+    "Operator": [
+        "journeys.view",
+        "funnels.view",
+        "attribution.view",
+        "alerts.view",
+        "alerts.manage",
+        "ads.view",
+        "ads.propose",
+        "ads.apply",
         "settings.view",
     ],
     "Viewer": [
@@ -59,6 +75,7 @@ SYSTEM_ROLE_PERMISSIONS: Dict[str, List[str]] = {
         "funnels.view",
         "attribution.view",
         "alerts.view",
+        "ads.view",
         "settings.view",
     ],
 }
@@ -152,4 +169,3 @@ def ensure_access_control_seed_data(db: Session) -> Dict[str, Any]:
         "workspaces_inserted": inserted_workspaces,
         "system_roles": sorted(role_by_name.keys()),
     }
-

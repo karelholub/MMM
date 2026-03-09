@@ -342,6 +342,10 @@ interface AppTopBarProps {
   onLoadSample: () => void
   onRunModels: () => void
   onPeriodChange: (next: { dateFrom: string; dateTo: string }) => void
+  activeJourneySource: 'sample' | 'upload' | 'meiro' | null
+  journeySourceOptions: Array<{ key: 'sample' | 'upload' | 'meiro'; label: string; available: boolean }>
+  sourceSwitching: boolean
+  onJourneySourceChange: (value: 'sample' | 'upload' | 'meiro') => void
 }
 
 export function AppTopBar({
@@ -366,6 +370,10 @@ export function AppTopBar({
   onLoadSample,
   onRunModels,
   onPeriodChange,
+  activeJourneySource,
+  journeySourceOptions,
+  sourceSwitching,
+  onJourneySourceChange,
 }: AppTopBarProps) {
   const [draftDateFrom, setDraftDateFrom] = useState(periodDateFrom)
   const [draftDateTo, setDraftDateTo] = useState(periodDateTo)
@@ -445,6 +453,22 @@ export function AppTopBar({
           </span>
           <span style={{ opacity: 0.7, flex: '0 0 auto' }}>(read-only)</span>
         </div>
+
+        <label style={{ fontSize: tokens.font.sizeXs, color: 'rgba(226,232,240,0.9)', display: 'inline-flex', alignItems: isMobileHeader ? 'stretch' : 'center', flexDirection: isMobileHeader ? 'column' : 'row', gap: isMobileHeader ? 4 : 6, minWidth: isMobileHeader ? '100%' : 0 }}>
+          <span>Source</span>
+          <select
+            value={activeJourneySource || ''}
+            onChange={(e) => onJourneySourceChange(e.target.value as 'sample' | 'upload' | 'meiro')}
+            disabled={sourceSwitching || !activeJourneySource}
+            style={{ padding: '6px 8px', height: 30, fontSize: tokens.font.sizeXs, borderRadius: tokens.radius.sm, border: '1px solid rgba(148,163,184,0.6)', backgroundColor: '#0b1220', color: '#e5e7eb', cursor: sourceSwitching ? 'wait' : 'pointer', width: isMobileHeader ? '100%' : 'clamp(160px, 16vw, 220px)', minWidth: isMobileHeader ? 0 : 160, maxWidth: isMobileHeader ? '100%' : 220 }}
+          >
+            {journeySourceOptions.map((src) => (
+              <option key={src.key} value={src.key} disabled={!src.available}>
+                {src.label}{src.available ? '' : ' (n/a)'}
+              </option>
+            ))}
+          </select>
+        </label>
 
         <label style={{ fontSize: tokens.font.sizeXs, color: 'rgba(226,232,240,0.9)', display: 'inline-flex', alignItems: isMobileHeader ? 'stretch' : 'center', flexDirection: isMobileHeader ? 'column' : 'row', gap: isMobileHeader ? 4 : 6, minWidth: isMobileHeader ? '100%' : 0 }}>
           <span>Model</span>

@@ -93,6 +93,8 @@ function isIsoDateOnly(value?: string | null): value is string {
   return !Number.isNaN(d.getTime())
 }
 
+type JourneySourceKey = 'sample' | 'upload' | 'meiro'
+
 export default function App() {
   const [page, setPage] = useState<AppPage>(() => {
     if (typeof window === 'undefined') return 'overview'
@@ -230,6 +232,16 @@ export default function App() {
     },
   })
 
+  const journeySourceStateQuery = useQuery({
+    queryKey: ['journeys-source-state'],
+    queryFn: async () =>
+      apiGetJson<{
+        active_source: JourneySourceKey | null
+        last_success_source: JourneySourceKey | null
+        available_sources: Array<{ key: JourneySourceKey; label: string; available: boolean }>
+      }>('/api/attribution/journeys/source-state', { fallbackMessage: 'Failed to load source state' }),
+  })
+
   const loadSampleMutation = useMutation({
     mutationFn: async () => apiSendJson<any>('/api/attribution/journeys/load-sample', 'POST', {}, {
       fallbackMessage: 'Failed to load sample',
@@ -244,6 +256,16 @@ export default function App() {
     mutationFn: async () => apiSendJson<any>('/api/attribution/run-all', 'POST', undefined, {
       fallbackMessage: 'Failed to run models',
     }),
+  })
+
+  const activateJourneySourceMutation = useMutation({
+    mutationFn: async (source: JourneySourceKey) =>
+      apiSendJson('/api/attribution/journeys/activate-source', 'POST', { source }, { fallbackMessage: 'Failed to activate source' }),
+    onSuccess: () => {
+      journeysQuery.refetch()
+      runAllMutation.mutate()
+      journeySourceStateQuery.refetch()
+    },
   })
 
   const createMmmRunMutation = useMutation({
@@ -365,6 +387,15 @@ export default function App() {
     ? `${globalDateRange.dateFrom} – ${globalDateRange.dateTo}`
     : 'Loading period…'
   const conversionLabel = primaryKpiLabel || primaryKpiId || (journeysQuery.isLoading ? 'Loading conversion…' : 'Primary KPI')
+  const journeySourceOptions = journeySourceStateQuery.data?.available_sources ?? [
+    { key: 'sample' as const, label: 'Sample data', available: true },
+    { key: 'upload' as const, label: 'Uploaded JSON', available: false },
+    { key: 'meiro' as const, label: 'Meiro CDP', available: false },
+  ]
+  const activeJourneySource =
+    journeySourceStateQuery.data?.active_source ||
+    journeySourceStateQuery.data?.last_success_source ||
+    (journeySourceOptions.find((s) => s.available)?.key ?? 'sample')
   const visibleNavItems = useMemo(
     () =>
       NAV_ITEMS.filter(
@@ -561,6 +592,10 @@ export default function App() {
             setGlobalDateRange(next)
             setHasCustomGlobalDateRange(true)
           }}
+          activeJourneySource={activeJourneySource}
+          journeySourceOptions={journeySourceOptions}
+          sourceSwitching={activateJourneySourceMutation.isPending}
+          onJourneySourceChange={(source) => activateJourneySourceMutation.mutate(source)}
         />
 
         {/* Main content with page-level header + breadcrumbs */}
