@@ -13,6 +13,9 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
     "value_field_path": "value",
     "currency_field_path": "currency",
     "dedup_key": "conversion_id",
+    "default_value": 0.0,
+    "default_value_mode": "missing_only",
+    "per_conversion_overrides": [],
     "base_currency": "EUR",
     "fx_enabled": False,
     "fx_mode": "none",
@@ -22,6 +25,7 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
 
 _ALLOWED_DEDUP = {"conversion_id", "order_id", "event_id"}
 _ALLOWED_FX_MODE = {"none", "static_rates"}
+_ALLOWED_DEFAULT_VALUE_MODE = {"disabled", "missing_only", "missing_or_zero"}
 
 
 def default_revenue_config() -> Dict[str, Any]:
@@ -36,6 +40,16 @@ def _safe_number(value: Any) -> float:
         return out
     except Exception:
         return 0.0
+
+
+def _parse_number(value: Any) -> Tuple[float, bool]:
+    try:
+        out = float(value)
+        if not math.isfinite(out):
+            return 0.0, False
+        return out, True
+    except Exception:
+        return 0.0, False
 
 
 def _norm_path(path: str, fallback: str) -> str:
@@ -80,6 +94,13 @@ def normalize_revenue_config(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
     dedup_key = str(raw.get("dedup_key") or "conversion_id").strip()
     out["dedup_key"] = dedup_key if dedup_key in _ALLOWED_DEDUP else "conversion_id"
+    out["default_value"] = max(0.0, _safe_number(raw.get("default_value")))
+    default_value_mode = str(raw.get("default_value_mode") or "missing_only").strip()
+    out["default_value_mode"] = (
+        default_value_mode
+        if default_value_mode in _ALLOWED_DEFAULT_VALUE_MODE
+        else "missing_only"
+    )
 
     base_currency = str(raw.get("base_currency") or "EUR").strip().upper()
     out["base_currency"] = base_currency or "EUR"
@@ -102,6 +123,45 @@ def normalize_revenue_config(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
     source_type = str(raw.get("source_type") or "conversion_event").strip()
     out["source_type"] = source_type or "conversion_event"
+
+    overrides_out: List[Dict[str, Any]] = []
+    overrides_raw = raw.get("per_conversion_overrides")
+    if isinstance(overrides_raw, list):
+        for item in overrides_raw:
+            if not isinstance(item, dict):
+                continue
+            conversion_name = str(item.get("conversion_name") or "").strip()
+            if not conversion_name:
+                continue
+            override_dedup_key = str(item.get("dedup_key") or out["dedup_key"]).strip()
+            override_mode = str(item.get("default_value_mode") or out["default_value_mode"]).strip()
+            overrides_out.append(
+                {
+                    "conversion_name": conversion_name,
+                    "value_field_path": _norm_path(
+                        str(item.get("value_field_path") or out["value_field_path"]),
+                        out["value_field_path"],
+                    ),
+                    "currency_field_path": _norm_path(
+                        str(item.get("currency_field_path") or out["currency_field_path"]),
+                        out["currency_field_path"],
+                    ),
+                    "dedup_key": (
+                        override_dedup_key if override_dedup_key in _ALLOWED_DEDUP else out["dedup_key"]
+                    ),
+                    "default_value": max(0.0, _safe_number(item.get("default_value", out["default_value"]))),
+                    "default_value_mode": (
+                        override_mode
+                        if override_mode in _ALLOWED_DEFAULT_VALUE_MODE
+                        else out["default_value_mode"]
+                    ),
+                }
+            )
+    if overrides_out:
+        out["per_conversion_overrides"] = sorted(
+            overrides_out,
+            key=lambda item: str(item.get("conversion_name") or "").lower(),
+        )
     return out
 
 
@@ -175,14 +235,22 @@ def _value_and_currency(
     value_field_path: str,
     currency_field_path: str,
     base_currency: str,
-) -> Tuple[float, str]:
+) -> Tuple[float, str, bool, bool, bool]:
     value = _extract_path(conversion, value_field_path)
-    if value is None:
+    if value in (None, "", []):
         value = _extract_path(payload, value_field_path)
+    raw_present = value not in (None, "", [])
+    parsed_value, parsed_ok = _parse_number(value) if raw_present else (0.0, False)
     currency = _extract_path(conversion, currency_field_path)
     if currency is None:
         currency = _extract_path(payload, currency_field_path)
-    return _safe_number(value), str(currency or base_currency).strip().upper() or base_currency
+    return (
+        _safe_number(parsed_value),
+        str(currency or base_currency).strip().upper() or base_currency,
+        raw_present,
+        parsed_ok,
+        raw_present and parsed_ok and _safe_number(parsed_value) == 0.0,
+    )
 
 
 def _to_base(value: float, currency: str, config: Dict[str, Any]) -> float:
@@ -245,32 +313,66 @@ def extract_revenue_entries(
     if not isinstance(payload, dict):
         return []
     cfg = normalize_revenue_config(config)
-    selected = {str(name).strip().lower() for name in cfg.get("conversion_names") or []}
+    overrides_by_name = {
+        str(item.get("conversion_name") or "").strip().lower(): item
+        for item in cfg.get("per_conversion_overrides") or []
+        if isinstance(item, dict) and str(item.get("conversion_name") or "").strip()
+    }
+    selected = {
+        str(name).strip().lower()
+        for name in cfg.get("conversion_names") or []
+        if str(name).strip()
+    }
+    selected.update(overrides_by_name.keys())
     out: List[Dict[str, Any]] = []
     for conversion in iter_payload_revenue_conversions(payload):
         name = _conversion_name(conversion, payload).lower()
         if selected and name not in selected:
             continue
+        effective = dict(cfg)
+        override = overrides_by_name.get(name)
+        if override:
+            effective.update(override)
         dedup_value = _dedup_key_value(
             conversion=conversion,
             payload=payload,
             fallback_conversion_id=fallback_conversion_id,
-            dedup_key=str(cfg.get("dedup_key") or "conversion_id"),
+            dedup_key=str(effective.get("dedup_key") or "conversion_id"),
         )
-        raw_value, currency = _value_and_currency(
+        raw_value, currency, raw_present, parsed_ok, raw_zero = _value_and_currency(
             conversion,
             payload,
-            value_field_path=str(cfg.get("value_field_path") or "value"),
-            currency_field_path=str(cfg.get("currency_field_path") or "currency"),
-            base_currency=str(cfg.get("base_currency") or "EUR"),
+            value_field_path=str(effective.get("value_field_path") or "value"),
+            currency_field_path=str(effective.get("currency_field_path") or "currency"),
+            base_currency=str(effective.get("base_currency") or "EUR"),
         )
+        default_value = max(0.0, _safe_number(effective.get("default_value")))
+        default_mode = str(effective.get("default_value_mode") or "missing_only")
+        default_applied = False
+        default_reason = "none"
+        value_for_base = raw_value
+        if default_mode != "disabled":
+            if (not raw_present) or (raw_present and not parsed_ok):
+                value_for_base = default_value
+                default_applied = True
+                default_reason = "missing"
+            elif raw_zero and default_mode == "missing_or_zero":
+                value_for_base = default_value
+                default_applied = True
+                default_reason = "zero"
         out.append(
             {
                 "name": name,
                 "dedup_key": dedup_value,
                 "currency": currency,
                 "value_raw": _safe_number(raw_value),
-                "value_in_base": _safe_number(_to_base(raw_value, currency, cfg)),
+                "value_effective": _safe_number(value_for_base),
+                "value_in_base": _safe_number(_to_base(value_for_base, currency, effective)),
+                "default_applied": default_applied,
+                "default_reason": default_reason,
+                "value_source": "defaulted" if default_applied else "raw",
+                "raw_value_present": raw_present,
+                "raw_value_zero": raw_zero,
             }
         )
     return out

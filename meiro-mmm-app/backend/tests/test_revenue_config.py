@@ -1,4 +1,8 @@
-from app.services_revenue_config import compute_payload_revenue_value, normalize_revenue_config
+from app.services_revenue_config import (
+    compute_payload_revenue_value,
+    extract_revenue_entries,
+    normalize_revenue_config,
+)
 
 
 def test_revenue_config_filters_event_names_and_dedup_by_order_id():
@@ -61,3 +65,49 @@ def test_revenue_config_defaults_for_unset_fields_are_backward_compatible():
     total = compute_payload_revenue_value(payload, cfg, dedupe_seen=set())
     assert total == 12.5
 
+
+def test_revenue_config_applies_default_value_when_missing():
+    cfg = normalize_revenue_config(
+        {
+            "conversion_names": ["demo_booked"],
+            "default_value": 125,
+            "default_value_mode": "missing_only",
+        }
+    )
+    payload = {
+        "conversion_id": "cv-1",
+        "conversions": [{"id": "cv-1", "name": "demo_booked", "currency": "EUR"}],
+    }
+    entries = extract_revenue_entries(payload, cfg)
+    assert entries[0]["default_applied"] is True
+    assert entries[0]["default_reason"] == "missing"
+    assert entries[0]["value_effective"] == 125.0
+    total = compute_payload_revenue_value(payload, cfg, dedupe_seen=set())
+    assert total == 125.0
+
+
+def test_revenue_config_can_apply_per_conversion_override_for_zero_values():
+    cfg = normalize_revenue_config(
+        {
+            "conversion_names": ["purchase"],
+            "default_value": 0,
+            "default_value_mode": "disabled",
+            "per_conversion_overrides": [
+                {
+                    "conversion_name": "form_submit",
+                    "default_value": 25,
+                    "default_value_mode": "missing_or_zero",
+                }
+            ],
+        }
+    )
+    payload = {
+        "conversion_id": "cv-1",
+        "conversions": [{"id": "cv-1", "name": "form_submit", "value": 0, "currency": "EUR"}],
+    }
+    entries = extract_revenue_entries(payload, cfg)
+    assert entries[0]["default_applied"] is True
+    assert entries[0]["default_reason"] == "zero"
+    assert entries[0]["value_effective"] == 25.0
+    total = compute_payload_revenue_value(payload, cfg, dedupe_seen=set())
+    assert total == 25.0

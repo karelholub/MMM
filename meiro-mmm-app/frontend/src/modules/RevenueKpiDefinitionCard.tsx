@@ -5,12 +5,25 @@ import { apiGetJson, apiSendJson } from '../lib/apiClient'
 
 type DedupKey = 'conversion_id' | 'order_id' | 'event_id'
 type FxMode = 'none' | 'static_rates'
+type DefaultValueMode = 'disabled' | 'missing_only' | 'missing_or_zero'
+
+interface RevenueConfigOverride {
+  conversion_name: string
+  value_field_path: string
+  currency_field_path: string
+  dedup_key: DedupKey
+  default_value: number
+  default_value_mode: DefaultValueMode
+}
 
 interface RevenueConfig {
   conversion_names: string[]
   value_field_path: string
   currency_field_path: string
   dedup_key: DedupKey
+  default_value: number
+  default_value_mode: DefaultValueMode
+  per_conversion_overrides: RevenueConfigOverride[]
   base_currency: string
   fx_enabled: boolean
   fx_mode: FxMode
@@ -23,6 +36,9 @@ const DEFAULT_CONFIG: RevenueConfig = {
   value_field_path: 'value',
   currency_field_path: 'currency',
   dedup_key: 'conversion_id',
+  default_value: 0,
+  default_value_mode: 'missing_only',
+  per_conversion_overrides: [],
   base_currency: 'EUR',
   fx_enabled: false,
   fx_mode: 'none',
@@ -169,6 +185,191 @@ export default function RevenueKpiDefinitionCard() {
         </label>
       </div>
 
+      <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+        <label style={{ display: 'grid', gap: 4 }}>
+          <span style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>Default conversion value</span>
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={Number.isFinite(draft.default_value) ? draft.default_value : ''}
+            onChange={(e) => setDraft((prev) => ({ ...prev, default_value: Number(e.target.value) || 0 }))}
+            style={{ padding: `${t.space.sm}px ${t.space.md}px`, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+          />
+        </label>
+        <label style={{ display: 'grid', gap: 4 }}>
+          <span style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>Apply default when</span>
+          <select
+            value={draft.default_value_mode}
+            onChange={(e) => setDraft((prev) => ({ ...prev, default_value_mode: e.target.value as DefaultValueMode }))}
+            style={{ padding: `${t.space.sm}px ${t.space.md}px`, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+          >
+            <option value="disabled">Disabled</option>
+            <option value="missing_only">Value missing</option>
+            <option value="missing_or_zero">Value missing or zero</option>
+          </select>
+        </label>
+      </div>
+
+      <div style={{ display: 'grid', gap: t.space.sm, border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md }}>
+        <div>
+          <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Per-conversion overrides</div>
+          <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary, marginTop: 4 }}>
+            Use these when specific Meiro conversion events need different field paths or fallback values.
+          </div>
+        </div>
+        {draft.per_conversion_overrides.map((override, index) => (
+          <div
+            key={`${override.conversion_name}-${index}`}
+            style={{ display: 'grid', gap: t.space.xs, gridTemplateColumns: '1.2fr 1fr 1fr 0.9fr 0.9fr auto', alignItems: 'end' }}
+          >
+            <label style={{ display: 'grid', gap: 4 }}>
+              <span style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>Conversion name</span>
+              <input
+                value={override.conversion_name}
+                onChange={(e) =>
+                  setDraft((prev) => ({
+                    ...prev,
+                    per_conversion_overrides: prev.per_conversion_overrides.map((item, itemIndex) =>
+                      itemIndex === index ? { ...item, conversion_name: e.target.value } : item,
+                    ),
+                  }))
+                }
+                style={{ padding: `${t.space.xs}px ${t.space.sm}px`, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+              />
+            </label>
+            <label style={{ display: 'grid', gap: 4 }}>
+              <span style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>Value field</span>
+              <input
+                value={override.value_field_path}
+                onChange={(e) =>
+                  setDraft((prev) => ({
+                    ...prev,
+                    per_conversion_overrides: prev.per_conversion_overrides.map((item, itemIndex) =>
+                      itemIndex === index ? { ...item, value_field_path: e.target.value } : item,
+                    ),
+                  }))
+                }
+                style={{ padding: `${t.space.xs}px ${t.space.sm}px`, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+              />
+            </label>
+            <label style={{ display: 'grid', gap: 4 }}>
+              <span style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>Currency field</span>
+              <input
+                value={override.currency_field_path}
+                onChange={(e) =>
+                  setDraft((prev) => ({
+                    ...prev,
+                    per_conversion_overrides: prev.per_conversion_overrides.map((item, itemIndex) =>
+                      itemIndex === index ? { ...item, currency_field_path: e.target.value } : item,
+                    ),
+                  }))
+                }
+                style={{ padding: `${t.space.xs}px ${t.space.sm}px`, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+              />
+            </label>
+            <label style={{ display: 'grid', gap: 4 }}>
+              <span style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>Dedup key</span>
+              <select
+                value={override.dedup_key}
+                onChange={(e) =>
+                  setDraft((prev) => ({
+                    ...prev,
+                    per_conversion_overrides: prev.per_conversion_overrides.map((item, itemIndex) =>
+                      itemIndex === index ? { ...item, dedup_key: e.target.value as DedupKey } : item,
+                    ),
+                  }))
+                }
+                style={{ padding: `${t.space.xs}px ${t.space.sm}px`, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+              >
+                <option value="conversion_id">conversion_id</option>
+                <option value="order_id">order_id</option>
+                <option value="event_id">event_id</option>
+              </select>
+            </label>
+            <label style={{ display: 'grid', gap: 4 }}>
+              <span style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>Default value</span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={Number.isFinite(override.default_value) ? override.default_value : ''}
+                onChange={(e) =>
+                  setDraft((prev) => ({
+                    ...prev,
+                    per_conversion_overrides: prev.per_conversion_overrides.map((item, itemIndex) =>
+                      itemIndex === index ? { ...item, default_value: Number(e.target.value) || 0 } : item,
+                    ),
+                  }))
+                }
+                style={{ padding: `${t.space.xs}px ${t.space.sm}px`, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() =>
+                setDraft((prev) => ({
+                  ...prev,
+                  per_conversion_overrides: prev.per_conversion_overrides.filter((_, itemIndex) => itemIndex !== index),
+                }))
+              }
+              style={{ border: 'none', background: 'transparent', color: t.color.danger, cursor: 'pointer', paddingBottom: t.space.xs }}
+            >
+              Remove
+            </button>
+            <label style={{ display: 'grid', gap: 4, gridColumn: '1 / span 5' }}>
+              <span style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>Default mode</span>
+              <select
+                value={override.default_value_mode}
+                onChange={(e) =>
+                  setDraft((prev) => ({
+                    ...prev,
+                    per_conversion_overrides: prev.per_conversion_overrides.map((item, itemIndex) =>
+                      itemIndex === index ? { ...item, default_value_mode: e.target.value as DefaultValueMode } : item,
+                    ),
+                  }))
+                }
+                style={{ padding: `${t.space.xs}px ${t.space.sm}px`, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+              >
+                <option value="disabled">Disabled</option>
+                <option value="missing_only">Value missing</option>
+                <option value="missing_or_zero">Value missing or zero</option>
+              </select>
+            </label>
+          </div>
+        ))}
+        <button
+          type="button"
+          onClick={() =>
+            setDraft((prev) => ({
+              ...prev,
+              per_conversion_overrides: [
+                ...prev.per_conversion_overrides,
+                {
+                  conversion_name: '',
+                  value_field_path: prev.value_field_path,
+                  currency_field_path: prev.currency_field_path,
+                  dedup_key: prev.dedup_key,
+                  default_value: prev.default_value,
+                  default_value_mode: prev.default_value_mode,
+                },
+              ],
+            }))
+          }
+          style={{
+            width: 'fit-content',
+            padding: `${t.space.xs}px ${t.space.sm}px`,
+            borderRadius: t.radius.sm,
+            border: `1px solid ${t.color.borderLight}`,
+            background: t.color.bgSubtle,
+            color: t.color.text,
+            cursor: 'pointer',
+          }}
+        >
+          Add override
+        </button>
+      </div>
+
       <div style={{ display: 'grid', gap: t.space.sm, border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: t.space.sm }}>
           <input
@@ -267,6 +468,7 @@ export default function RevenueKpiDefinitionCard() {
             void saveMutation.mutateAsync({
               ...draft,
               conversion_names: draft.conversion_names.length ? draft.conversion_names : ['purchase'],
+              per_conversion_overrides: (draft.per_conversion_overrides || []).filter((item) => item.conversion_name.trim()),
               base_currency: (draft.base_currency || 'EUR').toUpperCase(),
             })
           }}

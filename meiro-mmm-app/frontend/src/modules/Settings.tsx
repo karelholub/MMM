@@ -165,6 +165,16 @@ interface RevenueConfig {
   value_field_path: string
   currency_field_path: string
   dedup_key: 'conversion_id' | 'order_id' | 'event_id'
+  default_value: number
+  default_value_mode: 'disabled' | 'missing_only' | 'missing_or_zero'
+  per_conversion_overrides: Array<{
+    conversion_name: string
+    value_field_path: string
+    currency_field_path: string
+    dedup_key: 'conversion_id' | 'order_id' | 'event_id'
+    default_value: number
+    default_value_mode: 'disabled' | 'missing_only' | 'missing_or_zero'
+  }>
   base_currency: string
   fx_enabled: boolean
   fx_mode: 'none' | 'static_rates'
@@ -476,6 +486,9 @@ const DEFAULT_SETTINGS: Settings = {
     value_field_path: 'value',
     currency_field_path: 'currency',
     dedup_key: 'conversion_id',
+    default_value: 0,
+    default_value_mode: 'missing_only',
+    per_conversion_overrides: [],
     base_currency: 'EUR',
     fx_enabled: false,
     fx_mode: 'none',

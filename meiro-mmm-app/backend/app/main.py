@@ -957,6 +957,9 @@ class RevenueConfig(BaseModel):
     value_field_path: str = "value"
     currency_field_path: str = "currency"
     dedup_key: str = "conversion_id"
+    default_value: float = 0.0
+    default_value_mode: str = "missing_only"
+    per_conversion_overrides: List[Dict[str, Any]] = Field(default_factory=list)
     base_currency: str = "EUR"
     fx_enabled: bool = False
     fx_mode: str = "none"
