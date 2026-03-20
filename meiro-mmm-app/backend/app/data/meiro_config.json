@@ -1,951 +1,8 @@
 {
-  "webhook_received_count": 6452,
-  "webhook_last_received_at": "2026-03-20T10:11:04.728675Z",
+  "webhook_received_count": 6475,
+  "webhook_last_received_at": "2026-03-20T10:20:36.648944Z",
   "webhook_secret": "cHG0fw33JztAzhDPrFMNc4dxHOMsGXrIqaXD_6KyY3Y",
   "webhook_events": [
-    {
-      "received_at": "2026-03-20T09:42:33.525704Z",
-      "received_count": 1,
-      "stored_total": 6319,
-      "replace": false,
-      "ip": "172.18.0.1",
-      "user_agent": "Bun/1.3.10",
-      "payload_shape": "object",
-      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"f61234ee-8607-4cc1-bb7a-2223cf1f4646\",\n      \"journey_id\": \"j_ab6985f2\",\n      \"customer\": {\n        \"id\": \"f61234ee-8607-4cc1-bb7a-2223cf1f4646\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-12T08:29:44.915+01:00\",\n          \"ts\": \"2026-03-12T08:29:44.915+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"17631619414\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
-      "payload_truncated": false,
-      "payload_bytes": 899,
-      "payload_json_valid": true,
-      "conversion_event_names": [],
-      "channels_detected": [
-        "direct"
-      ],
-      "payload_analysis": {
-        "conversion_count": 0,
-        "touchpoint_count": 1,
-        "conversion_event_counts": {},
-        "channel_counts": {
-          "direct": 1
-        },
-        "source_counts": {
-          "direct": 2
-        },
-        "medium_counts": {
-          "none": 2
-        },
-        "campaign_counts": {
-          "not_set": 2
-        },
-        "value_field_counts": {},
-        "currency_field_counts": {},
-        "dedup_key_counts": {
-          "conversion_id": 0,
-          "order_id": 0,
-          "event_id": 0
-        }
-      }
-    },
-    {
-      "received_at": "2026-03-20T09:42:44.676044Z",
-      "received_count": 1,
-      "stored_total": 6320,
-      "replace": false,
-      "ip": "172.18.0.1",
-      "user_agent": "Bun/1.3.10",
-      "payload_shape": "object",
-      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"81ca5bb9-3b90-4a44-899b-1a5b4a8202bf\",\n      \"journey_id\": \"j_47a7c71f\",\n      \"customer\": {\n        \"id\": \"81ca5bb9-3b90-4a44-899b-1a5b4a8202bf\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T10:42:40.789+01:00\",\n          \"ts\": \"2026-03-20T10:42:40.789+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"17631619579\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
-      "payload_truncated": false,
-      "payload_bytes": 899,
-      "payload_json_valid": true,
-      "conversion_event_names": [],
-      "channels_detected": [
-        "direct"
-      ],
-      "payload_analysis": {
-        "conversion_count": 0,
-        "touchpoint_count": 1,
-        "conversion_event_counts": {},
-        "channel_counts": {
-          "direct": 1
-        },
-        "source_counts": {
-          "direct": 2
-        },
-        "medium_counts": {
-          "none": 2
-        },
-        "campaign_counts": {
-          "not_set": 2
-        },
-        "value_field_counts": {},
-        "currency_field_counts": {},
-        "dedup_key_counts": {
-          "conversion_id": 0,
-          "order_id": 0,
-          "event_id": 0
-        }
-      }
-    },
-    {
-      "received_at": "2026-03-20T09:42:45.006844Z",
-      "received_count": 1,
-      "stored_total": 6321,
-      "replace": false,
-      "ip": "172.18.0.1",
-      "user_agent": "Bun/1.3.10",
-      "payload_shape": "object",
-      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"54d50ca7-b430-4d82-a086-596993ee26f7\",\n      \"journey_id\": \"j_874110a0\",\n      \"customer\": {\n        \"id\": \"54d50ca7-b430-4d82-a086-596993ee26f7\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"115360-cg+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+i\u010d\",\n          \"timestamp\": \"2026-03-20T10:42:37.53+01:00\",\n          \"ts\": \"2026-03-20T10:42:37.53+01:00\",\n          \"source\": \"115360-CG+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+I\u010c\",\n          \"medium\": \"email\",\n          \"utm\": {\n            \"source\": \"115360-CG+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+I\u010c\",\n            \"medium\": \"email\",\n            \"campaign\": \"not_set\",\n            \"content\": \"expresn\u011b+do+dvou+hodin\"\n          },\n          \"campaign\": {\n            \"id\": null,\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
-      "payload_truncated": false,
-      "payload_bytes": 1019,
-      "payload_json_valid": true,
-      "conversion_event_names": [],
-      "channels_detected": [
-        "115360-cg+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+i\u010d"
-      ],
-      "payload_analysis": {
-        "conversion_count": 0,
-        "touchpoint_count": 1,
-        "conversion_event_counts": {},
-        "channel_counts": {
-          "115360-cg+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+i\u010d": 1
-        },
-        "source_counts": {
-          "115360-CG+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+I\u010c": 2
-        },
-        "medium_counts": {
-          "email": 2
-        },
-        "campaign_counts": {
-          "not_set": 2
-        },
-        "value_field_counts": {},
-        "currency_field_counts": {},
-        "dedup_key_counts": {
-          "conversion_id": 0,
-          "order_id": 0,
-          "event_id": 0
-        }
-      }
-    },
-    {
-      "received_at": "2026-03-20T09:42:53.769457Z",
-      "received_count": 1,
-      "stored_total": 6322,
-      "replace": false,
-      "ip": "172.18.0.1",
-      "user_agent": "Bun/1.3.10",
-      "payload_shape": "object",
-      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"cc76ad39-bf95-47ae-9c3d-49e37b81acd8\",\n      \"journey_id\": \"j_be431275\",\n      \"customer\": {\n        \"id\": \"cc76ad39-bf95-47ae-9c3d-49e37b81acd8\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-12T08:27:21.131+01:00\",\n          \"ts\": \"2026-03-12T08:27:21.131+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"17631619417\",\n            \"name\": \"not_set\"\n          }\n        },\n        {\n          \"id\": \"tp_2\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-12T08:29:44.864+01:00\",\n          \"ts\": \"2026-03-12T08:29:44.864+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"17631619414\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
-      "payload_truncated": false,
-      "payload_bytes": 1394,
-      "payload_json_valid": true,
-      "conversion_event_names": [],
-      "channels_detected": [
-        "direct"
-      ],
-      "payload_analysis": {
-        "conversion_count": 0,
-        "touchpoint_count": 2,
-        "conversion_event_counts": {},
-        "channel_counts": {
-          "direct": 2
-        },
-        "source_counts": {
-          "direct": 4
-        },
-        "medium_counts": {
-          "none": 4
-        },
-        "campaign_counts": {
-          "not_set": 4
-        },
-        "value_field_counts": {},
-        "currency_field_counts": {},
-        "dedup_key_counts": {
-          "conversion_id": 0,
-          "order_id": 0,
-          "event_id": 0
-        }
-      }
-    },
-    {
-      "received_at": "2026-03-20T09:42:54.459178Z",
-      "received_count": 1,
-      "stored_total": 6323,
-      "replace": false,
-      "ip": "172.18.0.1",
-      "user_agent": "Bun/1.3.10",
-      "payload_shape": "object",
-      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"81ca5bb9-3b90-4a44-899b-1a5b4a8202bf\",\n      \"journey_id\": \"j_47a7c71f\",\n      \"customer\": {\n        \"id\": \"81ca5bb9-3b90-4a44-899b-1a5b4a8202bf\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T10:42:40.789+01:00\",\n          \"ts\": \"2026-03-20T10:42:40.789+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"17631619579\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
-      "payload_truncated": false,
-      "payload_bytes": 899,
-      "payload_json_valid": true,
-      "conversion_event_names": [],
-      "channels_detected": [
-        "direct"
-      ],
-      "payload_analysis": {
-        "conversion_count": 0,
-        "touchpoint_count": 1,
-        "conversion_event_counts": {},
-        "channel_counts": {
-          "direct": 1
-        },
-        "source_counts": {
-          "direct": 2
-        },
-        "medium_counts": {
-          "none": 2
-        },
-        "campaign_counts": {
-          "not_set": 2
-        },
-        "value_field_counts": {},
-        "currency_field_counts": {},
-        "dedup_key_counts": {
-          "conversion_id": 0,
-          "order_id": 0,
-          "event_id": 0
-        }
-      }
-    },
-    {
-      "received_at": "2026-03-20T09:42:55.457849Z",
-      "received_count": 1,
-      "stored_total": 6324,
-      "replace": false,
-      "ip": "172.18.0.1",
-      "user_agent": "Bun/1.3.10",
-      "payload_shape": "object",
-      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"f61234ee-8607-4cc1-bb7a-2223cf1f4646\",\n      \"journey_id\": \"j_ab6985f2\",\n      \"customer\": {\n        \"id\": \"f61234ee-8607-4cc1-bb7a-2223cf1f4646\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-12T08:29:44.915+01:00\",\n          \"ts\": \"2026-03-12T08:29:44.915+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"17631619414\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
-      "payload_truncated": false,
-      "payload_bytes": 899,
-      "payload_json_valid": true,
-      "conversion_event_names": [],
-      "channels_detected": [
-        "direct"
-      ],
-      "payload_analysis": {
-        "conversion_count": 0,
-        "touchpoint_count": 1,
-        "conversion_event_counts": {},
-        "channel_counts": {
-          "direct": 1
-        },
-        "source_counts": {
-          "direct": 2
-        },
-        "medium_counts": {
-          "none": 2
-        },
-        "campaign_counts": {
-          "not_set": 2
-        },
-        "value_field_counts": {},
-        "currency_field_counts": {},
-        "dedup_key_counts": {
-          "conversion_id": 0,
-          "order_id": 0,
-          "event_id": 0
-        }
-      }
-    },
-    {
-      "received_at": "2026-03-20T09:42:59.437889Z",
-      "received_count": 1,
-      "stored_total": 6325,
-      "replace": false,
-      "ip": "172.18.0.1",
-      "user_agent": "Bun/1.3.10",
-      "payload_shape": "object",
-      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"d8c40431-ee90-4f8b-945f-eb31bf60549e\",\n      \"journey_id\": \"j_6da8f2f7\",\n      \"customer\": {\n        \"id\": \"d8c40431-ee90-4f8b-945f-eb31bf60549e\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T10:42:54.639+01:00\",\n          \"ts\": \"2026-03-20T10:42:54.639+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"20630966350\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
-      "payload_truncated": false,
-      "payload_bytes": 899,
-      "payload_json_valid": true,
-      "conversion_event_names": [],
-      "channels_detected": [
-        "direct"
-      ],
-      "payload_analysis": {
-        "conversion_count": 0,
-        "touchpoint_count": 1,
-        "conversion_event_counts": {},
-        "channel_counts": {
-          "direct": 1
-        },
-        "source_counts": {
-          "direct": 2
-        },
-        "medium_counts": {
-          "none": 2
-        },
-        "campaign_counts": {
-          "not_set": 2
-        },
-        "value_field_counts": {},
-        "currency_field_counts": {},
-        "dedup_key_counts": {
-          "conversion_id": 0,
-          "order_id": 0,
-          "event_id": 0
-        }
-      }
-    },
-    {
-      "received_at": "2026-03-20T09:43:00.079046Z",
-      "received_count": 1,
-      "stored_total": 6326,
-      "replace": false,
-      "ip": "172.18.0.1",
-      "user_agent": "Bun/1.3.10",
-      "payload_shape": "object",
-      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"81ca5bb9-3b90-4a44-899b-1a5b4a8202bf\",\n      \"journey_id\": \"j_47a7c71f\",\n      \"customer\": {\n        \"id\": \"81ca5bb9-3b90-4a44-899b-1a5b4a8202bf\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T10:42:40.789+01:00\",\n          \"ts\": \"2026-03-20T10:42:40.789+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"17631619579\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
-      "payload_truncated": false,
-      "payload_bytes": 899,
-      "payload_json_valid": true,
-      "conversion_event_names": [],
-      "channels_detected": [
-        "direct"
-      ],
-      "payload_analysis": {
-        "conversion_count": 0,
-        "touchpoint_count": 1,
-        "conversion_event_counts": {},
-        "channel_counts": {
-          "direct": 1
-        },
-        "source_counts": {
-          "direct": 2
-        },
-        "medium_counts": {
-          "none": 2
-        },
-        "campaign_counts": {
-          "not_set": 2
-        },
-        "value_field_counts": {},
-        "currency_field_counts": {},
-        "dedup_key_counts": {
-          "conversion_id": 0,
-          "order_id": 0,
-          "event_id": 0
-        }
-      }
-    },
-    {
-      "received_at": "2026-03-20T09:43:10.359105Z",
-      "received_count": 1,
-      "stored_total": 6327,
-      "replace": false,
-      "ip": "172.18.0.1",
-      "user_agent": "Bun/1.3.10",
-      "payload_shape": "object",
-      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"d8c40431-ee90-4f8b-945f-eb31bf60549e\",\n      \"journey_id\": \"j_6da8f2f7\",\n      \"customer\": {\n        \"id\": \"d8c40431-ee90-4f8b-945f-eb31bf60549e\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T10:42:54.639+01:00\",\n          \"ts\": \"2026-03-20T10:42:54.639+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"20630966350\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
-      "payload_truncated": false,
-      "payload_bytes": 899,
-      "payload_json_valid": true,
-      "conversion_event_names": [],
-      "channels_detected": [
-        "direct"
-      ],
-      "payload_analysis": {
-        "conversion_count": 0,
-        "touchpoint_count": 1,
-        "conversion_event_counts": {},
-        "channel_counts": {
-          "direct": 1
-        },
-        "source_counts": {
-          "direct": 2
-        },
-        "medium_counts": {
-          "none": 2
-        },
-        "campaign_counts": {
-          "not_set": 2
-        },
-        "value_field_counts": {},
-        "currency_field_counts": {},
-        "dedup_key_counts": {
-          "conversion_id": 0,
-          "order_id": 0,
-          "event_id": 0
-        }
-      }
-    },
-    {
-      "received_at": "2026-03-20T09:43:10.695876Z",
-      "received_count": 1,
-      "stored_total": 6328,
-      "replace": false,
-      "ip": "172.18.0.1",
-      "user_agent": "Bun/1.3.10",
-      "payload_shape": "object",
-      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"54d50ca7-b430-4d82-a086-596993ee26f7\",\n      \"journey_id\": \"j_874110a0\",\n      \"customer\": {\n        \"id\": \"54d50ca7-b430-4d82-a086-596993ee26f7\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"115360-cg+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+i\u010d\",\n          \"timestamp\": \"2026-03-20T10:42:37.53+01:00\",\n          \"ts\": \"2026-03-20T10:42:37.53+01:00\",\n          \"source\": \"115360-CG+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+I\u010c\",\n          \"medium\": \"email\",\n          \"utm\": {\n            \"source\": \"115360-CG+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+I\u010c\",\n            \"medium\": \"email\",\n            \"campaign\": \"not_set\",\n            \"content\": \"expresn\u011b+do+dvou+hodin\"\n          },\n          \"campaign\": {\n            \"id\": null,\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
-      "payload_truncated": false,
-      "payload_bytes": 1019,
-      "payload_json_valid": true,
-      "conversion_event_names": [],
-      "channels_detected": [
-        "115360-cg+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+i\u010d"
-      ],
-      "payload_analysis": {
-        "conversion_count": 0,
-        "touchpoint_count": 1,
-        "conversion_event_counts": {},
-        "channel_counts": {
-          "115360-cg+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+i\u010d": 1
-        },
-        "source_counts": {
-          "115360-CG+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+I\u010c": 2
-        },
-        "medium_counts": {
-          "email": 2
-        },
-        "campaign_counts": {
-          "not_set": 2
-        },
-        "value_field_counts": {},
-        "currency_field_counts": {},
-        "dedup_key_counts": {
-          "conversion_id": 0,
-          "order_id": 0,
-          "event_id": 0
-        }
-      }
-    },
-    {
-      "received_at": "2026-03-20T09:43:11.269784Z",
-      "received_count": 1,
-      "stored_total": 6329,
-      "replace": false,
-      "ip": "172.18.0.1",
-      "user_agent": "Bun/1.3.10",
-      "payload_shape": "object",
-      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"54d50ca7-b430-4d82-a086-596993ee26f7\",\n      \"journey_id\": \"j_874110a0\",\n      \"customer\": {\n        \"id\": \"54d50ca7-b430-4d82-a086-596993ee26f7\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"115360-cg+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+i\u010d\",\n          \"timestamp\": \"2026-03-20T10:42:37.53+01:00\",\n          \"ts\": \"2026-03-20T10:42:37.53+01:00\",\n          \"source\": \"115360-CG+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+I\u010c\",\n          \"medium\": \"email\",\n          \"utm\": {\n            \"source\": \"115360-CG+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+I\u010c\",\n            \"medium\": \"email\",\n            \"campaign\": \"not_set\",\n            \"content\": \"expresn\u011b+do+dvou+hodin\"\n          },\n          \"campaign\": {\n            \"id\": null,\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
-      "payload_truncated": false,
-      "payload_bytes": 1019,
-      "payload_json_valid": true,
-      "conversion_event_names": [],
-      "channels_detected": [
-        "115360-cg+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+i\u010d"
-      ],
-      "payload_analysis": {
-        "conversion_count": 0,
-        "touchpoint_count": 1,
-        "conversion_event_counts": {},
-        "channel_counts": {
-          "115360-cg+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+i\u010d": 1
-        },
-        "source_counts": {
-          "115360-CG+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+I\u010c": 2
-        },
-        "medium_counts": {
-          "email": 2
-        },
-        "campaign_counts": {
-          "not_set": 2
-        },
-        "value_field_counts": {},
-        "currency_field_counts": {},
-        "dedup_key_counts": {
-          "conversion_id": 0,
-          "order_id": 0,
-          "event_id": 0
-        }
-      }
-    },
-    {
-      "received_at": "2026-03-20T09:43:14.904122Z",
-      "received_count": 1,
-      "stored_total": 6330,
-      "replace": false,
-      "ip": "172.18.0.1",
-      "user_agent": "Bun/1.3.10",
-      "payload_shape": "object",
-      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"afba7a8a-acff-40cb-aad9-0c84f195cc09\",\n      \"journey_id\": \"j_c5fb8a02\",\n      \"customer\": {\n        \"id\": \"afba7a8a-acff-40cb-aad9-0c84f195cc09\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T10:43:12.225+01:00\",\n          \"ts\": \"2026-03-20T10:43:12.225+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"20630966350\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
-      "payload_truncated": false,
-      "payload_bytes": 899,
-      "payload_json_valid": true,
-      "conversion_event_names": [],
-      "channels_detected": [
-        "direct"
-      ],
-      "payload_analysis": {
-        "conversion_count": 0,
-        "touchpoint_count": 1,
-        "conversion_event_counts": {},
-        "channel_counts": {
-          "direct": 1
-        },
-        "source_counts": {
-          "direct": 2
-        },
-        "medium_counts": {
-          "none": 2
-        },
-        "campaign_counts": {
-          "not_set": 2
-        },
-        "value_field_counts": {},
-        "currency_field_counts": {},
-        "dedup_key_counts": {
-          "conversion_id": 0,
-          "order_id": 0,
-          "event_id": 0
-        }
-      }
-    },
-    {
-      "received_at": "2026-03-20T09:43:19.335686Z",
-      "received_count": 1,
-      "stored_total": 6331,
-      "replace": false,
-      "ip": "172.18.0.1",
-      "user_agent": "Bun/1.3.10",
-      "payload_shape": "object",
-      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"81ca5bb9-3b90-4a44-899b-1a5b4a8202bf\",\n      \"journey_id\": \"j_47a7c71f\",\n      \"customer\": {\n        \"id\": \"81ca5bb9-3b90-4a44-899b-1a5b4a8202bf\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T10:42:40.789+01:00\",\n          \"ts\": \"2026-03-20T10:42:40.789+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"17631619579\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
-      "payload_truncated": false,
-      "payload_bytes": 899,
-      "payload_json_valid": true,
-      "conversion_event_names": [],
-      "channels_detected": [
-        "direct"
-      ],
-      "payload_analysis": {
-        "conversion_count": 0,
-        "touchpoint_count": 1,
-        "conversion_event_counts": {},
-        "channel_counts": {
-          "direct": 1
-        },
-        "source_counts": {
-          "direct": 2
-        },
-        "medium_counts": {
-          "none": 2
-        },
-        "campaign_counts": {
-          "not_set": 2
-        },
-        "value_field_counts": {},
-        "currency_field_counts": {},
-        "dedup_key_counts": {
-          "conversion_id": 0,
-          "order_id": 0,
-          "event_id": 0
-        }
-      }
-    },
-    {
-      "received_at": "2026-03-20T09:43:19.674702Z",
-      "received_count": 1,
-      "stored_total": 6332,
-      "replace": false,
-      "ip": "172.18.0.1",
-      "user_agent": "Bun/1.3.10",
-      "payload_shape": "object",
-      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"d8c40431-ee90-4f8b-945f-eb31bf60549e\",\n      \"journey_id\": \"j_6da8f2f7\",\n      \"customer\": {\n        \"id\": \"d8c40431-ee90-4f8b-945f-eb31bf60549e\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T10:42:54.639+01:00\",\n          \"ts\": \"2026-03-20T10:42:54.639+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"20630966350\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
-      "payload_truncated": false,
-      "payload_bytes": 899,
-      "payload_json_valid": true,
-      "conversion_event_names": [],
-      "channels_detected": [
-        "direct"
-      ],
-      "payload_analysis": {
-        "conversion_count": 0,
-        "touchpoint_count": 1,
-        "conversion_event_counts": {},
-        "channel_counts": {
-          "direct": 1
-        },
-        "source_counts": {
-          "direct": 2
-        },
-        "medium_counts": {
-          "none": 2
-        },
-        "campaign_counts": {
-          "not_set": 2
-        },
-        "value_field_counts": {},
-        "currency_field_counts": {},
-        "dedup_key_counts": {
-          "conversion_id": 0,
-          "order_id": 0,
-          "event_id": 0
-        }
-      }
-    },
-    {
-      "received_at": "2026-03-20T09:43:24.237263Z",
-      "received_count": 1,
-      "stored_total": 6333,
-      "replace": false,
-      "ip": "172.18.0.1",
-      "user_agent": "Bun/1.3.10",
-      "payload_shape": "object",
-      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"d8c40431-ee90-4f8b-945f-eb31bf60549e\",\n      \"journey_id\": \"j_6da8f2f7\",\n      \"customer\": {\n        \"id\": \"d8c40431-ee90-4f8b-945f-eb31bf60549e\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T10:42:54.639+01:00\",\n          \"ts\": \"2026-03-20T10:42:54.639+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"20630966350\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
-      "payload_truncated": false,
-      "payload_bytes": 899,
-      "payload_json_valid": true,
-      "conversion_event_names": [],
-      "channels_detected": [
-        "direct"
-      ],
-      "payload_analysis": {
-        "conversion_count": 0,
-        "touchpoint_count": 1,
-        "conversion_event_counts": {},
-        "channel_counts": {
-          "direct": 1
-        },
-        "source_counts": {
-          "direct": 2
-        },
-        "medium_counts": {
-          "none": 2
-        },
-        "campaign_counts": {
-          "not_set": 2
-        },
-        "value_field_counts": {},
-        "currency_field_counts": {},
-        "dedup_key_counts": {
-          "conversion_id": 0,
-          "order_id": 0,
-          "event_id": 0
-        }
-      }
-    },
-    {
-      "received_at": "2026-03-20T09:43:29.627472Z",
-      "received_count": 1,
-      "stored_total": 6334,
-      "replace": false,
-      "ip": "172.18.0.1",
-      "user_agent": "Bun/1.3.10",
-      "payload_shape": "object",
-      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"d8c40431-ee90-4f8b-945f-eb31bf60549e\",\n      \"journey_id\": \"j_6da8f2f7\",\n      \"customer\": {\n        \"id\": \"d8c40431-ee90-4f8b-945f-eb31bf60549e\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T10:42:54.639+01:00\",\n          \"ts\": \"2026-03-20T10:42:54.639+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"20630966350\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
-      "payload_truncated": false,
-      "payload_bytes": 899,
-      "payload_json_valid": true,
-      "conversion_event_names": [],
-      "channels_detected": [
-        "direct"
-      ],
-      "payload_analysis": {
-        "conversion_count": 0,
-        "touchpoint_count": 1,
-        "conversion_event_counts": {},
-        "channel_counts": {
-          "direct": 1
-        },
-        "source_counts": {
-          "direct": 2
-        },
-        "medium_counts": {
-          "none": 2
-        },
-        "campaign_counts": {
-          "not_set": 2
-        },
-        "value_field_counts": {},
-        "currency_field_counts": {},
-        "dedup_key_counts": {
-          "conversion_id": 0,
-          "order_id": 0,
-          "event_id": 0
-        }
-      }
-    },
-    {
-      "received_at": "2026-03-20T09:43:29.954609Z",
-      "received_count": 1,
-      "stored_total": 6335,
-      "replace": false,
-      "ip": "172.18.0.1",
-      "user_agent": "Bun/1.3.10",
-      "payload_shape": "object",
-      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"54d50ca7-b430-4d82-a086-596993ee26f7\",\n      \"journey_id\": \"j_874110a0\",\n      \"customer\": {\n        \"id\": \"54d50ca7-b430-4d82-a086-596993ee26f7\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"115360-cg+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+i\u010d\",\n          \"timestamp\": \"2026-03-20T10:42:37.53+01:00\",\n          \"ts\": \"2026-03-20T10:42:37.53+01:00\",\n          \"source\": \"115360-CG+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+I\u010c\",\n          \"medium\": \"email\",\n          \"utm\": {\n            \"source\": \"115360-CG+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+I\u010c\",\n            \"medium\": \"email\",\n            \"campaign\": \"not_set\",\n            \"content\": \"expresn\u011b+do+dvou+hodin\"\n          },\n          \"campaign\": {\n            \"id\": null,\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
-      "payload_truncated": false,
-      "payload_bytes": 1019,
-      "payload_json_valid": true,
-      "conversion_event_names": [],
-      "channels_detected": [
-        "115360-cg+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+i\u010d"
-      ],
-      "payload_analysis": {
-        "conversion_count": 0,
-        "touchpoint_count": 1,
-        "conversion_event_counts": {},
-        "channel_counts": {
-          "115360-cg+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+i\u010d": 1
-        },
-        "source_counts": {
-          "115360-CG+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+I\u010c": 2
-        },
-        "medium_counts": {
-          "email": 2
-        },
-        "campaign_counts": {
-          "not_set": 2
-        },
-        "value_field_counts": {},
-        "currency_field_counts": {},
-        "dedup_key_counts": {
-          "conversion_id": 0,
-          "order_id": 0,
-          "event_id": 0
-        }
-      }
-    },
-    {
-      "received_at": "2026-03-20T09:43:35.378259Z",
-      "received_count": 1,
-      "stored_total": 6336,
-      "replace": false,
-      "ip": "172.18.0.1",
-      "user_agent": "Bun/1.3.10",
-      "payload_shape": "object",
-      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"54d50ca7-b430-4d82-a086-596993ee26f7\",\n      \"journey_id\": \"j_874110a0\",\n      \"customer\": {\n        \"id\": \"54d50ca7-b430-4d82-a086-596993ee26f7\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"115360-cg+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+i\u010d\",\n          \"timestamp\": \"2026-03-20T10:42:37.53+01:00\",\n          \"ts\": \"2026-03-20T10:42:37.53+01:00\",\n          \"source\": \"115360-CG+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+I\u010c\",\n          \"medium\": \"email\",\n          \"utm\": {\n            \"source\": \"115360-CG+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+I\u010c\",\n            \"medium\": \"email\",\n            \"campaign\": \"not_set\",\n            \"content\": \"expresn\u011b+do+dvou+hodin\"\n          },\n          \"campaign\": {\n            \"id\": null,\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
-      "payload_truncated": false,
-      "payload_bytes": 1019,
-      "payload_json_valid": true,
-      "conversion_event_names": [],
-      "channels_detected": [
-        "115360-cg+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+i\u010d"
-      ],
-      "payload_analysis": {
-        "conversion_count": 0,
-        "touchpoint_count": 1,
-        "conversion_event_counts": {},
-        "channel_counts": {
-          "115360-cg+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+i\u010d": 1
-        },
-        "source_counts": {
-          "115360-CG+neregistrovan\u00fd+z\u00e1kazn\u00edk+s+I\u010c": 2
-        },
-        "medium_counts": {
-          "email": 2
-        },
-        "campaign_counts": {
-          "not_set": 2
-        },
-        "value_field_counts": {},
-        "currency_field_counts": {},
-        "dedup_key_counts": {
-          "conversion_id": 0,
-          "order_id": 0,
-          "event_id": 0
-        }
-      }
-    },
-    {
-      "received_at": "2026-03-20T09:44:56.021536Z",
-      "received_count": 1,
-      "stored_total": 6337,
-      "replace": false,
-      "ip": "172.18.0.1",
-      "user_agent": "Bun/1.3.10",
-      "payload_shape": "object",
-      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"8517f7e0-4d5d-4850-9f48-ed54ba3889bb\",\n      \"journey_id\": \"j_6194911e\",\n      \"customer\": {\n        \"id\": \"8517f7e0-4d5d-4850-9f48-ed54ba3889bb\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T10:44:51.181+01:00\",\n          \"ts\": \"2026-03-20T10:44:51.181+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"17631619414\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
-      "payload_truncated": false,
-      "payload_bytes": 899,
-      "payload_json_valid": true,
-      "conversion_event_names": [],
-      "channels_detected": [
-        "direct"
-      ],
-      "payload_analysis": {
-        "conversion_count": 0,
-        "touchpoint_count": 1,
-        "conversion_event_counts": {},
-        "channel_counts": {
-          "direct": 1
-        },
-        "source_counts": {
-          "direct": 2
-        },
-        "medium_counts": {
-          "none": 2
-        },
-        "campaign_counts": {
-          "not_set": 2
-        },
-        "value_field_counts": {},
-        "currency_field_counts": {},
-        "dedup_key_counts": {
-          "conversion_id": 0,
-          "order_id": 0,
-          "event_id": 0
-        }
-      }
-    },
-    {
-      "received_at": "2026-03-20T09:45:26.701566Z",
-      "received_count": 1,
-      "stored_total": 6338,
-      "replace": false,
-      "ip": "172.18.0.1",
-      "user_agent": "Bun/1.3.10",
-      "payload_shape": "object",
-      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"afba7a8a-acff-40cb-aad9-0c84f195cc09\",\n      \"journey_id\": \"j_c5fb8a02\",\n      \"customer\": {\n        \"id\": \"afba7a8a-acff-40cb-aad9-0c84f195cc09\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T10:43:12.225+01:00\",\n          \"ts\": \"2026-03-20T10:43:12.225+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"20630966350\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
-      "payload_truncated": false,
-      "payload_bytes": 899,
-      "payload_json_valid": true,
-      "conversion_event_names": [],
-      "channels_detected": [
-        "direct"
-      ],
-      "payload_analysis": {
-        "conversion_count": 0,
-        "touchpoint_count": 1,
-        "conversion_event_counts": {},
-        "channel_counts": {
-          "direct": 1
-        },
-        "source_counts": {
-          "direct": 2
-        },
-        "medium_counts": {
-          "none": 2
-        },
-        "campaign_counts": {
-          "not_set": 2
-        },
-        "value_field_counts": {},
-        "currency_field_counts": {},
-        "dedup_key_counts": {
-          "conversion_id": 0,
-          "order_id": 0,
-          "event_id": 0
-        }
-      }
-    },
-    {
-      "received_at": "2026-03-20T09:46:02.821408Z",
-      "received_count": 1,
-      "stored_total": 6339,
-      "replace": false,
-      "ip": "172.18.0.1",
-      "user_agent": "Bun/1.3.10",
-      "payload_shape": "object",
-      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"56bb4d2c-02b0-4904-8af3-ad807dcf58e8\",\n      \"journey_id\": \"j_b69416a6\",\n      \"customer\": {\n        \"id\": \"56bb4d2c-02b0-4904-8af3-ad807dcf58e8\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T10:45:54.538+01:00\",\n          \"ts\": \"2026-03-20T10:45:54.538+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"17631619414\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
-      "payload_truncated": false,
-      "payload_bytes": 899,
-      "payload_json_valid": true,
-      "conversion_event_names": [],
-      "channels_detected": [
-        "direct"
-      ],
-      "payload_analysis": {
-        "conversion_count": 0,
-        "touchpoint_count": 1,
-        "conversion_event_counts": {},
-        "channel_counts": {
-          "direct": 1
-        },
-        "source_counts": {
-          "direct": 2
-        },
-        "medium_counts": {
-          "none": 2
-        },
-        "campaign_counts": {
-          "not_set": 2
-        },
-        "value_field_counts": {},
-        "currency_field_counts": {},
-        "dedup_key_counts": {
-          "conversion_id": 0,
-          "order_id": 0,
-          "event_id": 0
-        }
-      }
-    },
-    {
-      "received_at": "2026-03-20T09:46:06.876140Z",
-      "received_count": 1,
-      "stored_total": 6340,
-      "replace": false,
-      "ip": "172.18.0.1",
-      "user_agent": "Bun/1.3.10",
-      "payload_shape": "object",
-      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"56bb4d2c-02b0-4904-8af3-ad807dcf58e8\",\n      \"journey_id\": \"j_b69416a6\",\n      \"customer\": {\n        \"id\": \"56bb4d2c-02b0-4904-8af3-ad807dcf58e8\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T10:45:54.538+01:00\",\n          \"ts\": \"2026-03-20T10:45:54.538+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"17631619414\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
-      "payload_truncated": false,
-      "payload_bytes": 899,
-      "payload_json_valid": true,
-      "conversion_event_names": [],
-      "channels_detected": [
-        "direct"
-      ],
-      "payload_analysis": {
-        "conversion_count": 0,
-        "touchpoint_count": 1,
-        "conversion_event_counts": {},
-        "channel_counts": {
-          "direct": 1
-        },
-        "source_counts": {
-          "direct": 2
-        },
-        "medium_counts": {
-          "none": 2
-        },
-        "campaign_counts": {
-          "not_set": 2
-        },
-        "value_field_counts": {},
-        "currency_field_counts": {},
-        "dedup_key_counts": {
-          "conversion_id": 0,
-          "order_id": 0,
-          "event_id": 0
-        }
-      }
-    },
-    {
-      "received_at": "2026-03-20T09:46:22.094352Z",
-      "received_count": 1,
-      "stored_total": 6341,
-      "replace": false,
-      "ip": "172.18.0.1",
-      "user_agent": "Bun/1.3.10",
-      "payload_shape": "object",
-      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"56bb4d2c-02b0-4904-8af3-ad807dcf58e8\",\n      \"journey_id\": \"j_b69416a6\",\n      \"customer\": {\n        \"id\": \"56bb4d2c-02b0-4904-8af3-ad807dcf58e8\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T10:45:54.538+01:00\",\n          \"ts\": \"2026-03-20T10:45:54.538+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"17631619414\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
-      "payload_truncated": false,
-      "payload_bytes": 899,
-      "payload_json_valid": true,
-      "conversion_event_names": [],
-      "channels_detected": [
-        "direct"
-      ],
-      "payload_analysis": {
-        "conversion_count": 0,
-        "touchpoint_count": 1,
-        "conversion_event_counts": {},
-        "channel_counts": {
-          "direct": 1
-        },
-        "source_counts": {
-          "direct": 2
-        },
-        "medium_counts": {
-          "none": 2
-        },
-        "campaign_counts": {
-          "not_set": 2
-        },
-        "value_field_counts": {},
-        "currency_field_counts": {},
-        "dedup_key_counts": {
-          "conversion_id": 0,
-          "order_id": 0,
-          "event_id": 0
-        }
-      }
-    },
     {
       "received_at": "2026-03-20T09:48:08.451952Z",
       "received_count": 1,
@@ -4080,6 +3137,949 @@
       "received_at": "2026-03-20T10:11:04.728675Z",
       "received_count": 1,
       "stored_total": 6418,
+      "replace": false,
+      "ip": "172.18.0.1",
+      "user_agent": "Bun/1.3.10",
+      "payload_shape": "object",
+      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"6a7fb2b0-0951-44ac-989a-de011c2f3d9d\",\n      \"journey_id\": \"j_fb4bc36f\",\n      \"customer\": {\n        \"id\": \"6a7fb2b0-0951-44ac-989a-de011c2f3d9d\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T11:04:09.929+01:00\",\n          \"ts\": \"2026-03-20T11:04:09.929+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"21554047612\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
+      "payload_truncated": false,
+      "payload_bytes": 899,
+      "payload_json_valid": true,
+      "conversion_event_names": [],
+      "channels_detected": [
+        "direct"
+      ],
+      "payload_analysis": {
+        "conversion_count": 0,
+        "touchpoint_count": 1,
+        "conversion_event_counts": {},
+        "channel_counts": {
+          "direct": 1
+        },
+        "source_counts": {
+          "direct": 2
+        },
+        "medium_counts": {
+          "none": 2
+        },
+        "campaign_counts": {
+          "not_set": 2
+        },
+        "value_field_counts": {},
+        "currency_field_counts": {},
+        "dedup_key_counts": {
+          "conversion_id": 0,
+          "order_id": 0,
+          "event_id": 0
+        }
+      }
+    },
+    {
+      "received_at": "2026-03-20T10:11:25.982168Z",
+      "received_count": 1,
+      "stored_total": 6419,
+      "replace": false,
+      "ip": "172.18.0.1",
+      "user_agent": "Bun/1.3.10",
+      "payload_shape": "object",
+      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"6a7fb2b0-0951-44ac-989a-de011c2f3d9d\",\n      \"journey_id\": \"j_fb4bc36f\",\n      \"customer\": {\n        \"id\": \"6a7fb2b0-0951-44ac-989a-de011c2f3d9d\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T11:04:09.929+01:00\",\n          \"ts\": \"2026-03-20T11:04:09.929+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"21554047612\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
+      "payload_truncated": false,
+      "payload_bytes": 899,
+      "payload_json_valid": true,
+      "conversion_event_names": [],
+      "channels_detected": [
+        "direct"
+      ],
+      "payload_analysis": {
+        "conversion_count": 0,
+        "touchpoint_count": 1,
+        "conversion_event_counts": {},
+        "channel_counts": {
+          "direct": 1
+        },
+        "source_counts": {
+          "direct": 2
+        },
+        "medium_counts": {
+          "none": 2
+        },
+        "campaign_counts": {
+          "not_set": 2
+        },
+        "value_field_counts": {},
+        "currency_field_counts": {},
+        "dedup_key_counts": {
+          "conversion_id": 0,
+          "order_id": 0,
+          "event_id": 0
+        }
+      }
+    },
+    {
+      "received_at": "2026-03-20T10:11:31.254399Z",
+      "received_count": 1,
+      "stored_total": 6420,
+      "replace": false,
+      "ip": "172.18.0.1",
+      "user_agent": "Bun/1.3.10",
+      "payload_shape": "object",
+      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"159deae3-9dfe-4d21-837b-e81f0ca048d9\",\n      \"journey_id\": \"j_6920517a\",\n      \"customer\": {\n        \"id\": \"159deae3-9dfe-4d21-837b-e81f0ca048d9\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"seznam\",\n          \"timestamp\": \"2026-03-20T11:09:08.971+01:00\",\n          \"ts\": \"2026-03-20T11:09:08.971+01:00\",\n          \"source\": \"seznam\",\n          \"medium\": \"cpc\",\n          \"utm\": {\n            \"source\": \"seznam\",\n            \"medium\": \"cpc\",\n            \"campaign\": \"PRINT-Brand\",\n            \"content\": \"copy general\"\n          },\n          \"campaign\": {\n            \"id\": null,\n            \"name\": \"PRINT-Brand\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
+      "payload_truncated": false,
+      "payload_bytes": 906,
+      "payload_json_valid": true,
+      "conversion_event_names": [],
+      "channels_detected": [
+        "seznam"
+      ],
+      "payload_analysis": {
+        "conversion_count": 0,
+        "touchpoint_count": 1,
+        "conversion_event_counts": {},
+        "channel_counts": {
+          "seznam": 1
+        },
+        "source_counts": {
+          "seznam": 2
+        },
+        "medium_counts": {
+          "cpc": 2
+        },
+        "campaign_counts": {
+          "PRINT-Brand": 2
+        },
+        "value_field_counts": {},
+        "currency_field_counts": {},
+        "dedup_key_counts": {
+          "conversion_id": 0,
+          "order_id": 0,
+          "event_id": 0
+        }
+      }
+    },
+    {
+      "received_at": "2026-03-20T10:11:35.786579Z",
+      "received_count": 1,
+      "stored_total": 6421,
+      "replace": false,
+      "ip": "172.18.0.1",
+      "user_agent": "Bun/1.3.10",
+      "payload_shape": "object",
+      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"6a7fb2b0-0951-44ac-989a-de011c2f3d9d\",\n      \"journey_id\": \"j_fb4bc36f\",\n      \"customer\": {\n        \"id\": \"6a7fb2b0-0951-44ac-989a-de011c2f3d9d\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T11:04:09.929+01:00\",\n          \"ts\": \"2026-03-20T11:04:09.929+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"21554047612\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
+      "payload_truncated": false,
+      "payload_bytes": 899,
+      "payload_json_valid": true,
+      "conversion_event_names": [],
+      "channels_detected": [
+        "direct"
+      ],
+      "payload_analysis": {
+        "conversion_count": 0,
+        "touchpoint_count": 1,
+        "conversion_event_counts": {},
+        "channel_counts": {
+          "direct": 1
+        },
+        "source_counts": {
+          "direct": 2
+        },
+        "medium_counts": {
+          "none": 2
+        },
+        "campaign_counts": {
+          "not_set": 2
+        },
+        "value_field_counts": {},
+        "currency_field_counts": {},
+        "dedup_key_counts": {
+          "conversion_id": 0,
+          "order_id": 0,
+          "event_id": 0
+        }
+      }
+    },
+    {
+      "received_at": "2026-03-20T10:11:40.996344Z",
+      "received_count": 1,
+      "stored_total": 6422,
+      "replace": false,
+      "ip": "172.18.0.1",
+      "user_agent": "Bun/1.3.10",
+      "payload_shape": "object",
+      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"6a7fb2b0-0951-44ac-989a-de011c2f3d9d\",\n      \"journey_id\": \"j_fb4bc36f\",\n      \"customer\": {\n        \"id\": \"6a7fb2b0-0951-44ac-989a-de011c2f3d9d\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T11:04:09.929+01:00\",\n          \"ts\": \"2026-03-20T11:04:09.929+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"21554047612\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
+      "payload_truncated": false,
+      "payload_bytes": 899,
+      "payload_json_valid": true,
+      "conversion_event_names": [],
+      "channels_detected": [
+        "direct"
+      ],
+      "payload_analysis": {
+        "conversion_count": 0,
+        "touchpoint_count": 1,
+        "conversion_event_counts": {},
+        "channel_counts": {
+          "direct": 1
+        },
+        "source_counts": {
+          "direct": 2
+        },
+        "medium_counts": {
+          "none": 2
+        },
+        "campaign_counts": {
+          "not_set": 2
+        },
+        "value_field_counts": {},
+        "currency_field_counts": {},
+        "dedup_key_counts": {
+          "conversion_id": 0,
+          "order_id": 0,
+          "event_id": 0
+        }
+      }
+    },
+    {
+      "received_at": "2026-03-20T10:11:50.749309Z",
+      "received_count": 1,
+      "stored_total": 6423,
+      "replace": false,
+      "ip": "172.18.0.1",
+      "user_agent": "Bun/1.3.10",
+      "payload_shape": "object",
+      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"6a7fb2b0-0951-44ac-989a-de011c2f3d9d\",\n      \"journey_id\": \"j_fb4bc36f\",\n      \"customer\": {\n        \"id\": \"6a7fb2b0-0951-44ac-989a-de011c2f3d9d\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T11:04:09.929+01:00\",\n          \"ts\": \"2026-03-20T11:04:09.929+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"21554047612\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
+      "payload_truncated": false,
+      "payload_bytes": 899,
+      "payload_json_valid": true,
+      "conversion_event_names": [],
+      "channels_detected": [
+        "direct"
+      ],
+      "payload_analysis": {
+        "conversion_count": 0,
+        "touchpoint_count": 1,
+        "conversion_event_counts": {},
+        "channel_counts": {
+          "direct": 1
+        },
+        "source_counts": {
+          "direct": 2
+        },
+        "medium_counts": {
+          "none": 2
+        },
+        "campaign_counts": {
+          "not_set": 2
+        },
+        "value_field_counts": {},
+        "currency_field_counts": {},
+        "dedup_key_counts": {
+          "conversion_id": 0,
+          "order_id": 0,
+          "event_id": 0
+        }
+      }
+    },
+    {
+      "received_at": "2026-03-20T10:11:55.750718Z",
+      "received_count": 1,
+      "stored_total": 6424,
+      "replace": false,
+      "ip": "172.18.0.1",
+      "user_agent": "Bun/1.3.10",
+      "payload_shape": "object",
+      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"6a7fb2b0-0951-44ac-989a-de011c2f3d9d\",\n      \"journey_id\": \"j_fb4bc36f\",\n      \"customer\": {\n        \"id\": \"6a7fb2b0-0951-44ac-989a-de011c2f3d9d\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T11:04:09.929+01:00\",\n          \"ts\": \"2026-03-20T11:04:09.929+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"21554047612\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
+      "payload_truncated": false,
+      "payload_bytes": 899,
+      "payload_json_valid": true,
+      "conversion_event_names": [],
+      "channels_detected": [
+        "direct"
+      ],
+      "payload_analysis": {
+        "conversion_count": 0,
+        "touchpoint_count": 1,
+        "conversion_event_counts": {},
+        "channel_counts": {
+          "direct": 1
+        },
+        "source_counts": {
+          "direct": 2
+        },
+        "medium_counts": {
+          "none": 2
+        },
+        "campaign_counts": {
+          "not_set": 2
+        },
+        "value_field_counts": {},
+        "currency_field_counts": {},
+        "dedup_key_counts": {
+          "conversion_id": 0,
+          "order_id": 0,
+          "event_id": 0
+        }
+      }
+    },
+    {
+      "received_at": "2026-03-20T10:12:17.097841Z",
+      "received_count": 1,
+      "stored_total": 6425,
+      "replace": false,
+      "ip": "172.18.0.1",
+      "user_agent": "Bun/1.3.10",
+      "payload_shape": "object",
+      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"6a7fb2b0-0951-44ac-989a-de011c2f3d9d\",\n      \"journey_id\": \"j_fb4bc36f\",\n      \"customer\": {\n        \"id\": \"6a7fb2b0-0951-44ac-989a-de011c2f3d9d\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T11:04:09.929+01:00\",\n          \"ts\": \"2026-03-20T11:04:09.929+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"21554047612\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
+      "payload_truncated": false,
+      "payload_bytes": 899,
+      "payload_json_valid": true,
+      "conversion_event_names": [],
+      "channels_detected": [
+        "direct"
+      ],
+      "payload_analysis": {
+        "conversion_count": 0,
+        "touchpoint_count": 1,
+        "conversion_event_counts": {},
+        "channel_counts": {
+          "direct": 1
+        },
+        "source_counts": {
+          "direct": 2
+        },
+        "medium_counts": {
+          "none": 2
+        },
+        "campaign_counts": {
+          "not_set": 2
+        },
+        "value_field_counts": {},
+        "currency_field_counts": {},
+        "dedup_key_counts": {
+          "conversion_id": 0,
+          "order_id": 0,
+          "event_id": 0
+        }
+      }
+    },
+    {
+      "received_at": "2026-03-20T10:12:21.723680Z",
+      "received_count": 1,
+      "stored_total": 6426,
+      "replace": false,
+      "ip": "172.18.0.1",
+      "user_agent": "Bun/1.3.10",
+      "payload_shape": "object",
+      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"159deae3-9dfe-4d21-837b-e81f0ca048d9\",\n      \"journey_id\": \"j_6920517a\",\n      \"customer\": {\n        \"id\": \"159deae3-9dfe-4d21-837b-e81f0ca048d9\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"seznam\",\n          \"timestamp\": \"2026-03-20T11:09:08.971+01:00\",\n          \"ts\": \"2026-03-20T11:09:08.971+01:00\",\n          \"source\": \"seznam\",\n          \"medium\": \"cpc\",\n          \"utm\": {\n            \"source\": \"seznam\",\n            \"medium\": \"cpc\",\n            \"campaign\": \"PRINT-Brand\",\n            \"content\": \"copy general\"\n          },\n          \"campaign\": {\n            \"id\": null,\n            \"name\": \"PRINT-Brand\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
+      "payload_truncated": false,
+      "payload_bytes": 906,
+      "payload_json_valid": true,
+      "conversion_event_names": [],
+      "channels_detected": [
+        "seznam"
+      ],
+      "payload_analysis": {
+        "conversion_count": 0,
+        "touchpoint_count": 1,
+        "conversion_event_counts": {},
+        "channel_counts": {
+          "seznam": 1
+        },
+        "source_counts": {
+          "seznam": 2
+        },
+        "medium_counts": {
+          "cpc": 2
+        },
+        "campaign_counts": {
+          "PRINT-Brand": 2
+        },
+        "value_field_counts": {},
+        "currency_field_counts": {},
+        "dedup_key_counts": {
+          "conversion_id": 0,
+          "order_id": 0,
+          "event_id": 0
+        }
+      }
+    },
+    {
+      "received_at": "2026-03-20T10:12:41.869886Z",
+      "received_count": 1,
+      "stored_total": 6427,
+      "replace": false,
+      "ip": "172.18.0.1",
+      "user_agent": "Bun/1.3.10",
+      "payload_shape": "object",
+      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"e7e10f79-041f-4009-98d3-d2a143da0163\",\n      \"journey_id\": \"j_353fb950\",\n      \"customer\": {\n        \"id\": \"e7e10f79-041f-4009-98d3-d2a143da0163\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T11:12:39.491+01:00\",\n          \"ts\": \"2026-03-20T11:12:39.491+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"21554047612\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
+      "payload_truncated": false,
+      "payload_bytes": 899,
+      "payload_json_valid": true,
+      "conversion_event_names": [],
+      "channels_detected": [
+        "direct"
+      ],
+      "payload_analysis": {
+        "conversion_count": 0,
+        "touchpoint_count": 1,
+        "conversion_event_counts": {},
+        "channel_counts": {
+          "direct": 1
+        },
+        "source_counts": {
+          "direct": 2
+        },
+        "medium_counts": {
+          "none": 2
+        },
+        "campaign_counts": {
+          "not_set": 2
+        },
+        "value_field_counts": {},
+        "currency_field_counts": {},
+        "dedup_key_counts": {
+          "conversion_id": 0,
+          "order_id": 0,
+          "event_id": 0
+        }
+      }
+    },
+    {
+      "received_at": "2026-03-20T10:12:52.162194Z",
+      "received_count": 1,
+      "stored_total": 6428,
+      "replace": false,
+      "ip": "172.18.0.1",
+      "user_agent": "Bun/1.3.10",
+      "payload_shape": "object",
+      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"6a7fb2b0-0951-44ac-989a-de011c2f3d9d\",\n      \"journey_id\": \"j_fb4bc36f\",\n      \"customer\": {\n        \"id\": \"6a7fb2b0-0951-44ac-989a-de011c2f3d9d\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T11:04:09.929+01:00\",\n          \"ts\": \"2026-03-20T11:04:09.929+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"21554047612\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
+      "payload_truncated": false,
+      "payload_bytes": 899,
+      "payload_json_valid": true,
+      "conversion_event_names": [],
+      "channels_detected": [
+        "direct"
+      ],
+      "payload_analysis": {
+        "conversion_count": 0,
+        "touchpoint_count": 1,
+        "conversion_event_counts": {},
+        "channel_counts": {
+          "direct": 1
+        },
+        "source_counts": {
+          "direct": 2
+        },
+        "medium_counts": {
+          "none": 2
+        },
+        "campaign_counts": {
+          "not_set": 2
+        },
+        "value_field_counts": {},
+        "currency_field_counts": {},
+        "dedup_key_counts": {
+          "conversion_id": 0,
+          "order_id": 0,
+          "event_id": 0
+        }
+      }
+    },
+    {
+      "received_at": "2026-03-20T10:13:07.032804Z",
+      "received_count": 1,
+      "stored_total": 6429,
+      "replace": false,
+      "ip": "172.18.0.1",
+      "user_agent": "Bun/1.3.10",
+      "payload_shape": "object",
+      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"6a7fb2b0-0951-44ac-989a-de011c2f3d9d\",\n      \"journey_id\": \"j_fb4bc36f\",\n      \"customer\": {\n        \"id\": \"6a7fb2b0-0951-44ac-989a-de011c2f3d9d\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T11:04:09.929+01:00\",\n          \"ts\": \"2026-03-20T11:04:09.929+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"21554047612\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
+      "payload_truncated": false,
+      "payload_bytes": 899,
+      "payload_json_valid": true,
+      "conversion_event_names": [],
+      "channels_detected": [
+        "direct"
+      ],
+      "payload_analysis": {
+        "conversion_count": 0,
+        "touchpoint_count": 1,
+        "conversion_event_counts": {},
+        "channel_counts": {
+          "direct": 1
+        },
+        "source_counts": {
+          "direct": 2
+        },
+        "medium_counts": {
+          "none": 2
+        },
+        "campaign_counts": {
+          "not_set": 2
+        },
+        "value_field_counts": {},
+        "currency_field_counts": {},
+        "dedup_key_counts": {
+          "conversion_id": 0,
+          "order_id": 0,
+          "event_id": 0
+        }
+      }
+    },
+    {
+      "received_at": "2026-03-20T10:13:07.186053Z",
+      "received_count": 1,
+      "stored_total": 6430,
+      "replace": false,
+      "ip": "172.18.0.1",
+      "user_agent": "Bun/1.3.10",
+      "payload_shape": "object",
+      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"e7e10f79-041f-4009-98d3-d2a143da0163\",\n      \"journey_id\": \"j_353fb950\",\n      \"customer\": {\n        \"id\": \"e7e10f79-041f-4009-98d3-d2a143da0163\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T11:12:39.491+01:00\",\n          \"ts\": \"2026-03-20T11:12:39.491+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"21554047612\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
+      "payload_truncated": false,
+      "payload_bytes": 899,
+      "payload_json_valid": true,
+      "conversion_event_names": [],
+      "channels_detected": [
+        "direct"
+      ],
+      "payload_analysis": {
+        "conversion_count": 0,
+        "touchpoint_count": 1,
+        "conversion_event_counts": {},
+        "channel_counts": {
+          "direct": 1
+        },
+        "source_counts": {
+          "direct": 2
+        },
+        "medium_counts": {
+          "none": 2
+        },
+        "campaign_counts": {
+          "not_set": 2
+        },
+        "value_field_counts": {},
+        "currency_field_counts": {},
+        "dedup_key_counts": {
+          "conversion_id": 0,
+          "order_id": 0,
+          "event_id": 0
+        }
+      }
+    },
+    {
+      "received_at": "2026-03-20T10:13:17.838009Z",
+      "received_count": 1,
+      "stored_total": 6431,
+      "replace": false,
+      "ip": "172.18.0.1",
+      "user_agent": "Bun/1.3.10",
+      "payload_shape": "object",
+      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"6a7fb2b0-0951-44ac-989a-de011c2f3d9d\",\n      \"journey_id\": \"j_fb4bc36f\",\n      \"customer\": {\n        \"id\": \"6a7fb2b0-0951-44ac-989a-de011c2f3d9d\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T11:04:09.929+01:00\",\n          \"ts\": \"2026-03-20T11:04:09.929+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"21554047612\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
+      "payload_truncated": false,
+      "payload_bytes": 899,
+      "payload_json_valid": true,
+      "conversion_event_names": [],
+      "channels_detected": [
+        "direct"
+      ],
+      "payload_analysis": {
+        "conversion_count": 0,
+        "touchpoint_count": 1,
+        "conversion_event_counts": {},
+        "channel_counts": {
+          "direct": 1
+        },
+        "source_counts": {
+          "direct": 2
+        },
+        "medium_counts": {
+          "none": 2
+        },
+        "campaign_counts": {
+          "not_set": 2
+        },
+        "value_field_counts": {},
+        "currency_field_counts": {},
+        "dedup_key_counts": {
+          "conversion_id": 0,
+          "order_id": 0,
+          "event_id": 0
+        }
+      }
+    },
+    {
+      "received_at": "2026-03-20T10:13:29.721786Z",
+      "received_count": 1,
+      "stored_total": 6432,
+      "replace": false,
+      "ip": "172.18.0.1",
+      "user_agent": "Bun/1.3.10",
+      "payload_shape": "object",
+      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"4bb0d59b-6dc4-4dce-86fa-b7a542a28573\",\n      \"journey_id\": \"j_da25bed2\",\n      \"customer\": {\n        \"id\": \"4bb0d59b-6dc4-4dce-86fa-b7a542a28573\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-19T22:34:23.723+01:00\",\n          \"ts\": \"2026-03-19T22:34:23.723+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"17631619414\",\n            \"name\": \"not_set\"\n          }\n        },\n        {\n          \"id\": \"tp_2\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-19T22:34:25.742+01:00\",\n          \"ts\": \"2026-03-19T22:34:25.742+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"17631619414\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
+      "payload_truncated": false,
+      "payload_bytes": 1394,
+      "payload_json_valid": true,
+      "conversion_event_names": [],
+      "channels_detected": [
+        "direct"
+      ],
+      "payload_analysis": {
+        "conversion_count": 0,
+        "touchpoint_count": 2,
+        "conversion_event_counts": {},
+        "channel_counts": {
+          "direct": 2
+        },
+        "source_counts": {
+          "direct": 4
+        },
+        "medium_counts": {
+          "none": 4
+        },
+        "campaign_counts": {
+          "not_set": 4
+        },
+        "value_field_counts": {},
+        "currency_field_counts": {},
+        "dedup_key_counts": {
+          "conversion_id": 0,
+          "order_id": 0,
+          "event_id": 0
+        }
+      }
+    },
+    {
+      "received_at": "2026-03-20T10:13:30.048800Z",
+      "received_count": 1,
+      "stored_total": 6433,
+      "replace": false,
+      "ip": "172.18.0.1",
+      "user_agent": "Bun/1.3.10",
+      "payload_shape": "object",
+      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"6a7fb2b0-0951-44ac-989a-de011c2f3d9d\",\n      \"journey_id\": \"j_fb4bc36f\",\n      \"customer\": {\n        \"id\": \"6a7fb2b0-0951-44ac-989a-de011c2f3d9d\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T11:04:09.929+01:00\",\n          \"ts\": \"2026-03-20T11:04:09.929+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"21554047612\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
+      "payload_truncated": false,
+      "payload_bytes": 899,
+      "payload_json_valid": true,
+      "conversion_event_names": [],
+      "channels_detected": [
+        "direct"
+      ],
+      "payload_analysis": {
+        "conversion_count": 0,
+        "touchpoint_count": 1,
+        "conversion_event_counts": {},
+        "channel_counts": {
+          "direct": 1
+        },
+        "source_counts": {
+          "direct": 2
+        },
+        "medium_counts": {
+          "none": 2
+        },
+        "campaign_counts": {
+          "not_set": 2
+        },
+        "value_field_counts": {},
+        "currency_field_counts": {},
+        "dedup_key_counts": {
+          "conversion_id": 0,
+          "order_id": 0,
+          "event_id": 0
+        }
+      }
+    },
+    {
+      "received_at": "2026-03-20T10:13:30.244715Z",
+      "received_count": 1,
+      "stored_total": 6434,
+      "replace": false,
+      "ip": "172.18.0.1",
+      "user_agent": "Bun/1.3.10",
+      "payload_shape": "object",
+      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"932af8f6-ed82-46af-84d4-f04faa6bd3ee\",\n      \"journey_id\": \"j_935c23af\",\n      \"customer\": {\n        \"id\": \"932af8f6-ed82-46af-84d4-f04faa6bd3ee\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-19T18:20:59.629+01:00\",\n          \"ts\": \"2026-03-19T18:20:59.629+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"22382566990\",\n            \"name\": \"not_set\"\n          }\n        },\n        {\n          \"id\": \"tp_2\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-19T18:45:07.742+01:00\",\n          \"ts\": \"2026-03-19T18:45:07.742+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"22382566990\",\n            \"name\": \"not_set\"\n          }\n        },\n        {\n          \"id\": \"tp_3\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T11:13:24.364+01:00\",\n          \"ts\": \"2026-03-20T11:13:24.364+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"22382566990\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
+      "payload_truncated": false,
+      "payload_bytes": 1889,
+      "payload_json_valid": true,
+      "conversion_event_names": [],
+      "channels_detected": [
+        "direct"
+      ],
+      "payload_analysis": {
+        "conversion_count": 0,
+        "touchpoint_count": 3,
+        "conversion_event_counts": {},
+        "channel_counts": {
+          "direct": 3
+        },
+        "source_counts": {
+          "direct": 6
+        },
+        "medium_counts": {
+          "none": 6
+        },
+        "campaign_counts": {
+          "not_set": 6
+        },
+        "value_field_counts": {},
+        "currency_field_counts": {},
+        "dedup_key_counts": {
+          "conversion_id": 0,
+          "order_id": 0,
+          "event_id": 0
+        }
+      }
+    },
+    {
+      "received_at": "2026-03-20T10:13:30.478201Z",
+      "received_count": 1,
+      "stored_total": 6435,
+      "replace": false,
+      "ip": "172.18.0.1",
+      "user_agent": "Bun/1.3.10",
+      "payload_shape": "object",
+      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"cd153bc5-56ba-4904-bb2c-993c963d820c\",\n      \"journey_id\": \"j_58390d97\",\n      \"customer\": {\n        \"id\": \"cd153bc5-56ba-4904-bb2c-993c963d820c\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-19T18:45:08.374+01:00\",\n          \"ts\": \"2026-03-19T18:45:08.374+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"22382566990\",\n            \"name\": \"not_set\"\n          }\n        },\n        {\n          \"id\": \"tp_2\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T11:13:25.154+01:00\",\n          \"ts\": \"2026-03-20T11:13:25.154+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"22382566990\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
+      "payload_truncated": false,
+      "payload_bytes": 1394,
+      "payload_json_valid": true,
+      "conversion_event_names": [],
+      "channels_detected": [
+        "direct"
+      ],
+      "payload_analysis": {
+        "conversion_count": 0,
+        "touchpoint_count": 2,
+        "conversion_event_counts": {},
+        "channel_counts": {
+          "direct": 2
+        },
+        "source_counts": {
+          "direct": 4
+        },
+        "medium_counts": {
+          "none": 4
+        },
+        "campaign_counts": {
+          "not_set": 4
+        },
+        "value_field_counts": {},
+        "currency_field_counts": {},
+        "dedup_key_counts": {
+          "conversion_id": 0,
+          "order_id": 0,
+          "event_id": 0
+        }
+      }
+    },
+    {
+      "received_at": "2026-03-20T10:13:34.331036Z",
+      "received_count": 1,
+      "stored_total": 6436,
+      "replace": false,
+      "ip": "172.18.0.1",
+      "user_agent": "Bun/1.3.10",
+      "payload_shape": "object",
+      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"e7e10f79-041f-4009-98d3-d2a143da0163\",\n      \"journey_id\": \"j_353fb950\",\n      \"customer\": {\n        \"id\": \"e7e10f79-041f-4009-98d3-d2a143da0163\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T11:12:39.491+01:00\",\n          \"ts\": \"2026-03-20T11:12:39.491+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"21554047612\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
+      "payload_truncated": false,
+      "payload_bytes": 899,
+      "payload_json_valid": true,
+      "conversion_event_names": [],
+      "channels_detected": [
+        "direct"
+      ],
+      "payload_analysis": {
+        "conversion_count": 0,
+        "touchpoint_count": 1,
+        "conversion_event_counts": {},
+        "channel_counts": {
+          "direct": 1
+        },
+        "source_counts": {
+          "direct": 2
+        },
+        "medium_counts": {
+          "none": 2
+        },
+        "campaign_counts": {
+          "not_set": 2
+        },
+        "value_field_counts": {},
+        "currency_field_counts": {},
+        "dedup_key_counts": {
+          "conversion_id": 0,
+          "order_id": 0,
+          "event_id": 0
+        }
+      }
+    },
+    {
+      "received_at": "2026-03-20T10:13:39.181982Z",
+      "received_count": 1,
+      "stored_total": 6437,
+      "replace": false,
+      "ip": "172.18.0.1",
+      "user_agent": "Bun/1.3.10",
+      "payload_shape": "object",
+      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"6a7fb2b0-0951-44ac-989a-de011c2f3d9d\",\n      \"journey_id\": \"j_fb4bc36f\",\n      \"customer\": {\n        \"id\": \"6a7fb2b0-0951-44ac-989a-de011c2f3d9d\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T11:04:09.929+01:00\",\n          \"ts\": \"2026-03-20T11:04:09.929+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"21554047612\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
+      "payload_truncated": false,
+      "payload_bytes": 899,
+      "payload_json_valid": true,
+      "conversion_event_names": [],
+      "channels_detected": [
+        "direct"
+      ],
+      "payload_analysis": {
+        "conversion_count": 0,
+        "touchpoint_count": 1,
+        "conversion_event_counts": {},
+        "channel_counts": {
+          "direct": 1
+        },
+        "source_counts": {
+          "direct": 2
+        },
+        "medium_counts": {
+          "none": 2
+        },
+        "campaign_counts": {
+          "not_set": 2
+        },
+        "value_field_counts": {},
+        "currency_field_counts": {},
+        "dedup_key_counts": {
+          "conversion_id": 0,
+          "order_id": 0,
+          "event_id": 0
+        }
+      }
+    },
+    {
+      "received_at": "2026-03-20T10:14:03.949180Z",
+      "received_count": 1,
+      "stored_total": 6438,
+      "replace": false,
+      "ip": "172.18.0.1",
+      "user_agent": "Bun/1.3.10",
+      "payload_shape": "object",
+      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"e7e10f79-041f-4009-98d3-d2a143da0163\",\n      \"journey_id\": \"j_353fb950\",\n      \"customer\": {\n        \"id\": \"e7e10f79-041f-4009-98d3-d2a143da0163\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T11:12:39.491+01:00\",\n          \"ts\": \"2026-03-20T11:12:39.491+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"21554047612\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
+      "payload_truncated": false,
+      "payload_bytes": 899,
+      "payload_json_valid": true,
+      "conversion_event_names": [],
+      "channels_detected": [
+        "direct"
+      ],
+      "payload_analysis": {
+        "conversion_count": 0,
+        "touchpoint_count": 1,
+        "conversion_event_counts": {},
+        "channel_counts": {
+          "direct": 1
+        },
+        "source_counts": {
+          "direct": 2
+        },
+        "medium_counts": {
+          "none": 2
+        },
+        "campaign_counts": {
+          "not_set": 2
+        },
+        "value_field_counts": {},
+        "currency_field_counts": {},
+        "dedup_key_counts": {
+          "conversion_id": 0,
+          "order_id": 0,
+          "event_id": 0
+        }
+      }
+    },
+    {
+      "received_at": "2026-03-20T10:14:43.981570Z",
+      "received_count": 1,
+      "stored_total": 6439,
+      "replace": false,
+      "ip": "172.18.0.1",
+      "user_agent": "Bun/1.3.10",
+      "payload_shape": "object",
+      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"e7e10f79-041f-4009-98d3-d2a143da0163\",\n      \"journey_id\": \"j_353fb950\",\n      \"customer\": {\n        \"id\": \"e7e10f79-041f-4009-98d3-d2a143da0163\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T11:12:39.491+01:00\",\n          \"ts\": \"2026-03-20T11:12:39.491+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"21554047612\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
+      "payload_truncated": false,
+      "payload_bytes": 899,
+      "payload_json_valid": true,
+      "conversion_event_names": [],
+      "channels_detected": [
+        "direct"
+      ],
+      "payload_analysis": {
+        "conversion_count": 0,
+        "touchpoint_count": 1,
+        "conversion_event_counts": {},
+        "channel_counts": {
+          "direct": 1
+        },
+        "source_counts": {
+          "direct": 2
+        },
+        "medium_counts": {
+          "none": 2
+        },
+        "campaign_counts": {
+          "not_set": 2
+        },
+        "value_field_counts": {},
+        "currency_field_counts": {},
+        "dedup_key_counts": {
+          "conversion_id": 0,
+          "order_id": 0,
+          "event_id": 0
+        }
+      }
+    },
+    {
+      "received_at": "2026-03-20T10:14:48.910109Z",
+      "received_count": 1,
+      "stored_total": 6440,
+      "replace": false,
+      "ip": "172.18.0.1",
+      "user_agent": "Bun/1.3.10",
+      "payload_shape": "object",
+      "payload_excerpt": "{\n  \"replace\": false,\n  \"profiles\": [\n    {\n      \"customer_id\": \"e7e10f79-041f-4009-98d3-d2a143da0163\",\n      \"journey_id\": \"j_353fb950\",\n      \"customer\": {\n        \"id\": \"e7e10f79-041f-4009-98d3-d2a143da0163\",\n        \"type\": \"profile_id\"\n      },\n      \"converted\": false,\n      \"conversion_value\": 0,\n      \"kpi_type\": \"conversion\",\n      \"touchpoints\": [\n        {\n          \"id\": \"tp_1\",\n          \"channel\": \"direct\",\n          \"timestamp\": \"2026-03-20T11:12:39.491+01:00\",\n          \"ts\": \"2026-03-20T11:12:39.491+01:00\",\n          \"source\": \"direct\",\n          \"medium\": \"none\",\n          \"utm\": {\n            \"source\": \"direct\",\n            \"medium\": \"none\",\n            \"campaign\": \"not_set\",\n            \"content\": null\n          },\n          \"campaign\": {\n            \"id\": \"21554047612\",\n            \"name\": \"not_set\"\n          }\n        }\n      ],\n      \"conversions\": []\n    }\n  ]\n}",
+      "payload_truncated": false,
+      "payload_bytes": 899,
+      "payload_json_valid": true,
+      "conversion_event_names": [],
+      "channels_detected": [
+        "direct"
+      ],
+      "payload_analysis": {
+        "conversion_count": 0,
+        "touchpoint_count": 1,
+        "conversion_event_counts": {},
+        "channel_counts": {
+          "direct": 1
+        },
+        "source_counts": {
+          "direct": 2
+        },
+        "medium_counts": {
+          "none": 2
+        },
+        "campaign_counts": {
+          "not_set": 2
+        },
+        "value_field_counts": {},
+        "currency_field_counts": {},
+        "dedup_key_counts": {
+          "conversion_id": 0,
+          "order_id": 0,
+          "event_id": 0
+        }
+      }
+    },
+    {
+      "received_at": "2026-03-20T10:20:36.648944Z",
+      "received_count": 1,
+      "stored_total": 6441,
       "replace": false,
       "ip": "172.18.0.1",
       "user_agent": "Bun/1.3.10",

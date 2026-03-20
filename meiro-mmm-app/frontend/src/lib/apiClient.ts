@@ -6,6 +6,10 @@ type ApiRequestOptions = Omit<RequestInit, 'headers'> & {
   fallbackMessage?: string
 }
 
+type CsrfRefreshPayload = {
+  csrf_token?: string | null
+}
+
 function isBrowser(): boolean {
   return typeof window !== 'undefined'
 }
@@ -72,13 +76,54 @@ export async function parseApiError(res: Response, fallbackMessage: string): Pro
   return new Error(fallbackMessage)
 }
 
+async function tryRefreshCsrfToken(): Promise<boolean> {
+  if (!isBrowser()) return false
+  try {
+    const res = await fetch('/api/auth/me', { method: 'GET' })
+    if (!res.ok) return false
+    const body = (await res.json()) as CsrfRefreshPayload
+    const csrf = (body?.csrf_token || '').trim()
+    if (!csrf) return false
+    window.localStorage.setItem('mmm-csrf-token', csrf)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function isCsrfFailure(res: Response): Promise<boolean> {
+  if (res.status !== 403) return false
+  try {
+    const cloned = res.clone()
+    const contentType = cloned.headers.get('content-type') || ''
+    if (!contentType.includes('application/json')) return false
+    const body = await cloned.json()
+    const detail = body?.detail
+    if (typeof detail === 'string') {
+      return detail === 'Missing CSRF token' || detail === 'Invalid CSRF token'
+    }
+  } catch {
+    // ignore parse errors
+  }
+  return false
+}
+
 export async function apiRequest(path: string, options: ApiRequestOptions = {}): Promise<Response> {
   const { auth = true, headers, fallbackMessage = `Request failed: ${path}`, body, ...rest } = options
-  const res = await fetch(path, {
-    ...rest,
-    body,
-    headers: mergeHeaders(headers, auth, body ?? null),
-  })
+  const makeRequest = () =>
+    fetch(path, {
+      ...rest,
+      body,
+      headers: mergeHeaders(headers, auth, body ?? null),
+    })
+
+  let res = await makeRequest()
+  if (auth && (rest.method || 'GET').toUpperCase() !== 'GET' && await isCsrfFailure(res)) {
+    const refreshed = await tryRefreshCsrfToken()
+    if (refreshed) {
+      res = await makeRequest()
+    }
+  }
   if (!res.ok) throw await parseApiError(res, fallbackMessage)
   return res
 }
