@@ -25,6 +25,18 @@ export interface MeiroMapping {
   channel_mapping?: Record<string, string>
 }
 
+export interface MeiroMappingState {
+  mapping: MeiroMapping
+  approval: {
+    status: string
+    note?: string | null
+    updated_at?: string | null
+  }
+  history: Array<Record<string, unknown>>
+  version: number
+  presets: Record<string, unknown>
+}
+
 export interface MeiroWebhookEvent {
   received_at: string
   received_count: number
@@ -91,8 +103,8 @@ export async function fetchMeiroCDPData(params: {
   })
 }
 
-export async function getMeiroMapping(): Promise<{ mapping: MeiroMapping; presets: Record<string, unknown> }> {
-  return apiGetJson<{ mapping: MeiroMapping; presets: Record<string, unknown> }>(
+export async function getMeiroMapping(): Promise<MeiroMappingState> {
+  return apiGetJson<MeiroMappingState>(
     '/api/connectors/meiro/mapping',
     { fallbackMessage: 'Failed to fetch mapping' },
   )
@@ -101,6 +113,12 @@ export async function getMeiroMapping(): Promise<{ mapping: MeiroMapping; preset
 export async function saveMeiroMapping(mapping: MeiroMapping) {
   return apiSendJson<any>('/api/connectors/meiro/mapping', 'POST', mapping, {
     fallbackMessage: 'Save failed',
+  })
+}
+
+export async function updateMeiroMappingApproval(payload: { status: string; note?: string }) {
+  return apiSendJson<any>('/api/connectors/meiro/mapping/approval', 'POST', payload, {
+    fallbackMessage: 'Failed to update mapping approval',
   })
 }
 

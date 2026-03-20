@@ -57,6 +57,7 @@ interface MeiroWebhookEvent {
   received_count: number
   stored_total: number
   replace: boolean
+  parser_version?: string | null
   ip?: string | null
   user_agent?: string | null
   payload_shape?: string | null
@@ -121,6 +122,35 @@ interface MeiroWebhookSuggestions {
     }
     mapping: Record<string, unknown>
   }
+}
+
+interface MeiroMappingState {
+  mapping: Record<string, unknown>
+  approval: {
+    status: string
+    note?: string | null
+    updated_at?: string | null
+  }
+  history: Array<Record<string, unknown>>
+  version: number
+  presets: Record<string, unknown>
+}
+
+interface MeiroWebhookArchiveStatus {
+  available: boolean
+  entries: number
+  last_received_at?: string | null
+  parser_versions: string[]
+}
+
+interface MeiroWebhookReprocessResult {
+  reprocessed_profiles: number
+  archive_entries_used: number
+  parser_version: string
+  mapping_version: number
+  mapping_approval_status: string
+  persisted_to_attribution: boolean
+  import_result?: { count?: number; message?: string }
 }
 
 // --- Threshold config per metric ---
@@ -300,6 +330,22 @@ export default function DataQuality() {
       ),
   })
 
+  const meiroMappingStateQuery = useQuery<MeiroMappingState>({
+    queryKey: ['meiro-mapping-state'],
+    queryFn: async () =>
+      apiGetJson<MeiroMappingState>('/api/connectors/meiro/mapping', {
+        fallbackMessage: 'Failed to load Meiro mapping state',
+      }),
+  })
+
+  const meiroWebhookArchiveStatusQuery = useQuery<MeiroWebhookArchiveStatus>({
+    queryKey: ['meiro-webhook-archive-status'],
+    queryFn: async () =>
+      apiGetJson<MeiroWebhookArchiveStatus>('/api/connectors/meiro/webhook/archive-status', {
+        fallbackMessage: 'Failed to load Meiro webhook archive status',
+      }),
+  })
+
   const applyKpiSuggestionsMutation = useMutation({
     mutationFn: async (payload: MeiroWebhookSuggestions['apply_payloads']['kpis']) =>
       apiSendJson('/api/kpis', 'POST', payload, { fallbackMessage: 'Failed to apply KPI suggestions' }),
@@ -317,8 +363,44 @@ export default function DataQuality() {
   const applyMappingSuggestionsMutation = useMutation({
     mutationFn: async (payload: MeiroWebhookSuggestions['apply_payloads']['mapping']) =>
       apiSendJson('/api/connectors/meiro/mapping', 'POST', payload, { fallbackMessage: 'Failed to apply Meiro mapping suggestions' }),
-    onSuccess: () => showToast('Meiro mapping suggestions applied.', 'success'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['meiro-mapping-state'] })
+      showToast('Meiro mapping suggestions applied.', 'success')
+    },
     onError: (err: Error) => showToast(err.message || 'Failed to apply Meiro mapping suggestions', 'error'),
+  })
+
+  const updateMappingApprovalMutation = useMutation({
+    mutationFn: async (payload: { status: string; note?: string }) =>
+      apiSendJson('/api/connectors/meiro/mapping/approval', 'POST', payload, {
+        fallbackMessage: 'Failed to update Meiro mapping approval',
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['meiro-mapping-state'] })
+      showToast('Meiro mapping approval updated.', 'success')
+    },
+    onError: (err: Error) => showToast(err.message || 'Failed to update Meiro mapping approval', 'error'),
+  })
+
+  const reprocessWebhookArchiveMutation = useMutation({
+    mutationFn: async () =>
+      apiSendJson<MeiroWebhookReprocessResult>('/api/connectors/meiro/webhook/reprocess', 'POST', {
+        persist_to_attribution: true,
+        import_note: 'Reprocessed from webhook archive using current approved mapping',
+      }, {
+        fallbackMessage: 'Failed to reprocess Meiro webhook archive',
+      }),
+    onSuccess: async (data) => {
+      await queryClient.invalidateQueries({ queryKey: ['journeys-summary'] })
+      await queryClient.invalidateQueries({ queryKey: ['journeys-validation-summary'] })
+      await queryClient.invalidateQueries({ queryKey: ['meiro-webhook-events-dq'] })
+      await queryClient.invalidateQueries({ queryKey: ['meiro-webhook-archive-status'] })
+      showToast(
+        `Reprocessed ${data.reprocessed_profiles} profiles with mapping v${data.mapping_version}.`,
+        'success',
+      )
+    },
+    onError: (err: Error) => showToast(err.message || 'Failed to reprocess Meiro webhook archive', 'error'),
   })
 
   const applyAllSuggestionsMutation = useMutation({
@@ -329,6 +411,7 @@ export default function DataQuality() {
     },
     onSuccess: () => {
       setShowApplyAllPreview(false)
+      queryClient.invalidateQueries({ queryKey: ['meiro-mapping-state'] })
       showToast('Applied KPI, taxonomy, and mapping suggestions.', 'success')
     },
     onError: (err: Error) => showToast(err.message || 'Failed to apply all suggestions', 'error'),
@@ -1105,13 +1188,25 @@ export default function DataQuality() {
               <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
                 Suggested field paths for importing flat webhook payloads through the Meiro CDP import flow.
               </div>
+              <div style={{ marginTop: t.space.xs, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                Current mapping version: <strong>{meiroMappingStateQuery.data?.version ?? 0}</strong>
+                {' '}· approval: <strong>{meiroMappingStateQuery.data?.approval?.status || 'unreviewed'}</strong>
+                {meiroMappingStateQuery.data?.approval?.updated_at ? (
+                  <> · updated: {new Date(meiroMappingStateQuery.data.approval.updated_at).toLocaleString()}</>
+                ) : null}
+              </div>
+              {meiroMappingStateQuery.data?.approval?.note ? (
+                <div style={{ marginTop: 4, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  Note: {meiroMappingStateQuery.data.approval.note}
+                </div>
+              ) : null}
               <div style={{ display: 'grid', gap: 4, marginTop: t.space.xs, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
                 <div>Touchpoints: <code>{String(meiroWebhookSuggestionsQuery.data.apply_payloads.mapping.touchpoint_attr || 'touchpoints')}</code></div>
                 <div>Value: <code>{String(meiroWebhookSuggestionsQuery.data.apply_payloads.mapping.value_attr || 'conversion_value')}</code></div>
                 <div>Source: <code>{String(meiroWebhookSuggestionsQuery.data.apply_payloads.mapping.source_field || 'source')}</code> · Medium: <code>{String(meiroWebhookSuggestionsQuery.data.apply_payloads.mapping.medium_field || 'medium')}</code></div>
                 <div>Campaign: <code>{String(meiroWebhookSuggestionsQuery.data.apply_payloads.mapping.campaign_field || 'campaign')}</code> · Channel: <code>{String(meiroWebhookSuggestionsQuery.data.apply_payloads.mapping.channel_field || 'channel')}</code></div>
               </div>
-              <div style={{ marginTop: t.space.sm }}>
+              <div style={{ marginTop: t.space.sm, display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
                 <button
                   type="button"
                   onClick={() => applyMappingSuggestionsMutation.mutate(meiroWebhookSuggestionsQuery.data.apply_payloads.mapping)}
@@ -1129,27 +1224,133 @@ export default function DataQuality() {
                 >
                   {applyMappingSuggestionsMutation.isPending ? 'Applying…' : 'Apply mapping suggestions'}
                 </button>
+                <button
+                  type="button"
+                  onClick={() => updateMappingApprovalMutation.mutate({ status: 'approved', note: 'Approved from webhook suggestions' })}
+                  disabled={updateMappingApprovalMutation.isPending}
+                  style={{
+                    padding: `${t.space.xs}px ${t.space.md}px`,
+                    fontSize: t.font.sizeSm,
+                    color: t.color.textSecondary,
+                    background: 'transparent',
+                    border: `1px solid ${t.color.border}`,
+                    borderRadius: t.radius.sm,
+                    cursor: updateMappingApprovalMutation.isPending ? 'wait' : 'pointer',
+                    opacity: updateMappingApprovalMutation.isPending ? 0.75 : 1,
+                  }}
+                >
+                  Approve mapping
+                </button>
+                <button
+                  type="button"
+                  onClick={() => updateMappingApprovalMutation.mutate({ status: 'rejected', note: 'Rejected from webhook suggestions review' })}
+                  disabled={updateMappingApprovalMutation.isPending}
+                  style={{
+                    padding: `${t.space.xs}px ${t.space.md}px`,
+                    fontSize: t.font.sizeSm,
+                    color: t.color.textSecondary,
+                    background: 'transparent',
+                    border: `1px solid ${t.color.border}`,
+                    borderRadius: t.radius.sm,
+                    cursor: updateMappingApprovalMutation.isPending ? 'wait' : 'pointer',
+                    opacity: updateMappingApprovalMutation.isPending ? 0.75 : 1,
+                  }}
+                >
+                  Reject mapping
+                </button>
+              </div>
+              {(meiroMappingStateQuery.data?.history || []).length ? (
+                <div style={{ marginTop: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  Recent mapping history:
+                  {(meiroMappingStateQuery.data?.history || []).slice(-3).reverse().map((item, index) => (
+                    <div key={index} style={{ marginTop: 4 }}>
+                      <code>{String(item.action || 'event')}</code> · {item.at ? new Date(String(item.at)).toLocaleString() : '—'}
+                      {item.status ? <> · status: <strong>{String(item.status)}</strong></> : null}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              <div style={{ marginTop: t.space.sm }}>
+                <button
+                  type="button"
+                  onClick={() => setShowApplyAllPreview(true)}
+                  disabled={applyAllSuggestionsMutation.isPending}
+                  style={{
+                    padding: `${t.space.xs}px ${t.space.md}px`,
+                    fontSize: t.font.sizeSm,
+                    color: '#fff',
+                    background: t.color.accent,
+                    border: 'none',
+                    borderRadius: t.radius.sm,
+                    cursor: applyAllSuggestionsMutation.isPending ? 'wait' : 'pointer',
+                    opacity: applyAllSuggestionsMutation.isPending ? 0.75 : 1,
+                  }}
+                >
+                  Apply all (preview first)
+                </button>
               </div>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <button
-                type="button"
-                onClick={() => setShowApplyAllPreview(true)}
-                disabled={applyAllSuggestionsMutation.isPending}
-                style={{
-                  padding: `${t.space.xs}px ${t.space.md}px`,
-                  fontSize: t.font.sizeSm,
-                  color: '#fff',
-                  background: t.color.accent,
-                  border: 'none',
-                  borderRadius: t.radius.sm,
-                  cursor: applyAllSuggestionsMutation.isPending ? 'wait' : 'pointer',
-                  opacity: applyAllSuggestionsMutation.isPending ? 0.75 : 1,
-                }}
-              >
-                Apply all (preview first)
-              </button>
+            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md }}>
+              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, marginBottom: t.space.xs }}>
+                Webhook replay
+              </div>
+              {meiroWebhookArchiveStatusQuery.isLoading ? (
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading webhook archive status…</div>
+              ) : meiroWebhookArchiveStatusQuery.isError ? (
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>
+                  {(meiroWebhookArchiveStatusQuery.error as Error)?.message || 'Failed to load webhook archive status'}
+                </div>
+              ) : meiroWebhookArchiveStatusQuery.data?.available ? (
+                <>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    Archived batches: <strong>{meiroWebhookArchiveStatusQuery.data.entries}</strong>
+                    {' '}· last received: <strong>{meiroWebhookArchiveStatusQuery.data.last_received_at ? new Date(meiroWebhookArchiveStatusQuery.data.last_received_at).toLocaleString() : '—'}</strong>
+                  </div>
+                  <div style={{ marginTop: 4, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    Parser versions in archive: <strong>{(meiroWebhookArchiveStatusQuery.data.parser_versions || []).join(', ') || '—'}</strong>
+                    {' '}· current parser: <strong>{meiroWebhookEventsQuery.data?.items?.[0]?.parser_version || 'current'}</strong>
+                  </div>
+                  <div style={{ marginTop: 4, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    Rebuilds stored Meiro profiles from archived webhook payloads and re-imports them using the current approved mapping.
+                  </div>
+                  <div style={{ marginTop: t.space.sm }}>
+                    <button
+                      type="button"
+                      onClick={() => reprocessWebhookArchiveMutation.mutate()}
+                      disabled={
+                        reprocessWebhookArchiveMutation.isPending ||
+                        meiroMappingStateQuery.data?.approval?.status !== 'approved'
+                      }
+                      style={{
+                        padding: `${t.space.xs}px ${t.space.md}px`,
+                        fontSize: t.font.sizeSm,
+                        color: '#fff',
+                        background: t.color.accent,
+                        border: 'none',
+                        borderRadius: t.radius.sm,
+                        cursor: reprocessWebhookArchiveMutation.isPending ? 'wait' : 'pointer',
+                        opacity:
+                          reprocessWebhookArchiveMutation.isPending ||
+                          meiroMappingStateQuery.data?.approval?.status !== 'approved'
+                            ? 0.75
+                            : 1,
+                      }}
+                    >
+                      {reprocessWebhookArchiveMutation.isPending ? 'Reprocessing…' : 'Reprocess archive into attribution'}
+                    </button>
+                  </div>
+                  {meiroMappingStateQuery.data?.approval?.status !== 'approved' ? (
+                    <div style={{ marginTop: 4, fontSize: t.font.sizeSm, color: t.color.warning }}>
+                      Approve the current mapping before replaying archived payloads.
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  No archived webhook payloads available yet.
+                </div>
+              )}
             </div>
           </div>
         ) : null}

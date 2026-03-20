@@ -1,6 +1,7 @@
 """Meiro integration config: metadata, mapping, webhook stats."""
 import json
 import secrets
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -182,13 +183,108 @@ def rebuild_profiles_from_webhook_archive(limit: Optional[int] = None) -> list[A
 
 
 def get_mapping() -> Dict[str, Any]:
-    return _load().get("mapping", {})
+    raw = _load().get("mapping", {})
+    if isinstance(raw, dict) and isinstance(raw.get("config"), dict):
+        return raw.get("config", {})
+    return raw if isinstance(raw, dict) else {}
 
 
 def save_mapping(mapping: Dict[str, Any]) -> None:
     d = _load()
-    d["mapping"] = mapping
+    existing = d.get("mapping", {})
+    history = []
+    approval = {"status": "approved", "note": None, "updated_at": None}
+    version = 0
+    if isinstance(existing, dict) and isinstance(existing.get("config"), dict):
+        history = list(existing.get("history") or [])
+        approval_raw = existing.get("approval")
+        if isinstance(approval_raw, dict):
+            approval.update({
+                "status": approval_raw.get("status") or approval["status"],
+                "note": approval_raw.get("note"),
+                "updated_at": approval_raw.get("updated_at"),
+            })
+        try:
+            version = int(existing.get("version") or 0)
+        except Exception:
+            version = 0
+        previous = existing.get("config")
+    else:
+        previous = existing if isinstance(existing, dict) else {}
+    now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    if previous != mapping:
+        history.append(
+            {
+                "at": now_iso,
+                "action": "mapping_saved",
+                "mapping": mapping,
+            }
+        )
+        history = history[-50:]
+        version += 1
+    approval["status"] = "approved"
+    approval["updated_at"] = now_iso
+    d["mapping"] = {
+        "config": mapping,
+        "approval": approval,
+        "history": history,
+        "version": max(version, 1),
+    }
     _save(d)
+
+
+def get_mapping_state() -> Dict[str, Any]:
+    raw = _load().get("mapping", {})
+    if isinstance(raw, dict) and isinstance(raw.get("config"), dict):
+        return {
+            "mapping": raw.get("config", {}),
+            "approval": raw.get("approval") or {"status": "approved", "note": None, "updated_at": None},
+            "history": raw.get("history") or [],
+            "version": raw.get("version") or 1,
+        }
+    if isinstance(raw, dict):
+        return {
+            "mapping": raw,
+            "approval": {"status": "approved", "note": None, "updated_at": None},
+            "history": [],
+            "version": 1 if raw else 0,
+        }
+    return {
+        "mapping": {},
+        "approval": {"status": "unreviewed", "note": None, "updated_at": None},
+        "history": [],
+        "version": 0,
+    }
+
+
+def update_mapping_approval(status: str, note: Optional[str] = None) -> Dict[str, Any]:
+    d = _load()
+    state = get_mapping_state()
+    normalized_status = status.strip().lower() if isinstance(status, str) else ""
+    if normalized_status not in {"approved", "rejected", "unreviewed"}:
+        normalized_status = "unreviewed"
+    now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    history = list(state.get("history") or [])
+    history.append(
+        {
+            "at": now_iso,
+            "action": "approval_updated",
+            "status": normalized_status,
+            "note": note,
+        }
+    )
+    d["mapping"] = {
+        "config": state.get("mapping", {}),
+        "approval": {
+            "status": normalized_status,
+            "note": note,
+            "updated_at": now_iso,
+        },
+        "history": history[-50:],
+        "version": state.get("version") or 0,
+    }
+    _save(d)
+    return get_mapping_state()
 
 
 def get_pull_config() -> Dict[str, Any]:

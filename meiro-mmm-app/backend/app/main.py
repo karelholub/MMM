@@ -245,12 +245,14 @@ from app.utils.meiro_config import (
     get_webhook_received_count,
     get_webhook_secret,
     get_mapping,
+    get_mapping_state,
     save_mapping,
     get_pull_config,
     save_pull_config,
     rotate_webhook_secret,
     rebuild_profiles_from_webhook_archive,
     set_webhook_received,
+    update_mapping_approval,
 )
 from app.attribution_engine import (
     run_attribution,
@@ -708,6 +710,11 @@ class MeiroWebhookReprocessRequest(BaseModel):
     persist_to_attribution: bool = False
     config_id: Optional[str] = None
     import_note: Optional[str] = None
+
+
+class MeiroMappingApprovalRequest(BaseModel):
+    status: str
+    note: Optional[str] = None
 
 
 class BuildFromPlatformRequest(BaseModel):
@@ -10165,6 +10172,7 @@ def meiro_webhook_reprocess(
     archived_profiles = rebuild_profiles_from_webhook_archive(limit=payload.archive_limit)
     if not archived_profiles:
         raise HTTPException(status_code=404, detail="No archived webhook payloads found to reprocess.")
+    mapping_state = get_mapping_state()
 
     out_path = DATA_DIR / "meiro_cdp_profiles.json"
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -10174,6 +10182,8 @@ def meiro_webhook_reprocess(
         "reprocessed_profiles": len(archived_profiles),
         "archive_entries_used": len(archive_entries),
         "parser_version": MEIRO_PARSER_VERSION,
+        "mapping_version": mapping_state.get("version") or 0,
+        "mapping_approval_status": ((mapping_state.get("approval") or {}).get("status") or "unreviewed"),
         "persisted_to_attribution": False,
     }
     if payload.persist_to_attribution:
@@ -10545,13 +10555,19 @@ MEIRO_MAPPING_PRESETS = {
 
 @app.get("/api/connectors/meiro/mapping")
 def meiro_get_mapping():
-    return {"mapping": get_mapping(), "presets": MEIRO_MAPPING_PRESETS}
+    return {**get_mapping_state(), "presets": MEIRO_MAPPING_PRESETS}
 
 
 @app.post("/api/connectors/meiro/mapping")
 def meiro_save_mapping(mapping: dict):
     save_mapping(mapping)
-    return {"message": "Mapping saved"}
+    return {"message": "Mapping saved", **get_mapping_state()}
+
+
+@app.post("/api/connectors/meiro/mapping/approval")
+def meiro_update_mapping_approval(payload: MeiroMappingApprovalRequest):
+    state = update_mapping_approval(payload.status, payload.note)
+    return {"message": "Mapping approval updated", **state}
 
 
 @app.get("/api/connectors/meiro/pull-config")
