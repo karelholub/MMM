@@ -19,9 +19,27 @@
       }
     },
     {
-      "name": "Auto: google",
-      "channel": "google",
+      "name": "Auto: 115360-cg neregistrovan\u00fd z\u00e1kazn\u00edk s i\u010d",
+      "channel": "115360-cg neregistrovan\u00fd z\u00e1kazn\u00edk s i\u010d",
       "priority": 20,
+      "enabled": false,
+      "source": {
+        "operator": "any",
+        "value": ""
+      },
+      "medium": {
+        "operator": "any",
+        "value": ""
+      },
+      "campaign": {
+        "operator": "any",
+        "value": ""
+      }
+    },
+    {
+      "name": "Auto: meta_ads",
+      "channel": "meta_ads",
+      "priority": 30,
       "enabled": true,
       "source": {
         "operator": "any",
@@ -37,9 +55,63 @@
       }
     },
     {
-      "name": "Auto: google_ads",
-      "channel": "google_ads",
-      "priority": 30,
+      "name": "Auto: pinterest",
+      "channel": "pinterest",
+      "priority": 40,
+      "enabled": true,
+      "source": {
+        "operator": "any",
+        "value": ""
+      },
+      "medium": {
+        "operator": "any",
+        "value": ""
+      },
+      "campaign": {
+        "operator": "any",
+        "value": ""
+      }
+    },
+    {
+      "name": "Auto: microsite",
+      "channel": "microsite",
+      "priority": 50,
+      "enabled": true,
+      "source": {
+        "operator": "any",
+        "value": ""
+      },
+      "medium": {
+        "operator": "any",
+        "value": ""
+      },
+      "campaign": {
+        "operator": "any",
+        "value": ""
+      }
+    },
+    {
+      "name": "Auto: home_page",
+      "channel": "home_page",
+      "priority": 60,
+      "enabled": true,
+      "source": {
+        "operator": "any",
+        "value": ""
+      },
+      "medium": {
+        "operator": "any",
+        "value": ""
+      },
+      "campaign": {
+        "operator": "any",
+        "value": ""
+      }
+    },
+    {
+      "name": "Auto: micrisite",
+      "channel": "micrisite",
+      "priority": 70,
       "enabled": true,
       "source": {
         "operator": "any",

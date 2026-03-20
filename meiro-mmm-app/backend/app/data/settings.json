@@ -33,13 +33,17 @@
     "scim_enabled": false,
     "sso_enabled": false
   },
+  "ads_governance": {
+    "require_approval": true,
+    "max_budget_change_pct": 30.0
+  },
   "revenue_config": {
     "conversion_names": [
-      "store_order"
+      "form_submit"
     ],
     "value_field_path": "value",
     "currency_field_path": "currency",
-    "dedup_key": "conversion_id",
+    "dedup_key": "event_id",
     "base_currency": "EUR",
     "fx_enabled": false,
     "fx_mode": "none",

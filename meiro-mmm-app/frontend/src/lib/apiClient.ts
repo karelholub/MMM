@@ -110,6 +110,12 @@ async function isCsrfFailure(res: Response): Promise<boolean> {
 
 export async function apiRequest(path: string, options: ApiRequestOptions = {}): Promise<Response> {
   const { auth = true, headers, fallbackMessage = `Request failed: ${path}`, body, ...rest } = options
+  const method = (rest.method || 'GET').toUpperCase()
+
+  if (auth && method !== 'GET') {
+    await tryRefreshCsrfToken()
+  }
+
   const makeRequest = () =>
     fetch(path, {
       ...rest,
@@ -118,7 +124,7 @@ export async function apiRequest(path: string, options: ApiRequestOptions = {}):
     })
 
   let res = await makeRequest()
-  if (auth && (rest.method || 'GET').toUpperCase() !== 'GET' && await isCsrfFailure(res)) {
+  if (auth && method !== 'GET' && await isCsrfFailure(res)) {
     const refreshed = await tryRefreshCsrfToken()
     if (refreshed) {
       res = await makeRequest()

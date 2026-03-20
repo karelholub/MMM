@@ -57,6 +57,7 @@ from app.services_model_config import (
     activate_config,
     archive_config,
     get_default_config_id,
+    validate_model_config,
 )
 from app.services_journey_settings import (
     activate_journey_settings_version,
