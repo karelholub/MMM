@@ -22,7 +22,7 @@
       "name": "Auto: 115360-cg neregistrovan\u00fd z\u00e1kazn\u00edk s i\u010d",
       "channel": "115360-cg neregistrovan\u00fd z\u00e1kazn\u00edk s i\u010d",
       "priority": 20,
-      "enabled": false,
+      "enabled": true,
       "source": {
         "operator": "any",
         "value": ""
@@ -37,8 +37,8 @@
       }
     },
     {
-      "name": "Auto: meta_ads",
-      "channel": "meta_ads",
+      "name": "Auto: mailkit",
+      "channel": "mailkit",
       "priority": 30,
       "enabled": true,
       "source": {
@@ -55,8 +55,8 @@
       }
     },
     {
-      "name": "Auto: pinterest",
-      "channel": "pinterest",
+      "name": "Auto: meta_ads",
+      "channel": "meta_ads",
       "priority": 40,
       "enabled": true,
       "source": {
@@ -112,6 +112,24 @@
       "name": "Auto: micrisite",
       "channel": "micrisite",
       "priority": 70,
+      "enabled": true,
+      "source": {
+        "operator": "any",
+        "value": ""
+      },
+      "medium": {
+        "operator": "any",
+        "value": ""
+      },
+      "campaign": {
+        "operator": "any",
+        "value": ""
+      }
+    },
+    {
+      "name": "Auto: search.seznam.cz",
+      "channel": "search.seznam.cz",
+      "priority": 80,
       "enabled": true,
       "source": {
         "operator": "any",

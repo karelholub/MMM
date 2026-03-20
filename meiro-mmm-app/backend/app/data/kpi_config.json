@@ -8,15 +8,6 @@
       "value_field": "value",
       "weight": 1.0,
       "lookback_days": 30
-    },
-    {
-      "id": "order_finalized",
-      "label": "Order finalized",
-      "type": "primary",
-      "event_name": "order_finalized",
-      "value_field": "value",
-      "weight": 1.0,
-      "lookback_days": 30
     }
   ],
   "primary_kpi_id": "form_submit"

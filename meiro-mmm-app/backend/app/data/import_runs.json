@@ -1,5 +1,260 @@
 [
 {
+"id": "4887a4bd-579",
+"source": "meiro_webhook",
+"started_at": "2026-03-20T12:16:47.586359Z",
+"finished_at": "2026-03-20T12:16:47.586359Z",
+"status": "success",
+"total": 6842,
+"valid": 6842,
+"invalid": 0,
+"converted": 56,
+"channels_detected": [
+"direct"
+],
+"validation_summary": {},
+"config_snapshot": {
+"mapping_preset": "saved",
+"schema_version": "1.0"
+},
+"initiated_by": null,
+"import_note": null,
+"error": null,
+"preview_rows": [
+{
+"customer_id": "unknown",
+"touchpoints": 18,
+"value": 1.0
+},
+{
+"customer_id": "4ab7cc61-1bf5-479e-ade9-7533fba0278b",
+"touchpoints": 60,
+"value": 1.0
+},
+{
+"customer_id": "4ab7cc61-1bf5-479e-ade9-7533fba0278b",
+"touchpoints": 61,
+"value": 1.0
+},
+{
+"customer_id": "33eef6b9-0e52-46ca-9d63-d6987772929e",
+"touchpoints": 5,
+"value": 1.0
+},
+{
+"customer_id": "33eef6b9-0e52-46ca-9d63-d6987772929e",
+"touchpoints": 6,
+"value": 1.0
+},
+{
+"customer_id": "33eef6b9-0e52-46ca-9d63-d6987772929e",
+"touchpoints": 7,
+"value": 1.0
+},
+{
+"customer_id": "4ab7cc61-1bf5-479e-ade9-7533fba0278b",
+"touchpoints": 62,
+"value": 1.0
+},
+{
+"customer_id": "4ceebf3d-d0af-4e74-aea3-8cb8ab4609b8",
+"touchpoints": 16,
+"value": 1.0
+},
+{
+"customer_id": "4ceebf3d-d0af-4e74-aea3-8cb8ab4609b8",
+"touchpoints": 17,
+"value": 1.0
+},
+{
+"customer_id": "4ceebf3d-d0af-4e74-aea3-8cb8ab4609b8",
+"touchpoints": 18,
+"value": 1.0
+},
+{
+"customer_id": "4ab7cc61-1bf5-479e-ade9-7533fba0278b",
+"touchpoints": 63,
+"value": 1.0
+},
+{
+"customer_id": "4ceebf3d-d0af-4e74-aea3-8cb8ab4609b8",
+"touchpoints": 19,
+"value": 1.0
+},
+{
+"customer_id": "4ceebf3d-d0af-4e74-aea3-8cb8ab4609b8",
+"touchpoints": 20,
+"value": 1.0
+},
+{
+"customer_id": "9fc91e5d-31b2-4aa4-89e3-361a12a7e5fa",
+"touchpoints": 1,
+"value": 1.0
+},
+{
+"customer_id": "9fc91e5d-31b2-4aa4-89e3-361a12a7e5fa",
+"touchpoints": 1,
+"value": 1.0
+},
+{
+"customer_id": "68dc15c5-05cb-4f0e-9d00-c4819141ff60",
+"touchpoints": 8,
+"value": 1.0
+},
+{
+"customer_id": "4ab7cc61-1bf5-479e-ade9-7533fba0278b",
+"touchpoints": 57,
+"value": 1.0
+},
+{
+"customer_id": "4ab7cc61-1bf5-479e-ade9-7533fba0278b",
+"touchpoints": 58,
+"value": 1.0
+},
+{
+"customer_id": "4ceebf3d-d0af-4e74-aea3-8cb8ab4609b8",
+"touchpoints": 21,
+"value": 1.0
+},
+{
+"customer_id": "4ceebf3d-d0af-4e74-aea3-8cb8ab4609b8",
+"touchpoints": 22,
+"value": 1.0
+}
+]
+},
+{
+"id": "69a39d60-44c",
+"source": "sample",
+"started_at": "2026-03-20T12:16:20.525455Z",
+"finished_at": "2026-03-20T12:16:20.525455Z",
+"status": "success",
+"total": 30,
+"valid": 30,
+"invalid": 0,
+"converted": 25,
+"channels_detected": [
+"direct",
+"email",
+"google_ads",
+"linkedin_ads",
+"meta_ads",
+"whatsapp"
+],
+"validation_summary": {
+"top_errors": [],
+"top_warnings": []
+},
+"config_snapshot": {
+"schema_version": "1.0"
+},
+"initiated_by": null,
+"import_note": null,
+"error": null,
+"preview_rows": [
+{
+"customer_id": "c001",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c002",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c003",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c004",
+"touchpoints": 5,
+"converted": true
+},
+{
+"customer_id": "c005",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c006",
+"touchpoints": 1,
+"converted": true
+},
+{
+"customer_id": "c007",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c008",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c009",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c010",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c011",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c012",
+"touchpoints": 6,
+"converted": true
+},
+{
+"customer_id": "c013",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c014",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c015",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c016",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c017",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c018",
+"touchpoints": 1,
+"converted": true
+},
+{
+"customer_id": "c019",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c020",
+"touchpoints": 2,
+"converted": true
+}
+]
+},
+{
 "id": "d64cec2b-1f5",
 "source": "meiro_webhook",
 "started_at": "2026-03-20T11:45:32.543820Z",
