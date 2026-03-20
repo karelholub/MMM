@@ -12,10 +12,10 @@
     "frequency": "W"
   },
   "nba": {
-    "min_prefix_support": 5,
-    "min_conversion_rate": 0.005,
-    "max_prefix_depth": 2,
-    "min_next_support": 5,
+    "min_prefix_support": 10,
+    "min_conversion_rate": 0.025,
+    "max_prefix_depth": 3,
+    "min_next_support": 10,
     "max_suggestions_per_prefix": 3,
     "min_uplift_pct": null,
     "excluded_channels": [
@@ -44,7 +44,10 @@
     "value_field_path": "value",
     "currency_field_path": "currency",
     "dedup_key": "event_id",
-    "base_currency": "EUR",
+    "default_value": 120.0,
+    "default_value_mode": "missing_or_zero",
+    "per_conversion_overrides": [],
+    "base_currency": "CZK",
     "fx_enabled": false,
     "fx_mode": "none",
     "fx_rates_json": {},

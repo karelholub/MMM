@@ -95,7 +95,7 @@ from app.services_conversions import (
     load_journeys_from_db,
     persist_journeys_as_conversion_paths,
 )
-from app.services_journey_ingestion import validate_and_normalize
+from app.services_journey_ingestion import MEIRO_PARSER_VERSION, canonicalize_meiro_profiles, validate_and_normalize, detect_schema
 from app.services_import_runs import (
     create_run as create_import_run,
     get_runs as get_import_runs,
@@ -236,8 +236,11 @@ from app.mmm_engine import fit_model as mmm_fit_model, engine_info
 from app.connectors import meiro_cdp
 from app.utils.meiro_config import (
     append_webhook_event,
+    append_webhook_archive_entry,
     get_last_test_at,
     get_webhook_events,
+    get_webhook_archive_entries,
+    get_webhook_archive_status,
     get_webhook_last_received_at,
     get_webhook_received_count,
     get_webhook_secret,
@@ -246,6 +249,7 @@ from app.utils.meiro_config import (
     get_pull_config,
     save_pull_config,
     rotate_webhook_secret,
+    rebuild_profiles_from_webhook_archive,
     set_webhook_received,
 )
 from app.attribution_engine import (
@@ -253,7 +257,6 @@ from app.attribution_engine import (
     run_all_models as run_all_attribution,
     run_attribution_campaign,
     compute_channel_performance,
-    parse_conversion_paths,
     analyze_paths,
     compute_next_best_action,
     has_any_campaign,
@@ -688,10 +691,21 @@ class AttributionMappingConfig(BaseModel):
     id_attr: str = "customer_id"
     channel_field: str = "channel"
     timestamp_field: str = "timestamp"
+    source_field: str = "source"
+    medium_field: str = "medium"
+    campaign_field: str = "campaign"
+    currency_field: str = "currency"
 
 
 class FromCDPRequest(BaseModel):
     mapping: Optional[AttributionMappingConfig] = None
+    config_id: Optional[str] = None
+    import_note: Optional[str] = None
+
+
+class MeiroWebhookReprocessRequest(BaseModel):
+    archive_limit: Optional[int] = None
+    persist_to_attribution: bool = False
     config_id: Optional[str] = None
     import_note: Optional[str] = None
 
@@ -3708,6 +3722,10 @@ def import_journeys_from_cdp(
         id_attr=saved.get("id_attr", "customer_id"),
         channel_field=saved.get("channel_field", "channel"),
         timestamp_field=saved.get("timestamp_field", "timestamp"),
+        source_field=saved.get("source_field", "source"),
+        medium_field=saved.get("medium_field", "medium"),
+        campaign_field=saved.get("campaign_field", "campaign"),
+        currency_field=saved.get("currency_field", "currency"),
     )
     mapping = base
     if req.mapping:
@@ -3717,6 +3735,10 @@ def import_journeys_from_cdp(
             id_attr=req.mapping.id_attr or base.id_attr,
             channel_field=req.mapping.channel_field or base.channel_field,
             timestamp_field=req.mapping.timestamp_field or base.timestamp_field,
+            source_field=req.mapping.source_field or base.source_field,
+            medium_field=req.mapping.medium_field or base.medium_field,
+            campaign_field=req.mapping.campaign_field or base.campaign_field,
+            currency_field=req.mapping.currency_field or base.currency_field,
         )
 
     source_label = "meiro_webhook"
@@ -3732,14 +3754,12 @@ def import_journeys_from_cdp(
         raise HTTPException(status_code=404, detail="No CDP data found. Fetch from Meiro CDP first.")
 
     try:
-        journeys = parse_conversion_paths(
+        result = canonicalize_meiro_profiles(
             profiles,
-            touchpoint_attr=mapping.touchpoint_attr,
-            value_attr=mapping.value_attr,
-            id_attr=mapping.id_attr,
-            channel_field=mapping.channel_field,
-            timestamp_field=mapping.timestamp_field,
+            mapping=mapping.model_dump(),
+            revenue_config=(SETTINGS.revenue_config.model_dump() if hasattr(SETTINGS.revenue_config, "model_dump") else SETTINGS.revenue_config),
         )
+        journeys = result["valid_journeys"]
     except Exception as e:
         _append_import_run(source_label, 0, "error", error=str(e))
         raise
@@ -6433,6 +6453,38 @@ _DQ_DRILLDOWN = {
             "Review eligible touchpoints config in Model Configurator",
             "Fix UTM taxonomy mapping for new sources in Taxonomy",
             "Check Connectors for missing channel mapping",
+        ],
+    },
+    "defaulted_conversion_value_pct": {
+        "definition": "Share of conversion entries where the configured default value was applied because the raw value was missing or invalid.",
+        "recommended_actions": [
+            "Review Revenue KPI defaults and per-conversion overrides in Settings",
+            "Confirm the correct conversion value field is mapped from Meiro payloads",
+            "Inspect webhook suggestions for missing value-field paths",
+        ],
+    },
+    "raw_zero_conversion_value_pct": {
+        "definition": "Share of conversion entries that arrived with a raw numeric value of zero before any fallback logic.",
+        "recommended_actions": [
+            "Check whether zero is a valid business value for this conversion type",
+            "Use per-conversion defaults only where zero should mean missing revenue",
+            "Validate source event schemas and test payloads from Meiro",
+        ],
+    },
+    "unresolved_source_medium_touchpoint_pct": {
+        "definition": "Share of touchpoints whose source/medium pair does not match any current taxonomy rule after alias normalization.",
+        "recommended_actions": [
+            "Apply draft taxonomy suggestions from the Meiro payload analysis card",
+            "Add missing source aliases and medium aliases for new traffic values",
+            "Create channel rules for repeated unresolved source/medium pairs",
+        ],
+    },
+    "inferred_mapping_journey_pct": {
+        "definition": "Share of journeys where the parser had to fall back to inferred field mappings instead of only using explicitly configured paths.",
+        "recommended_actions": [
+            "Review and apply Meiro mapping suggestions for touchpoints, IDs, and conversion fields",
+            "Confirm webhook payloads use stable field paths for source, medium, campaign, value, and timestamp",
+            "Audit journey parser metadata to identify the fields relying on fallback extraction",
         ],
     },
 }
@@ -9868,8 +9920,14 @@ async def meiro_receive_profiles(
         source_counts: Dict[str, int] = {}
         medium_counts: Dict[str, int] = {}
         campaign_counts: Dict[str, int] = {}
+        source_medium_pair_counts: Dict[str, int] = {}
         value_field_counts: Dict[str, int] = {}
         currency_field_counts: Dict[str, int] = {}
+        touchpoint_attr_counts: Dict[str, int] = {}
+        channel_field_path_counts: Dict[str, int] = {}
+        source_field_path_counts: Dict[str, int] = {}
+        medium_field_path_counts: Dict[str, int] = {}
+        campaign_field_path_counts: Dict[str, int] = {}
         dedup_key_counts: Dict[str, int] = {"conversion_id": 0, "order_id": 0, "event_id": 0}
         conversion_count = 0
         touchpoint_count = 0
@@ -9881,6 +9939,14 @@ async def meiro_receive_profiles(
             if not normalized:
                 return
             target[normalized] = target.get(normalized, 0) + 1
+
+        def _normalized_text(value: Any) -> Optional[str]:
+            if isinstance(value, dict):
+                value = value.get("name") or value.get("platform") or value.get("campaign_name")
+            if not isinstance(value, str):
+                return None
+            normalized = value.strip().lower()
+            return normalized or None
 
         for profile in payload_profiles[:200]:
             if not isinstance(profile, dict):
@@ -9907,26 +9973,53 @@ async def meiro_receive_profiles(
 
             touchpoints = profile.get("touchpoints") or []
             if isinstance(touchpoints, list):
+                touchpoint_attr_counts["touchpoints"] = touchpoint_attr_counts.get("touchpoints", 0) + 1
                 for tp in touchpoints[:500]:
                     if not isinstance(tp, dict):
                         continue
                     touchpoint_count += 1
+                    raw_source = _normalized_text(tp.get("source"))
+                    raw_medium = _normalized_text(tp.get("medium"))
+                    raw_campaign = _normalized_text(tp.get("campaign"))
+                    if tp.get("channel"):
+                        channel_field_path_counts["channel"] = channel_field_path_counts.get("channel", 0) + 1
+                    if tp.get("source"):
+                        source_field_path_counts["source"] = source_field_path_counts.get("source", 0) + 1
+                    if tp.get("medium"):
+                        medium_field_path_counts["medium"] = medium_field_path_counts.get("medium", 0) + 1
+                    if tp.get("campaign"):
+                        campaign_field_path_counts["campaign"] = campaign_field_path_counts.get("campaign", 0) + 1
                     _inc(channel_counts, tp.get("channel"))
-                    _inc(source_counts, tp.get("source"))
-                    _inc(medium_counts, tp.get("medium"))
-                    _inc(campaign_counts, tp.get("campaign"))
                     utm = tp.get("utm")
                     if isinstance(utm, dict):
-                        _inc(source_counts, utm.get("source"))
-                        _inc(medium_counts, utm.get("medium"))
-                        _inc(campaign_counts, utm.get("campaign"))
+                        if utm.get("source"):
+                            source_field_path_counts["utm.source"] = source_field_path_counts.get("utm.source", 0) + 1
+                        if utm.get("medium"):
+                            medium_field_path_counts["utm.medium"] = medium_field_path_counts.get("utm.medium", 0) + 1
+                        if utm.get("campaign"):
+                            campaign_field_path_counts["utm.campaign"] = campaign_field_path_counts.get("utm.campaign", 0) + 1
+                        raw_source = raw_source or _normalized_text(utm.get("source"))
+                        raw_medium = raw_medium or _normalized_text(utm.get("medium"))
+                        raw_campaign = raw_campaign or _normalized_text(utm.get("campaign"))
                     source_obj = tp.get("source")
                     if isinstance(source_obj, dict):
-                        _inc(source_counts, source_obj.get("platform"))
-                        _inc(campaign_counts, source_obj.get("campaign_name"))
+                        if source_obj.get("platform"):
+                            source_field_path_counts["source.platform"] = source_field_path_counts.get("source.platform", 0) + 1
+                        if source_obj.get("campaign_name"):
+                            campaign_field_path_counts["source.campaign_name"] = campaign_field_path_counts.get("source.campaign_name", 0) + 1
+                        raw_source = raw_source or _normalized_text(source_obj.get("platform"))
+                        raw_campaign = raw_campaign or _normalized_text(source_obj.get("campaign_name"))
                     campaign_obj = tp.get("campaign")
                     if isinstance(campaign_obj, dict):
-                        _inc(campaign_counts, campaign_obj.get("name"))
+                        if campaign_obj.get("name"):
+                            campaign_field_path_counts["campaign.name"] = campaign_field_path_counts.get("campaign.name", 0) + 1
+                        raw_campaign = raw_campaign or _normalized_text(campaign_obj.get("name"))
+                    _inc(source_counts, raw_source)
+                    _inc(medium_counts, raw_medium)
+                    _inc(campaign_counts, raw_campaign)
+                    if raw_source or raw_medium:
+                        pair_key = f"{raw_source or ''}||{raw_medium or ''}"
+                        source_medium_pair_counts[pair_key] = source_medium_pair_counts.get(pair_key, 0) + 1
 
         return {
             "conversion_count": conversion_count,
@@ -9936,8 +10029,14 @@ async def meiro_receive_profiles(
             "source_counts": source_counts,
             "medium_counts": medium_counts,
             "campaign_counts": campaign_counts,
+            "source_medium_pair_counts": source_medium_pair_counts,
             "value_field_counts": value_field_counts,
             "currency_field_counts": currency_field_counts,
+            "touchpoint_attr_counts": touchpoint_attr_counts,
+            "channel_field_path_counts": channel_field_path_counts,
+            "source_field_path_counts": source_field_path_counts,
+            "medium_field_path_counts": medium_field_path_counts,
+            "campaign_field_path_counts": campaign_field_path_counts,
             "dedup_key_counts": dedup_key_counts,
         }
 
@@ -9986,12 +10085,23 @@ async def meiro_receive_profiles(
     payload_excerpt, payload_truncated, payload_bytes = _safe_json_excerpt(body)
     conversion_names, channels_detected = _extract_payload_hints(profiles)
     payload_analysis = _analyze_payload(profiles)
+    append_webhook_archive_entry(
+        {
+            "received_at": now_iso,
+            "parser_version": MEIRO_PARSER_VERSION,
+            "replace": bool(replace),
+            "payload_shape": "array" if isinstance(body, list) else "object",
+            "received_count": int(len(profiles)),
+            "profiles": profiles,
+        }
+    )
     append_webhook_event(
         {
             "received_at": now_iso,
             "received_count": int(len(profiles)),
             "stored_total": int(len(to_store)),
             "replace": bool(replace),
+            "parser_version": MEIRO_PARSER_VERSION,
             "ip": request.client.host if request.client else None,
             "user_agent": (request.headers.get("user-agent") or "")[:256] or None,
             "payload_shape": "array" if isinstance(body, list) else "object",
@@ -10033,6 +10143,49 @@ def meiro_webhook_events(
     return {"items": events, "total": len(events)}
 
 
+@app.get("/api/connectors/meiro/webhook/archive-status")
+def meiro_webhook_archive_status():
+    return get_webhook_archive_status()
+
+
+@app.get("/api/connectors/meiro/webhook/archive")
+def meiro_webhook_archive(
+    limit: int = Query(25, ge=1, le=500),
+):
+    items = get_webhook_archive_entries(limit=limit)
+    return {"items": items, "total": len(items)}
+
+
+@app.post("/api/connectors/meiro/webhook/reprocess")
+def meiro_webhook_reprocess(
+    payload: MeiroWebhookReprocessRequest = Body(default=MeiroWebhookReprocessRequest()),
+    db=Depends(get_db),
+):
+    archive_entries = get_webhook_archive_entries(limit=payload.archive_limit or 5000)
+    archived_profiles = rebuild_profiles_from_webhook_archive(limit=payload.archive_limit)
+    if not archived_profiles:
+        raise HTTPException(status_code=404, detail="No archived webhook payloads found to reprocess.")
+
+    out_path = DATA_DIR / "meiro_cdp_profiles.json"
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(archived_profiles, indent=2))
+
+    result: Dict[str, Any] = {
+        "reprocessed_profiles": len(archived_profiles),
+        "archive_entries_used": len(archive_entries),
+        "parser_version": MEIRO_PARSER_VERSION,
+        "persisted_to_attribution": False,
+    }
+    if payload.persist_to_attribution:
+        import_result = import_journeys_from_cdp(
+            req=FromCDPRequest(config_id=payload.config_id, import_note=payload.import_note or "Reprocessed from webhook archive"),
+            db=db,
+        )
+        result["persisted_to_attribution"] = True
+        result["import_result"] = import_result
+    return result
+
+
 @app.get("/api/connectors/meiro/webhook/suggestions")
 def meiro_webhook_suggestions(limit: int = Query(100, ge=1, le=500)):
     events = get_webhook_events(limit=limit)
@@ -10040,7 +10193,15 @@ def meiro_webhook_suggestions(limit: int = Query(100, ge=1, le=500)):
     channel_counts: Dict[str, int] = {}
     source_counts: Dict[str, int] = {}
     medium_counts: Dict[str, int] = {}
+    campaign_counts: Dict[str, int] = {}
+    source_medium_pair_counts: Dict[str, int] = {}
     value_field_counts: Dict[str, int] = {}
+    currency_field_counts: Dict[str, int] = {}
+    touchpoint_attr_counts: Dict[str, int] = {}
+    channel_field_path_counts: Dict[str, int] = {}
+    source_field_path_counts: Dict[str, int] = {}
+    medium_field_path_counts: Dict[str, int] = {}
+    campaign_field_path_counts: Dict[str, int] = {}
     dedup_key_counts: Dict[str, int] = {"conversion_id": 0, "order_id": 0, "event_id": 0}
     total_conversions = 0
     total_touchpoints = 0
@@ -10065,7 +10226,15 @@ def meiro_webhook_suggestions(limit: int = Query(100, ge=1, le=500)):
         _merge_counts(channel_counts, analysis.get("channel_counts") or {})
         _merge_counts(source_counts, analysis.get("source_counts") or {})
         _merge_counts(medium_counts, analysis.get("medium_counts") or {})
+        _merge_counts(campaign_counts, analysis.get("campaign_counts") or {})
+        _merge_counts(source_medium_pair_counts, analysis.get("source_medium_pair_counts") or {})
         _merge_counts(value_field_counts, analysis.get("value_field_counts") or {})
+        _merge_counts(currency_field_counts, analysis.get("currency_field_counts") or {})
+        _merge_counts(touchpoint_attr_counts, analysis.get("touchpoint_attr_counts") or {})
+        _merge_counts(channel_field_path_counts, analysis.get("channel_field_path_counts") or {})
+        _merge_counts(source_field_path_counts, analysis.get("source_field_path_counts") or {})
+        _merge_counts(medium_field_path_counts, analysis.get("medium_field_path_counts") or {})
+        _merge_counts(campaign_field_path_counts, analysis.get("campaign_field_path_counts") or {})
         for key in ("conversion_id", "order_id", "event_id"):
             dedup_key_counts[key] = dedup_key_counts.get(key, 0) + int((analysis.get("dedup_key_counts") or {}).get(key, 0) or 0)
 
@@ -10074,9 +10243,17 @@ def meiro_webhook_suggestions(limit: int = Query(100, ge=1, le=500)):
 
     top_conversion_names = _top_items(conversion_event_counts, n=10)
     top_value_fields = _top_items(value_field_counts, n=5)
+    top_currency_fields = _top_items(currency_field_counts, n=5)
     top_sources = _top_items(source_counts, n=15)
     top_mediums = _top_items(medium_counts, n=15)
+    top_campaigns = _top_items(campaign_counts, n=15)
     top_channels = _top_items(channel_counts, n=15)
+    top_source_medium_pairs = _top_items(source_medium_pair_counts, n=20)
+    top_touchpoint_attrs = _top_items(touchpoint_attr_counts, n=5)
+    top_channel_field_paths = _top_items(channel_field_path_counts, n=5)
+    top_source_field_paths = _top_items(source_field_path_counts, n=5)
+    top_medium_field_paths = _top_items(medium_field_path_counts, n=5)
+    top_campaign_field_paths = _top_items(campaign_field_path_counts, n=5)
     best_dedup_key = sorted(dedup_key_counts.items(), key=lambda kv: kv[1], reverse=True)[0][0]
 
     kpi_suggestions = []
@@ -10101,38 +10278,140 @@ def meiro_webhook_suggestions(limit: int = Query(100, ge=1, le=500)):
 
     primary_kpi_id = kpi_suggestions[0]["id"] if kpi_suggestions else None
 
-    taxonomy_rules = []
-    priority = 10
-    for channel, count in top_channels:
-        if channel.lower() in {"unknown", "other", "(none)"}:
+    current_taxonomy = load_taxonomy()
+
+    def _normalized_label(value: Optional[str]) -> str:
+        return str(value or "").strip().lower()
+
+    def _suggest_source_alias(raw_source: str) -> Optional[str]:
+        known = {
+            "fb": "facebook",
+            "ig": "instagram",
+            "yt": "youtube",
+            "li": "linkedin",
+            "tt": "tiktok",
+            "gads": "google",
+            "adwords": "google",
+        }
+        return known.get(_normalized_label(raw_source))
+
+    def _suggest_medium_alias(raw_medium: str) -> Optional[str]:
+        known = {
+            "ppc": "cpc",
+            "paid": "cpc",
+            "paidsearch": "cpc",
+            "paid_search": "cpc",
+            "paidsocial": "paid_social",
+            "paid-social": "paid_social",
+            "social_paid": "paid_social",
+        }
+        return known.get(_normalized_label(raw_medium))
+
+    def _classify_channel(source: str, medium: str) -> Optional[str]:
+        src = _normalized_label(source)
+        med = _normalized_label(medium)
+        if med in {"email", "e-mail"} or "email" in med:
+            return "email"
+        if med in {"(none)", "none", "direct", ""} and src in {"", "direct"}:
+            return "direct"
+        if med in {"cpc", "ppc", "paid_search"} and re.search(r"google|bing|baidu|adwords", src):
+            return "paid_search"
+        if med in {"paid_social", "social", "social_paid", "paid"} and re.search(r"facebook|meta|instagram|linkedin|twitter|x|tiktok", src):
+            return "paid_social"
+        if src in {"newsletter", "mailchimp", "klaviyo", "braze", "customerio"}:
+            return "email"
+        return None
+
+    def _matches_existing_rule(source: str, medium: str, campaign: str = "") -> bool:
+        source_norm = current_taxonomy.source_aliases.get(source, source)
+        medium_norm = current_taxonomy.medium_aliases.get(medium, medium)
+        for rule in current_taxonomy.channel_rules:
+            if rule.matches(source_norm, medium_norm, campaign):
+                return True
+        return False
+
+    source_aliases = dict(current_taxonomy.source_aliases)
+    suggested_source_aliases: Dict[str, str] = {}
+    for source, count in top_sources:
+        lower = _normalized_label(source)
+        if not lower or lower in source_aliases:
             continue
-        taxonomy_rules.append(
-            {
-                "name": f"Auto: {channel}",
-                "channel": channel,
-                "priority": priority,
-                "enabled": True,
-                "source": {"operator": "any", "value": ""},
-                "medium": {"operator": "any", "value": ""},
-                "campaign": {"operator": "any", "value": ""},
-                "observed_count": count,
-            }
+        mapped = _suggest_source_alias(lower)
+        if mapped and mapped != lower:
+            source_aliases[lower] = mapped
+            suggested_source_aliases[lower] = mapped
+
+    medium_aliases = dict(current_taxonomy.medium_aliases)
+    suggested_medium_aliases: Dict[str, str] = {}
+    for medium, count in top_mediums:
+        lower = _normalized_label(medium)
+        if not lower or lower in medium_aliases:
+            continue
+        mapped = _suggest_medium_alias(lower)
+        if mapped and mapped != lower:
+            medium_aliases[lower] = mapped
+            suggested_medium_aliases[lower] = mapped
+
+    taxonomy_rules = []
+    unresolved_pairs = []
+    seen_rule_keys = {
+        (
+            rule.channel,
+            rule.source.normalize_operator(),
+            rule.source.value,
+            rule.medium.normalize_operator(),
+            rule.medium.value,
+            rule.campaign.normalize_operator(),
+            rule.campaign.value,
         )
-        priority += 10
+        for rule in current_taxonomy.channel_rules
+    }
+    priority = max([rule.priority for rule in current_taxonomy.channel_rules] or [0]) + 10
+    for pair_key, count in top_source_medium_pairs:
+        raw_source, raw_medium = (pair_key.split("||", 1) + [""])[:2]
+        source_norm = source_aliases.get(raw_source, raw_source)
+        medium_norm = medium_aliases.get(raw_medium, raw_medium)
+        if _matches_existing_rule(source_norm, medium_norm):
+            continue
+        suggested_channel = _classify_channel(source_norm, medium_norm)
+        if suggested_channel:
+            rule_key = (
+                suggested_channel,
+                "equals",
+                source_norm,
+                "equals",
+                medium_norm,
+                "any",
+                "",
+            )
+            if rule_key in seen_rule_keys:
+                continue
+            taxonomy_rules.append(
+                {
+                    "name": f"Auto: {suggested_channel} from {source_norm or 'source'} / {medium_norm or 'medium'}",
+                    "channel": suggested_channel,
+                    "priority": priority,
+                    "enabled": True,
+                    "source": {"operator": "equals" if source_norm else "any", "value": source_norm},
+                    "medium": {"operator": "equals" if medium_norm else "any", "value": medium_norm},
+                    "campaign": {"operator": "any", "value": ""},
+                    "observed_count": count,
+                    "match_source": source_norm,
+                    "match_medium": medium_norm,
+                }
+            )
+            seen_rule_keys.add(rule_key)
+            priority += 10
+        else:
+            unresolved_pairs.append(
+                {
+                    "source": source_norm,
+                    "medium": medium_norm,
+                    "count": count,
+                }
+            )
         if len(taxonomy_rules) >= 12:
             break
-
-    source_aliases = {}
-    for source, _count in top_sources:
-        lower = source.lower()
-        if lower in {"fb", "ig", "yt", "li"}:
-            mapped = {"fb": "facebook", "ig": "instagram", "yt": "youtube", "li": "linkedin"}[lower]
-            source_aliases[lower] = mapped
-    medium_aliases = {}
-    for medium, _count in top_mediums:
-        lower = medium.lower()
-        if lower in {"ppc", "paid", "paidsearch"}:
-            medium_aliases[lower] = "cpc"
 
     kpi_apply_payload = {
         "definitions": [
@@ -10151,11 +10430,31 @@ def meiro_webhook_suggestions(limit: int = Query(100, ge=1, le=500)):
     }
     taxonomy_apply_payload = {
         "channel_rules": [
-            {k: v for k, v in rule.items() if k != "observed_count"}
-            for rule in taxonomy_rules
-        ],
+            {
+                "name": r.name,
+                "channel": r.channel,
+                "priority": r.priority,
+                "enabled": r.enabled,
+                "source": {"operator": r.source.normalize_operator(), "value": r.source.value or ""},
+                "medium": {"operator": r.medium.normalize_operator(), "value": r.medium.value or ""},
+                "campaign": {"operator": r.campaign.normalize_operator(), "value": r.campaign.value or ""},
+            }
+            for r in current_taxonomy.channel_rules
+        ]
+        + [{k: v for k, v in rule.items() if k not in {"observed_count", "match_source", "match_medium"}} for rule in taxonomy_rules],
         "source_aliases": source_aliases,
         "medium_aliases": medium_aliases,
+    }
+    mapping_apply_payload = {
+        "touchpoint_attr": top_touchpoint_attrs[0][0] if top_touchpoint_attrs else "touchpoints",
+        "value_attr": top_value_fields[0][0] if top_value_fields else "conversion_value",
+        "id_attr": "customer_id",
+        "channel_field": top_channel_field_paths[0][0] if top_channel_field_paths else "channel",
+        "timestamp_field": "timestamp",
+        "source_field": top_source_field_paths[0][0] if top_source_field_paths else "source",
+        "medium_field": top_medium_field_paths[0][0] if top_medium_field_paths else "medium",
+        "campaign_field": top_campaign_field_paths[0][0] if top_campaign_field_paths else "campaign",
+        "currency_field": top_currency_fields[0][0] if top_currency_fields else "currency",
     }
 
     return {
@@ -10171,14 +10470,34 @@ def meiro_webhook_suggestions(limit: int = Query(100, ge=1, le=500)):
         ],
         "taxonomy_suggestions": {
             "channel_rules": taxonomy_rules,
-            "source_aliases": source_aliases,
-            "medium_aliases": medium_aliases,
+            "source_aliases": suggested_source_aliases,
+            "medium_aliases": suggested_medium_aliases,
             "top_sources": [{"source": name, "count": count} for name, count in top_sources],
             "top_mediums": [{"medium": name, "count": count} for name, count in top_mediums],
+            "top_campaigns": [{"campaign": name, "count": count} for name, count in top_campaigns],
+            "observed_pairs": [
+                {
+                    "source": (name.split("||", 1) + [""])[0],
+                    "medium": (name.split("||", 1) + [""])[1],
+                    "count": count,
+                }
+                for name, count in top_source_medium_pairs
+            ],
+            "unresolved_pairs": unresolved_pairs[:10],
+        },
+        "mapping_suggestions": {
+            "touchpoint_attr_candidates": [{"path": name, "count": count} for name, count in top_touchpoint_attrs],
+            "value_field_candidates": [{"path": name, "count": count} for name, count in top_value_fields],
+            "currency_field_candidates": [{"path": name, "count": count} for name, count in top_currency_fields],
+            "channel_field_candidates": [{"path": name, "count": count} for name, count in top_channel_field_paths],
+            "source_field_candidates": [{"path": name, "count": count} for name, count in top_source_field_paths],
+            "medium_field_candidates": [{"path": name, "count": count} for name, count in top_medium_field_paths],
+            "campaign_field_candidates": [{"path": name, "count": count} for name, count in top_campaign_field_paths],
         },
         "apply_payloads": {
             "kpis": kpi_apply_payload,
             "taxonomy": taxonomy_apply_payload,
+            "mapping": mapping_apply_payload,
         },
     }
 
@@ -10306,6 +10625,10 @@ def meiro_dry_run(limit: int = 100):
         id_attr=saved.get("id_attr", "customer_id"),
         channel_field=saved.get("channel_field", "channel"),
         timestamp_field=saved.get("timestamp_field", "timestamp"),
+        source_field=saved.get("source_field", "source"),
+        medium_field=saved.get("medium_field", "medium"),
+        campaign_field=saved.get("campaign_field", "campaign"),
+        currency_field=saved.get("currency_field", "currency"),
     )
     if cdp_json_path.exists():
         with open(cdp_json_path) as f:
@@ -10319,14 +10642,12 @@ def meiro_dry_run(limit: int = 100):
     if not profiles:
         return {"count": 0, "preview": [], "warnings": ["No profiles to process"], "validation": {}}
     try:
-        journeys = parse_conversion_paths(
+        result = canonicalize_meiro_profiles(
             profiles,
-            touchpoint_attr=mapping.touchpoint_attr,
-            value_attr=mapping.value_attr,
-            id_attr=mapping.id_attr,
-            channel_field=mapping.channel_field,
-            timestamp_field=mapping.timestamp_field,
+            mapping=mapping.model_dump(),
+            revenue_config=(SETTINGS.revenue_config.model_dump() if hasattr(SETTINGS.revenue_config, "model_dump") else SETTINGS.revenue_config),
         )
+        journeys = result["valid_journeys"]
     except Exception as e:
         return {"count": 0, "preview": [], "warnings": [str(e)], "validation": {"error": str(e)}}
     warnings = []

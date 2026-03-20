@@ -18,6 +18,7 @@ from .models_config_dq import (
     DQAlert,
     NotificationEndpoint,
 )
+from .utils.taxonomy import load_taxonomy
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 
@@ -114,11 +115,21 @@ def compute_journeys_completeness(journeys: List[Dict[str, Any]]) -> List[Tuple[
     missing_channel = 0
     unknown_channel = 0
     attrib_eligible = 0
+    total_touchpoints = 0
+    unresolved_source_medium_touchpoints = 0
+    total_revenue_entries = 0
+    defaulted_revenue_entries = 0
+    raw_zero_revenue_entries = 0
+    journeys_using_inferred_mappings = 0
 
     seen_ids = set()
     duplicate_ids = 0
+    taxonomy = load_taxonomy()
 
     for j in journeys:
+        parser_meta = ((j.get("meta") or {}).get("parser") or {}) if isinstance(j, dict) else {}
+        if bool(parser_meta.get("used_inferred_mapping")):
+            journeys_using_inferred_mappings += 1
         cid = j.get("customer_id") or j.get("profile_id") or j.get("id") or (j.get("customer") or {}).get("id")
         if not cid:
             missing_profile += 1
@@ -136,6 +147,7 @@ def compute_journeys_completeness(journeys: List[Dict[str, Any]]) -> List[Tuple[
         any_channel = False
         any_non_direct = False
         for tp in tps:
+            total_touchpoints += 1
             if tp.get("timestamp") or tp.get("ts"):
                 any_ts = True
             ch = tp.get("channel")
@@ -145,6 +157,17 @@ def compute_journeys_completeness(journeys: List[Dict[str, Any]]) -> List[Tuple[
                     unknown_channel += 1
                 if ch not in ("direct", "unknown"):
                     any_non_direct += 1
+            raw_source = str(((tp.get("utm") or {}).get("source") or tp.get("source") or "")).strip().lower()
+            raw_medium = str(((tp.get("utm") or {}).get("medium") or tp.get("medium") or "")).strip().lower()
+            raw_campaign = tp.get("campaign")
+            if isinstance(raw_campaign, dict):
+                raw_campaign = raw_campaign.get("name")
+            raw_campaign_text = str(raw_campaign or "").strip().lower()
+            if raw_source or raw_medium:
+                source_norm = taxonomy.source_aliases.get(raw_source, raw_source)
+                medium_norm = taxonomy.medium_aliases.get(raw_medium, raw_medium)
+                if not any(rule.matches(source_norm, medium_norm, raw_campaign_text) for rule in taxonomy.channel_rules):
+                    unresolved_source_medium_touchpoints += 1
         if not any_ts:
             missing_ts += 1
         if not any_channel:
@@ -152,9 +175,26 @@ def compute_journeys_completeness(journeys: List[Dict[str, Any]]) -> List[Tuple[
         if any_non_direct:
             attrib_eligible += 1
 
+        revenue_entries = j.get("_revenue_entries")
+        if isinstance(revenue_entries, list):
+            for entry in revenue_entries:
+                if not isinstance(entry, dict):
+                    continue
+                total_revenue_entries += 1
+                if bool(entry.get("default_applied")):
+                    defaulted_revenue_entries += 1
+                if bool(entry.get("raw_value_zero")):
+                    raw_zero_revenue_entries += 1
+
     metrics: List[Tuple[str, str, float, Dict[str, Any]]] = []
     def pct(x: int) -> float:
         return float(x) / float(n) * 100.0 if n else 0.0
+
+    def pct_of_touchpoints(x: int) -> float:
+        return float(x) / float(total_touchpoints) * 100.0 if total_touchpoints else 0.0
+
+    def pct_of_revenue_entries(x: int) -> float:
+        return float(x) / float(total_revenue_entries) * 100.0 if total_revenue_entries else 0.0
 
     metrics.append(("journeys", "missing_profile_pct", pct(missing_profile), {"missing": missing_profile, "total": n}))
     metrics.append(("journeys", "missing_timestamp_pct", pct(missing_ts), {"missing": missing_ts, "total": n}))
@@ -162,6 +202,30 @@ def compute_journeys_completeness(journeys: List[Dict[str, Any]]) -> List[Tuple[
     metrics.append(("journeys", "duplicate_id_pct", pct(duplicate_ids), {"duplicates": duplicate_ids, "total": n}))
     metrics.append(("journeys", "unknown_channel_share_pct", pct(unknown_channel), {"unknown_channel_events": unknown_channel, "total_journeys": n}))
     metrics.append(("journeys", "conversion_attributable_pct", pct(attrib_eligible), {"attrib_eligible": attrib_eligible, "total": n}))
+    metrics.append((
+        "journeys",
+        "defaulted_conversion_value_pct",
+        pct_of_revenue_entries(defaulted_revenue_entries),
+        {"defaulted": defaulted_revenue_entries, "total_revenue_entries": total_revenue_entries},
+    ))
+    metrics.append((
+        "journeys",
+        "raw_zero_conversion_value_pct",
+        pct_of_revenue_entries(raw_zero_revenue_entries),
+        {"raw_zero": raw_zero_revenue_entries, "total_revenue_entries": total_revenue_entries},
+    ))
+    metrics.append((
+        "journeys",
+        "unresolved_source_medium_touchpoint_pct",
+        pct_of_touchpoints(unresolved_source_medium_touchpoints),
+        {"unresolved_touchpoints": unresolved_source_medium_touchpoints, "total_touchpoints": total_touchpoints},
+    ))
+    metrics.append((
+        "journeys",
+        "inferred_mapping_journey_pct",
+        pct(journeys_using_inferred_mappings),
+        {"journeys_using_inferred_mappings": journeys_using_inferred_mappings, "total": n},
+    ))
 
     return metrics
 
@@ -274,4 +338,3 @@ def evaluate_alert_rules(db: Session) -> List[DQAlert]:
             # Placeholder: webhook/email/slack notifications can be added by reading NotificationEndpoint
     db.commit()
     return created_alerts
-

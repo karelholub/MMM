@@ -19,45 +19,9 @@
       }
     },
     {
-      "name": "Auto: 115360-cg neregistrovan\u00fd z\u00e1kazn\u00edk s i\u010d",
-      "channel": "115360-cg neregistrovan\u00fd z\u00e1kazn\u00edk s i\u010d",
+      "name": "Auto: firmy.cz",
+      "channel": "firmy.cz",
       "priority": 20,
-      "enabled": true,
-      "source": {
-        "operator": "any",
-        "value": ""
-      },
-      "medium": {
-        "operator": "any",
-        "value": ""
-      },
-      "campaign": {
-        "operator": "any",
-        "value": ""
-      }
-    },
-    {
-      "name": "Auto: mailkit",
-      "channel": "mailkit",
-      "priority": 30,
-      "enabled": true,
-      "source": {
-        "operator": "any",
-        "value": ""
-      },
-      "medium": {
-        "operator": "any",
-        "value": ""
-      },
-      "campaign": {
-        "operator": "any",
-        "value": ""
-      }
-    },
-    {
-      "name": "Auto: meta_ads",
-      "channel": "meta_ads",
-      "priority": 40,
       "enabled": true,
       "source": {
         "operator": "any",
@@ -75,7 +39,7 @@
     {
       "name": "Auto: microsite",
       "channel": "microsite",
-      "priority": 50,
+      "priority": 30,
       "enabled": true,
       "source": {
         "operator": "any",
@@ -93,7 +57,7 @@
     {
       "name": "Auto: home_page",
       "channel": "home_page",
-      "priority": 60,
+      "priority": 40,
       "enabled": true,
       "source": {
         "operator": "any",
@@ -111,7 +75,7 @@
     {
       "name": "Auto: micrisite",
       "channel": "micrisite",
-      "priority": 70,
+      "priority": 50,
       "enabled": true,
       "source": {
         "operator": "any",
@@ -127,9 +91,9 @@
       }
     },
     {
-      "name": "Auto: search.seznam.cz",
-      "channel": "search.seznam.cz",
-      "priority": 80,
+      "name": "Auto: pinterest",
+      "channel": "pinterest",
+      "priority": 60,
       "enabled": true,
       "source": {
         "operator": "any",

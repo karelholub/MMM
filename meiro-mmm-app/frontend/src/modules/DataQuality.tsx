@@ -83,9 +83,23 @@ interface MeiroWebhookSuggestions {
     coverage_pct?: number
   }>
   taxonomy_suggestions: {
-    channel_rules: Array<{ name: string; channel: string; observed_count?: number }>
+    channel_rules: Array<{ name: string; channel: string; observed_count?: number; match_source?: string; match_medium?: string }>
     source_aliases: Record<string, string>
     medium_aliases: Record<string, string>
+    top_sources?: Array<{ source: string; count: number }>
+    top_mediums?: Array<{ medium: string; count: number }>
+    top_campaigns?: Array<{ campaign: string; count: number }>
+    observed_pairs?: Array<{ source: string; medium: string; count: number }>
+    unresolved_pairs?: Array<{ source: string; medium: string; count: number }>
+  }
+  mapping_suggestions: {
+    touchpoint_attr_candidates: Array<{ path: string; count: number }>
+    value_field_candidates: Array<{ path: string; count: number }>
+    currency_field_candidates: Array<{ path: string; count: number }>
+    channel_field_candidates: Array<{ path: string; count: number }>
+    source_field_candidates: Array<{ path: string; count: number }>
+    medium_field_candidates: Array<{ path: string; count: number }>
+    campaign_field_candidates: Array<{ path: string; count: number }>
   }
   apply_payloads: {
     kpis: {
@@ -105,6 +119,7 @@ interface MeiroWebhookSuggestions {
       source_aliases: Record<string, string>
       medium_aliases: Record<string, string>
     }
+    mapping: Record<string, unknown>
   }
 }
 
@@ -149,6 +164,34 @@ const METRIC_CONFIG: Record<
     criticalThreshold: 40,
     unit: '%',
     invert: true,
+  },
+  defaulted_conversion_value_pct: {
+    okThreshold: 5,
+    warnThreshold: 15,
+    criticalThreshold: 30,
+    unit: '%',
+    invert: false,
+  },
+  raw_zero_conversion_value_pct: {
+    okThreshold: 5,
+    warnThreshold: 15,
+    criticalThreshold: 30,
+    unit: '%',
+    invert: false,
+  },
+  unresolved_source_medium_touchpoint_pct: {
+    okThreshold: 5,
+    warnThreshold: 15,
+    criticalThreshold: 30,
+    unit: '%',
+    invert: false,
+  },
+  inferred_mapping_journey_pct: {
+    okThreshold: 10,
+    warnThreshold: 25,
+    criticalThreshold: 40,
+    unit: '%',
+    invert: false,
   },
 }
 
@@ -271,14 +314,22 @@ export default function DataQuality() {
     onError: (err: Error) => showToast(err.message || 'Failed to apply taxonomy suggestions', 'error'),
   })
 
+  const applyMappingSuggestionsMutation = useMutation({
+    mutationFn: async (payload: MeiroWebhookSuggestions['apply_payloads']['mapping']) =>
+      apiSendJson('/api/connectors/meiro/mapping', 'POST', payload, { fallbackMessage: 'Failed to apply Meiro mapping suggestions' }),
+    onSuccess: () => showToast('Meiro mapping suggestions applied.', 'success'),
+    onError: (err: Error) => showToast(err.message || 'Failed to apply Meiro mapping suggestions', 'error'),
+  })
+
   const applyAllSuggestionsMutation = useMutation({
     mutationFn: async (payloads: MeiroWebhookSuggestions['apply_payloads']) => {
       await apiSendJson('/api/kpis', 'POST', payloads.kpis, { fallbackMessage: 'Failed to apply KPI suggestions' })
       await apiSendJson('/api/taxonomy', 'POST', payloads.taxonomy, { fallbackMessage: 'Failed to apply taxonomy suggestions' })
+      await apiSendJson('/api/connectors/meiro/mapping', 'POST', payloads.mapping, { fallbackMessage: 'Failed to apply Meiro mapping suggestions' })
     },
     onSuccess: () => {
       setShowApplyAllPreview(false)
-      showToast('Applied KPI and taxonomy suggestions.', 'success')
+      showToast('Applied KPI, taxonomy, and mapping suggestions.', 'success')
     },
     onError: (err: Error) => showToast(err.message || 'Failed to apply all suggestions', 'error'),
   })
@@ -331,6 +382,10 @@ export default function DataQuality() {
   const completenessMissingTs = latest.find((s) => s.metric_key === 'missing_timestamp_pct')
   const duplication = latest.find((s) => s.metric_key === 'duplicate_id_pct')
   const joinRate = latest.find((s) => s.metric_key === 'conversion_attributable_pct')
+  const defaultedConversionValue = latest.find((s) => s.metric_key === 'defaulted_conversion_value_pct')
+  const rawZeroConversionValue = latest.find((s) => s.metric_key === 'raw_zero_conversion_value_pct')
+  const unresolvedSourceMedium = latest.find((s) => s.metric_key === 'unresolved_source_medium_touchpoint_pct')
+  const inferredMappingJourneys = latest.find((s) => s.metric_key === 'inferred_mapping_journey_pct')
 
   // Trend: compare latest vs previous run (by ts_bucket)
   const buckets = [...new Set(snapshots.map((s) => s.ts_bucket))].sort().reverse()
@@ -384,6 +439,9 @@ export default function DataQuality() {
     dup: duplication?.metric_value ?? 0,
     freshness_hours: freshness.length ? Math.max(...freshness.map((f) => f.metric_value)) / 60 : 0,
     attributable: joinRate?.metric_value ?? 0,
+    defaulted_value: defaultedConversionValue?.metric_value ?? 0,
+    unresolved_pairs: unresolvedSourceMedium?.metric_value ?? 0,
+    inferred_journeys: inferredMappingJourneys?.metric_value ?? 0,
   }
   let dqScore = 100
   dqScore -= scoreInputs.missing_profile * 1.5
@@ -391,6 +449,9 @@ export default function DataQuality() {
   dqScore -= scoreInputs.dup * 0.5
   dqScore -= Math.min(20, scoreInputs.freshness_hours * 2)
   dqScore -= Math.max(0, 100 - scoreInputs.attributable) * 0.3
+  dqScore -= scoreInputs.defaulted_value * 0.4
+  dqScore -= scoreInputs.unresolved_pairs * 0.4
+  dqScore -= scoreInputs.inferred_journeys * 0.3
   dqScore = Math.max(0, Math.min(100, Math.round(dqScore)))
   const dqLabel = dqScore >= 80 ? 'High' : dqScore >= 50 ? 'Medium' : 'Low'
   const topDrivers: string[] = []
@@ -399,6 +460,9 @@ export default function DataQuality() {
   if (scoreInputs.dup > 3) topDrivers.push(`${scoreInputs.dup.toFixed(1)}% duplicate IDs`)
   if (scoreInputs.freshness_hours > 6) topDrivers.push(`${scoreInputs.freshness_hours.toFixed(1)}h freshness lag`)
   if (scoreInputs.attributable < 70) topDrivers.push(`${scoreInputs.attributable.toFixed(1)}% attributable conversions`)
+  if (scoreInputs.defaulted_value > 10) topDrivers.push(`${scoreInputs.defaulted_value.toFixed(1)}% defaulted conversion values`)
+  if (scoreInputs.unresolved_pairs > 10) topDrivers.push(`${scoreInputs.unresolved_pairs.toFixed(1)}% unresolved source/medium touchpoints`)
+  if (scoreInputs.inferred_journeys > 15) topDrivers.push(`${scoreInputs.inferred_journeys.toFixed(1)}% journeys using inferred mappings`)
 
   return (
     <div style={{ maxWidth: 1200, margin: '0 auto' }}>
@@ -555,14 +619,14 @@ export default function DataQuality() {
           <span style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
             Data Confidence{' '}
             <span
-              title="How is this computed? Combined score (0–100) from: missing profile_id, missing timestamps, duplicate IDs, freshness lag, and attributable conversions. Penalties reduce the score; higher attributable % increases it."
+              title="How is this computed? Combined score (0–100) from: missing profile_id, missing timestamps, duplicate IDs, freshness lag, attributable conversions, defaulted conversion values, and unresolved source/medium touchpoints. Penalties reduce the score; higher attributable % increases it."
               style={{ cursor: 'help', color: t.color.textMuted }}
             >
               ?
             </span>
           </span>
           <span
-            title="Combined score from freshness, completeness, duplication, and attributable conversions. Higher is better."
+            title="Combined score from freshness, completeness, duplication, attributable conversions, defaulted revenue share, and unresolved taxonomy pairs. Higher is better."
             style={{
               fontSize: t.font.size2xl,
               fontWeight: t.font.weightBold,
@@ -664,6 +728,38 @@ export default function DataQuality() {
           description="Conversions with at least one eligible touchpoint"
           trend={getTrend('conversion_attributable_pct', scope === 'overall' ? undefined : scope)}
           onClick={() => setDrilldownMetric('conversion_attributable_pct')}
+        />
+        <Tile
+          label="Defaulted conversion values"
+          metricKey="defaulted_conversion_value_pct"
+          value={defaultedConversionValue ? defaultedConversionValue.metric_value.toFixed(1) : null}
+          description="Conversions using fallback value rules"
+          trend={getTrend('defaulted_conversion_value_pct', scope === 'overall' ? undefined : scope)}
+          onClick={() => setDrilldownMetric('defaulted_conversion_value_pct')}
+        />
+        <Tile
+          label="Raw zero-value conversions"
+          metricKey="raw_zero_conversion_value_pct"
+          value={rawZeroConversionValue ? rawZeroConversionValue.metric_value.toFixed(1) : null}
+          description="Conversions arriving with raw value = 0"
+          trend={getTrend('raw_zero_conversion_value_pct', scope === 'overall' ? undefined : scope)}
+          onClick={() => setDrilldownMetric('raw_zero_conversion_value_pct')}
+        />
+        <Tile
+          label="Unresolved source / medium"
+          metricKey="unresolved_source_medium_touchpoint_pct"
+          value={unresolvedSourceMedium ? unresolvedSourceMedium.metric_value.toFixed(1) : null}
+          description="Touchpoints not matched by taxonomy rules"
+          trend={getTrend('unresolved_source_medium_touchpoint_pct', scope === 'overall' ? undefined : scope)}
+          onClick={() => setDrilldownMetric('unresolved_source_medium_touchpoint_pct')}
+        />
+        <Tile
+          label="Journeys using inferred mappings"
+          metricKey="inferred_mapping_journey_pct"
+          value={inferredMappingJourneys ? inferredMappingJourneys.metric_value.toFixed(1) : null}
+          description="Journeys normalized via parser fallback logic"
+          trend={getTrend('inferred_mapping_journey_pct', scope === 'overall' ? undefined : scope)}
+          onClick={() => setDrilldownMetric('inferred_mapping_journey_pct')}
         />
       </div>
 
@@ -954,12 +1050,31 @@ export default function DataQuality() {
               <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
                 {(meiroWebhookSuggestionsQuery.data.taxonomy_suggestions.channel_rules || []).length} channel rules,
                 {' '}{Object.keys(meiroWebhookSuggestionsQuery.data.taxonomy_suggestions.source_aliases || {}).length} source aliases,
-                {' '}{Object.keys(meiroWebhookSuggestionsQuery.data.taxonomy_suggestions.medium_aliases || {}).length} medium aliases.
+                {' '}{Object.keys(meiroWebhookSuggestionsQuery.data.taxonomy_suggestions.medium_aliases || {}).length} medium aliases,
+                {' '}{(meiroWebhookSuggestionsQuery.data.taxonomy_suggestions.unresolved_pairs || []).length} unresolved source/medium pairs.
               </div>
+              {Object.keys(meiroWebhookSuggestionsQuery.data.taxonomy_suggestions.source_aliases || {}).slice(0, 4).map((raw) => (
+                <div key={`src-${raw}`} style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary, marginTop: 4 }}>
+                  Source alias: <code>{raw}</code> → <code>{meiroWebhookSuggestionsQuery.data.taxonomy_suggestions.source_aliases[raw]}</code>
+                </div>
+              ))}
+              {Object.keys(meiroWebhookSuggestionsQuery.data.taxonomy_suggestions.medium_aliases || {}).slice(0, 4).map((raw) => (
+                <div key={`med-${raw}`} style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary, marginTop: 4 }}>
+                  Medium alias: <code>{raw}</code> → <code>{meiroWebhookSuggestionsQuery.data.taxonomy_suggestions.medium_aliases[raw]}</code>
+                </div>
+              ))}
               {(meiroWebhookSuggestionsQuery.data.taxonomy_suggestions.channel_rules || []).slice(0, 5).map((rule) => (
                 <div key={rule.name} style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary, marginTop: 4 }}>
                   <strong>{rule.name}</strong> → <code>{rule.channel}</code>
+                  {rule.match_source || rule.match_medium ? (
+                    <> · match: <code>{rule.match_source || 'any'}</code> / <code>{rule.match_medium || 'any'}</code></>
+                  ) : null}
                   {rule.observed_count != null ? <> · observed: {rule.observed_count}</> : null}
+                </div>
+              ))}
+              {(meiroWebhookSuggestionsQuery.data.taxonomy_suggestions.unresolved_pairs || []).slice(0, 3).map((pair, index) => (
+                <div key={`unresolved-${index}`} style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary, marginTop: 4 }}>
+                  Unresolved pair: <code>{pair.source || '∅'}</code> / <code>{pair.medium || '∅'}</code> · observed: {pair.count}
                 </div>
               ))}
               <div style={{ marginTop: t.space.sm }}>
@@ -979,6 +1094,40 @@ export default function DataQuality() {
                   }}
                 >
                   {applyTaxonomySuggestionsMutation.isPending ? 'Applying…' : 'Apply taxonomy suggestions'}
+                </button>
+              </div>
+            </div>
+
+            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md }}>
+              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, marginBottom: t.space.xs }}>
+                Meiro mapping suggestions
+              </div>
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                Suggested field paths for importing flat webhook payloads through the Meiro CDP import flow.
+              </div>
+              <div style={{ display: 'grid', gap: 4, marginTop: t.space.xs, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                <div>Touchpoints: <code>{String(meiroWebhookSuggestionsQuery.data.apply_payloads.mapping.touchpoint_attr || 'touchpoints')}</code></div>
+                <div>Value: <code>{String(meiroWebhookSuggestionsQuery.data.apply_payloads.mapping.value_attr || 'conversion_value')}</code></div>
+                <div>Source: <code>{String(meiroWebhookSuggestionsQuery.data.apply_payloads.mapping.source_field || 'source')}</code> · Medium: <code>{String(meiroWebhookSuggestionsQuery.data.apply_payloads.mapping.medium_field || 'medium')}</code></div>
+                <div>Campaign: <code>{String(meiroWebhookSuggestionsQuery.data.apply_payloads.mapping.campaign_field || 'campaign')}</code> · Channel: <code>{String(meiroWebhookSuggestionsQuery.data.apply_payloads.mapping.channel_field || 'channel')}</code></div>
+              </div>
+              <div style={{ marginTop: t.space.sm }}>
+                <button
+                  type="button"
+                  onClick={() => applyMappingSuggestionsMutation.mutate(meiroWebhookSuggestionsQuery.data.apply_payloads.mapping)}
+                  disabled={applyMappingSuggestionsMutation.isPending}
+                  style={{
+                    padding: `${t.space.xs}px ${t.space.md}px`,
+                    fontSize: t.font.sizeSm,
+                    color: '#fff',
+                    background: t.color.accent,
+                    border: 'none',
+                    borderRadius: t.radius.sm,
+                    cursor: applyMappingSuggestionsMutation.isPending ? 'wait' : 'pointer',
+                    opacity: applyMappingSuggestionsMutation.isPending ? 0.75 : 1,
+                  }}
+                >
+                  {applyMappingSuggestionsMutation.isPending ? 'Applying…' : 'Apply mapping suggestions'}
                 </button>
               </div>
             </div>
@@ -1284,6 +1433,9 @@ export default function DataQuality() {
                 {' '}· source aliases: <strong>{Object.keys(meiroWebhookSuggestionsQuery.data.apply_payloads.taxonomy.source_aliases || {}).length}</strong>
                 {' '}· medium aliases: <strong>{Object.keys(meiroWebhookSuggestionsQuery.data.apply_payloads.taxonomy.medium_aliases || {}).length}</strong>
               </div>
+              <div>
+                Mapping fields to save: <strong>{Object.keys(meiroWebhookSuggestionsQuery.data.apply_payloads.mapping || {}).length}</strong>
+              </div>
             </div>
 
             <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.bgSubtle }}>
@@ -1297,6 +1449,13 @@ export default function DataQuality() {
               <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, marginBottom: 6 }}>Taxonomy payload preview</div>
               <pre style={{ margin: 0, fontSize: t.font.sizeXs, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                 {JSON.stringify(meiroWebhookSuggestionsQuery.data.apply_payloads.taxonomy, null, 2)}
+              </pre>
+            </div>
+
+            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.bgSubtle }}>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, marginBottom: 6 }}>Meiro mapping payload preview</div>
+              <pre style={{ margin: 0, fontSize: t.font.sizeXs, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                {JSON.stringify(meiroWebhookSuggestionsQuery.data.apply_payloads.mapping, null, 2)}
               </pre>
             </div>
 
@@ -1573,6 +1732,10 @@ function DrilldownDrawer(props: {
     missing_timestamp_pct: 'Journeys missing timestamps',
     duplicate_id_pct: 'Duplicate IDs',
     conversion_attributable_pct: 'Attributable conversions',
+    defaulted_conversion_value_pct: 'Defaulted conversion values',
+    raw_zero_conversion_value_pct: 'Raw zero-value conversions',
+    unresolved_source_medium_touchpoint_pct: 'Unresolved source / medium touchpoints',
+    inferred_mapping_journey_pct: 'Journeys using inferred mappings',
   }
   return (
     <div

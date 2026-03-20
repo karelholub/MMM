@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 # Store in app/data/ alongside other meiro files
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 CONFIG_PATH = DATA_DIR / "meiro_config.json"
+WEBHOOK_ARCHIVE_PATH = DATA_DIR / "meiro_webhook_archive.jsonl"
 MEIRO_CDP_PLATFORM = "meiro_cdp"
 
 
@@ -83,6 +84,101 @@ def get_webhook_events(limit: int = 100) -> list[Dict[str, Any]]:
         return []
     keep = max(1, min(1000, int(limit)))
     return list(reversed(events[-keep:]))
+
+
+def append_webhook_archive_entry(entry: Dict[str, Any]) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with WEBHOOK_ARCHIVE_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def get_webhook_archive_entries(limit: int = 100) -> list[Dict[str, Any]]:
+    if not WEBHOOK_ARCHIVE_PATH.exists():
+        return []
+    rows: list[Dict[str, Any]] = []
+    try:
+        with WEBHOOK_ARCHIVE_PATH.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    parsed = json.loads(line)
+                except Exception:
+                    continue
+                if isinstance(parsed, dict):
+                    rows.append(parsed)
+    except Exception:
+        return []
+    keep = max(1, min(5000, int(limit)))
+    return list(reversed(rows[-keep:]))
+
+
+def get_webhook_archive_status() -> Dict[str, Any]:
+    if not WEBHOOK_ARCHIVE_PATH.exists():
+        return {"available": False, "entries": 0, "last_received_at": None, "parser_versions": []}
+    entries = 0
+    last_received_at: Optional[str] = None
+    parser_versions: set[str] = set()
+    try:
+        with WEBHOOK_ARCHIVE_PATH.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    parsed = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(parsed, dict):
+                    continue
+                entries += 1
+                received_at = parsed.get("received_at")
+                if isinstance(received_at, str) and received_at:
+                    last_received_at = received_at
+                parser_version = parsed.get("parser_version")
+                if isinstance(parser_version, str) and parser_version:
+                    parser_versions.add(parser_version)
+    except Exception:
+        return {"available": False, "entries": 0, "last_received_at": None, "parser_versions": []}
+    return {
+        "available": entries > 0,
+        "entries": entries,
+        "last_received_at": last_received_at,
+        "parser_versions": sorted(parser_versions),
+    }
+
+
+def rebuild_profiles_from_webhook_archive(limit: Optional[int] = None) -> list[Any]:
+    if not WEBHOOK_ARCHIVE_PATH.exists():
+        return []
+    rows: list[Dict[str, Any]] = []
+    with WEBHOOK_ARCHIVE_PATH.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(parsed, dict):
+                rows.append(parsed)
+    if limit is not None:
+        keep = max(1, int(limit))
+        rows = rows[-keep:]
+
+    rebuilt: list[Any] = []
+    for row in rows:
+        profiles = row.get("profiles")
+        if not isinstance(profiles, list):
+            continue
+        replace = bool(row.get("replace", True))
+        if replace:
+            rebuilt = list(profiles)
+        else:
+            rebuilt.extend(list(profiles))
+    return rebuilt
 
 
 def get_mapping() -> Dict[str, Any]:

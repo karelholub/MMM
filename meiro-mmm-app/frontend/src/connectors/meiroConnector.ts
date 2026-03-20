@@ -18,6 +18,10 @@ export interface MeiroMapping {
   id_attr?: string
   channel_field?: string
   timestamp_field?: string
+  source_field?: string
+  medium_field?: string
+  campaign_field?: string
+  currency_field?: string
   channel_mapping?: Record<string, string>
 }
 

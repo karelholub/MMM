@@ -169,6 +169,8 @@ def compute_overall_quality_from_dq(db: Session) -> List[AttributionQualitySnaps
         if s.source == "journeys":
             if s.metric_key in ("missing_profile_pct", "missing_timestamp_pct", "missing_channel_pct"):
                 missing_pct_vals.append(s.metric_value)
+            elif s.metric_key in ("defaulted_conversion_value_pct", "unresolved_source_medium_touchpoint_pct", "inferred_mapping_journey_pct"):
+                missing_pct_vals.append(s.metric_value)
             elif s.metric_key == "duplicate_id_pct":
                 dup_pct_vals.append(s.metric_value)
             elif s.metric_key == "conversion_attributable_pct":
@@ -278,4 +280,3 @@ def summarize_config_changes(db: Session, cfg_id: str, since: datetime) -> List[
             }
         )
     return summaries
-

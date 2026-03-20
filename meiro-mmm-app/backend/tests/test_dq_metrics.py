@@ -1,8 +1,10 @@
-from app.services_data_quality import compute_journeys_completeness
+from app import services_data_quality
 from app.services_quality import ConfidenceComponents, score_confidence
+from app.utils.taxonomy import Taxonomy
 
 
-def test_compute_journeys_completeness_basic_counts():
+def test_compute_journeys_completeness_basic_counts(monkeypatch):
+    monkeypatch.setattr(services_data_quality, "load_taxonomy", Taxonomy.default)
     journeys = [
         {
             "customer_id": "c1",
@@ -10,18 +12,30 @@ def test_compute_journeys_completeness_basic_counts():
                 {"channel": "google", "timestamp": "2024-01-01T00:00:00"},
                 {"channel": "meta", "timestamp": "2024-01-02T00:00:00"},
             ],
+            "meta": {"parser": {"used_inferred_mapping": False}},
+            "_revenue_entries": [
+                {"default_applied": False, "raw_value_zero": False},
+            ],
         },
         {
             # Missing customer_id should count towards missing_profile_pct
             "touchpoints": [{"channel": "unknown", "timestamp": ""}],
+            "meta": {"parser": {"used_inferred_mapping": True}},
+            "_revenue_entries": [
+                {"default_applied": True, "raw_value_zero": False},
+            ],
         },
         {
             "customer_id": "c1",  # duplicate id
-            "touchpoints": [{"channel": "direct", "timestamp": "2024-01-03T00:00:00"}],
+            "touchpoints": [{"channel": "direct", "timestamp": "2024-01-03T00:00:00", "source": "mystery", "medium": "weird"}],
+            "meta": {"parser": {"used_inferred_mapping": False}},
+            "_revenue_entries": [
+                {"default_applied": False, "raw_value_zero": True},
+            ],
         },
     ]
 
-    metrics = compute_journeys_completeness(journeys)
+    metrics = services_data_quality.compute_journeys_completeness(journeys)
     keys = {m[1] for m in metrics}
 
     assert "missing_profile_pct" in keys
@@ -29,14 +43,26 @@ def test_compute_journeys_completeness_basic_counts():
     assert "missing_channel_pct" in keys
     assert "duplicate_id_pct" in keys
     assert "conversion_attributable_pct" in keys
+    assert "defaulted_conversion_value_pct" in keys
+    assert "raw_zero_conversion_value_pct" in keys
+    assert "unresolved_source_medium_touchpoint_pct" in keys
+    assert "inferred_mapping_journey_pct" in keys
 
     missing_profile = next(v for (_, k, v, _) in metrics if k == "missing_profile_pct")
     duplicate_pct = next(v for (_, k, v, _) in metrics if k == "duplicate_id_pct")
+    defaulted_pct = next(v for (_, k, v, _) in metrics if k == "defaulted_conversion_value_pct")
+    raw_zero_pct = next(v for (_, k, v, _) in metrics if k == "raw_zero_conversion_value_pct")
+    unresolved_pct = next(v for (_, k, v, _) in metrics if k == "unresolved_source_medium_touchpoint_pct")
+    inferred_pct = next(v for (_, k, v, _) in metrics if k == "inferred_mapping_journey_pct")
 
     # One of three journeys is missing a profile id
     assert missing_profile > 0
     # Duplicate id present
     assert duplicate_pct > 0
+    assert defaulted_pct > 0
+    assert raw_zero_pct > 0
+    assert unresolved_pct > 0
+    assert inferred_pct > 0
 
 
 def test_score_confidence_ranges_and_labels():

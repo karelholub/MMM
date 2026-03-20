@@ -13,6 +13,7 @@ Input: list of customer journeys, each with ordered touchpoints and a conversion
 Output: attributed credit per channel, plus summary statistics.
 """
 
+import json
 import logging
 import math
 from collections import defaultdict
@@ -26,6 +27,21 @@ from app.services_metrics import journey_revenue_value
 from app.utils.taxonomy import normalize_touchpoint, load_taxonomy
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_path(record: Any, path: str, fallback: Any = None) -> Any:
+    raw = (path or "").strip()
+    if not raw:
+        return fallback
+    current = record
+    for part in raw.split("."):
+        if isinstance(current, dict):
+            current = current.get(part)
+        else:
+            return fallback
+        if current is None:
+            return fallback
+    return current
 
 
 # ---------------------------------------------------------------------------
@@ -620,6 +636,9 @@ def parse_conversion_paths(
     id_attr: str = "customer_id",
     channel_field: str = "channel",
     timestamp_field: str = "timestamp",
+    source_field: str = "source",
+    medium_field: str = "medium",
+    campaign_field: str = "campaign",
 ) -> List[Dict]:
     """
     Parse CDP profile data into journey format expected by attribution models.
@@ -633,10 +652,10 @@ def parse_conversion_paths(
     taxonomy = load_taxonomy()
 
     for profile in profiles:
-        customer_id = profile.get(id_attr, profile.get("id", "unknown"))
+        customer_id = _extract_path(profile, id_attr, profile.get("id", "unknown"))
 
         # Try to get touchpoints from the specified attribute
-        touchpoints_raw = profile.get(touchpoint_attr)
+        touchpoints_raw = _extract_path(profile, touchpoint_attr, profile.get(touchpoint_attr))
 
         if isinstance(touchpoints_raw, list):
             # Direct list of touchpoint dicts
@@ -644,18 +663,18 @@ def parse_conversion_paths(
             for tp in touchpoints_raw:
                 if isinstance(tp, dict):
                     raw_tp = {
-                        "channel": tp.get(channel_field, tp.get("source", tp.get("utm_source", "unknown"))),
-                        "source": tp.get("source"),
-                        "medium": tp.get("medium"),
+                        "channel": _extract_path(tp, channel_field, tp.get(channel_field, tp.get("source", tp.get("utm_source", "unknown")))),
+                        "source": _extract_path(tp, source_field, tp.get("source")),
+                        "medium": _extract_path(tp, medium_field, tp.get("medium")),
                         "utm_source": tp.get("utm_source"),
                         "utm_medium": tp.get("utm_medium"),
                         "utm_campaign": tp.get("utm_campaign"),
                         "utm_content": tp.get("utm_content"),
-                        "campaign": tp.get("campaign"),
+                        "campaign": _extract_path(tp, campaign_field, tp.get("campaign")),
                         "adset": tp.get("adset"),
                         "ad": tp.get("ad"),
                         "creative": tp.get("creative"),
-                        "timestamp": tp.get(timestamp_field, tp.get("date", tp.get("event_date", ""))),
+                        "timestamp": _extract_path(tp, timestamp_field, tp.get(timestamp_field, tp.get("date", tp.get("event_date", "")))),
                     }
                     touchpoints.append(normalize_touchpoint(raw_tp, taxonomy))
                 elif isinstance(tp, str):
@@ -663,25 +682,24 @@ def parse_conversion_paths(
                     touchpoints.append({"channel": tp, "timestamp": ""})
         elif isinstance(touchpoints_raw, str):
             # Try JSON parse
-            import json
             try:
                 parsed = json.loads(touchpoints_raw)
                 if isinstance(parsed, list):
                     touchpoints = [
                         normalize_touchpoint(
                             {
-                                "channel": tp.get(channel_field, "unknown") if isinstance(tp, dict) else str(tp),
-                                "source": tp.get("source") if isinstance(tp, dict) else None,
-                                "medium": tp.get("medium") if isinstance(tp, dict) else None,
+                                "channel": _extract_path(tp, channel_field, tp.get(channel_field, "unknown")) if isinstance(tp, dict) else str(tp),
+                                "source": _extract_path(tp, source_field, tp.get("source")) if isinstance(tp, dict) else None,
+                                "medium": _extract_path(tp, medium_field, tp.get("medium")) if isinstance(tp, dict) else None,
                                 "utm_source": tp.get("utm_source") if isinstance(tp, dict) else None,
                                 "utm_medium": tp.get("utm_medium") if isinstance(tp, dict) else None,
                                 "utm_campaign": tp.get("utm_campaign") if isinstance(tp, dict) else None,
                                 "utm_content": tp.get("utm_content") if isinstance(tp, dict) else None,
-                                "campaign": tp.get("campaign") if isinstance(tp, dict) else None,
+                                "campaign": _extract_path(tp, campaign_field, tp.get("campaign")) if isinstance(tp, dict) else None,
                                 "adset": tp.get("adset") if isinstance(tp, dict) else None,
                                 "ad": tp.get("ad") if isinstance(tp, dict) else None,
                                 "creative": tp.get("creative") if isinstance(tp, dict) else None,
-                                "timestamp": tp.get(timestamp_field, "") if isinstance(tp, dict) else "",
+                                "timestamp": _extract_path(tp, timestamp_field, tp.get(timestamp_field, "")) if isinstance(tp, dict) else "",
                             },
                             taxonomy,
                         )
@@ -719,7 +737,11 @@ def parse_conversion_paths(
         if not touchpoints:
             continue
 
-        conversion_value = float(profile.get(value_attr, profile.get("revenue", profile.get("value", 1.0))) or 1.0)
+        raw_value = _extract_path(profile, value_attr, profile.get(value_attr, profile.get("revenue", profile.get("value", 1.0))))
+        try:
+            conversion_value = float(raw_value) if raw_value is not None else 1.0
+        except Exception:
+            conversion_value = 1.0
         converted = profile.get("converted", True)
         if isinstance(converted, str):
             converted = converted.lower() in ("true", "1", "yes")

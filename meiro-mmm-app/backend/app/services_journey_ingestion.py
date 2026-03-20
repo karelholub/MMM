@@ -15,6 +15,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.services_revenue_config import extract_revenue_entries, normalize_revenue_config
+from app.utils.taxonomy import load_taxonomy, normalize_touchpoint
+
+MEIRO_PARSER_VERSION = "2026-03-20-v2"
+
 CANONICAL_CHANNELS = frozenset({"google_ads", "meta_ads", "linkedin_ads", "email", "direct", "whatsapp"})
 LONG_JOURNEY_THRESHOLD = 200
 
@@ -45,6 +50,13 @@ def detect_schema(raw: Any) -> Tuple[str, List[Any], Dict[str, Any]]:
             j = raw["journeys"]
             return ("1.0", j if isinstance(j, list) else [], defaults)
     if isinstance(raw, list):
+        first = raw[0] if raw else None
+        if isinstance(first, dict) and (
+            "journey_id" in first
+            or "customer" in first
+            or ("touchpoints" in first and "conversions" in first)
+        ):
+            return ("2.0", raw, defaults)
         return ("1.0", raw, defaults)
     return ("1.0", [], defaults)
 
@@ -68,6 +80,21 @@ def _parse_timestamp(ts: Any) -> Optional[datetime]:
         return None
 
 
+def _extract_path(record: Any, path: str, fallback: Any = None) -> Any:
+    raw = (path or "").strip()
+    if not raw:
+        return fallback
+    current = record
+    for part in raw.split("."):
+        if isinstance(current, dict):
+            current = current.get(part)
+        else:
+            return fallback
+        if current is None:
+            return fallback
+    return current
+
+
 def _iso_datetime(dt: datetime) -> str:
     return dt.isoformat().replace("+00:00", "Z")
 
@@ -77,6 +104,405 @@ def _canonicalize_channel(raw: str) -> str:
     if lower in CANONICAL_CHANNELS:
         return lower
     return CHANNEL_ALIASES.get(lower, raw)
+
+
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, "", []):
+            return value
+    return None
+
+
+def _resolve_candidate(candidates: List[Tuple[str, Any, bool]]) -> Tuple[Any, Optional[str], bool]:
+    for source_label, value, inferred in candidates:
+        if value not in (None, "", []):
+            return value, source_label, inferred
+    return None, None, False
+
+
+def _candidate_timestamp(*values: Any) -> Optional[str]:
+    for value in values:
+        if value in (None, "", []):
+            continue
+        parsed = _parse_timestamp(value)
+        if parsed is not None:
+            return _iso_datetime(parsed)
+    return None
+
+
+def _touchpoint_list_from_profile(profile: Dict[str, Any], mapping: Dict[str, Any]) -> List[Any]:
+    raw = _extract_path(profile, str(mapping.get("touchpoint_attr") or "touchpoints"))
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, list):
+            return parsed
+    fallback: List[Dict[str, Any]] = []
+    for key in ("first_touch_channel", "last_touch_channel", "channel", "source"):
+        if profile.get(key) not in (None, "", []):
+            fallback.append(
+                {
+                    "channel": profile.get(key),
+                    "source": profile.get("source"),
+                    "medium": profile.get("medium"),
+                    "utm_source": profile.get("utm_source"),
+                    "utm_medium": profile.get("utm_medium"),
+                    "utm_campaign": profile.get("utm_campaign"),
+                    "utm_content": profile.get("utm_content"),
+                    "campaign": profile.get("campaign"),
+                    "timestamp": _candidate_timestamp(
+                        profile.get("timestamp"),
+                        profile.get("event_date"),
+                        profile.get("date"),
+                    ),
+                }
+            )
+    return fallback
+
+
+def _build_v2_touchpoints(
+    profile: Dict[str, Any],
+    mapping: Dict[str, Any],
+    *,
+    idx: int,
+) -> List[Dict[str, Any]]:
+    taxonomy = load_taxonomy()
+    out: List[Dict[str, Any]] = []
+    for ti, raw_tp in enumerate(_touchpoint_list_from_profile(profile, mapping)):
+        if isinstance(raw_tp, str):
+            ts = _candidate_timestamp(profile.get("timestamp"), profile.get("event_date"), profile.get("date"))
+            out.append(
+                {
+                    "id": f"tp_{idx}_{ti}",
+                    "ts": ts or _iso_datetime(datetime.now(timezone.utc)),
+                    "channel": _canonicalize_channel(str(raw_tp)),
+                    "meta": {
+                        "parser": {
+                            "used_inferred_mapping": True,
+                            "field_sources": {
+                                "channel": "fallback:string_touchpoint",
+                                "timestamp": "fallback:profile_timestamp" if ts else "fallback:generated_now",
+                            },
+                        }
+                    },
+                }
+            )
+            continue
+        if not isinstance(raw_tp, dict):
+            continue
+        timestamp_value, timestamp_source, timestamp_inferred = _resolve_candidate(
+            [
+                (f"configured:{str(mapping.get('timestamp_field') or 'timestamp')}", _extract_path(raw_tp, str(mapping.get("timestamp_field") or "timestamp")), False),
+                ("fallback:touchpoint.ts", raw_tp.get("ts"), True),
+                ("fallback:touchpoint.timestamp", raw_tp.get("timestamp"), True),
+                ("fallback:touchpoint.event_date", raw_tp.get("event_date"), True),
+                ("fallback:touchpoint.date", raw_tp.get("date"), True),
+                ("fallback:profile.timestamp", profile.get("timestamp"), True),
+                ("fallback:profile.event_date", profile.get("event_date"), True),
+                ("fallback:profile.date", profile.get("date"), True),
+            ]
+        )
+        raw_timestamp = _candidate_timestamp(timestamp_value)
+        channel_value, channel_source, channel_inferred = _resolve_candidate(
+            [
+                (f"configured:{str(mapping.get('channel_field') or 'channel')}", _extract_path(raw_tp, str(mapping.get("channel_field") or "channel")), False),
+                ("fallback:touchpoint.channel", raw_tp.get("channel"), True),
+                ("fallback:touchpoint.source", raw_tp.get("source"), True),
+                ("fallback:touchpoint.utm_source", raw_tp.get("utm_source"), True),
+                ("fallback:literal_unknown", "unknown", True),
+            ]
+        )
+        source_value, source_source, source_inferred = _resolve_candidate(
+            [
+                (f"configured:{str(mapping.get('source_field') or 'source')}", _extract_path(raw_tp, str(mapping.get("source_field") or "source")), False),
+                ("fallback:touchpoint.source", raw_tp.get("source"), True),
+            ]
+        )
+        medium_value, medium_source, medium_inferred = _resolve_candidate(
+            [
+                (f"configured:{str(mapping.get('medium_field') or 'medium')}", _extract_path(raw_tp, str(mapping.get("medium_field") or "medium")), False),
+                ("fallback:touchpoint.medium", raw_tp.get("medium"), True),
+            ]
+        )
+        campaign_value, campaign_source, campaign_inferred = _resolve_candidate(
+            [
+                (f"configured:{str(mapping.get('campaign_field') or 'campaign')}", _extract_path(raw_tp, str(mapping.get("campaign_field") or "campaign")), False),
+                ("fallback:touchpoint.campaign", raw_tp.get("campaign"), True),
+                ("fallback:touchpoint.utm_campaign", raw_tp.get("utm_campaign"), True),
+            ]
+        )
+        normalized = normalize_touchpoint(
+            {
+                "channel": channel_value,
+                "source": source_value,
+                "medium": medium_value,
+                "utm_source": raw_tp.get("utm_source"),
+                "utm_medium": raw_tp.get("utm_medium"),
+                "utm_campaign": raw_tp.get("utm_campaign"),
+                "utm_content": raw_tp.get("utm_content"),
+                "campaign": campaign_value,
+                "adset": raw_tp.get("adset"),
+                "ad": raw_tp.get("ad"),
+                "creative": _first_present(raw_tp.get("creative"), raw_tp.get("utm_content")),
+                "timestamp": raw_timestamp,
+            },
+            taxonomy,
+        )
+        tp: Dict[str, Any] = {
+            "id": str(raw_tp.get("id") or f"tp_{idx}_{ti}"),
+            "ts": raw_timestamp or _iso_datetime(datetime.now(timezone.utc)),
+            "channel": str(normalized.get("channel") or "unknown"),
+        }
+        if normalized.get("source") not in (None, "", []):
+            tp["source"] = normalized.get("source")
+        if normalized.get("medium") not in (None, "", []):
+            tp["medium"] = normalized.get("medium")
+        campaign = normalized.get("campaign")
+        if campaign not in (None, "", []):
+            tp["campaign"] = campaign if isinstance(campaign, dict) else {"name": str(campaign)}
+        utm: Dict[str, Any] = {}
+        if raw_tp.get("utm_source") not in (None, "", []):
+            utm["source"] = raw_tp.get("utm_source")
+        if raw_tp.get("utm_medium") not in (None, "", []):
+            utm["medium"] = raw_tp.get("utm_medium")
+        if raw_tp.get("utm_campaign") not in (None, "", []):
+            utm["campaign"] = raw_tp.get("utm_campaign")
+        if raw_tp.get("utm_content") not in (None, "", []):
+            utm["content"] = raw_tp.get("utm_content")
+        if utm:
+            tp["utm"] = utm
+        tp["meta"] = {
+            "parser": {
+                "used_inferred_mapping": bool(
+                    timestamp_inferred
+                    or channel_inferred
+                    or source_inferred
+                    or medium_inferred
+                    or campaign_inferred
+                ),
+                "field_sources": {
+                    "timestamp": timestamp_source or ("fallback:generated_now" if not raw_timestamp else None),
+                    "channel": channel_source,
+                    "source": source_source,
+                    "medium": medium_source,
+                    "campaign": campaign_source,
+                },
+            }
+        }
+        out.append(tp)
+    return out
+
+
+def _build_v2_conversions(
+    profile: Dict[str, Any],
+    mapping: Dict[str, Any],
+    revenue_config: Dict[str, Any],
+    *,
+    idx: int,
+    last_touch_ts: Optional[str],
+) -> List[Dict[str, Any]]:
+    raw_conversions = profile.get("conversions")
+    source_items: List[Dict[str, Any]] = []
+    if isinstance(raw_conversions, list) and raw_conversions:
+        source_items = [item for item in raw_conversions if isinstance(item, dict)]
+    else:
+        converted = profile.get("converted")
+        if isinstance(converted, str):
+            converted = converted.strip().lower() in {"true", "1", "yes"}
+        raw_value = _first_present(
+            _extract_path(profile, str(mapping.get("value_attr") or "conversion_value")),
+            profile.get("conversion_value"),
+            profile.get("revenue"),
+            profile.get("value"),
+        )
+        if converted is False and raw_value in (None, "", []):
+            return []
+        source_items = [profile]
+
+    default_name = str(
+        profile.get("kpi_type")
+        or profile.get("conversion_key")
+        or ((revenue_config.get("conversion_names") or ["conversion"])[0])
+        or "conversion"
+    ).strip() or "conversion"
+    currency_field = str(
+        mapping.get("currency_field")
+        or revenue_config.get("currency_field_path")
+        or "currency"
+    )
+    conversions: List[Dict[str, Any]] = []
+    for ci, raw_conv in enumerate(source_items):
+        value, value_source, value_inferred = _resolve_candidate(
+            [
+                (f"configured:{str(mapping.get('value_attr') or 'conversion_value')}", _extract_path(raw_conv, str(mapping.get("value_attr") or "conversion_value")), False),
+                ("fallback:conversion.value", raw_conv.get("value"), True),
+                ("fallback:conversion.conversion_value", raw_conv.get("conversion_value"), True),
+            ]
+        )
+        currency, currency_source, currency_inferred = _resolve_candidate(
+            [
+                (f"configured:{currency_field}", _extract_path(raw_conv, currency_field), False),
+                ("fallback:conversion.currency", raw_conv.get("currency"), True),
+                (f"fallback:profile.{currency_field}", _extract_path(profile, currency_field), True),
+                ("fallback:profile.currency", profile.get("currency"), True),
+                ("fallback:revenue_base_currency", revenue_config.get("base_currency"), True),
+                ("fallback:literal_eur", "EUR", True),
+            ]
+        )
+        ts_value, ts_source, ts_inferred = _resolve_candidate(
+            [
+                ("fallback:conversion.ts", raw_conv.get("ts"), True),
+                ("fallback:conversion.timestamp", raw_conv.get("timestamp"), True),
+                ("fallback:conversion.event_date", raw_conv.get("event_date"), True),
+                ("fallback:conversion.date", raw_conv.get("date"), True),
+                ("fallback:profile.conversion_ts", profile.get("conversion_ts"), True),
+                ("fallback:profile.timestamp", profile.get("timestamp"), True),
+                ("fallback:last_touch_ts", last_touch_ts, True),
+                ("fallback:generated_now", datetime.now(timezone.utc), True),
+            ]
+        )
+        name_value, name_source, name_inferred = _resolve_candidate(
+            [
+                ("fallback:conversion.name", raw_conv.get("name"), True),
+                ("fallback:conversion.event_name", raw_conv.get("event_name"), True),
+                ("fallback:conversion.type", raw_conv.get("type"), True),
+                ("fallback:profile.kpi_type", profile.get("kpi_type"), True),
+                ("fallback:profile.conversion_key", profile.get("conversion_key"), True),
+                ("fallback:default_name", default_name, True),
+            ]
+        )
+        conversion = {
+            "id": str(
+                raw_conv.get("id")
+                or raw_conv.get("conversion_id")
+                or raw_conv.get("event_id")
+                or raw_conv.get("order_id")
+                or f"cv_{idx}_{ci}"
+            ),
+            "ts": _candidate_timestamp(ts_value),
+            "name": str(name_value).strip() or default_name,
+            "currency": str(currency or "EUR"),
+        }
+        if value not in (None, "", []):
+            conversion["value"] = value
+        if raw_conv.get("order_id") not in (None, "", []):
+            conversion["order_id"] = raw_conv.get("order_id")
+        if raw_conv.get("event_id") not in (None, "", []):
+            conversion["event_id"] = raw_conv.get("event_id")
+        conversion["meta"] = {
+            "parser": {
+                "used_inferred_mapping": bool(value_inferred or currency_inferred or ts_inferred or name_inferred),
+                "field_sources": {
+                    "value": value_source,
+                    "currency": currency_source,
+                    "ts": ts_source,
+                    "name": name_source,
+                },
+            }
+        }
+        conversions.append(conversion)
+    return conversions
+
+
+def canonicalize_meiro_profiles(
+    raw_input: Any,
+    mapping: Optional[Dict[str, Any]] = None,
+    revenue_config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Normalize mixed Meiro payloads into internal v2 journeys and attach revenue entries."""
+    mapping_cfg = {
+        "touchpoint_attr": "touchpoints",
+        "value_attr": "conversion_value",
+        "id_attr": "customer_id",
+        "channel_field": "channel",
+        "timestamp_field": "timestamp",
+        "source_field": "source",
+        "medium_field": "medium",
+        "campaign_field": "campaign",
+        "currency_field": "currency",
+    }
+    if isinstance(mapping, dict):
+        mapping_cfg.update({k: v for k, v in mapping.items() if v not in (None, "")})
+    revenue_cfg = normalize_revenue_config(revenue_config)
+    _, journeys_list, defaults = detect_schema(raw_input)
+
+    prepared: List[Dict[str, Any]] = []
+    for idx, raw in enumerate(journeys_list):
+        if not isinstance(raw, dict):
+            prepared.append(raw)
+            continue
+        if "journey_id" in raw or "customer" in raw or ("touchpoints" in raw and "conversions" in raw):
+            prepared.append(raw)
+            continue
+        touchpoints = _build_v2_touchpoints(raw, mapping_cfg, idx=idx)
+        last_touch_ts = touchpoints[-1]["ts"] if touchpoints else None
+        conversions = _build_v2_conversions(raw, mapping_cfg, revenue_cfg, idx=idx, last_touch_ts=last_touch_ts)
+        customer_id = _first_present(
+            _extract_path(raw, str(mapping_cfg.get("id_attr") or "customer_id")),
+            raw.get("customer_id"),
+            raw.get("profile_id"),
+            raw.get("id"),
+            f"anon-{idx}",
+        )
+        customer_id_source = (
+            f"configured:{str(mapping_cfg.get('id_attr') or 'customer_id')}"
+            if _extract_path(raw, str(mapping_cfg.get("id_attr") or "customer_id")) not in (None, "", [])
+            else (
+                "fallback:customer_id"
+                if raw.get("customer_id") not in (None, "", [])
+                else "fallback:profile_id"
+                if raw.get("profile_id") not in (None, "", [])
+                else "fallback:id"
+                if raw.get("id") not in (None, "", [])
+                else "fallback:generated_anon"
+            )
+        )
+        prepared.append(
+            {
+                "journey_id": str(raw.get("journey_id") or f"j_{uuid.uuid4().hex[:12]}"),
+                "customer": {"id": str(customer_id), "type": "profile_id"},
+                "defaults": defaults,
+                "touchpoints": touchpoints,
+                "conversions": conversions,
+                "kpi_type": str(raw.get("kpi_type") or "") or None,
+                "meta": {
+                    "parser": {
+                        "used_inferred_mapping": customer_id_source != f"configured:{str(mapping_cfg.get('id_attr') or 'customer_id')}",
+                        "field_sources": {"customer_id": customer_id_source},
+                    }
+                },
+                "_schema": "2.0",
+            }
+        )
+
+    result = validate_and_normalize(prepared)
+    for journey in result.get("valid_journeys", []):
+        entries = extract_revenue_entries(
+            journey,
+            revenue_cfg,
+            fallback_conversion_id=str(journey.get("journey_id") or ""),
+        )
+        if entries:
+            journey["_revenue_entries"] = entries
+        if not journey.get("kpi_type"):
+            conversions = journey.get("conversions") or []
+            if conversions and isinstance(conversions[0], dict) and conversions[0].get("name"):
+                journey["kpi_type"] = str(conversions[0]["name"])
+        parser_meta = dict((journey.get("meta") or {}).get("parser") or {})
+        tp_parser = [((tp.get("meta") or {}).get("parser") or {}) for tp in (journey.get("touchpoints") or []) if isinstance(tp, dict)]
+        conv_parser = [((conv.get("meta") or {}).get("parser") or {}) for conv in (journey.get("conversions") or []) if isinstance(conv, dict)]
+        parser_items = [parser_meta, *tp_parser, *conv_parser]
+        inferred_items = sum(1 for item in parser_items if item.get("used_inferred_mapping"))
+        parser_meta["inferred_items"] = inferred_items
+        parser_meta["total_items"] = len(parser_items)
+        parser_meta["confidence"] = round((1.0 - (inferred_items / float(len(parser_items) or 1))), 4)
+        parser_meta["used_inferred_mapping"] = inferred_items > 0
+        journey.setdefault("meta", {})["parser"] = parser_meta
+    return result
 
 
 def _add_validation(
@@ -334,22 +760,27 @@ def _validate_and_normalize_v2(
         cts = _parse_timestamp(c.get("ts"))
         if cts is None:
             cts = datetime.now(timezone.utc)
-        try:
-            val = float(c.get("value", 0) or 0)
-        except (TypeError, ValueError):
-            val = 0.0
-        v2_conversions.append({
+        value_present = c.get("value") not in (None, "", [])
+        conversion_item = {
             "id": c.get("id", f"cv_{idx}_{ci}"),
             "ts": _iso_datetime(cts),
             "name": str(c.get("name", "conversion")),
-            "value": max(0.0, val),
             "currency": c.get("currency") or defaults.get("currency", "EUR"),
-        })
+        }
+        if value_present:
+            try:
+                val = float(c.get("value", 0) or 0)
+            except (TypeError, ValueError):
+                val = 0.0
+            conversion_item["value"] = max(0.0, val)
+        if c.get("meta"):
+            conversion_item["meta"] = c["meta"]
+        v2_conversions.append(conversion_item)
 
     if has_error:
         return None
 
-    return {
+    out = {
         "journey_id": jid,
         "customer": customer,
         "defaults": defaults,
@@ -357,6 +788,9 @@ def _validate_and_normalize_v2(
         "conversions": v2_conversions,
         "_schema": "2.0",
     }
+    if raw.get("meta"):
+        out["meta"] = raw.get("meta")
+    return out
 
 
 def _apply_dq_rules(journeys: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
