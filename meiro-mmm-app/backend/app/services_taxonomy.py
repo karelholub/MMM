@@ -344,6 +344,17 @@ def compute_unknown_share(
     """
     if taxonomy is None:
         taxonomy = load_taxonomy()
+
+    def _normalized_text(value: Any) -> str:
+        if isinstance(value, dict):
+            for key in ("name", "id", "value", "label"):
+                candidate = value.get(key)
+                if candidate:
+                    return str(candidate).lower().strip()
+            return ""
+        if value is None:
+            return ""
+        return str(value).lower().strip()
     
     total_touchpoints = 0
     unknown_count = 0
@@ -358,9 +369,9 @@ def compute_unknown_share(
             total_touchpoints += 1
             
             # Normalize and check channel
-            source = (tp.get("utm_source") or tp.get("source") or "").lower().strip()
-            medium = (tp.get("utm_medium") or tp.get("medium") or "").lower().strip()
-            campaign = (tp.get("utm_campaign") or tp.get("campaign") or "").lower().strip()
+            source = _normalized_text(tp.get("utm_source") or tp.get("source"))
+            medium = _normalized_text(tp.get("utm_medium") or tp.get("medium"))
+            campaign = _normalized_text(tp.get("utm_campaign") or tp.get("campaign"))
             
             mapping = map_to_channel(source, medium, campaign, taxonomy)
             
