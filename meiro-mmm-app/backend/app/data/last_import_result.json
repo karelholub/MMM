@@ -40,7 +40,7 @@
 "kpi_type": "purchase"
 },
 "normalized": {
-"journey_id": "j_ee253d170deb",
+"journey_id": "j_b4f744cdfa9a",
 "customer": {
 "id": "c001",
 "type": "customer_id"
@@ -115,7 +115,7 @@
 "kpi_type": "purchase"
 },
 "normalized": {
-"journey_id": "j_e07089b09b1f",
+"journey_id": "j_a31b95cbb84c",
 "customer": {
 "id": "c002",
 "type": "customer_id"
@@ -186,7 +186,7 @@
 "kpi_type": "purchase"
 },
 "normalized": {
-"journey_id": "j_010831decdd0",
+"journey_id": "j_cfeec4bf3339",
 "customer": {
 "id": "c003",
 "type": "customer_id"
@@ -258,7 +258,7 @@
 "kpi_type": "purchase"
 },
 "normalized": {
-"journey_id": "j_230f232502a5",
+"journey_id": "j_c6d4f97a0ce1",
 "customer": {
 "id": "c004",
 "type": "customer_id"
@@ -338,7 +338,7 @@
 "kpi_type": "lead"
 },
 "normalized": {
-"journey_id": "j_1df34e74467f",
+"journey_id": "j_f27e4df71578",
 "customer": {
 "id": "c005",
 "type": "customer_id"
@@ -395,7 +395,7 @@
 "kpi_type": "purchase"
 },
 "normalized": {
-"journey_id": "j_62de2e58404f",
+"journey_id": "j_683ab883764a",
 "customer": {
 "id": "c006",
 "type": "customer_id"
@@ -452,7 +452,7 @@
 "kpi_type": "purchase"
 },
 "normalized": {
-"journey_id": "j_988fe9677c67",
+"journey_id": "j_609520c19133",
 "customer": {
 "id": "c007",
 "type": "customer_id"
@@ -525,7 +525,7 @@
 "kpi_type": "purchase"
 },
 "normalized": {
-"journey_id": "j_2630262acab9",
+"journey_id": "j_172c7b862bc5",
 "customer": {
 "id": "c008",
 "type": "customer_id"
@@ -604,7 +604,7 @@
 "kpi_type": "purchase"
 },
 "normalized": {
-"journey_id": "j_1cd4af9c9b88",
+"journey_id": "j_58d45292e3c7",
 "customer": {
 "id": "c009",
 "type": "customer_id"
@@ -679,7 +679,7 @@
 "kpi_type": "signup"
 },
 "normalized": {
-"journey_id": "j_4f9980d995c6",
+"journey_id": "j_c69e26a8f85f",
 "customer": {
 "id": "c010",
 "type": "customer_id"
@@ -751,7 +751,7 @@
 "kpi_type": "purchase"
 },
 "normalized": {
-"journey_id": "j_55850636f38c",
+"journey_id": "j_ded5505b0511",
 "customer": {
 "id": "c011",
 "type": "customer_id"
@@ -831,7 +831,7 @@
 "kpi_type": "purchase"
 },
 "normalized": {
-"journey_id": "j_bd945f9a821c",
+"journey_id": "j_dbfebb175ce3",
 "customer": {
 "id": "c012",
 "type": "customer_id"
@@ -917,7 +917,7 @@
 "kpi_type": "purchase"
 },
 "normalized": {
-"journey_id": "j_bc1459725e07",
+"journey_id": "j_388fc6e5da05",
 "customer": {
 "id": "c013",
 "type": "customer_id"
@@ -978,7 +978,7 @@
 "kpi_type": "lead"
 },
 "normalized": {
-"journey_id": "j_2b5a5e183b62",
+"journey_id": "j_a20aa99398c4",
 "customer": {
 "id": "c014",
 "type": "customer_id"
@@ -1056,7 +1056,7 @@
 "kpi_type": "purchase"
 },
 "normalized": {
-"journey_id": "j_99e832f66a65",
+"journey_id": "j_88b64736c86b",
 "customer": {
 "id": "c015",
 "type": "customer_id"
@@ -1131,7 +1131,7 @@
 "kpi_type": "purchase"
 },
 "normalized": {
-"journey_id": "j_a55765c0fb4f",
+"journey_id": "j_523372507a24",
 "customer": {
 "id": "c016",
 "type": "customer_id"
@@ -1204,7 +1204,7 @@
 "kpi_type": "purchase"
 },
 "normalized": {
-"journey_id": "j_0a5255084828",
+"journey_id": "j_0767dc502160",
 "customer": {
 "id": "c017",
 "type": "customer_id"
@@ -1274,7 +1274,7 @@
 "kpi_type": "purchase"
 },
 "normalized": {
-"journey_id": "j_18c24879634d",
+"journey_id": "j_36f39dc18a17",
 "customer": {
 "id": "c018",
 "type": "customer_id"
@@ -1336,7 +1336,7 @@
 "kpi_type": "renewal"
 },
 "normalized": {
-"journey_id": "j_65128c1d082e",
+"journey_id": "j_404c634b5efe",
 "customer": {
 "id": "c019",
 "type": "customer_id"
@@ -1408,7 +1408,7 @@
 "kpi_type": "purchase"
 },
 "normalized": {
-"journey_id": "j_46ee5fd46dc8",
+"journey_id": "j_a62681b7b36a",
 "customer": {
 "id": "c020",
 "type": "customer_id"
@@ -1470,7 +1470,7 @@
 "kpi_type": "purchase"
 },
 "normalized": {
-"journey_id": "j_23ee5742135f",
+"journey_id": "j_c3c2cbb8ebb6",
 "customer": {
 "id": "c021",
 "type": "customer_id"
@@ -1536,7 +1536,7 @@
 "kpi_type": "lead"
 },
 "normalized": {
-"journey_id": "j_805a097a8ac3",
+"journey_id": "j_e4f138f2a1c4",
 "customer": {
 "id": "c022",
 "type": "customer_id"
@@ -1602,7 +1602,7 @@
 "kpi_type": "signup"
 },
 "normalized": {
-"journey_id": "j_7a448021c303",
+"journey_id": "j_d2d0fe51888b",
 "customer": {
 "id": "c023",
 "type": "customer_id"
@@ -1674,7 +1674,7 @@
 "kpi_type": "purchase"
 },
 "normalized": {
-"journey_id": "j_e109e01b7254",
+"journey_id": "j_856b4cba7559",
 "customer": {
 "id": "c024",
 "type": "customer_id"
@@ -1758,7 +1758,7 @@
 "kpi_type": "purchase"
 },
 "normalized": {
-"journey_id": "j_54d8e350a4c0",
+"journey_id": "j_54fcf4db3216",
 "customer": {
 "id": "c025",
 "type": "customer_id"
@@ -1820,7 +1820,7 @@
 "kpi_type": "add_to_cart"
 },
 "normalized": {
-"journey_id": "j_10879dfa7765",
+"journey_id": "j_7461b1a898bf",
 "customer": {
 "id": "c026",
 "type": "customer_id"
@@ -1866,7 +1866,7 @@
 "kpi_type": "product_view"
 },
 "normalized": {
-"journey_id": "j_e90c06cfa45c",
+"journey_id": "j_972d8a62b737",
 "customer": {
 "id": "c027",
 "type": "customer_id"
@@ -1915,7 +1915,7 @@
 "kpi_type": "price_check"
 },
 "normalized": {
-"journey_id": "j_7451511e0ca1",
+"journey_id": "j_0e20bb878808",
 "customer": {
 "id": "c028",
 "type": "customer_id"
@@ -1961,7 +1961,7 @@
 "kpi_type": "call_click"
 },
 "normalized": {
-"journey_id": "j_07bae112c502",
+"journey_id": "j_5f2b03a736b8",
 "customer": {
 "id": "c029",
 "type": "customer_id"
@@ -2014,7 +2014,7 @@
 "kpi_type": "add_to_cart"
 },
 "normalized": {
-"journey_id": "j_92da957111a1",
+"journey_id": "j_77daf3aaafde",
 "customer": {
 "id": "c030",
 "type": "customer_id"

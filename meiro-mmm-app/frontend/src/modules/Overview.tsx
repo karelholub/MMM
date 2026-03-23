@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { tokens as t } from '../theme/tokens'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
@@ -131,6 +131,35 @@ interface OverviewDriversResponse {
   date_to: string
 }
 
+interface OverviewFunnelItem {
+  path: string
+  path_display: string
+  steps: string[]
+  conversions: number
+  share: number
+  revenue: number
+  revenue_per_conversion: number
+  median_days_to_convert?: number | null
+  path_length: number
+  ends_with_direct: boolean
+}
+
+interface OverviewFunnelsResponse {
+  date_from: string
+  date_to: string
+  summary: {
+    total_conversions: number
+    distinct_paths: number
+    top_paths_conversion_share: number
+    median_path_length: number
+  }
+  tabs: {
+    conversions: OverviewFunnelItem[]
+    revenue: OverviewFunnelItem[]
+    speed: OverviewFunnelItem[]
+  }
+}
+
 interface OverviewAlertItem {
   id: number
   rule_id: number
@@ -200,6 +229,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
     isLoadingSampleJourneys,
     loadSampleJourneys,
   } = useWorkspaceContext()
+  const [funnelTab, setFunnelTab] = useState<'conversions' | 'revenue' | 'speed'>('conversions')
 
   const dateRange = useMemo(() => {
     const dateFrom = globalDateFrom || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
@@ -233,6 +263,17 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
       return apiGetJson<OverviewAlertsResponse>(withQuery('/api/overview/alerts', { status: 'open', limit: 20 }), {
         fallbackMessage: 'Failed to load alerts',
       })
+    },
+  })
+
+  const funnelsQuery = useQuery<OverviewFunnelsResponse>({
+    queryKey: ['overview-funnels', dateRange.date_from, dateRange.date_to],
+    queryFn: async () => {
+      return apiGetJson<OverviewFunnelsResponse>(withQuery('/api/overview/funnels', {
+        date_from: dateRange.date_from,
+        date_to: dateRange.date_to,
+        limit: 5,
+      }), { fallbackMessage: 'Failed to load top funnels' })
     },
   })
 
@@ -324,6 +365,9 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
   const highlights = summary?.highlights ?? []
   const byChannel = drivers?.by_channel ?? []
   const byCampaign = drivers?.by_campaign ?? []
+  const funnelSummary = funnelsQuery.data?.summary
+  const funnelRows = funnelsQuery.data?.tabs?.[funnelTab] ?? []
+  const selectedFunnel = funnelRows[0] ?? null
   const freshness = summary?.freshness
 
   const hasAnyData =
@@ -751,6 +795,223 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
             </DashboardTable>
           </SectionCard>
         </div>
+
+        <SectionCard
+          title="Top converting funnels"
+          subtitle="Channel-normalized paths ranked by conversions, value, and speed"
+          actions={
+            <button
+              type="button"
+              onClick={() => onNavigate('paths')}
+              style={{
+                padding: `${t.space.xs}px ${t.space.sm}px`,
+                borderRadius: t.radius.sm,
+                border: `1px solid ${t.color.border}`,
+                background: t.color.surface,
+                fontSize: t.font.sizeXs,
+                cursor: 'pointer',
+              }}
+            >
+              View all funnels →
+            </button>
+          }
+        >
+          <div style={{ display: 'grid', gap: t.space.lg }}>
+            <div
+              style={{
+                display: 'grid',
+                gap: t.space.md,
+                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+              }}
+            >
+              <div
+                style={{
+                  padding: `${t.space.md}px ${t.space.lg}px`,
+                  borderRadius: t.radius.md,
+                  background: t.color.bg,
+                  border: `1px solid ${t.color.borderLight}`,
+                }}
+              >
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  Concentration
+                </div>
+                <div style={{ marginTop: t.space.xs, fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                  {funnelSummary ? `${(funnelSummary.top_paths_conversion_share * 100).toFixed(0)}%` : '—'}
+                </div>
+                <div style={{ marginTop: 2, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  Top 5 paths drive this share of all conversions
+                </div>
+              </div>
+              <div
+                style={{
+                  padding: `${t.space.md}px ${t.space.lg}px`,
+                  borderRadius: t.radius.md,
+                  background: t.color.bg,
+                  border: `1px solid ${t.color.borderLight}`,
+                }}
+              >
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  Typical Path Depth
+                </div>
+                <div style={{ marginTop: t.space.xs, fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                  {funnelSummary ? `${funnelSummary.median_path_length.toFixed(1)} touches` : '—'}
+                </div>
+                <div style={{ marginTop: 2, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  Weighted median path length across converted journeys
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+              {[
+                ['conversions', 'Top converting paths'],
+                ['revenue', 'Top revenue paths'],
+                ['speed', 'Fastest paths'],
+              ].map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setFunnelTab(key as 'conversions' | 'revenue' | 'speed')}
+                  style={{
+                    padding: `${t.space.xs}px ${t.space.sm}px`,
+                    borderRadius: t.radius.full,
+                    border: `1px solid ${funnelTab === key ? t.color.accent : t.color.border}`,
+                    background: funnelTab === key ? t.color.accentMuted : t.color.surface,
+                    color: funnelTab === key ? t.color.accent : t.color.textSecondary,
+                    fontSize: t.font.sizeXs,
+                    fontWeight: t.font.weightSemibold,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div
+              style={{
+                display: 'grid',
+                gap: t.space.lg,
+                gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+              }}
+            >
+              <div style={{ display: 'grid', gap: t.space.sm }}>
+                {funnelsQuery.isError && (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>
+                    {(funnelsQuery.error as Error)?.message ?? 'Failed to load funnel insights.'}
+                  </div>
+                )}
+                {!funnelsQuery.isError && funnelRows.length === 0 && (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    No converted funnel paths were found in this period.
+                  </div>
+                )}
+                {funnelRows.map((row, index) => (
+                  <div
+                    key={`${funnelTab}-${row.path}`}
+                    style={{
+                      display: 'grid',
+                      gap: t.space.xs,
+                      padding: `${t.space.md}px ${t.space.lg}px`,
+                      borderRadius: t.radius.md,
+                      background: t.color.bg,
+                      border: `1px solid ${t.color.borderLight}`,
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', gap: t.space.sm, alignItems: 'center', minWidth: 0 }}>
+                        <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, minWidth: 18 }}>#{index + 1}</span>
+                        <span style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, wordBreak: 'break-word' }}>
+                          {row.path_display}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
+                        {row.ends_with_direct && (
+                          <span style={{ fontSize: t.font.sizeXs, color: t.color.warning, background: t.color.warningSubtle, padding: '2px 8px', borderRadius: t.radius.full }}>
+                            Direct closer
+                          </span>
+                        )}
+                        {index === 0 && funnelTab === 'revenue' && (
+                          <span style={{ fontSize: t.font.sizeXs, color: t.color.success, background: t.color.successMuted, padding: '2px 8px', borderRadius: t.radius.full }}>
+                            Highest value
+                          </span>
+                        )}
+                        {index === 0 && funnelTab === 'speed' && (
+                          <span style={{ fontSize: t.font.sizeXs, color: t.color.accent, background: t.color.accentMuted, padding: '2px 8px', borderRadius: t.radius.full }}>
+                            Fastest
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: t.space.md, flexWrap: 'wrap', fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                      <span>{row.conversions.toLocaleString()} conv</span>
+                      <span>{(row.share * 100).toFixed(1)}% share</span>
+                      <span>{formatCurrency(row.revenue)}</span>
+                      <span>{formatCurrency(row.revenue_per_conversion)} / conv</span>
+                      <span>{row.median_days_to_convert != null ? `${row.median_days_to_convert.toFixed(1)}d median` : 'Latency n/a'}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div
+                style={{
+                  padding: `${t.space.lg}px`,
+                  borderRadius: t.radius.md,
+                  background: t.color.bg,
+                  border: `1px solid ${t.color.borderLight}`,
+                  alignSelf: 'start',
+                }}
+              >
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  Path Snapshot
+                </div>
+                <div style={{ marginTop: t.space.sm, fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                  {selectedFunnel?.path_display ?? 'No funnel selected'}
+                </div>
+                <div style={{ marginTop: t.space.md, display: 'grid', gap: t.space.sm }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.md, fontSize: t.font.sizeSm }}>
+                    <span style={{ color: t.color.textSecondary }}>Conversions</span>
+                    <strong>{selectedFunnel ? selectedFunnel.conversions.toLocaleString() : '—'}</strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.md, fontSize: t.font.sizeSm }}>
+                    <span style={{ color: t.color.textSecondary }}>Revenue</span>
+                    <strong>{selectedFunnel ? formatCurrency(selectedFunnel.revenue) : '—'}</strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.md, fontSize: t.font.sizeSm }}>
+                    <span style={{ color: t.color.textSecondary }}>Revenue / conversion</span>
+                    <strong>{selectedFunnel ? formatCurrency(selectedFunnel.revenue_per_conversion) : '—'}</strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.md, fontSize: t.font.sizeSm }}>
+                    <span style={{ color: t.color.textSecondary }}>Median time to convert</span>
+                    <strong>{selectedFunnel?.median_days_to_convert != null ? `${selectedFunnel.median_days_to_convert.toFixed(1)} days` : '—'}</strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.md, fontSize: t.font.sizeSm }}>
+                    <span style={{ color: t.color.textSecondary }}>Path length</span>
+                    <strong>{selectedFunnel ? `${selectedFunnel.path_length} steps` : '—'}</strong>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('paths')}
+                  style={{
+                    marginTop: t.space.lg,
+                    padding: `${t.space.sm}px ${t.space.md}px`,
+                    borderRadius: t.radius.sm,
+                    border: `1px solid ${t.color.accent}`,
+                    background: t.color.accentMuted,
+                    color: t.color.accent,
+                    fontSize: t.font.sizeSm,
+                    fontWeight: t.font.weightSemibold,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Open Conversion Paths
+                </button>
+              </div>
+            </div>
+          </div>
+        </SectionCard>
 
         {/* E) Data health + F) Recent alerts side by side */}
         <div style={{ display: 'grid', gap: t.space.xl, gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}>

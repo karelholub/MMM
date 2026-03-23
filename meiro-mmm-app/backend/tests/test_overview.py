@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from app.db import Base
 from app.models_config_dq import ConversionPath
 from app.main import app
-from app.services_overview import get_overview_drivers
+from app.services_overview import get_overview_drivers, get_overview_funnels
 
 client = TestClient(app)
 
@@ -216,3 +216,112 @@ def test_overview_drivers_last_touch_count_uses_position_not_value_equality():
         assert by_channel["email"]["conversions"] == 1
     finally:
         db.close()
+
+
+def test_overview_funnels_ranks_paths_by_conversions_revenue_and_speed():
+    db = _unit_db_session()
+    try:
+        rows = [
+            ConversionPath(
+                conversion_id="conv-1",
+                profile_id="p-1",
+                conversion_key="purchase",
+                conversion_ts=datetime(2024, 2, 10, 12, 0),
+                path_json={
+                    "conversion_value": 100.0,
+                    "touchpoints": [
+                        {"channel": "paid_social"},
+                        {"channel": "direct"},
+                    ],
+                },
+                path_hash="hash-1",
+                length=2,
+                first_touch_ts=datetime(2024, 2, 8, 12, 0),
+                last_touch_ts=datetime(2024, 2, 10, 11, 0),
+            ),
+            ConversionPath(
+                conversion_id="conv-2",
+                profile_id="p-2",
+                conversion_key="purchase",
+                conversion_ts=datetime(2024, 2, 11, 12, 0),
+                path_json={
+                    "conversion_value": 90.0,
+                    "touchpoints": [
+                        {"channel": "paid_social"},
+                        {"channel": "direct"},
+                    ],
+                },
+                path_hash="hash-2",
+                length=2,
+                first_touch_ts=datetime(2024, 2, 10, 12, 0),
+                last_touch_ts=datetime(2024, 2, 11, 11, 0),
+            ),
+            ConversionPath(
+                conversion_id="conv-3",
+                profile_id="p-3",
+                conversion_key="purchase",
+                conversion_ts=datetime(2024, 2, 12, 12, 0),
+                path_json={
+                    "conversion_value": 400.0,
+                    "touchpoints": [
+                        {"channel": "email"},
+                        {"channel": "direct"},
+                    ],
+                },
+                path_hash="hash-3",
+                length=2,
+                first_touch_ts=datetime(2024, 2, 12, 6, 0),
+                last_touch_ts=datetime(2024, 2, 12, 11, 0),
+            ),
+            ConversionPath(
+                conversion_id="conv-4",
+                profile_id="p-4",
+                conversion_key="purchase",
+                conversion_ts=datetime(2024, 2, 13, 12, 0),
+                path_json={
+                    "conversion_value": 40.0,
+                    "touchpoints": [
+                        {"channel": "organic_search"},
+                        {"channel": "email"},
+                    ],
+                },
+                path_hash="hash-4",
+                length=2,
+                first_touch_ts=datetime(2024, 2, 13, 10, 0),
+                last_touch_ts=datetime(2024, 2, 13, 11, 0),
+            ),
+        ]
+        for row in rows:
+            db.add(row)
+        db.commit()
+
+        out = get_overview_funnels(
+            db,
+            date_from="2024-02-01",
+            date_to="2024-02-29",
+            limit=5,
+        )
+
+        assert out["summary"]["total_conversions"] == 4
+        assert out["tabs"]["conversions"][0]["path"] == "paid_social > direct"
+        assert out["tabs"]["conversions"][0]["conversions"] == 2
+        assert out["tabs"]["revenue"][0]["path"] == "email > direct"
+        assert out["tabs"]["revenue"][0]["revenue"] == 400.0
+        assert out["tabs"]["speed"][0]["path"] == "email > direct"
+        assert out["tabs"]["speed"][0]["median_days_to_convert"] < out["tabs"]["conversions"][0]["median_days_to_convert"]
+        assert out["summary"]["top_paths_conversion_share"] == 1.0
+    finally:
+        db.close()
+
+
+def test_overview_funnels_endpoint_returns_expected_shape():
+    resp = client.get(
+        "/api/overview/funnels",
+        params={"date_from": "2024-01-01", "date_to": "2024-01-31"},
+        headers=_admin_headers(),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "summary" in body
+    assert "tabs" in body
+    assert set(body["tabs"].keys()) == {"conversions", "revenue", "speed"}

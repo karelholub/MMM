@@ -8,6 +8,7 @@ Overview (Cover) Dashboard: summary KPIs, drivers, alerts, freshness.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -271,6 +272,72 @@ def _series_from_expenses(
         "map": amount_map,
         "observed_points": observed_points,
     }
+
+
+def _normalize_channel_token(value: Any) -> Optional[str]:
+    if isinstance(value, dict):
+        value = value.get("name") or value.get("id") or value.get("platform") or value.get("label")
+    if value is None:
+        return None
+    token = str(value).strip()
+    return token or None
+
+
+def _display_channel_token(token: str) -> str:
+    raw = token.strip()
+    if not raw:
+        return "Unknown"
+    lower = raw.lower()
+    if lower in {"cpc", "ppc", "seo", "crm"}:
+        return lower.upper()
+    return " ".join(part.capitalize() for part in raw.replace("_", " ").replace("-", " ").split())
+
+
+def _touchpoint_channel(tp: Dict[str, Any]) -> str:
+    for candidate in (
+        tp.get("channel"),
+        tp.get("source"),
+        tp.get("medium"),
+        (tp.get("utm") or {}).get("source") if isinstance(tp.get("utm"), dict) else None,
+        (tp.get("utm") or {}).get("medium") if isinstance(tp.get("utm"), dict) else None,
+    ):
+        token = _normalize_channel_token(candidate)
+        if token:
+            return token
+    return "unknown"
+
+
+def _path_steps_from_payload(payload: Dict[str, Any]) -> List[str]:
+    touchpoints = payload.get("touchpoints") or []
+    if not isinstance(touchpoints, list):
+        return ["unknown"]
+    steps: List[str] = []
+    prev_key: Optional[str] = None
+    for tp in touchpoints:
+        if not isinstance(tp, dict):
+            continue
+        channel = _touchpoint_channel(tp)
+        key = channel.strip().lower() or "unknown"
+        if key == prev_key:
+            continue
+        steps.append(channel)
+        prev_key = key
+    return steps or ["unknown"]
+
+
+def _weighted_median(counts: Dict[int, int]) -> float:
+    if not counts:
+        return 0.0
+    total = sum(max(0, count) for count in counts.values())
+    if total <= 0:
+        return 0.0
+    threshold = total / 2.0
+    running = 0
+    for value in sorted(counts):
+        running += max(0, counts[value])
+        if running >= threshold:
+            return float(value)
+    return float(max(counts))
 
 
 def _confidence_from_quality(
@@ -817,6 +884,122 @@ def get_overview_drivers(
     }
 
 
+def get_overview_funnels(
+    db: Session,
+    *,
+    date_from: str,
+    date_to: str,
+    conversion_key: Optional[str] = None,
+    limit: int = 5,
+) -> Dict[str, Any]:
+    dt_from, dt_to = _normalize_period_bounds(date_from, date_to)
+    revenue_config = get_revenue_config()
+    dedupe_seen = set()
+
+    q = db.query(ConversionPath).filter(
+        ConversionPath.conversion_ts >= dt_from,
+        ConversionPath.conversion_ts <= dt_to,
+    )
+    if conversion_key:
+        q = q.filter(ConversionPath.conversion_key == conversion_key)
+    rows = q.order_by(ConversionPath.conversion_ts.desc()).all()
+
+    aggs: Dict[str, Dict[str, Any]] = {}
+    total_conversions = 0
+    path_length_counts: Dict[int, int] = defaultdict(int)
+    for row in rows:
+        payload = row.path_json or {}
+        if not isinstance(payload, dict):
+            payload = {}
+        steps = _path_steps_from_payload(payload)
+        path_key = " > ".join(steps)
+        revenue = compute_payload_revenue_value(
+            payload,
+            revenue_config,
+            dedupe_seen=dedupe_seen,
+            fallback_conversion_id=str(getattr(row, "conversion_id", "") or ""),
+        )
+        latency_days = None
+        first_ts = _as_datetime(getattr(row, "first_touch_ts", None))
+        conversion_ts = _as_datetime(getattr(row, "conversion_ts", None))
+        if first_ts is not None and conversion_ts is not None and conversion_ts >= first_ts:
+            latency_days = (conversion_ts - first_ts).total_seconds() / 86400.0
+
+        entry = aggs.setdefault(
+            path_key,
+            {
+                "path": path_key,
+                "steps": steps,
+                "conversions": 0,
+                "revenue": 0.0,
+                "latencies": [],
+                "path_length": len(steps),
+                "ends_with_direct": steps[-1].strip().lower() == "direct",
+            },
+        )
+        entry["conversions"] += 1
+        entry["revenue"] += float(revenue or 0.0)
+        if latency_days is not None:
+            entry["latencies"].append(latency_days)
+        total_conversions += 1
+        path_length_counts[len(steps)] += 1
+
+    def _format_item(entry: Dict[str, Any]) -> Dict[str, Any]:
+        latencies = sorted(float(value) for value in entry.get("latencies") or [])
+        median_days = None
+        if latencies:
+            mid = len(latencies) // 2
+            if len(latencies) % 2 == 1:
+                median_days = latencies[mid]
+            else:
+                median_days = (latencies[mid - 1] + latencies[mid]) / 2.0
+        conversions = int(entry.get("conversions") or 0)
+        revenue = float(entry.get("revenue") or 0.0)
+        return {
+            "path": entry["path"],
+            "path_display": " -> ".join(_display_channel_token(step) for step in entry.get("steps") or []),
+            "steps": entry.get("steps") or [],
+            "conversions": conversions,
+            "share": round((conversions / total_conversions), 6) if total_conversions > 0 else 0.0,
+            "revenue": round(revenue, 2),
+            "revenue_per_conversion": round((revenue / conversions), 2) if conversions > 0 else 0.0,
+            "median_days_to_convert": round(median_days, 2) if median_days is not None else None,
+            "path_length": int(entry.get("path_length") or 0),
+            "ends_with_direct": bool(entry.get("ends_with_direct")),
+        }
+
+    items = [_format_item(entry) for entry in aggs.values()]
+    by_conversions = sorted(items, key=lambda item: (item["conversions"], item["revenue"]), reverse=True)
+    by_revenue = sorted(items, key=lambda item: (item["revenue"], item["conversions"]), reverse=True)
+    speed_candidates = [item for item in items if item["median_days_to_convert"] is not None and item["conversions"] >= 2]
+    if not speed_candidates:
+        speed_candidates = [item for item in items if item["median_days_to_convert"] is not None]
+    by_speed = sorted(
+        speed_candidates,
+        key=lambda item: (item["median_days_to_convert"], -item["conversions"], -item["revenue"]),
+    )
+
+    top_converting = by_conversions[: max(1, limit)]
+    top_revenue = by_revenue[: max(1, limit)]
+    fastest = by_speed[: max(1, limit)]
+
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        "summary": {
+            "total_conversions": total_conversions,
+            "distinct_paths": len(items),
+            "top_paths_conversion_share": round(sum(item["conversions"] for item in top_converting) / total_conversions, 6) if total_conversions > 0 else 0.0,
+            "median_path_length": _weighted_median(path_length_counts),
+        },
+        "tabs": {
+            "conversions": top_converting,
+            "revenue": top_revenue,
+            "speed": fastest,
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # Alerts: open + recent resolved with deep links
 # ---------------------------------------------------------------------------
@@ -862,6 +1045,3 @@ def get_overview_alerts(
             "deep_link": link,
         })
     return {"alerts": out, "total": len(out)}
-    revenue_config = get_revenue_config()
-    dedupe_seen_current = set()
-    dedupe_seen_prev = set()
