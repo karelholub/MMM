@@ -8,7 +8,7 @@ Overview (Cover) Dashboard: summary KPIs, drivers, alerts, freshness.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import func
@@ -28,7 +28,10 @@ def _parse_dt(s: Optional[str]):
     if not s:
         return None
     try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
     except Exception:
         return None
 
@@ -113,9 +116,12 @@ def _as_datetime(value: Any) -> Optional[datetime]:
     if value is None:
         return None
     if isinstance(value, datetime):
-        return value
+        return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
     try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
     except Exception:
         return None
 
@@ -198,6 +204,37 @@ def _series_from_conversion_paths(
         "conversions_map": conv_map,
         "revenue_map": rev_map,
         "observed_points": len(rows),
+    }
+
+
+def _series_from_visits(
+    db: Session,
+    start: datetime,
+    end: datetime,
+    grain: str,
+) -> Dict[str, Any]:
+    visit_map: Dict[str, float] = {}
+    observed_points = 0
+    q = db.query(ConversionPath).filter(
+        ConversionPath.last_touch_ts >= start,
+        ConversionPath.first_touch_ts <= end,
+    )
+    rows = q.all()
+    for row in rows:
+        payload = row.path_json or {}
+        for tp in payload.get("touchpoints") or []:
+            if not isinstance(tp, dict):
+                continue
+            ts = _as_datetime(tp.get("timestamp") or tp.get("ts"))
+            if ts is None or ts < start or ts > end:
+                continue
+            key = _bucket_key(ts, grain)
+            visit_map[key] = visit_map.get(key, 0.0) + 1.0
+            observed_points += 1
+    return {
+        "visits_total": round(sum(visit_map.values()), 2),
+        "visits_map": visit_map,
+        "observed_points": observed_points,
     }
 
 
@@ -403,11 +440,15 @@ def get_overview_summary(
 
     current_paths = _series_from_conversion_paths(db, dt_from, dt_to, grain)
     prev_paths = _series_from_conversion_paths(db, prev_from, prev_to, grain)
+    current_visits = _series_from_visits(db, dt_from, dt_to, grain)
+    prev_visits = _series_from_visits(db, prev_from, prev_to, grain)
     current_expenses = _series_from_expenses(expenses or {}, dt_from, dt_to, grain)
     prev_expenses = _series_from_expenses(expenses or {}, prev_from, prev_to, grain)
 
     total_spend = current_expenses["total"]
     prev_spend = prev_expenses["total"]
+    total_visits = current_visits["visits_total"]
+    prev_visits_total = prev_visits["visits_total"]
     conv_count = current_paths["conversions_total"]
     prev_conv = prev_paths["conversions_total"]
     total_revenue = current_paths["revenue_total"]
@@ -446,6 +487,7 @@ def get_overview_summary(
 
     observed_points = max(
         current_expenses.get("observed_points", 0),
+        current_visits.get("observed_points", 0),
         current_paths.get("observed_points", 0),
     )
     confidence = _confidence_from_quality(
@@ -461,6 +503,12 @@ def get_overview_summary(
     )
     prev_spend_series = _series_from_map(
         prev_expenses["map"], bucket_keys_prev, observed_points=prev_expenses["observed_points"]
+    )
+    current_visit_series = _series_from_map(
+        current_visits["visits_map"], bucket_keys_current, observed_points=current_visits["observed_points"]
+    )
+    prev_visit_series = _series_from_map(
+        prev_visits["visits_map"], bucket_keys_prev, observed_points=prev_visits["observed_points"]
     )
     current_conv_series = _series_from_map(
         current_paths["conversions_map"], bucket_keys_current, observed_points=current_paths["observed_points"]
@@ -497,7 +545,7 @@ def get_overview_summary(
         delta_pct = _delta_pct(float(value), float(prev_value))
         return {
             "kpi_key": kpi_key,
-            "value": round(value, 2) if kpi_key != "conversions" else int(value),
+            "value": round(value, 2) if kpi_key not in {"conversions", "visits"} else int(value),
             "delta_pct": delta_pct,
             "delta_abs": delta_abs,
             "current_period": current_period,
@@ -518,6 +566,13 @@ def get_overview_summary(
             prev_value=float(prev_spend),
             series=current_spend_series,
             series_prev=prev_spend_series,
+        ),
+        _tile_payload(
+            kpi_key="visits",
+            value=float(total_visits),
+            prev_value=float(prev_visits_total),
+            series=current_visit_series,
+            series_prev=prev_visit_series,
         ),
         _tile_payload(
             kpi_key="conversions",
@@ -605,8 +660,8 @@ def get_overview_drivers(
     dt_from = _parse_dt(date_from)
     dt_to = _parse_dt(date_to)
     if not dt_from or not dt_to:
-        dt_from = datetime.utcnow() - timedelta(days=30)
-        dt_to = datetime.utcnow()
+        dt_from = datetime.now(timezone.utc) - timedelta(days=30)
+        dt_to = datetime.now(timezone.utc)
     delta_days = max((dt_to - dt_from).days, 1)
     prev_to = dt_from - timedelta(days=1)
     prev_from = prev_to - timedelta(days=delta_days)
@@ -679,21 +734,55 @@ def get_overview_drivers(
                 camp = camp.get("name", "unknown")
             prev_camp_rev[camp] = prev_camp_rev.get(camp, 0) + val
 
-    channels = sorted(set(expense_by_channel.keys()) | set(ch_rev.keys()))
+    ch_visits: Dict[str, int] = {}
+    prev_ch_visits: Dict[str, int] = {}
+    visit_rows = db.query(ConversionPath).filter(
+        ConversionPath.last_touch_ts >= dt_from,
+        ConversionPath.first_touch_ts <= dt_to,
+    ).all()
+    for r in visit_rows:
+        for tp in (r.path_json or {}).get("touchpoints") or []:
+            if not isinstance(tp, dict):
+                continue
+            ts = _parse_dt(tp.get("timestamp") or tp.get("ts"))
+            if not ts or ts < dt_from or ts > dt_to:
+                continue
+            ch = tp.get("channel", "unknown")
+            ch_visits[ch] = ch_visits.get(ch, 0) + 1
+
+    prev_visit_rows = db.query(ConversionPath).filter(
+        ConversionPath.last_touch_ts >= prev_from,
+        ConversionPath.first_touch_ts <= prev_to,
+    ).all()
+    for r in prev_visit_rows:
+        for tp in (r.path_json or {}).get("touchpoints") or []:
+            if not isinstance(tp, dict):
+                continue
+            ts = _parse_dt(tp.get("timestamp") or tp.get("ts"))
+            if not ts or ts < prev_from or ts > prev_to:
+                continue
+            ch = tp.get("channel", "unknown")
+            prev_ch_visits[ch] = prev_ch_visits.get(ch, 0) + 1
+
+    channels = sorted(set(expense_by_channel.keys()) | set(ch_rev.keys()) | set(ch_visits.keys()))
     by_channel = []
     for ch in channels:
         spend = expense_by_channel.get(ch, 0)
+        visits = ch_visits.get(ch, 0)
         rev = ch_rev.get(ch, 0)
         conv = ch_conv.get(ch, 0)
         prev_spend = prev_expense.get(ch, 0)
+        prev_visits = prev_ch_visits.get(ch, 0)
         prev_rev = prev_ch_rev.get(ch, 0)
         prev_conv = prev_ch_conv.get(ch, 0)
         by_channel.append({
             "channel": ch,
             "spend": round(spend, 2),
+            "visits": visits,
             "conversions": conv,
             "revenue": round(rev, 2),
             "delta_spend_pct": delta_pct(spend, prev_spend),
+            "delta_visits_pct": delta_pct(float(visits), float(prev_visits)),
             "delta_conversions_pct": delta_pct(float(conv), float(prev_conv)),
             "delta_revenue_pct": delta_pct(rev, prev_rev),
         })

@@ -368,6 +368,26 @@ interface ModelConfigPreviewResult {
   active_version?: number | null
 }
 
+interface ModelConfigSuggestionResult {
+  preview_available: boolean
+  reason?: string | null
+  config_json?: Record<string, any> | null
+  reasons: string[]
+  warnings: string[]
+  data_summary?: {
+    journeys?: number
+    converted_journeys?: number
+    touchpoints?: number
+    defaulted_conversion_value_pct?: number
+    inferred_mapping_journey_pct?: number
+    unresolved_touchpoint_pct?: number
+  } | null
+  confidence?: {
+    score: number
+    label: string
+  } | null
+}
+
 interface NotificationChannelRow {
   id: number
   type: 'email' | 'slack_webhook'
@@ -2051,8 +2071,11 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       useState<ModelConfigValidationResult | null>(null)
     const [modelConfigPreview, setModelConfigPreview] =
       useState<ModelConfigPreviewResult | null>(null)
+    const [modelConfigSuggestion, setModelConfigSuggestion] =
+      useState<ModelConfigSuggestionResult | null>(null)
     const [isValidatingConfig, setIsValidatingConfig] = useState<boolean>(false)
     const [isPreviewingConfig, setIsPreviewingConfig] = useState<boolean>(false)
+    const [isSuggestingConfig, setIsSuggestingConfig] = useState<boolean>(false)
     const [modelConfigSearch, setModelConfigSearch] = useState<string>('')
     const [modelConfigStatusFilter, setModelConfigStatusFilter] = useState<
       'all' | 'draft' | 'active' | 'archived'
@@ -2079,6 +2102,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
           setModelConfigError(null)
           setModelConfigValidation(null)
           setModelConfigPreview(null)
+          setModelConfigSuggestion(null)
           setActivationSummary(null)
           setActivationWarning(null)
           return next
@@ -2348,6 +2372,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
           setModelConfigParseError(null)
           setModelConfigValidation(null)
           setModelConfigPreview(null)
+          setModelConfigSuggestion(null)
           setActivationSummary(null)
           setActivationWarning(null)
         } catch (error) {
@@ -2464,6 +2489,54 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       previewModelConfigMutation,
       selectedModelConfigId,
     ])
+
+    const handleSuggestDraft = useCallback(async () => {
+      if (!selectedModelConfigId) return
+      setIsSuggestingConfig(true)
+      try {
+        const result = await apiSendJson<ModelConfigSuggestionResult>(
+          `/api/model-configs/${selectedModelConfigId}/suggest`,
+          'POST',
+          { strategy: 'balanced' },
+          { fallbackMessage: 'Failed to generate suggested config' },
+        )
+        setModelConfigSuggestion(result)
+        if (!result.preview_available) {
+          setModelConfigError(result.reason ?? 'Suggestion unavailable')
+        } else {
+          if (result.config_json) {
+            const next = deepClone(result.config_json)
+            const formatted = JSON.stringify(next, null, 2)
+            setCurrentConfigObject(next)
+            setModelConfigJson(formatted)
+            setModelConfigParseError(null)
+            setModelConfigValidation(null)
+            setModelConfigPreview(null)
+            setActivationSummary(null)
+            setActivationWarning(null)
+          }
+          setModelConfigError(null)
+        }
+      } catch (error) {
+        setModelConfigError((error as Error)?.message ?? 'Suggestion failed')
+      } finally {
+        setIsSuggestingConfig(false)
+      }
+    }, [selectedModelConfigId])
+
+    const handleApplySuggestedDraft = useCallback(() => {
+      if (!modelConfigSuggestion?.config_json) return
+      const next = deepClone(modelConfigSuggestion.config_json)
+      const formatted = JSON.stringify(next, null, 2)
+      setCurrentConfigObject(next)
+      setModelConfigJson(formatted)
+      setModelConfigParseError(null)
+      setModelConfigValidation(null)
+      setModelConfigPreview(null)
+      setActivationSummary(null)
+      setActivationWarning(null)
+      setModelConfigError(null)
+    }, [modelConfigSuggestion])
 
     const handleEditorModeChange = useCallback(
       (mode: 'basic' | 'advanced') => {
@@ -2742,18 +2815,19 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
           })
           const configObject = (data.config_json ?? {}) as Record<string, any>
           const json = JSON.stringify(configObject, null, 2)
-          setCurrentConfigObject(configObject)
-          setModelConfigJson(json)
+        setCurrentConfigObject(configObject)
+        setModelConfigJson(json)
           setModelConfigBaseline(json)
           const note = data.change_note ?? ''
           setModelConfigChangeNote(note)
           setModelConfigBaselineChangeNote(note)
           setModelConfigError(null)
           setModelConfigParseError(null)
-          setMeasurementEditorMode('basic')
-          setModelConfigValidation(null)
-          setModelConfigPreview(null)
-          setActivationNote('')
+        setMeasurementEditorMode('basic')
+        setModelConfigValidation(null)
+        setModelConfigPreview(null)
+        setModelConfigSuggestion(null)
+        setActivationNote('')
           setActivationSummary(null)
           setActivationWarning(null)
           setImpactUnavailableReason(null)
@@ -3221,6 +3295,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                 setModelConfigError(null)
                 setModelConfigValidation(null)
                 setModelConfigPreview(null)
+                setModelConfigSuggestion(null)
                 setLastSavedAt((prev) => ({
                   ...prev,
                   'measurement-models': new Date().toLocaleTimeString(),
@@ -3329,6 +3404,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
             setModelConfigParseError(null)
             setModelConfigValidation(null)
             setModelConfigPreview(null)
+            setModelConfigSuggestion(null)
             setMeasurementEditorMode('basic')
             setModelConfigChangeNote(modelConfigBaselineChangeNote)
             setActivationNote('')
@@ -7044,6 +7120,22 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                         >
                           {isPreviewingConfig ? 'Calculating…' : 'Impact preview'}
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => handleSuggestDraft()}
+                          disabled={!selectedModelConfigId || isSuggestingConfig}
+                          style={{
+                            padding: `${t.space.xs}px ${t.space.sm}px`,
+                            borderRadius: t.radius.sm,
+                            border: `1px solid ${t.color.borderLight}`,
+                            background: 'transparent',
+                            color: t.color.text,
+                            fontSize: t.font.sizeXs,
+                            cursor: isSuggestingConfig ? 'wait' : 'pointer',
+                          }}
+                        >
+                          {isSuggestingConfig ? 'Sampling…' : 'Suggest from data'}
+                        </button>
                       </div>
 
                       <div
@@ -7156,6 +7248,103 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                         </button>
                       </div>
                     </div>
+
+                    {modelConfigSuggestion && (
+                      <div
+                        style={{
+                          border: `1px solid ${t.color.borderLight}`,
+                          background: t.color.surfaceMuted,
+                          borderRadius: t.radius.md,
+                          padding: t.space.md,
+                          display: 'grid',
+                          gap: t.space.sm,
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            flexWrap: 'wrap',
+                            gap: t.space.sm,
+                          }}
+                        >
+                          <div>
+                            <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                              Suggested config from current data
+                            </div>
+                            <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                              Confidence: {modelConfigSuggestion.confidence?.label ?? '—'}
+                              {modelConfigSuggestion.confidence?.score != null ? ` (${modelConfigSuggestion.confidence.score}/100)` : ''}
+                            </div>
+                          </div>
+                          {modelConfigSuggestion.preview_available && modelConfigSuggestion.config_json ? (
+                            <button
+                              type="button"
+                              onClick={() => handleApplySuggestedDraft()}
+                              style={{
+                                padding: `${t.space.xs}px ${t.space.sm}px`,
+                                borderRadius: t.radius.sm,
+                                border: 'none',
+                                background: t.color.accent,
+                                color: t.color.surface,
+                                fontSize: t.font.sizeXs,
+                                fontWeight: t.font.weightSemibold,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              Apply suggestion to draft
+                            </button>
+                          ) : null}
+                        </div>
+
+                        {modelConfigSuggestion.reason ? (
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                            {modelConfigSuggestion.reason}
+                          </div>
+                        ) : null}
+
+                        {modelConfigSuggestion.data_summary ? (
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                            Journeys: <strong>{modelConfigSuggestion.data_summary.journeys ?? 0}</strong>
+                            {' '}· converted: <strong>{modelConfigSuggestion.data_summary.converted_journeys ?? 0}</strong>
+                            {' '}· touchpoints: <strong>{modelConfigSuggestion.data_summary.touchpoints ?? 0}</strong>
+                            {' '}· defaulted values: <strong>{(modelConfigSuggestion.data_summary.defaulted_conversion_value_pct ?? 0).toFixed(1)}%</strong>
+                            {' '}· inferred mappings: <strong>{(modelConfigSuggestion.data_summary.inferred_mapping_journey_pct ?? 0).toFixed(1)}%</strong>
+                            {' '}· unresolved touchpoints: <strong>{(modelConfigSuggestion.data_summary.unresolved_touchpoint_pct ?? 0).toFixed(1)}%</strong>
+                          </div>
+                        ) : null}
+
+                        {modelConfigSuggestion.reasons?.length ? (
+                          <div style={{ display: 'grid', gap: 4 }}>
+                            {modelConfigSuggestion.reasons.map((item, index) => (
+                              <div key={`reason-${index}`} style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                                {item}
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+
+                        {modelConfigSuggestion.warnings?.length ? (
+                          <div
+                            style={{
+                              border: `1px solid ${t.color.warning}`,
+                              background: t.color.warningSubtle,
+                              color: t.color.warning,
+                              borderRadius: t.radius.sm,
+                              padding: t.space.sm,
+                              display: 'grid',
+                              gap: 4,
+                              fontSize: t.font.sizeXs,
+                            }}
+                          >
+                            {modelConfigSuggestion.warnings.map((item, index) => (
+                              <div key={`warn-${index}`}>{item}</div>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    )}
 
                     {modelConfigValidation && (
                       <div

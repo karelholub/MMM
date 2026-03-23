@@ -90,12 +90,14 @@ def _add_metric_rollup(
     bucket_key: str,
     *,
     spend: float = 0.0,
+    visits: float = 0.0,
     conversions: float = 0.0,
     revenue: float = 0.0,
 ) -> None:
     dim_entry = store.setdefault(dim_key, {})
-    bucket_entry = dim_entry.setdefault(bucket_key, {"spend": 0.0, "conversions": 0.0, "revenue": 0.0})
+    bucket_entry = dim_entry.setdefault(bucket_key, {"spend": 0.0, "visits": 0.0, "conversions": 0.0, "revenue": 0.0})
     bucket_entry["spend"] += spend
+    bucket_entry["visits"] += visits
     bucket_entry["conversions"] += conversions
     bucket_entry["revenue"] += revenue
 
@@ -144,13 +146,28 @@ def _collect_channel_rollups(
     dedupe_prev: set[str] = set()
 
     for journey in journeys or []:
-        if not journey.get("converted", True):
-            continue
         if conversion_key:
             journey_key = str(journey.get("kpi_type") or journey.get("conversion_key") or "")
             if journey_key != conversion_key:
                 continue
         touchpoints = journey.get("touchpoints") or []
+        for tp in touchpoints:
+            if not isinstance(tp, dict):
+                continue
+            channel = str(tp.get("channel") or "unknown")
+            if filter_channels and channel not in allowed_channels:
+                continue
+            day = _local_date_from_ts(tp.get("timestamp") or tp.get("ts"), tz)
+            if day is None:
+                continue
+            bucket = _bucket_start(day, resolved_grain).isoformat()
+            if curr_from <= day <= curr_to:
+                _add_metric_rollup(curr_store, channel, bucket, visits=1.0)
+            elif compare and prev_from <= day <= prev_to:
+                _add_metric_rollup(prev_store, channel, bucket, visits=1.0)
+
+        if not journey.get("converted", True):
+            continue
         if not touchpoints:
             continue
         last_tp = touchpoints[-1] if isinstance(touchpoints[-1], dict) else {}
@@ -213,13 +230,41 @@ def _collect_campaign_rollups(
         return f"{channel}:{campaign}" if campaign else channel
 
     for journey in journeys or []:
-        if not journey.get("converted", True):
-            continue
         if conversion_key:
             journey_key = str(journey.get("kpi_type") or journey.get("conversion_key") or "")
             if journey_key != conversion_key:
                 continue
         touchpoints = journey.get("touchpoints") or []
+        for tp in touchpoints:
+            if not isinstance(tp, dict):
+                continue
+            channel = str(tp.get("channel") or "unknown")
+            if filter_channels and channel not in allowed_channels:
+                continue
+            campaign_name = tp.get("campaign")
+            if isinstance(campaign_name, dict):
+                campaign_name = campaign_name.get("name")
+            c_key = campaign_key(channel, campaign_name if campaign_name else None)
+            meta.setdefault(
+                c_key,
+                {
+                    "campaign_id": c_key,
+                    "campaign_name": campaign_name,
+                    "channel": channel,
+                    "platform": tp.get("platform"),
+                },
+            )
+            day = _local_date_from_ts(tp.get("timestamp") or tp.get("ts"), tz)
+            if day is None:
+                continue
+            bucket = _bucket_start(day, resolved_grain).isoformat()
+            if curr_from <= day <= curr_to:
+                _add_metric_rollup(curr_store, c_key, bucket, visits=1.0)
+            elif compare and prev_from <= day <= prev_to:
+                _add_metric_rollup(prev_store, c_key, bucket, visits=1.0)
+
+        if not journey.get("converted", True):
+            continue
         if not touchpoints:
             continue
         last_tp = touchpoints[-1] if isinstance(touchpoints[-1], dict) else {}
@@ -490,14 +535,16 @@ def build_channel_summary_response(
                 "derived": {"roas": curr_derived["roas"], "cpa": curr_derived["cpa"]},
             }
         )
-    totals_current = {"spend": 0.0, "conversions": 0.0, "revenue": 0.0}
-    totals_previous = {"spend": 0.0, "conversions": 0.0, "revenue": 0.0}
+    totals_current = {"spend": 0.0, "visits": 0.0, "conversions": 0.0, "revenue": 0.0}
+    totals_previous = {"spend": 0.0, "visits": 0.0, "conversions": 0.0, "revenue": 0.0}
     for item in items:
         totals_current["spend"] += float(item["current"].get("spend", 0.0))
+        totals_current["visits"] += float(item["current"].get("visits", 0.0))
         totals_current["conversions"] += float(item["current"].get("conversions", 0.0))
         totals_current["revenue"] += float(item["current"].get("revenue", 0.0))
         prev_row = item.get("previous") or {}
         totals_previous["spend"] += float(prev_row.get("spend", 0.0))
+        totals_previous["visits"] += float(prev_row.get("visits", 0.0))
         totals_previous["conversions"] += float(prev_row.get("conversions", 0.0))
         totals_previous["revenue"] += float(prev_row.get("revenue", 0.0))
     return {
@@ -557,14 +604,16 @@ def build_campaign_summary_response(
                 "derived": {"roas": curr_derived["roas"], "cpa": curr_derived["cpa"]},
             }
         )
-    totals_current = {"spend": 0.0, "conversions": 0.0, "revenue": 0.0}
-    totals_previous = {"spend": 0.0, "conversions": 0.0, "revenue": 0.0}
+    totals_current = {"spend": 0.0, "visits": 0.0, "conversions": 0.0, "revenue": 0.0}
+    totals_previous = {"spend": 0.0, "visits": 0.0, "conversions": 0.0, "revenue": 0.0}
     for item in items:
         totals_current["spend"] += float(item["current"].get("spend", 0.0))
+        totals_current["visits"] += float(item["current"].get("visits", 0.0))
         totals_current["conversions"] += float(item["current"].get("conversions", 0.0))
         totals_current["revenue"] += float(item["current"].get("revenue", 0.0))
         prev_row = item.get("previous") or {}
         totals_previous["spend"] += float(prev_row.get("spend", 0.0))
+        totals_previous["visits"] += float(prev_row.get("visits", 0.0))
         totals_previous["conversions"] += float(prev_row.get("conversions", 0.0))
         totals_previous["revenue"] += float(prev_row.get("revenue", 0.0))
     return {

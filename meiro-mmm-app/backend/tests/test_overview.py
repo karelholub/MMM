@@ -55,7 +55,7 @@ def test_overview_summary_returns_consistent_shape():
         assert "confidence_score" in tile
         assert "confidence_level" in tile
         assert "confidence_reasons" in tile
-        assert tile["kpi_key"] in ("spend", "conversions", "revenue")
+        assert tile["kpi_key"] in ("spend", "visits", "conversions", "revenue")
 
 
 def test_overview_summary_previous_period_is_equal_length():
@@ -134,6 +134,7 @@ def test_overview_drivers_returns_consistent_shape():
     for ch in body["by_channel"]:
         assert "channel" in ch
         assert "spend" in ch
+        assert "visits" in ch
         assert "conversions" in ch
         assert "revenue" in ch
 

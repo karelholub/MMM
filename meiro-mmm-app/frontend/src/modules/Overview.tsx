@@ -108,9 +108,11 @@ interface OverviewSummaryResponse {
 interface ChannelDriver {
   channel: string
   spend: number
+  visits: number
   conversions: number
   revenue: number
   delta_spend_pct?: number | null
+  delta_visits_pct?: number | null
   delta_conversions_pct?: number | null
   delta_revenue_pct?: number | null
 }
@@ -332,7 +334,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
   const isEmpty = !summaryQuery.isLoading && !summaryQuery.error && !hasAnyData
   const periodDays = daysInPeriod(summary?.current_period?.date_from, summary?.current_period?.date_to)
   const baselineLabel = periodDays > 0 ? `vs previous ${periodDays} ${periodDays === 1 ? 'day' : 'days'}` : 'vs previous period'
-  const tileOrder: Array<KpiTileResponse['kpi_key']> = ['spend', 'conversions', 'revenue']
+  const tileOrder: Array<KpiTileResponse['kpi_key']> = ['spend', 'visits', 'conversions', 'revenue']
   const orderedKpiTiles = tileOrder
     .map((key) => kpiTiles.find((k) => k.kpi_key === key))
     .filter((k): k is KpiTileResponse => Boolean(k))
@@ -372,6 +374,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
       onNavigate('dashboard')
     }
     if (key === 'spend') return { label: 'Click to open Channel performance', go: () => pushTrendQuery('spend') }
+    if (key === 'visits') return { label: 'Click to open Channel performance', go: () => pushTrendQuery('visits') }
     if (key === 'conversions') return { label: 'Click to open Channel performance', go: () => pushTrendQuery('conversions') }
     return { label: 'Click to open Channel performance', go: () => pushTrendQuery('revenue') }
   }
@@ -640,7 +643,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
         <div style={{ display: 'grid', gap: t.space.xl, gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))' }}>
           <SectionCard
             title="Top channels"
-            subtitle="Spend, conversions, revenue and period-over-period delta"
+            subtitle="Spend, visits, conversions, revenue and period-over-period delta"
             overflow="auto"
             actions={
               <button
@@ -664,6 +667,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
                 <tr>
                   <th>Channel</th>
                   <th>Spend</th>
+                  <th>Visits</th>
                   <th>Conversions</th>
                   <th>Revenue</th>
                   <th>Δ%</th>
@@ -674,6 +678,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
                   <tr key={row.channel}>
                     <td style={{ fontWeight: t.font.weightMedium }}>{row.channel}</td>
                     <td>{formatCurrency(row.spend)}</td>
+                    <td>{row.visits.toLocaleString()}</td>
                     <td>{row.conversions.toLocaleString()}</td>
                     <td>{formatCurrency(row.revenue)}</td>
                     <td>
@@ -685,7 +690,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
                 ))}
                 {byChannel.length === 0 && (
                   <tr>
-                    <td colSpan={5} style={{ textAlign: 'center', color: t.color.textSecondary }}>
+                    <td colSpan={6} style={{ textAlign: 'center', color: t.color.textSecondary }}>
                       No channel data for this period.
                     </td>
                   </tr>

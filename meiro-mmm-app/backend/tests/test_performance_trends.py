@@ -153,10 +153,42 @@ def test_build_channel_summary_uses_same_source_rollups():
     assert row["channel"] == "google_ads"
     assert row["current"]["revenue"] == 150.0
     assert row["current"]["conversions"] == 2.0
+    assert row["current"]["visits"] == 2.0
     assert row["current"]["spend"] == 100.0
     assert round(row["derived"]["roas"], 4) == 1.5
     assert out["totals"]["current"]["spend"] == 100.0
+    assert out["totals"]["current"]["visits"] == 2.0
     assert out["totals"]["current"]["revenue"] == 150.0
+
+
+def test_build_channel_trend_supports_visits_for_all_touchpoints():
+    journeys = [
+        {
+            "converted": False,
+            "touchpoints": [
+                {"timestamp": "2026-02-01T10:00:00Z", "channel": "google_ads"},
+                {"timestamp": "2026-02-01T11:00:00Z", "channel": "email"},
+            ],
+        },
+        {
+            "converted": True,
+            "conversion_value": 50.0,
+            "touchpoints": [{"timestamp": "2026-02-02T10:00:00Z", "channel": "google_ads"}],
+        },
+    ]
+    out = build_channel_trend_response(
+        journeys=journeys,
+        expenses=[],
+        date_from="2026-02-01",
+        date_to="2026-02-02",
+        timezone="UTC",
+        kpi_key="visits",
+        grain="daily",
+        compare=False,
+    )
+    rows = [r for r in out["series"] if r["channel"] == "google_ads"]
+    assert any(r["ts"] == "2026-02-01" and r["value"] == 1.0 for r in rows)
+    assert any(r["ts"] == "2026-02-02" and r["value"] == 1.0 for r in rows)
 
 
 def test_build_campaign_summary_shape_and_notes():

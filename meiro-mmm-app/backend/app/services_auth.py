@@ -460,8 +460,12 @@ def verify_csrf(db: Session, request: Request) -> None:
         raise HTTPException(status_code=403, detail="Invalid CSRF token")
 
 
-def issue_csrf_token(db: Session, raw_session_id: Optional[str]) -> Optional[str]:
-    """Issue and persist a new CSRF token for an existing active session."""
+def issue_csrf_token(
+    db: Session,
+    raw_session_id: Optional[str],
+    current_token: Optional[str] = None,
+) -> Optional[str]:
+    """Return the current CSRF token when the client presents a valid one, otherwise issue a new token."""
     if not raw_session_id:
         return None
     sid = _hash_token(raw_session_id)
@@ -471,6 +475,12 @@ def issue_csrf_token(db: Session, raw_session_id: Optional[str]) -> Optional[str
     now = _now()
     if session_row.revoked_at is not None or session_row.expires_at <= now:
         return None
+    presented = (current_token or "").strip()
+    if presented and _hash_token(presented) == session_row.csrf_token:
+        session_row.last_seen_at = now
+        db.add(session_row)
+        db.commit()
+        return presented
     raw_csrf = _token(48)
     session_row.csrf_token = _hash_token(raw_csrf)
     session_row.last_seen_at = now

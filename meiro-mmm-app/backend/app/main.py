@@ -59,6 +59,7 @@ from app.services_model_config import (
     get_default_config_id,
     validate_model_config,
 )
+from app.services_model_config_suggestions import suggest_model_config_from_journeys
 from app.services_journey_settings import (
     activate_journey_settings_version,
     archive_journey_settings_version,
@@ -195,6 +196,7 @@ from app.services_performance_trends import (
     build_channel_summary_response,
     build_campaign_summary_response,
 )
+from app.services_performance_diagnostics import build_scope_diagnostics
 from app.services_performance_helpers import (
     build_performance_query_context as _build_performance_query_context,
     build_performance_meta as _build_performance_meta,
@@ -1331,6 +1333,10 @@ class ModelConfigPreviewPayload(BaseModel):
     config_json: Optional[Dict[str, Any]] = None
 
 
+class ModelConfigSuggestPayload(BaseModel):
+    strategy: str = "balanced"
+
+
 class JourneySettingsVersionCreatePayload(BaseModel):
     version_label: Optional[str] = None
     description: Optional[str] = None
@@ -1647,6 +1653,23 @@ def preview_model_config(
         "active_version": baseline_cfg.version if baseline_cfg else None,
         "reason": None,
     }
+
+
+@app.post("/api/model-configs/{cfg_id}/suggest")
+def suggest_model_config_route(
+    cfg_id: str,
+    payload: ModelConfigSuggestPayload,
+    db=Depends(get_db),
+):
+    cfg = db.get(ORMModelConfig, cfg_id)
+    if not cfg:
+        raise HTTPException(status_code=404, detail="Config not found")
+    journeys = _ensure_journeys_loaded(db)
+    return suggest_model_config_from_journeys(
+        journeys,
+        kpi_definitions=[d.__dict__ for d in KPI_CONFIG.definitions],
+        strategy=payload.strategy,
+    )
 
 
 @app.get("/api/model-configs/{cfg_id}")
@@ -5260,7 +5283,11 @@ def auth_providers():
 @app.get("/api/auth/me")
 def get_auth_me(request: Request, db=Depends(get_db)):
     ctx = require_auth_context(db, request)
-    csrf_token = issue_csrf_token(db, request.cookies.get(SESSION_COOKIE_NAME))
+    csrf_token = issue_csrf_token(
+        db,
+        request.cookies.get(SESSION_COOKIE_NAME),
+        request.headers.get(CSRF_HEADER_NAME),
+    )
     return {
         "authenticated": True,
         "user": {
@@ -6725,7 +6752,7 @@ def performance_channel_trend(
     account: Optional[str] = Query(None, description="Account filter (reserved)"),
     channels: Optional[List[str]] = Query(None, description="Optional channel filter list"),
     model_id: Optional[str] = Query(None, description="Optional model config id"),
-    kpi_key: str = Query("revenue", description="spend|conversions|revenue|cpa|roas"),
+    kpi_key: str = Query("revenue", description="spend|visits|conversions|revenue|cpa|roas"),
     conversion_key: Optional[str] = Query(None, description="Optional conversion key filter"),
     grain: str = Query("auto", description="auto|daily|weekly"),
     compare: bool = Query(True, description="Include previous-period series"),
@@ -6815,6 +6842,35 @@ def performance_channel_summary(
         channels=query_ctx.channels,
         conversion_key=effective_conversion_key,
     )
+    diagnostics = build_scope_diagnostics(
+        db=db,
+        scope_type="channel",
+        date_from=query_ctx.date_from,
+        date_to=query_ctx.date_to,
+        conversion_key=effective_conversion_key,
+        channels=query_ctx.channels,
+    )
+    for item in out.get("items", []):
+        current = item.get("current") or {}
+        previous = item.get("previous") or {}
+        visits = float(current.get("visits", 0.0) or 0.0)
+        conversions = float(current.get("conversions", 0.0) or 0.0)
+        revenue = float(current.get("revenue", 0.0) or 0.0)
+        spend = float(current.get("spend", 0.0) or 0.0)
+        derived = item.setdefault("derived", {})
+        derived["cvr"] = round((conversions / visits), 4) if visits > 0 else None
+        derived["cost_per_visit"] = round((spend / visits), 4) if visits > 0 else None
+        derived["revenue_per_visit"] = round((revenue / visits), 4) if visits > 0 else None
+        prev_visits = float(previous.get("visits", 0.0) or 0.0)
+        prev_conversions = float(previous.get("conversions", 0.0) or 0.0)
+        prev_revenue = float(previous.get("revenue", 0.0) or 0.0)
+        prev_spend = float(previous.get("spend", 0.0) or 0.0)
+        item["previous_derived"] = {
+            "cvr": round((prev_conversions / prev_visits), 4) if prev_visits > 0 else None,
+            "cost_per_visit": round((prev_spend / prev_visits), 4) if prev_visits > 0 else None,
+            "revenue_per_visit": round((prev_revenue / prev_visits), 4) if prev_visits > 0 else None,
+        } if previous else None
+        item["diagnostics"] = diagnostics.get(str(item.get("channel")), {})
     _attach_scope_confidence(
         db=db,
         items=out.get("items", []),
@@ -6849,7 +6905,7 @@ def performance_campaign_trend(
     account: Optional[str] = Query(None, description="Account filter (reserved)"),
     channels: Optional[List[str]] = Query(None, description="Optional channel filter list"),
     model_id: Optional[str] = Query(None, description="Optional model config id"),
-    kpi_key: str = Query("revenue", description="spend|conversions|revenue|cpa|roas"),
+    kpi_key: str = Query("revenue", description="spend|visits|conversions|revenue|cpa|roas"),
     conversion_key: Optional[str] = Query(None, description="Optional conversion key filter"),
     grain: str = Query("auto", description="auto|daily|weekly"),
     compare: bool = Query(True, description="Include previous-period series"),
@@ -6939,6 +6995,36 @@ def performance_campaign_summary(
         channels=query_ctx.channels,
         conversion_key=effective_conversion_key,
     )
+    diagnostics = build_scope_diagnostics(
+        db=db,
+        scope_type="campaign",
+        date_from=query_ctx.date_from,
+        date_to=query_ctx.date_to,
+        conversion_key=effective_conversion_key,
+        channels=query_ctx.channels,
+    )
+    for item in out.get("items", []):
+        current = item.get("current") or {}
+        previous = item.get("previous") or {}
+        visits = float(current.get("visits", 0.0) or 0.0)
+        conversions = float(current.get("conversions", 0.0) or 0.0)
+        revenue = float(current.get("revenue", 0.0) or 0.0)
+        spend = float(current.get("spend", 0.0) or 0.0)
+        derived = item.setdefault("derived", {})
+        derived["cvr"] = round((conversions / visits), 4) if visits > 0 else None
+        derived["cost_per_visit"] = round((spend / visits), 4) if visits > 0 else None
+        derived["revenue_per_visit"] = round((revenue / visits), 4) if visits > 0 else None
+        prev_visits = float(previous.get("visits", 0.0) or 0.0)
+        prev_conversions = float(previous.get("conversions", 0.0) or 0.0)
+        prev_revenue = float(previous.get("revenue", 0.0) or 0.0)
+        prev_spend = float(previous.get("spend", 0.0) or 0.0)
+        item["previous_derived"] = {
+            "cvr": round((prev_conversions / prev_visits), 4) if prev_visits > 0 else None,
+            "cost_per_visit": round((prev_spend / prev_visits), 4) if prev_visits > 0 else None,
+            "revenue_per_visit": round((prev_revenue / prev_visits), 4) if prev_visits > 0 else None,
+        } if previous else None
+        diag_key = str(item.get("campaign_id") or item.get("channel"))
+        item["diagnostics"] = diagnostics.get(diag_key, {})
     _attach_scope_confidence(
         db=db,
         items=out.get("items", []),

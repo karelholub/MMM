@@ -28,9 +28,24 @@ interface CampaignData {
   campaign: string
   channel: string
   campaign_name: string | null
+  visits: number
   attributed_value: number
   attributed_share: number
   attributed_conversions: number
+  cvr: number
+  cost_per_visit: number
+  revenue_per_visit: number
+  first_touch_conversions: number
+  assist_conversions: number
+  last_touch_conversions: number
+  first_touch_revenue: number
+  assist_revenue: number
+  last_touch_revenue: number
+  touch_journeys: number
+  content_journeys: number
+  checkout_journeys: number
+  converted_journeys: number
+  funnel_conversion_rate: number
   spend: number
   roi: number | null
   roas: number | null
@@ -67,9 +82,37 @@ interface CampaignSummaryItem {
   campaign_name?: string | null
   channel: string
   platform?: string | null
-  current: { spend: number; conversions: number; revenue: number }
-  previous?: { spend: number; conversions: number; revenue: number } | null
-  derived?: { roas?: number | null; cpa?: number | null }
+  current: { spend: number; visits: number; conversions: number; revenue: number }
+  previous?: { spend: number; visits: number; conversions: number; revenue: number } | null
+  derived?: {
+    roas?: number | null
+    cpa?: number | null
+    cvr?: number | null
+    cost_per_visit?: number | null
+    revenue_per_visit?: number | null
+  }
+  previous_derived?: {
+    cvr?: number | null
+    cost_per_visit?: number | null
+    revenue_per_visit?: number | null
+  } | null
+  diagnostics?: {
+    roles?: {
+      first_touch_conversions?: number
+      last_touch_conversions?: number
+      assist_conversions?: number
+      first_touch_revenue?: number
+      last_touch_revenue?: number
+      assist_revenue?: number
+    }
+    funnel?: {
+      touch_journeys?: number
+      content_journeys?: number
+      checkout_journeys?: number
+      converted_journeys?: number
+      conversion_rate?: number
+    }
+  }
   confidence?: Confidence | null
 }
 
@@ -78,8 +121,8 @@ interface CampaignSummaryResponse {
   previous_period: { date_from: string; date_to: string }
   items: CampaignSummaryItem[]
   totals?: {
-    current: { spend: number; conversions: number; revenue: number }
-    previous?: { spend: number; conversions: number; revenue: number } | null
+    current: { spend: number; visits: number; conversions: number; revenue: number }
+    previous?: { spend: number; visits: number; conversions: number; revenue: number } | null
   }
   config?: {
     config_id?: string
@@ -114,8 +157,12 @@ const MODEL_LABELS: Record<string, string> = {
 
 const METRIC_DEFINITIONS: Record<string, string> = {
   'Total Spend': 'Sum of expenses by channel (campaigns inherit channel spend).',
+  'Visits': 'Normalized touchpoint count observed for each campaign in the selected period.',
   'Attributed Revenue': 'Revenue attributed to each campaign by the selected model.',
   'Conversions': 'Attributed conversion count.',
+  'CVR': 'Attributed conversions divided by observed visits.',
+  'Cost / Visit': 'Spend divided by visits.',
+  'Revenue / Visit': 'Attributed revenue divided by visits.',
   'Suggested next': 'Next Best Action: recommended next channel/campaign after this one.',
 }
 
@@ -144,6 +191,10 @@ function exportCampaignsCSV(
   const headers = [
     'Campaign',
     'Channel',
+    'Visits',
+    'CVR',
+    'Cost / Visit',
+    'Revenue / Visit',
     'Attributed Revenue',
     'Share %',
     'Conversions',
@@ -161,6 +212,10 @@ function exportCampaignsCSV(
   const rows = campaigns.map((c) => [
     c.campaign,
     c.channel,
+    c.visits.toFixed(0),
+    (c.cvr * 100).toFixed(2),
+    c.cost_per_visit.toFixed(4),
+    c.revenue_per_visit.toFixed(4),
     c.attributed_value.toFixed(2),
     (c.attributed_share * 100).toFixed(1),
     c.attributed_conversions.toFixed(1),
@@ -192,7 +247,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
   const initialTrendParams = useMemo(() => {
     const params = new URLSearchParams(window.location.search)
     const kpiRaw = (params.get('kpi') || '').toLowerCase()
-    const kpi = ['spend', 'conversions', 'revenue', 'cpa', 'roas'].includes(kpiRaw) ? kpiRaw : 'conversions'
+    const kpi = ['spend', 'visits', 'conversions', 'revenue', 'cpa', 'roas'].includes(kpiRaw) ? kpiRaw : 'conversions'
     const grainRaw = (params.get('grain') || 'auto').toLowerCase()
     const grain = grainRaw === 'daily' || grainRaw === 'weekly' ? grainRaw : 'auto'
     const compare = params.get('compare') !== '0'
@@ -280,18 +335,39 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       const channel = String(item.channel || 'unknown')
       const campaignId = String(item.campaign_id || item.campaign_name || `${channel}:unknown`)
       const spend = item.current.spend || 0
+      const visits = item.current.visits || 0
       const revenue = item.current.revenue || 0
       const conversions = item.current.conversions || 0
       const roas = item.derived?.roas ?? (spend > 0 ? revenue / spend : null)
       const cpa = item.derived?.cpa ?? (conversions > 0 ? spend / conversions : null)
       const roi = spend > 0 ? (revenue - spend) / spend : null
+      const cvr = item.derived?.cvr ?? (visits > 0 ? conversions / visits : 0)
+      const costPerVisit = item.derived?.cost_per_visit ?? (visits > 0 ? spend / visits : 0)
+      const revenuePerVisit = item.derived?.revenue_per_visit ?? (visits > 0 ? revenue / visits : 0)
+      const roles = item.diagnostics?.roles || {}
+      const funnel = item.diagnostics?.funnel || {}
       return {
         campaign: campaignId,
         channel,
         campaign_name: item.campaign_name ?? null,
+        visits,
         attributed_value: revenue,
         attributed_share: totalRevenue > 0 ? revenue / totalRevenue : 0,
         attributed_conversions: conversions,
+        cvr,
+        cost_per_visit: costPerVisit,
+        revenue_per_visit: revenuePerVisit,
+        first_touch_conversions: roles.first_touch_conversions || 0,
+        assist_conversions: roles.assist_conversions || 0,
+        last_touch_conversions: roles.last_touch_conversions || 0,
+        first_touch_revenue: roles.first_touch_revenue || 0,
+        assist_revenue: roles.assist_revenue || 0,
+        last_touch_revenue: roles.last_touch_revenue || 0,
+        touch_journeys: funnel.touch_journeys || 0,
+        content_journeys: funnel.content_journeys || 0,
+        checkout_journeys: funnel.checkout_journeys || 0,
+        converted_journeys: funnel.converted_journeys || 0,
+        funnel_conversion_rate: funnel.conversion_rate || 0,
         spend,
         roi,
         roas,
@@ -417,7 +493,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
         previous: prevSeries,
         summaryMode: trendKpi === 'cpa' || trendKpi === 'roas' ? ('avg' as const) : ('sum' as const),
         formatValue:
-          trendKpi === 'conversions'
+          trendKpi === 'conversions' || trendKpi === 'visits'
             ? (v: number) => v.toFixed(0)
             : trendKpi === 'roas'
             ? (v: number) => `${v.toFixed(2)}x`
@@ -536,21 +612,43 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
     )
   }
 
-  const summaryCurrent = summaryQuery.data?.totals?.current ?? { spend: 0, revenue: 0, conversions: 0 }
+  const summaryCurrent = summaryQuery.data?.totals?.current ?? { spend: 0, visits: 0, revenue: 0, conversions: 0 }
   const totalSpend = summaryCurrent.spend
+  const totalVisits = summaryCurrent.visits
   const totalValue = summaryCurrent.revenue
   const totalConversions = summaryCurrent.conversions
   const totalROAS = totalSpend > 0 ? totalValue / totalSpend : 0
   const avgCPA = totalConversions > 0 ? totalSpend / totalConversions : 0
+  const totalCVR = totalVisits > 0 ? totalConversions / totalVisits : 0
+  const totalCostPerVisit = totalVisits > 0 ? totalSpend / totalVisits : 0
+  const totalRevenuePerVisit = totalVisits > 0 ? totalValue / totalVisits : 0
   const filteredTotalSpend = filteredCampaigns.reduce((s, c) => s + c.spend, 0)
   const kpis = [
     { label: 'Total Spend', value: formatCurrency(totalSpend), def: METRIC_DEFINITIONS['Total Spend'] },
+    { label: 'Visits', value: totalVisits.toLocaleString(), def: METRIC_DEFINITIONS['Visits'] },
     { label: 'Attributed Revenue', value: formatCurrency(totalValue), def: METRIC_DEFINITIONS['Attributed Revenue'] },
     { label: 'Conversions', value: totalConversions.toLocaleString(), def: '' },
+    { label: 'CVR', value: `${(totalCVR * 100).toFixed(2)}%`, def: METRIC_DEFINITIONS['CVR'] },
+    { label: 'Cost / Visit', value: formatCurrency(totalCostPerVisit), def: METRIC_DEFINITIONS['Cost / Visit'] },
+    { label: 'Revenue / Visit', value: formatCurrency(totalRevenuePerVisit), def: METRIC_DEFINITIONS['Revenue / Visit'] },
     { label: 'ROAS', value: `${totalROAS.toFixed(2)}×`, def: '' },
     { label: 'Avg CPA', value: formatCurrency(avgCPA), def: '' },
   ]
   const coverage = summaryQuery.data?.mapping_coverage
+  const roleRows = useMemo(
+    () =>
+      [...sortedCampaigns]
+        .sort((a, b) => b.last_touch_revenue + b.assist_revenue + b.first_touch_revenue - (a.last_touch_revenue + a.assist_revenue + a.first_touch_revenue))
+        .slice(0, 8),
+    [sortedCampaigns],
+  )
+  const funnelRows = useMemo(
+    () =>
+      [...sortedCampaigns]
+        .sort((a, b) => b.touch_journeys - a.touch_journeys)
+        .slice(0, 8),
+    [sortedCampaigns],
+  )
 
   const chartData = filteredCampaigns.map((c) => ({
     name: c.campaign_name ? `${c.channel} / ${c.campaign_name}` : c.campaign,
@@ -640,6 +738,25 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
 
       <div style={{ marginBottom: t.space.xl }}>
         <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', alignItems: 'center', marginBottom: t.space.sm }}>
+          <label style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Trend metric</label>
+          <select
+            value={trendKpi}
+            onChange={(e) => setTrendKpi(e.target.value)}
+            style={{
+              padding: `${t.space.xs}px ${t.space.sm}px`,
+              border: `1px solid ${t.color.border}`,
+              borderRadius: t.radius.sm,
+              fontSize: t.font.sizeSm,
+              minWidth: 140,
+            }}
+          >
+            <option value="spend">Spend</option>
+            <option value="visits">Visits</option>
+            <option value="conversions">Conversions</option>
+            <option value="revenue">Revenue</option>
+            <option value="cpa">CPA</option>
+            <option value="roas">ROAS</option>
+          </select>
           <label style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Campaign</label>
           <input
             type="text"
@@ -934,6 +1051,101 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
         </div>
       </div>
 
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
+          gap: t.space.xl,
+          marginBottom: t.space.xl,
+        }}
+      >
+        <div
+          style={{
+            background: t.color.surface,
+            border: `1px solid ${t.color.borderLight}`,
+            borderRadius: t.radius.lg,
+            padding: t.space.xl,
+            boxShadow: t.shadowSm,
+          }}
+        >
+          <h3 style={{ margin: `0 0 ${t.space.md}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+            Attribution Role Split
+          </h3>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: t.font.sizeSm }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${t.color.border}` }}>
+                  <th style={{ textAlign: 'left', padding: `${t.space.sm}px 0` }}>Campaign</th>
+                  <th style={{ textAlign: 'right', padding: `${t.space.sm}px 0` }}>First</th>
+                  <th style={{ textAlign: 'right', padding: `${t.space.sm}px 0` }}>Assist</th>
+                  <th style={{ textAlign: 'right', padding: `${t.space.sm}px 0` }}>Last</th>
+                </tr>
+              </thead>
+              <tbody>
+                {roleRows.map((row) => (
+                  <tr key={row.campaign} style={{ borderBottom: `1px solid ${t.color.borderLight}` }}>
+                    <td style={{ padding: `${t.space.sm}px 0`, fontWeight: t.font.weightMedium }}>
+                      {row.campaign_name ? `${row.channel} / ${row.campaign_name}` : row.campaign}
+                    </td>
+                    <td style={{ padding: `${t.space.sm}px 0`, textAlign: 'right' }}>
+                      {row.first_touch_conversions.toFixed(0)} / {formatCurrency(row.first_touch_revenue)}
+                    </td>
+                    <td style={{ padding: `${t.space.sm}px 0`, textAlign: 'right' }}>
+                      {row.assist_conversions.toFixed(0)} / {formatCurrency(row.assist_revenue)}
+                    </td>
+                    <td style={{ padding: `${t.space.sm}px 0`, textAlign: 'right' }}>
+                      {row.last_touch_conversions.toFixed(0)} / {formatCurrency(row.last_touch_revenue)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div
+          style={{
+            background: t.color.surface,
+            border: `1px solid ${t.color.borderLight}`,
+            borderRadius: t.radius.lg,
+            padding: t.space.xl,
+            boxShadow: t.shadowSm,
+          }}
+        >
+          <h3 style={{ margin: `0 0 ${t.space.md}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+            Funnel Progression
+          </h3>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: t.font.sizeSm }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${t.color.border}` }}>
+                  <th style={{ textAlign: 'left', padding: `${t.space.sm}px 0` }}>Campaign</th>
+                  <th style={{ textAlign: 'right', padding: `${t.space.sm}px 0` }}>Touched</th>
+                  <th style={{ textAlign: 'right', padding: `${t.space.sm}px 0` }}>Content</th>
+                  <th style={{ textAlign: 'right', padding: `${t.space.sm}px 0` }}>Checkout</th>
+                  <th style={{ textAlign: 'right', padding: `${t.space.sm}px 0` }}>Converted</th>
+                  <th style={{ textAlign: 'right', padding: `${t.space.sm}px 0` }}>Conv rate</th>
+                </tr>
+              </thead>
+              <tbody>
+                {funnelRows.map((row) => (
+                  <tr key={row.campaign} style={{ borderBottom: `1px solid ${t.color.borderLight}` }}>
+                    <td style={{ padding: `${t.space.sm}px 0`, fontWeight: t.font.weightMedium }}>
+                      {row.campaign_name ? `${row.channel} / ${row.campaign_name}` : row.campaign}
+                    </td>
+                    <td style={{ padding: `${t.space.sm}px 0`, textAlign: 'right' }}>{row.touch_journeys.toLocaleString()}</td>
+                    <td style={{ padding: `${t.space.sm}px 0`, textAlign: 'right' }}>{row.content_journeys.toLocaleString()}</td>
+                    <td style={{ padding: `${t.space.sm}px 0`, textAlign: 'right' }}>{row.checkout_journeys.toLocaleString()}</td>
+                    <td style={{ padding: `${t.space.sm}px 0`, textAlign: 'right' }}>{row.converted_journeys.toLocaleString()}</td>
+                    <td style={{ padding: `${t.space.sm}px 0`, textAlign: 'right' }}>{(row.funnel_conversion_rate * 100).toFixed(1)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
       {showWhy && (
         <div style={{ marginBottom: t.space.lg }}>
           <ExplainabilityPanel scope="campaign" configId={configId ?? undefined} model={model} />
@@ -1086,6 +1298,12 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
               </div>
             </div>
             <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Visits / CVR</div>
+              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                {activeCampaignStats ? `${activeCampaignStats.visits.toFixed(0)} / ${(activeCampaignStats.cvr * 100).toFixed(2)}%` : '—'}
+              </div>
+            </div>
+            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
               <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Conversions</div>
               <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
                 {activeCampaignStats ? activeCampaignStats.attributed_conversions.toFixed(1) : '—'}
@@ -1146,6 +1364,10 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
                 {[
                   { key: 'campaign' as SortKey, label: 'Campaign', align: 'left' },
                   { key: 'channel' as SortKey, label: 'Channel', align: 'left' },
+                  { key: 'visits' as SortKey, label: 'Visits', align: 'right' },
+                  { key: 'cvr' as SortKey, label: 'CVR', align: 'right' },
+                  { key: 'cost_per_visit' as SortKey, label: 'Cost / Visit', align: 'right' },
+                  { key: 'revenue_per_visit' as SortKey, label: 'Revenue / Visit', align: 'right' },
                   { key: 'attributed_value' as SortKey, label: 'Attributed Revenue', align: 'right' },
                   { key: 'attributed_share' as SortKey, label: 'Share', align: 'right' },
                   { key: 'attributed_conversions' as SortKey, label: 'Conversions', align: 'right' },
@@ -1220,6 +1442,18 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
                     {c.campaign_name ? `${c.channel} / ${c.campaign_name}` : c.campaign}
                   </td>
                   <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, color: t.color.textSecondary }}>{c.channel}</td>
+                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                    {c.visits.toFixed(0)}
+                  </td>
+                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                    {(c.cvr * 100).toFixed(2)}%
+                  </td>
+                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                    {formatCurrency(c.cost_per_visit)}
+                  </td>
+                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                    {formatCurrency(c.revenue_per_visit)}
+                  </td>
                   <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontWeight: t.font.weightMedium, color: t.color.success, fontVariantNumeric: 'tabular-nums' }}>
                     {formatCurrency(c.attributed_value)}
                   </td>

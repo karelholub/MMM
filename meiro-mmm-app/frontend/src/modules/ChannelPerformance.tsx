@@ -30,9 +30,24 @@ interface ChannelPerformanceProps {
 interface ChannelData {
   channel: string
   spend: number
+  visits: number
   attributed_value: number
   attributed_conversions: number
   attributed_share: number
+  cvr: number
+  cost_per_visit: number
+  revenue_per_visit: number
+  first_touch_conversions: number
+  assist_conversions: number
+  last_touch_conversions: number
+  first_touch_revenue: number
+  assist_revenue: number
+  last_touch_revenue: number
+  touch_journeys: number
+  content_journeys: number
+  checkout_journeys: number
+  converted_journeys: number
+  funnel_conversion_rate: number
   roi: number
   roas: number
   cpa: number
@@ -73,9 +88,37 @@ interface ChannelTrendResponse {
 
 interface ChannelSummaryItem {
   channel: string
-  current: { spend: number; conversions: number; revenue: number }
-  previous?: { spend: number; conversions: number; revenue: number } | null
-  derived?: { roas?: number | null; cpa?: number | null }
+  current: { spend: number; visits: number; conversions: number; revenue: number }
+  previous?: { spend: number; visits: number; conversions: number; revenue: number } | null
+  derived?: {
+    roas?: number | null
+    cpa?: number | null
+    cvr?: number | null
+    cost_per_visit?: number | null
+    revenue_per_visit?: number | null
+  }
+  previous_derived?: {
+    cvr?: number | null
+    cost_per_visit?: number | null
+    revenue_per_visit?: number | null
+  } | null
+  diagnostics?: {
+    roles?: {
+      first_touch_conversions?: number
+      last_touch_conversions?: number
+      assist_conversions?: number
+      first_touch_revenue?: number
+      last_touch_revenue?: number
+      assist_revenue?: number
+    }
+    funnel?: {
+      touch_journeys?: number
+      content_journeys?: number
+      checkout_journeys?: number
+      converted_journeys?: number
+      conversion_rate?: number
+    }
+  }
   confidence?: Confidence | null
 }
 
@@ -84,8 +127,8 @@ interface ChannelSummaryResponse {
   previous_period: { date_from: string; date_to: string }
   items: ChannelSummaryItem[]
   totals?: {
-    current: { spend: number; conversions: number; revenue: number }
-    previous?: { spend: number; conversions: number; revenue: number } | null
+    current: { spend: number; visits: number; conversions: number; revenue: number }
+    previous?: { spend: number; visits: number; conversions: number; revenue: number } | null
   }
   config?: {
     config_id?: string
@@ -120,8 +163,12 @@ const MODEL_LABELS: Record<string, string> = {
 
 const METRIC_DEFINITIONS: Record<string, string> = {
   'Total Spend': 'Sum of expenses mapped to channels in the selected period.',
+  'Visits': 'Normalized touchpoint count observed for each channel in the selected period.',
   'Attributed Revenue': 'Revenue attributed to each channel by the selected model.',
   'Conversions': 'Attributed conversion count.',
+  'CVR': 'Attributed conversions divided by observed visits.',
+  'Cost / Visit': 'Spend divided by visits.',
+  'Revenue / Visit': 'Attributed revenue divided by visits.',
   'ROAS': 'Return on ad spend: attributed revenue ÷ spend.',
   'ROI': 'Return on investment: (attributed value − spend) ÷ spend.',
   'CPA': 'Cost per acquisition: spend ÷ attributed conversions.',
@@ -147,6 +194,10 @@ function exportTableCSV(
   const headers = [
     'Channel',
     'Spend',
+    'Visits',
+    'CVR',
+    'Cost / Visit',
+    'Revenue / Visit',
     'Attributed Revenue',
     'Conversions',
     'Share %',
@@ -162,6 +213,10 @@ function exportTableCSV(
   const rows = channels.map((ch) => [
     ch.channel,
     ch.spend.toFixed(2),
+    ch.visits.toFixed(0),
+    (ch.cvr * 100).toFixed(2),
+    ch.cost_per_visit.toFixed(4),
+    ch.revenue_per_visit.toFixed(4),
     ch.attributed_value.toFixed(2),
     ch.attributed_conversions.toFixed(1),
     (ch.attributed_share * 100).toFixed(1),
@@ -192,7 +247,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
   const initialTrendParams = useMemo(() => {
     const params = new URLSearchParams(window.location.search)
     const kpiRaw = (params.get('kpi') || '').toLowerCase()
-    const kpi = ['spend', 'conversions', 'revenue', 'cpa', 'roas'].includes(kpiRaw) ? kpiRaw : 'conversions'
+    const kpi = ['spend', 'visits', 'conversions', 'revenue', 'cpa', 'roas'].includes(kpiRaw) ? kpiRaw : 'conversions'
     const grainRaw = (params.get('grain') || 'auto').toLowerCase()
     const grain = grainRaw === 'daily' || grainRaw === 'weekly' ? grainRaw : 'auto'
     const compare = params.get('compare') !== '0'
@@ -207,7 +262,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
   const [comparePrevious, setComparePrevious] = useState(initialTrendParams.compare)
   const [trendKpi, setTrendKpi] = useState(initialTrendParams.kpi)
   const [trendGrain, setTrendGrain] = useState<'auto' | 'daily' | 'weekly'>(initialTrendParams.grain)
-  const [chartSortBy, setChartSortBy] = useState<'spend' | 'attributed_value' | 'roas'>('attributed_value')
+  const [chartSortBy, setChartSortBy] = useState<'spend' | 'visits' | 'attributed_value' | 'roas'>('attributed_value')
   const [channelSearch, setChannelSearch] = useState('')
   const [onlyLowConfidence, setOnlyLowConfidence] = useState(false)
   const [selectedTrendChannels, setSelectedTrendChannels] = useState<string[]>([])
@@ -282,17 +337,38 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     const revenueTotal = rows.reduce((sum, row) => sum + (row.current.revenue || 0), 0)
     return rows.map((row) => {
       const spend = row.current.spend || 0
+      const visits = row.current.visits || 0
       const revenue = row.current.revenue || 0
       const conversions = row.current.conversions || 0
       const roas = row.derived?.roas != null ? row.derived.roas : spend > 0 ? revenue / spend : 0
       const cpa = row.derived?.cpa != null ? row.derived.cpa : conversions > 0 ? spend / conversions : 0
       const roi = spend > 0 ? (revenue - spend) / spend : 0
+      const cvr = row.derived?.cvr != null ? row.derived.cvr : visits > 0 ? conversions / visits : 0
+      const costPerVisit = row.derived?.cost_per_visit != null ? row.derived.cost_per_visit : visits > 0 ? spend / visits : 0
+      const revenuePerVisit = row.derived?.revenue_per_visit != null ? row.derived.revenue_per_visit : visits > 0 ? revenue / visits : 0
+      const roles = row.diagnostics?.roles || {}
+      const funnel = row.diagnostics?.funnel || {}
       return {
         channel: row.channel,
         spend,
+        visits,
         attributed_value: revenue,
         attributed_conversions: conversions,
         attributed_share: revenueTotal > 0 ? revenue / revenueTotal : 0,
+        cvr,
+        cost_per_visit: costPerVisit,
+        revenue_per_visit: revenuePerVisit,
+        first_touch_conversions: roles.first_touch_conversions || 0,
+        assist_conversions: roles.assist_conversions || 0,
+        last_touch_conversions: roles.last_touch_conversions || 0,
+        first_touch_revenue: roles.first_touch_revenue || 0,
+        assist_revenue: roles.assist_revenue || 0,
+        last_touch_revenue: roles.last_touch_revenue || 0,
+        touch_journeys: funnel.touch_journeys || 0,
+        content_journeys: funnel.content_journeys || 0,
+        checkout_journeys: funnel.checkout_journeys || 0,
+        converted_journeys: funnel.converted_journeys || 0,
+        funnel_conversion_rate: funnel.conversion_rate || 0,
         roi,
         roas,
         cpa,
@@ -352,6 +428,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     if (!filteredForCharts.length) return []
     const clone = [...filteredForCharts]
     if (chartSortBy === 'spend') clone.sort((a, b) => a.spend - b.spend)
+    else if (chartSortBy === 'visits') clone.sort((a, b) => a.visits - b.visits)
     else if (chartSortBy === 'roas') clone.sort((a, b) => a.roas - b.roas)
     else clone.sort((a, b) => a.attributed_value - b.attributed_value)
     return clone
@@ -386,7 +463,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
         previous: prevSeries,
         summaryMode: trendKpi === 'cpa' || trendKpi === 'roas' ? ('avg' as const) : ('sum' as const),
         formatValue:
-          trendKpi === 'conversions'
+          trendKpi === 'conversions' || trendKpi === 'visits'
             ? (v: number) => v.toFixed(0)
             : trendKpi === 'roas'
             ? (v: number) => `${v.toFixed(2)}x`
@@ -473,14 +550,18 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     )
   }
 
-  const summaryCurrent = summaryQuery.data?.totals?.current ?? { spend: 0, revenue: 0, conversions: 0 }
-  const summaryPrevious = summaryQuery.data?.totals?.previous ?? { spend: 0, revenue: 0, conversions: 0 }
+  const summaryCurrent = summaryQuery.data?.totals?.current ?? { spend: 0, visits: 0, revenue: 0, conversions: 0 }
+  const summaryPrevious = summaryQuery.data?.totals?.previous ?? { spend: 0, visits: 0, revenue: 0, conversions: 0 }
   const totalSpend = summaryCurrent.spend
+  const totalVisits = summaryCurrent.visits
   const totalValue = summaryCurrent.revenue
   const totalConversions = summaryCurrent.conversions
 
   const totalROAS = totalSpend > 0 ? totalValue / totalSpend : 0
   const avgCPA = totalConversions > 0 ? totalSpend / totalConversions : 0
+  const totalCVR = totalVisits > 0 ? totalConversions / totalVisits : 0
+  const totalCostPerVisit = totalVisits > 0 ? totalSpend / totalVisits : 0
+  const totalRevenuePerVisit = totalVisits > 0 ? totalValue / totalVisits : 0
 
   const periodLabel =
     globalDateFrom && globalDateTo
@@ -504,6 +585,11 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
           Math.abs(summaryPrevious.spend) > 1e-9
             ? ((totalSpend - summaryPrevious.spend) / summaryPrevious.spend) * 100
             : null as number | null,
+        totalVisits: totalVisits - summaryPrevious.visits,
+        totalVisitsPct:
+          Math.abs(summaryPrevious.visits) > 1e-9
+            ? ((totalVisits - summaryPrevious.visits) / summaryPrevious.visits) * 100
+            : null as number | null,
         totalValue: totalValue - summaryPrevious.revenue,
         totalValuePct:
           Math.abs(summaryPrevious.revenue) > 1e-9
@@ -522,8 +608,12 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     : null
   const kpis = [
     { label: 'Total Spend', value: formatCurrency(totalSpend), def: METRIC_DEFINITIONS['Total Spend'] },
+    { label: 'Visits', value: totalVisits.toLocaleString(), def: METRIC_DEFINITIONS['Visits'] },
     { label: 'Attributed Revenue', value: formatCurrency(totalValue), def: METRIC_DEFINITIONS['Attributed Revenue'] },
     { label: 'Conversions', value: totalConversions.toLocaleString(), def: METRIC_DEFINITIONS['Conversions'] },
+    { label: 'CVR', value: `${(totalCVR * 100).toFixed(2)}%`, def: METRIC_DEFINITIONS['CVR'] },
+    { label: 'Cost / Visit', value: formatCurrency(totalCostPerVisit), def: METRIC_DEFINITIONS['Cost / Visit'] },
+    { label: 'Revenue / Visit', value: formatCurrency(totalRevenuePerVisit), def: METRIC_DEFINITIONS['Revenue / Visit'] },
     { label: 'ROAS', value: `${totalROAS.toFixed(2)}×`, def: METRIC_DEFINITIONS['ROAS'] },
     { label: 'Avg CPA', value: formatCurrency(avgCPA), def: METRIC_DEFINITIONS['CPA'] },
   ]
@@ -531,6 +621,10 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
   const tableColumns: { key: SortKey; label: string; align: 'left' | 'right'; format: (ch: ChannelData) => string }[] = [
     { key: 'channel', label: 'Channel', align: 'left', format: (ch) => ch.channel },
     { key: 'spend', label: 'Spend', align: 'right', format: (ch) => formatCurrency(ch.spend) },
+    { key: 'visits', label: 'Visits', align: 'right', format: (ch) => ch.visits.toLocaleString() },
+    { key: 'cvr', label: 'CVR', align: 'right', format: (ch) => `${(ch.cvr * 100).toFixed(2)}%` },
+    { key: 'cost_per_visit', label: 'Cost / Visit', align: 'right', format: (ch) => formatCurrency(ch.cost_per_visit) },
+    { key: 'revenue_per_visit', label: 'Revenue / Visit', align: 'right', format: (ch) => formatCurrency(ch.revenue_per_visit) },
     { key: 'attributed_value', label: 'Attributed Revenue', align: 'right', format: (ch) => formatCurrency(ch.attributed_value) },
     { key: 'attributed_conversions', label: 'Conversions', align: 'right', format: (ch) => ch.attributed_conversions.toFixed(1) },
     { key: 'attributed_share', label: 'Share', align: 'right', format: (ch) => `${(ch.attributed_share * 100).toFixed(1)}%` },
@@ -538,6 +632,20 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     { key: 'roas', label: 'ROAS', align: 'right', format: (ch) => `${ch.roas.toFixed(2)}×` },
     { key: 'cpa', label: 'CPA', align: 'right', format: (ch) => (ch.cpa > 0 ? formatCurrency(ch.cpa) : '—') },
   ]
+  const roleRows = useMemo(
+    () =>
+      [...sortedChannels]
+        .sort((a, b) => b.last_touch_revenue + b.assist_revenue + b.first_touch_revenue - (a.last_touch_revenue + a.assist_revenue + a.first_touch_revenue))
+        .slice(0, 8),
+    [sortedChannels],
+  )
+  const funnelRows = useMemo(
+    () =>
+      [...sortedChannels]
+        .sort((a, b) => b.touch_journeys - a.touch_journeys)
+        .slice(0, 8),
+    [sortedChannels],
+  )
 
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto' }}>
@@ -679,6 +787,28 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
             gap: t.space.sm,
           }}
         >
+          <div style={{ display: 'flex', gap: t.space.sm, alignItems: 'center', flexWrap: 'wrap' }}>
+            <label style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Trend metric</label>
+            <select
+              value={trendKpi}
+              onChange={(e) => setTrendKpi(e.target.value)}
+              style={{
+                fontSize: t.font.sizeSm,
+                padding: '6px 10px',
+                borderRadius: t.radius.sm,
+                border: `1px solid ${t.color.borderLight}`,
+                backgroundColor: t.color.surface,
+                color: t.color.text,
+              }}
+            >
+              <option value="spend">Spend</option>
+              <option value="visits">Visits</option>
+              <option value="conversions">Conversions</option>
+              <option value="revenue">Revenue</option>
+              <option value="cpa">CPA</option>
+              <option value="roas">ROAS</option>
+            </select>
+          </div>
           <div style={{ display: 'grid', gap: t.space.xs }}>
             <label style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Channels</label>
             <div
@@ -819,6 +949,12 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
                   if (kpi.label === 'Total Spend') {
                     return 'Δ N/A'
                   }
+                  if (kpi.label === 'Visits') {
+                    if (kpiDeltas.totalVisits == null) return 'Δ N/A'
+                    const abs = kpiDeltas.totalVisits
+                    const pct = kpiDeltas.totalVisitsPct
+                    return `${abs >= 0 ? '+' : ''}${abs.toFixed(0)} ${pct != null ? `/ ${pct.toFixed(1)}%` : ''}`
+                  }
                   if (kpi.label === 'Attributed Revenue') {
                     if (kpiDeltas.totalValue == null) return 'Δ N/A'
                     const abs = kpiDeltas.totalValue
@@ -826,12 +962,109 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
                     const absLabel = formatCurrency(Math.abs(abs))
                     return `${abs >= 0 ? '+' : '-'}${absLabel} ${pct != null ? `/ ${pct.toFixed(1)}%` : ''}`
                   }
+                  if (kpi.label === 'Conversions') {
+                    if (kpiDeltas.totalConversions == null) return 'Δ N/A'
+                    const abs = kpiDeltas.totalConversions
+                    const pct = kpiDeltas.totalConversionsPct
+                    return `${abs >= 0 ? '+' : ''}${abs.toFixed(0)} ${pct != null ? `/ ${pct.toFixed(1)}%` : ''}`
+                  }
                   return 'Δ N/A'
                 })()}
               </div>
             )}
           </div>
         ))}
+      </div>
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
+          gap: t.space.xl,
+          marginBottom: t.space.xl,
+        }}
+      >
+        <div
+          style={{
+            background: t.color.surface,
+            border: `1px solid ${t.color.borderLight}`,
+            borderRadius: t.radius.lg,
+            padding: t.space.xl,
+            boxShadow: t.shadowSm,
+          }}
+        >
+          <h3 style={{ margin: `0 0 ${t.space.md}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+            Attribution Role Split
+          </h3>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: t.font.sizeSm }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${t.color.border}` }}>
+                  <th style={{ textAlign: 'left', padding: `${t.space.sm}px 0` }}>Channel</th>
+                  <th style={{ textAlign: 'right', padding: `${t.space.sm}px 0` }}>First</th>
+                  <th style={{ textAlign: 'right', padding: `${t.space.sm}px 0` }}>Assist</th>
+                  <th style={{ textAlign: 'right', padding: `${t.space.sm}px 0` }}>Last</th>
+                </tr>
+              </thead>
+              <tbody>
+                {roleRows.map((row) => (
+                  <tr key={row.channel} style={{ borderBottom: `1px solid ${t.color.borderLight}` }}>
+                    <td style={{ padding: `${t.space.sm}px 0`, fontWeight: t.font.weightMedium }}>{row.channel}</td>
+                    <td style={{ padding: `${t.space.sm}px 0`, textAlign: 'right' }}>
+                      {row.first_touch_conversions.toFixed(0)} / {formatCurrency(row.first_touch_revenue)}
+                    </td>
+                    <td style={{ padding: `${t.space.sm}px 0`, textAlign: 'right' }}>
+                      {row.assist_conversions.toFixed(0)} / {formatCurrency(row.assist_revenue)}
+                    </td>
+                    <td style={{ padding: `${t.space.sm}px 0`, textAlign: 'right' }}>
+                      {row.last_touch_conversions.toFixed(0)} / {formatCurrency(row.last_touch_revenue)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div
+          style={{
+            background: t.color.surface,
+            border: `1px solid ${t.color.borderLight}`,
+            borderRadius: t.radius.lg,
+            padding: t.space.xl,
+            boxShadow: t.shadowSm,
+          }}
+        >
+          <h3 style={{ margin: `0 0 ${t.space.md}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+            Funnel Progression
+          </h3>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: t.font.sizeSm }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${t.color.border}` }}>
+                  <th style={{ textAlign: 'left', padding: `${t.space.sm}px 0` }}>Channel</th>
+                  <th style={{ textAlign: 'right', padding: `${t.space.sm}px 0` }}>Touched</th>
+                  <th style={{ textAlign: 'right', padding: `${t.space.sm}px 0` }}>Content</th>
+                  <th style={{ textAlign: 'right', padding: `${t.space.sm}px 0` }}>Checkout</th>
+                  <th style={{ textAlign: 'right', padding: `${t.space.sm}px 0` }}>Converted</th>
+                  <th style={{ textAlign: 'right', padding: `${t.space.sm}px 0` }}>Conv rate</th>
+                </tr>
+              </thead>
+              <tbody>
+                {funnelRows.map((row) => (
+                  <tr key={row.channel} style={{ borderBottom: `1px solid ${t.color.borderLight}` }}>
+                    <td style={{ padding: `${t.space.sm}px 0`, fontWeight: t.font.weightMedium }}>{row.channel}</td>
+                    <td style={{ padding: `${t.space.sm}px 0`, textAlign: 'right' }}>{row.touch_journeys.toLocaleString()}</td>
+                    <td style={{ padding: `${t.space.sm}px 0`, textAlign: 'right' }}>{row.content_journeys.toLocaleString()}</td>
+                    <td style={{ padding: `${t.space.sm}px 0`, textAlign: 'right' }}>{row.checkout_journeys.toLocaleString()}</td>
+                    <td style={{ padding: `${t.space.sm}px 0`, textAlign: 'right' }}>{row.converted_journeys.toLocaleString()}</td>
+                    <td style={{ padding: `${t.space.sm}px 0`, textAlign: 'right' }}>{(row.funnel_conversion_rate * 100).toFixed(1)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
 
       {/* Data health mini indicator */}
@@ -914,7 +1147,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
               Sorted by:{' '}
               <select
                 value={chartSortBy}
-                onChange={(e) => setChartSortBy(e.target.value as 'spend' | 'attributed_value' | 'roas')}
+                onChange={(e) => setChartSortBy(e.target.value as 'spend' | 'visits' | 'attributed_value' | 'roas')}
                 style={{
                   fontSize: t.font.sizeXs,
                   padding: '2px 6px',
@@ -925,6 +1158,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
                 }}
               >
                 <option value="spend">Spend</option>
+                <option value="visits">Visits</option>
                 <option value="attributed_value">Attributed Revenue</option>
                 <option value="roas">ROAS</option>
               </select>
@@ -1077,7 +1311,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
             <thead>
               <tr style={{ borderBottom: `2px solid ${t.color.border}` }}>
                 <th
-                  colSpan={3}
+                  colSpan={5}
                   style={{
                     padding: `${t.space.sm}px ${t.space.lg}px`,
                     textAlign: 'left',
@@ -1099,7 +1333,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
                   />
                 </th>
                 <th
-                  colSpan={5}
+                  colSpan={7}
                   style={{
                     padding: `${t.space.sm}px ${t.space.lg}px`,
                     textAlign: 'right',

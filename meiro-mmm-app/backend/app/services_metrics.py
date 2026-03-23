@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional, Set, Tuple
 
 
-SUPPORTED_KPIS = {"spend", "conversions", "revenue", "cpa", "roas"}
+SUPPORTED_KPIS = {"spend", "visits", "conversions", "revenue", "cpa", "roas"}
 
 
 def safe_ratio(numerator: float, denominator: float) -> Optional[float]:
@@ -14,10 +14,13 @@ def safe_ratio(numerator: float, denominator: float) -> Optional[float]:
 
 def metric_value(metric_row: Dict[str, float], kpi_key: str) -> Optional[float]:
     spend = float(metric_row.get("spend", 0.0) or 0.0)
+    visits = float(metric_row.get("visits", 0.0) or 0.0)
     conversions = float(metric_row.get("conversions", 0.0) or 0.0)
     revenue = float(metric_row.get("revenue", 0.0) or 0.0)
     if kpi_key == "spend":
         return spend
+    if kpi_key == "visits":
+        return visits
     if kpi_key == "conversions":
         return conversions
     if kpi_key == "revenue":
@@ -68,9 +71,10 @@ def journey_revenue_value(
 
 
 def summarize_rows(rows: Dict[str, Dict[str, float]]) -> Tuple[Dict[str, float], Dict[str, Optional[float]]]:
-    totals = {"spend": 0.0, "conversions": 0.0, "revenue": 0.0}
+    totals = {"spend": 0.0, "visits": 0.0, "conversions": 0.0, "revenue": 0.0}
     for row in rows.values():
         totals["spend"] += float(row.get("spend", 0.0) or 0.0)
+        totals["visits"] += float(row.get("visits", 0.0) or 0.0)
         totals["conversions"] += float(row.get("conversions", 0.0) or 0.0)
         totals["revenue"] += float(row.get("revenue", 0.0) or 0.0)
     return totals, derive_efficiency(
