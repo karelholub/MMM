@@ -632,20 +632,12 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     { key: 'roas', label: 'ROAS', align: 'right', format: (ch) => `${ch.roas.toFixed(2)}×` },
     { key: 'cpa', label: 'CPA', align: 'right', format: (ch) => (ch.cpa > 0 ? formatCurrency(ch.cpa) : '—') },
   ]
-  const roleRows = useMemo(
-    () =>
-      [...sortedChannels]
-        .sort((a, b) => b.last_touch_revenue + b.assist_revenue + b.first_touch_revenue - (a.last_touch_revenue + a.assist_revenue + a.first_touch_revenue))
-        .slice(0, 8),
-    [sortedChannels],
-  )
-  const funnelRows = useMemo(
-    () =>
-      [...sortedChannels]
-        .sort((a, b) => b.touch_journeys - a.touch_journeys)
-        .slice(0, 8),
-    [sortedChannels],
-  )
+  const roleRows = [...sortedChannels]
+    .sort((a, b) => b.last_touch_revenue + b.assist_revenue + b.first_touch_revenue - (a.last_touch_revenue + a.assist_revenue + a.first_touch_revenue))
+    .slice(0, 8)
+  const funnelRows = [...sortedChannels]
+    .sort((a, b) => b.touch_journeys - a.touch_journeys)
+    .slice(0, 8)
 
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto' }}>

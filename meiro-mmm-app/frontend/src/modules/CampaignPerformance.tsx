@@ -635,20 +635,12 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
     { label: 'Avg CPA', value: formatCurrency(avgCPA), def: '' },
   ]
   const coverage = summaryQuery.data?.mapping_coverage
-  const roleRows = useMemo(
-    () =>
-      [...sortedCampaigns]
-        .sort((a, b) => b.last_touch_revenue + b.assist_revenue + b.first_touch_revenue - (a.last_touch_revenue + a.assist_revenue + a.first_touch_revenue))
-        .slice(0, 8),
-    [sortedCampaigns],
-  )
-  const funnelRows = useMemo(
-    () =>
-      [...sortedCampaigns]
-        .sort((a, b) => b.touch_journeys - a.touch_journeys)
-        .slice(0, 8),
-    [sortedCampaigns],
-  )
+  const roleRows = [...sortedCampaigns]
+    .sort((a, b) => b.last_touch_revenue + b.assist_revenue + b.first_touch_revenue - (a.last_touch_revenue + a.assist_revenue + a.first_touch_revenue))
+    .slice(0, 8)
+  const funnelRows = [...sortedCampaigns]
+    .sort((a, b) => b.touch_journeys - a.touch_journeys)
+    .slice(0, 8)
 
   const chartData = filteredCampaigns.map((c) => ({
     name: c.campaign_name ? `${c.channel} / ${c.campaign_name}` : c.campaign,

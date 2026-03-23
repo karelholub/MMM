@@ -10,11 +10,11 @@
       "lookback_days": 30
     },
     {
-      "id": "order_finalized",
-      "label": "Order Finalized",
+      "id": "checkout_start",
+      "label": "Checkout Start",
       "type": "micro",
-      "event_name": "order_finalized",
-      "value_field": "value",
+      "event_name": "checkout_start",
+      "value_field": null,
       "weight": 0.5,
       "lookback_days": 14
     }
