@@ -113,6 +113,13 @@ from app.modules.auth_access.router import create_router as create_auth_access_r
 from app.modules.alerts_funnels.router import create_router as create_alerts_funnels_router
 from app.modules.attribution.router import create_router as create_attribution_router
 from app.modules.attribution.schemas import LoadSampleRequest
+from app.modules.ads_connectors.router import create_router as create_ads_connectors_router
+from app.modules.ads_governance.router import create_router as create_ads_governance_router
+from app.modules.ads_governance.schemas import (
+    AdsChangeRequestApplyPayload,
+    AdsChangeRequestCreatePayload,
+    AdsChangeRequestRejectPayload,
+)
 from app.modules.config_management.router import create_router as create_config_management_router
 from app.modules.data_sources.router import create_router as create_data_sources_router
 from app.modules.meiro_integration.router import create_router as create_meiro_integration_router
@@ -1037,22 +1044,6 @@ def _ensure_journeys_loaded(db: Any) -> List[Dict[str, Any]]:
     return JOURNEYS or []
 
 
-class AdsChangeRequestCreatePayload(BaseModel):
-    provider: str
-    account_id: str
-    entity_type: str
-    entity_id: str
-    action_type: str
-    action_payload: Dict[str, Any] = Field(default_factory=dict)
-
-
-class AdsChangeRequestRejectPayload(BaseModel):
-    reason: Optional[str] = None
-
-
-class AdsChangeRequestApplyPayload(BaseModel):
-    admin_override: bool = False
-
 # Initialize sample datasets
 DATASETS["sample-weekly-01"] = {"path": SAMPLE_DIR / "sample-weekly-01.csv", "type": "sales"}
 DATASETS["sample-weekly-realistic"] = {"path": SAMPLE_DIR / "sample-weekly-realistic.csv", "type": "sales"}
@@ -1247,214 +1238,6 @@ def _ads_governance_settings() -> AdsGovernanceSettings:
         except Exception:
             return AdsGovernanceSettings()
     return AdsGovernanceSettings()
-
-
-@app.get("/api/ads/entities")
-def get_ads_entities(
-    provider: Optional[str] = Query(default=None),
-    entity_type: Optional[str] = Query(default=None),
-    search: Optional[str] = Query(default=None),
-    limit: int = Query(default=100, ge=1, le=500),
-    db=Depends(get_db),
-    ctx: PermissionContext = Depends(require_permission("ads.view")),
-):
-    workspace_id = workspace_scope_or_403(ctx, None)
-    try:
-        if provider and provider not in ADS_PROVIDER_KEYS:
-            raise ValueError("Unsupported provider")
-        if entity_type and entity_type not in ADS_ENTITY_TYPES:
-            raise ValueError("Unsupported entity_type")
-        return ads_list_entities(
-            db,
-            workspace_id=workspace_id,
-            provider=provider,
-            entity_type=entity_type,
-            search=search,
-            limit=limit,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.get("/api/ads/deeplink")
-def get_ads_deeplink(
-    provider: str = Query(...),
-    account_id: Optional[str] = Query(default=None),
-    entity_type: str = Query(...),
-    entity_id: str = Query(..., min_length=1),
-    db=Depends(get_db),
-    ctx: PermissionContext = Depends(require_permission("ads.view")),
-):
-    workspace_id = workspace_scope_or_403(ctx, None)
-    try:
-        url = ads_get_deep_link(
-            db,
-            workspace_id=workspace_id,
-            provider=provider,
-            account_id=account_id,
-            entity_type=entity_type,
-            entity_id=entity_id,
-        )
-        return {"provider": provider, "entity_type": entity_type, "entity_id": entity_id, "url": url}
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.get("/api/ads/state")
-def get_ads_state(
-    provider: str = Query(...),
-    account_id: str = Query(..., min_length=1),
-    entity_type: str = Query(...),
-    entity_id: str = Query(..., min_length=1),
-    db=Depends(get_db),
-    ctx: PermissionContext = Depends(require_permission("ads.view")),
-):
-    workspace_id = workspace_scope_or_403(ctx, None)
-    try:
-        return ads_fetch_state(
-            db,
-            workspace_id=workspace_id,
-            provider=provider,
-            account_id=account_id,
-            entity_type=entity_type,
-            entity_id=entity_id,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.post("/api/ads/change-requests")
-def create_ads_change_request(
-    payload: AdsChangeRequestCreatePayload,
-    db=Depends(get_db),
-    ctx: PermissionContext = Depends(require_permission("ads.propose")),
-):
-    workspace_id = workspace_scope_or_403(ctx, None)
-    governance = _ads_governance_settings()
-    try:
-        return ads_create_change_request(
-            db,
-            workspace_id=workspace_id,
-            requested_by_user_id=ctx.user_id,
-            provider=payload.provider,
-            account_id=payload.account_id,
-            entity_type=payload.entity_type,
-            entity_id=payload.entity_id,
-            action_type=payload.action_type,
-            action_payload=payload.action_payload,
-            approval_required=bool(governance.require_approval),
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.get("/api/ads/change-requests")
-def get_ads_change_requests(
-    status: Optional[str] = Query(default=None),
-    provider: Optional[str] = Query(default=None),
-    limit: int = Query(default=200, ge=1, le=1000),
-    db=Depends(get_db),
-    ctx: PermissionContext = Depends(require_permission("ads.view")),
-):
-    workspace_id = workspace_scope_or_403(ctx, None)
-    try:
-        if status and status not in {"draft", "pending_approval", "approved", "rejected", "applied", "failed", "cancelled"}:
-            raise ValueError("Unsupported status")
-        if provider and provider not in ADS_PROVIDER_KEYS:
-            raise ValueError("Unsupported provider")
-        return ads_list_change_requests(
-            db,
-            workspace_id=workspace_id,
-            status=status,
-            provider=provider,
-            limit=limit,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.post("/api/ads/change-requests/{request_id}/approve")
-def approve_ads_change_request(
-    request_id: str,
-    db=Depends(get_db),
-    ctx: PermissionContext = Depends(require_permission("ads.apply")),
-):
-    workspace_id = workspace_scope_or_403(ctx, None)
-    try:
-        return ads_approve_change_request(
-            db,
-            workspace_id=workspace_id,
-            request_id=request_id,
-            actor_user_id=ctx.user_id,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.post("/api/ads/change-requests/{request_id}/reject")
-def reject_ads_change_request(
-    request_id: str,
-    payload: AdsChangeRequestRejectPayload,
-    db=Depends(get_db),
-    ctx: PermissionContext = Depends(require_permission("ads.apply")),
-):
-    workspace_id = workspace_scope_or_403(ctx, None)
-    try:
-        return ads_reject_change_request(
-            db,
-            workspace_id=workspace_id,
-            request_id=request_id,
-            actor_user_id=ctx.user_id,
-            reason=payload.reason,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.post("/api/ads/change-requests/{request_id}/apply")
-def apply_ads_change_request(
-    request_id: str,
-    payload: AdsChangeRequestApplyPayload,
-    db=Depends(get_db),
-    ctx: PermissionContext = Depends(require_permission("ads.apply")),
-):
-    workspace_id = workspace_scope_or_403(ctx, None)
-    governance = _ads_governance_settings()
-    try:
-        return ads_apply_change_request(
-            db,
-            workspace_id=workspace_id,
-            request_id=request_id,
-            actor_user_id=ctx.user_id,
-            require_approval=bool(governance.require_approval),
-            budget_change_limit_pct=max(0.0, float(governance.max_budget_change_pct)),
-            admin_override=bool(payload.admin_override),
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.get("/api/ads/audit")
-def get_ads_audit(
-    provider: Optional[str] = Query(default=None),
-    entity_id: Optional[str] = Query(default=None),
-    limit: int = Query(default=200, ge=1, le=1000),
-    db=Depends(get_db),
-    ctx: PermissionContext = Depends(require_permission("ads.view")),
-):
-    workspace_id = workspace_scope_or_403(ctx, None)
-    try:
-        if provider and provider not in ADS_PROVIDER_KEYS:
-            raise ValueError("Unsupported provider")
-        return ads_list_audit(
-            db,
-            workspace_id=workspace_id,
-            provider=provider,
-            entity_id=entity_id,
-            limit=limit,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _current_user_id(request: Request) -> str:
@@ -2499,6 +2282,26 @@ def _validate_conversion_kpi_id(conversion_kpi_id: Optional[str]) -> Optional[st
 
 
 app.include_router(
+    create_ads_governance_router(
+        get_db_dependency=get_db,
+        require_permission_dependency=require_permission,
+        workspace_scope_or_403_fn=workspace_scope_or_403,
+        get_ads_governance_settings_fn=_ads_governance_settings,
+        ads_provider_keys_obj=ADS_PROVIDER_KEYS,
+        ads_entity_types_obj=ADS_ENTITY_TYPES,
+        ads_list_entities_fn=ads_list_entities,
+        ads_get_deep_link_fn=ads_get_deep_link,
+        ads_fetch_state_fn=ads_fetch_state,
+        ads_create_change_request_fn=ads_create_change_request,
+        ads_list_change_requests_fn=ads_list_change_requests,
+        ads_approve_change_request_fn=ads_approve_change_request,
+        ads_reject_change_request_fn=ads_reject_change_request,
+        ads_apply_change_request_fn=ads_apply_change_request,
+        ads_list_audit_fn=ads_list_audit,
+    )
+)
+
+app.include_router(
     create_journeys_router(
         get_db_dependency=get_db,
         require_permission_dependency=require_permission,
@@ -2714,6 +2517,16 @@ app.include_router(
 )
 
 app.include_router(
+    create_ads_connectors_router(
+        connectors_status_fn=lambda: connectors_status(),
+        fetch_meta_fn=lambda *args, **kwargs: fetch_meta(*args, **kwargs),
+        fetch_google_fn=lambda *args, **kwargs: fetch_google(*args, **kwargs),
+        fetch_linkedin_fn=lambda *args, **kwargs: fetch_linkedin(*args, **kwargs),
+        merge_ads_fn=lambda: merge_ads(),
+    )
+)
+
+app.include_router(
     create_mmm_router(
         get_db_dependency=get_db,
         get_runs_obj=lambda: RUNS,
@@ -2724,7 +2537,7 @@ app.include_router(
         ensure_journeys_loaded_fn=_ensure_journeys_loaded,
         now_iso_fn=_now_iso,
         save_runs_fn=_save_runs,
-        fit_model_fn=_fit_model,
+        fit_model_fn=lambda *args, **kwargs: _fit_model(*args, **kwargs),
         build_mmm_dataset_from_platform_fn=build_mmm_dataset_from_platform,
         validate_mapping_fn=validate_mapping,
     )
@@ -4048,7 +3861,6 @@ def auto_assign_experiment(exp_id: int, body: AutoAssignRequest, db=Depends(get_
 
 # ==================== Ad Platform Connectors ====================
 
-@app.get("/api/connectors/status")
 def connectors_status():
     sources = [(DATA_DIR / "meta_ads.csv", "Meta"), (DATA_DIR / "google_ads.csv", "Google"), (DATA_DIR / "linkedin_ads.csv", "LinkedIn"), (DATA_DIR / "meiro_cdp.csv", "Meiro CDP"), (DATA_DIR / "unified_ads.csv", "Unified")]
     stats = {}
@@ -4063,7 +3875,6 @@ def connectors_status():
             stats[name] = {"path": str(path), "rows": 0}
     return stats
 
-@app.post("/api/connectors/meta")
 def fetch_meta(ad_account_id: str, since: str, until: str, avg_aov: float = 0.0, access_token: Optional[str] = None):
     if not access_token:
         token_data = get_token("meta")
@@ -4134,7 +3945,6 @@ def fetch_meta(ad_account_id: str, since: str, until: str, avg_aov: float = 0.0,
     }
     return {"rows": len(rows), "path": str(out_path)}
 
-@app.post("/api/connectors/google")
 def fetch_google(segments_date_from: str, segments_date_to: str):
     out_path = DATA_DIR / "google_ads.csv"
     if not out_path.exists():
@@ -4154,7 +3964,6 @@ def fetch_google(segments_date_from: str, segments_date_to: str):
     }
     return {"rows": rows, "path": str(out_path)}
 
-@app.post("/api/connectors/linkedin")
 def fetch_linkedin(since: str, until: str, access_token: Optional[str] = None):
     if not access_token:
         token_data = get_token("linkedin")
@@ -4214,7 +4023,6 @@ def fetch_linkedin(since: str, until: str, access_token: Optional[str] = None):
     }
     return {"rows": len(rows), "path": str(out_path)}
 
-@app.post("/api/connectors/merge")
 def merge_ads():
     sources = [DATA_DIR / "meta_ads.csv", DATA_DIR / "google_ads.csv", DATA_DIR / "linkedin_ads.csv", DATA_DIR / "meiro_cdp.csv"]
     frames = [pd.read_csv(p) for p in sources if p.exists()]
