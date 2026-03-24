@@ -91,7 +91,7 @@
       }
     },
     {
-      "name": "Paid Social - myTimi+|+PLAN+|+P\u0159\u00edpadov\u00e9+studie",
+      "name": "Paid Social - myTimi PLAN",
       "channel": "paid_social",
       "priority": 60,
       "enabled": true,
@@ -104,12 +104,12 @@
         "value": ""
       },
       "campaign": {
-        "operator": "equals",
-        "value": "myTimi+|+PLAN+|+P\u0159\u00edpadov\u00e9+studie-P\u0159\u00edpadovka+|+Prakab"
+        "operator": "contains",
+        "value": "myTimi+|+PLAN+"
       }
     },
     {
-      "name": "Referral - firmy.cz-479497",
+      "name": "Referral",
       "channel": "referral",
       "priority": 70,
       "enabled": true,
@@ -124,6 +124,42 @@
       "campaign": {
         "operator": "contains",
         "value": "firmy.cz"
+      }
+    },
+    {
+      "name": "Mapy",
+      "channel": "referral",
+      "priority": 80,
+      "enabled": true,
+      "source": {
+        "operator": "contains",
+        "value": "mapy.cz"
+      },
+      "medium": {
+        "operator": "any",
+        "value": ""
+      },
+      "campaign": {
+        "operator": "any",
+        "value": ""
+      }
+    },
+    {
+      "name": "Meta Ads",
+      "channel": "paid_social",
+      "priority": 90,
+      "enabled": true,
+      "source": {
+        "operator": "contains",
+        "value": "meta_ads"
+      },
+      "medium": {
+        "operator": "any",
+        "value": ""
+      },
+      "campaign": {
+        "operator": "any",
+        "value": ""
       }
     }
   ],

@@ -8,14 +8,19 @@ import {
   useState,
 } from 'react'
 import type { CSSProperties } from 'react'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { tokens as t } from '../theme/tokens'
 import JourneysSettingsSection from './JourneysSettingsSection'
 import AccessControlUsersSection from './AccessControlUsersSection'
 import AccessControlRolesSection from './AccessControlRolesSection'
 import AccessControlAuditLogSection from './AccessControlAuditLogSection'
 import RevenueKpiDefinitionCard from './RevenueKpiDefinitionCard'
-import TaxonomyInsightsPanel from '../features/taxonomy/TaxonomyInsightsPanel'
+import KpiOverviewPanel from '../features/kpi/KpiOverviewPanel'
+import KpiSuggestionsPanel from '../features/kpi/KpiSuggestionsPanel'
+import KpiPreviewPanel from '../features/kpi/KpiPreviewPanel'
+import TaxonomyOverviewPanel from '../features/taxonomy/TaxonomyOverviewPanel'
+import TaxonomySuggestionsPanel from '../features/taxonomy/TaxonomySuggestionsPanel'
+import TaxonomyPreviewPanel from '../features/taxonomy/TaxonomyPreviewPanel'
 import { usePermissions } from '../hooks/usePermissions'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
 
@@ -249,19 +254,43 @@ interface Taxonomy {
   medium_aliases: Record<string, string>
 }
 
-interface TaxonomyUnknownShare {
-  total_touchpoints: number
-  unknown_count: number
-  unknown_share: number
-  top_unmapped_patterns: Array<{ source: string; medium: string; campaign?: string | null; count: number }>
-}
+type TaxonomyTabKey = 'overview' | 'suggestions' | 'preview' | 'advanced'
+type KpiTabKey = 'overview' | 'suggestions' | 'preview' | 'advanced'
 
-interface TaxonomyCoverage {
-  channel_distribution: Record<string, number>
-  source_coverage: number
-  medium_coverage: number
-  rule_usage: Record<string, number>
+interface TaxonomyOverviewResponse {
+  status: 'ready' | 'warning' | 'blocked' | string
+  confidence: {
+    score: number
+    band: string
+  }
+  summary: {
+    unknown_share: number
+    unknown_count: number
+    total_touchpoints: number
+    source_coverage: number
+    medium_coverage: number
+    active_rules: number
+    source_aliases: number
+    medium_aliases: number
+    low_confidence_share: number
+    low_confidence_count: number
+  }
   top_unmapped_patterns: Array<{ source: string; medium: string; campaign?: string | null; count: number }>
+  top_low_confidence_patterns: Array<{ source: string; medium: string; campaign?: string | null; count: number; confidence: number }>
+  attention_queue: Array<{
+    type: string
+    title: string
+    detail: string
+    count: number
+    sample?: { source?: string; medium?: string; campaign?: string | null }
+  }>
+  warnings: string[]
+  recommended_actions: Array<{
+    id: string
+    label: string
+    benefit?: string
+    requires_review?: boolean
+  }>
 }
 
 interface TaxonomySuggestionItem {
@@ -269,8 +298,15 @@ interface TaxonomySuggestionItem {
   type: 'source_alias' | 'medium_alias' | 'channel_rule'
   title: string
   description: string
-  confidence: number
+  confidence: {
+    score: number
+    band: string
+  }
   impact_count: number
+  estimated_unknown_share_delta?: number
+  channel?: string | null
+  reasons?: string[]
+  recommended_action?: string
   sample?: { source?: string; medium?: string; campaign?: string | null }
   payload: {
     source_alias?: { raw: string; canonical: string }
@@ -284,17 +320,46 @@ interface TaxonomySuggestionItem {
 }
 
 interface TaxonomySuggestionsResponse {
-  summary: {
+  summary: Record<string, any>
+  suggestions: TaxonomySuggestionItem[]
+}
+
+interface TaxonomyPreviewResponse {
+  before: {
     unknown_share: number
     unknown_count: number
-    total_touchpoints: number
-    source_coverage: number
-    medium_coverage: number
+    low_confidence_share: number
+    low_confidence_count: number
     active_rules: number
     source_aliases: number
     medium_aliases: number
   }
-  suggestions: TaxonomySuggestionItem[]
+  after: {
+    unknown_share: number
+    unknown_count: number
+    low_confidence_share: number
+    low_confidence_count: number
+    active_rules: number
+    source_aliases: number
+    medium_aliases: number
+  }
+  delta: {
+    unknown_share: number
+    unknown_count: number
+    low_confidence_share: number
+    active_rules: number
+    source_aliases: number
+    medium_aliases: number
+  }
+  top_new_matches: Array<{
+    source: string
+    medium: string
+    campaign?: string | null
+    count: number
+    channel: string
+    confidence: number
+  }>
+  warnings: string[]
 }
 
 interface KpiDefinition {
@@ -310,6 +375,58 @@ interface KpiDefinition {
 interface KpiConfig {
   definitions: KpiDefinition[]
   primary_kpi_id?: string | null
+}
+
+interface KpiOverviewResponse {
+  status: string
+  confidence: { score: number; band: string }
+  summary: {
+    definitions_count: number
+    primary_kpi_id?: string | null
+    primary_kpi_label?: string | null
+    journeys_total: number
+    journeys_with_any_kpi: number
+    journeys_with_primary_kpi: number
+    primary_coverage: number
+  }
+  definition_stats: Array<Record<string, any>>
+  warnings: string[]
+  recommended_actions: Array<{ id: string; label: string; benefit?: string }>
+}
+
+interface KpiSuggestionItem {
+  id: string
+  type: 'set_primary' | 'add_definition'
+  title: string
+  description: string
+  confidence: { score: number; band: string }
+  impact_count: number
+  reasons?: string[]
+  recommended_action?: string
+  payload: {
+    primary_kpi_id?: string
+    definition?: KpiDefinition
+  }
+}
+
+interface KpiSuggestionsResponse {
+  suggestions: KpiSuggestionItem[]
+}
+
+interface KpiPreviewResponse {
+  before: KpiOverviewResponse['summary']
+  after: KpiOverviewResponse['summary']
+  delta: {
+    definitions_count: number
+    journeys_with_primary_kpi: number
+    journeys_with_any_kpi: number
+    primary_coverage: number
+  }
+  primary_change: {
+    before?: string | null
+    after?: string | null
+  }
+  warnings: string[]
 }
 
 interface KpiTestResult {
@@ -751,6 +868,40 @@ function analyzeAliasRows(rows: AliasRow[]) {
   }
 }
 
+function sanitizeTaxonomyPayload(taxonomy: Taxonomy): Taxonomy {
+  const sanitizedRules = taxonomy.channel_rules
+    .map((rule, index) => {
+      const priority = Number.isFinite(rule.priority)
+        ? Number(rule.priority)
+        : (index + 1) * 10
+      return {
+        name: rule.name.trim(),
+        channel: rule.channel.trim(),
+        priority,
+        enabled: rule.enabled !== false,
+        source: {
+          operator: ensureMatchExpression(rule.source).operator,
+          value: ensureMatchExpression(rule.source).value.trim(),
+        },
+        medium: {
+          operator: ensureMatchExpression(rule.medium).operator,
+          value: ensureMatchExpression(rule.medium).value.trim(),
+        },
+        campaign: {
+          operator: ensureMatchExpression(rule.campaign).operator,
+          value: ensureMatchExpression(rule.campaign).value.trim(),
+        },
+      }
+    })
+    .sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name))
+
+  return {
+    channel_rules: sanitizedRules as ChannelRule[],
+    source_aliases: { ...taxonomy.source_aliases },
+    medium_aliases: { ...taxonomy.medium_aliases },
+  }
+}
+
 function formatDateTime(value?: string | null): string {
   if (!value) return '—'
   const date = new Date(value)
@@ -828,6 +979,7 @@ const badgeStyle: React.CSSProperties = {
 
 const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
   ({ onDirtySectionsChange }, ref) => {
+    const queryClient = useQueryClient()
     const permissions = usePermissions()
     const initialSection: SectionKey =
       (typeof window !== 'undefined' &&
@@ -841,6 +993,10 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
 
     const [activeSection, setActiveSection] =
       useState<SectionKey>(initialSection)
+    const [kpiActiveTab, setKpiActiveTab] =
+      useState<KpiTabKey>('overview')
+    const [taxonomyActiveTab, setTaxonomyActiveTab] =
+      useState<TaxonomyTabKey>('overview')
     const [pendingSectionChange, setPendingSectionChange] =
       useState<PendingSectionChange | null>(null)
     const [lastSavedAt, setLastSavedAt] = useState<
@@ -866,14 +1022,9 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       queryKey: ['taxonomy'],
       queryFn: async () => apiGetJson<Taxonomy>('/api/taxonomy', { fallbackMessage: 'Failed to load taxonomy' }),
     })
-    const taxonomyUnknownShareQuery = useQuery<TaxonomyUnknownShare>({
-      queryKey: ['taxonomy', 'unknown-share'],
-      queryFn: async () => apiGetJson<TaxonomyUnknownShare>('/api/taxonomy/unknown-share?limit=5', { fallbackMessage: 'Failed to load taxonomy overview' }),
-      enabled: activeSection === 'taxonomy',
-    })
-    const taxonomyCoverageQuery = useQuery<TaxonomyCoverage>({
-      queryKey: ['taxonomy', 'coverage'],
-      queryFn: async () => apiGetJson<TaxonomyCoverage>('/api/taxonomy/coverage', { fallbackMessage: 'Failed to load taxonomy coverage' }),
+    const taxonomyOverviewQuery = useQuery<TaxonomyOverviewResponse>({
+      queryKey: ['taxonomy', 'overview'],
+      queryFn: async () => apiGetJson<TaxonomyOverviewResponse>('/api/taxonomy/overview', { fallbackMessage: 'Failed to load taxonomy overview' }),
       enabled: activeSection === 'taxonomy',
     })
     const taxonomySuggestionsQuery = useQuery<TaxonomySuggestionsResponse>({
@@ -884,6 +1035,16 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
     const kpiQuery = useQuery<KpiConfig>({
       queryKey: ['kpis'],
       queryFn: async () => apiGetJson<KpiConfig>('/api/kpis', { fallbackMessage: 'Failed to load KPI config' }),
+    })
+    const kpiOverviewQuery = useQuery<KpiOverviewResponse>({
+      queryKey: ['kpis', 'overview'],
+      queryFn: async () => apiGetJson<KpiOverviewResponse>('/api/kpis/overview', { fallbackMessage: 'Failed to load KPI overview' }),
+      enabled: activeSection === 'kpi',
+    })
+    const kpiSuggestionsQuery = useQuery<KpiSuggestionsResponse>({
+      queryKey: ['kpis', 'suggestions'],
+      queryFn: async () => apiGetJson<KpiSuggestionsResponse>('/api/kpis/suggestions?limit=6', { fallbackMessage: 'Failed to load KPI suggestions' }),
+      enabled: activeSection === 'kpi',
     })
     const currentFlags =
       settingsQuery.data?.feature_flags ??
@@ -1024,6 +1185,11 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
     const saveKpiMutation = useMutation({
       mutationFn: async (payload: KpiConfig) =>
         apiSendJson<KpiConfig>('/api/kpis', 'POST', payload, { fallbackMessage: 'Failed to save KPI config' }),
+      onSuccess: () => {
+        void queryClient.invalidateQueries({ queryKey: ['kpis'] })
+        void queryClient.invalidateQueries({ queryKey: ['kpis', 'overview'] })
+        void queryClient.invalidateQueries({ queryKey: ['kpis', 'suggestions'] })
+      },
     })
 
     const testKpiMutation = useMutation({
@@ -1608,6 +1774,37 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       testKpiMutation,
       validateKpiDefinition,
     ])
+
+    const handleApplyKpiSuggestion = useCallback((suggestionId: string) => {
+      const suggestion = kpiSuggestionsQuery.data?.suggestions.find((item) => item.id === suggestionId)
+      if (!suggestion) return
+
+      if (suggestion.payload.definition) {
+        const nextDefinition = suggestion.payload.definition
+        setKpiDraft((prev) => {
+          const exists = prev.definitions.some((definition) => definition.id.trim().toLowerCase() === nextDefinition.id.trim().toLowerCase())
+          if (exists) return prev
+          return {
+            ...prev,
+            definitions: [...prev.definitions, nextDefinition],
+          }
+        })
+      }
+
+      if (suggestion.payload.primary_kpi_id) {
+        setKpiDraft((prev) => ({
+          ...prev,
+          primary_kpi_id: suggestion.payload.primary_kpi_id ?? prev.primary_kpi_id,
+        }))
+      }
+
+      toastIdRef.current += 1
+      setToast({
+        id: toastIdRef.current,
+        type: 'success',
+        message: 'Applied KPI suggestion to draft',
+      })
+    }, [kpiSuggestionsQuery.data?.suggestions])
 
     const updateSourceAliases = useCallback(
       (updater: (rows: AliasRow[]) => AliasRow[]) => {
@@ -3150,10 +3347,33 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       )
     }, [taxonomyBaseline, taxonomyDraft.channel_rules, taxonomyDraft.medium_aliases, taxonomyDraft.source_aliases])
 
+    const taxonomyPreviewPayload = useMemo(
+      () => sanitizeTaxonomyPayload(taxonomyDraft),
+      [taxonomyDraft],
+    )
+
+    const taxonomyPreviewQuery = useQuery<TaxonomyPreviewResponse>({
+      queryKey: ['taxonomy', 'preview', taxonomyPreviewPayload],
+      queryFn: async () =>
+        apiSendJson<TaxonomyPreviewResponse>('/api/taxonomy/preview', 'POST', taxonomyPreviewPayload, {
+          fallbackMessage: 'Failed to load taxonomy preview',
+        }),
+      enabled: activeSection === 'taxonomy' && taxonomyDirty,
+    })
+
     const kpiDirty = useMemo(() => {
       if (!kpiBaseline) return false
       return !deepEqual(kpiDraft, kpiBaseline)
     }, [kpiBaseline, kpiDraft])
+
+    const kpiPreviewQuery = useQuery<KpiPreviewResponse>({
+      queryKey: ['kpis', 'preview', kpiDraft],
+      queryFn: async () =>
+        apiSendJson<KpiPreviewResponse>('/api/kpis/preview', 'POST', kpiDraft, {
+          fallbackMessage: 'Failed to load KPI preview',
+        }),
+      enabled: activeSection === 'kpi' && kpiDirty,
+    })
 
     const measurementDirty = useMemo(() => {
       if (!selectedModelConfigId) return false
@@ -5458,300 +5678,228 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
             </div>
           )}
 
-          <div
-            style={{
-              fontSize: t.font.sizeSm,
-              color: t.color.textSecondary,
-              background: t.color.bgSubtle,
-              borderRadius: t.radius.md,
-              border: `1px solid ${t.color.borderLight}`,
-              padding: t.space.md,
-            }}
-          >
-            Manage KPIs through guided dialogs to avoid accidental edits. The primary
-            KPI drives attribution defaults and ROI calculations, while micro
-            conversions enrich reporting and next-best-action models.
-          </div>
-
-          <RevenueKpiDefinitionCard />
-
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              flexWrap: 'wrap',
-              gap: t.space.sm,
-            }}
-          >
-            <div
-              style={{
-                fontSize: t.font.sizeXs,
-                color: t.color.textMuted,
-              }}
-            >
-              {kpiDraft.primary_kpi_id
-                ? `Primary KPI: ${
-                    kpiDraft.definitions.find(
-                      (def) => def.id === kpiDraft.primary_kpi_id,
-                    )?.label ?? kpiDraft.primary_kpi_id
-                  }`
-                : 'No primary KPI selected'}
-            </div>
-            <button
-              type="button"
-              onClick={handleOpenCreateKpi}
-              style={{
-                padding: `${t.space.sm}px ${t.space.md}px`,
-                borderRadius: t.radius.sm,
-                border: 'none',
-                background: t.color.accent,
-                color: t.color.surface,
-                fontSize: t.font.sizeSm,
-                fontWeight: t.font.weightSemibold,
-                cursor: 'pointer',
-              }}
-            >
-              Add KPI
-            </button>
-          </div>
-
-          <div
-            style={{
-              border: `1px solid ${t.color.borderLight}`,
-              borderRadius: t.radius.lg,
-              overflow: 'hidden',
-            }}
-          >
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead
+          <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
+            {([
+              ['overview', 'Overview'],
+              ['suggestions', 'Suggestions'],
+              ['preview', 'Preview'],
+              ['advanced', 'Advanced'],
+            ] as Array<[KpiTabKey, string]>).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setKpiActiveTab(key)}
                 style={{
-                  background: t.color.bgSubtle,
-                  color: t.color.textSecondary,
+                  padding: `${t.space.xs}px ${t.space.sm}px`,
+                  borderRadius: t.radius.sm,
+                  border: `1px solid ${kpiActiveTab === key ? t.color.accent : t.color.borderLight}`,
+                  background: kpiActiveTab === key ? t.color.accentMuted : t.color.surface,
+                  color: kpiActiveTab === key ? t.color.accent : t.color.text,
                   fontSize: t.font.sizeXs,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.05em',
+                  cursor: 'pointer',
                 }}
               >
-                <tr>
-                  <th
-                    style={{
-                      padding: `${t.space.sm}px ${t.space.md}px`,
-                      textAlign: 'left',
-                    }}
-                  >
-                    KPI
-                  </th>
-                  <th
-                    style={{
-                      padding: `${t.space.sm}px ${t.space.md}px`,
-                      textAlign: 'left',
-                    }}
-                  >
-                    Event
-                  </th>
-                  <th
-                    style={{
-                      padding: `${t.space.sm}px ${t.space.md}px`,
-                      textAlign: 'left',
-                    }}
-                  >
-                    Value field
-                  </th>
-                  <th
-                    style={{
-                      padding: `${t.space.sm}px ${t.space.md}px`,
-                      textAlign: 'right',
-                    }}
-                  >
-                    Weight
-                  </th>
-                  <th
-                    style={{
-                      padding: `${t.space.sm}px ${t.space.md}px`,
-                      textAlign: 'right',
-                    }}
-                  >
-                    Lookback
-                  </th>
-                  <th
-                    style={{
-                      padding: `${t.space.sm}px ${t.space.md}px`,
-                      textAlign: 'center',
-                    }}
-                  >
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedDefinitions.length === 0 ? (
-                  <tr>
-                    <td
-                      colSpan={6}
-                      style={{
-                        padding: `${t.space.lg}px`,
-                        textAlign: 'center',
-                        color: t.color.textSecondary,
-                        fontSize: t.font.sizeSm,
-                      }}
-                    >
-                      No KPIs configured yet. Add your primary KPI to get started.
-                    </td>
-                  </tr>
-                ) : (
-                  sortedDefinitions.map(({ definition: def, index }) => {
-                    const rowError = kpiValidation.rowErrors[index]
-                    const hasRowErrors =
-                      rowError &&
-                      Object.keys(rowError).some(
-                        (key) => !!rowError[key as keyof typeof rowError],
-                      )
-                    const isPrimary = kpiDraft.primary_kpi_id === def.id
-                    return (
-                      <tr
-                        key={def.id}
-                        onClick={() => handleOpenEditKpi(index)}
-                        style={{
-                          cursor: 'pointer',
-                          background: hasRowErrors
-                            ? t.color.dangerSubtle
-                            : isPrimary
-                            ? t.color.accentMuted
-                            : 'transparent',
-                          borderBottom: `1px solid ${t.color.borderLight}`,
-                          transition: 'background-color 120ms ease',
-                        }}
-                      >
-                        <td
-                          style={{
-                            padding: `${t.space.sm}px ${t.space.md}px`,
-                            fontSize: t.font.sizeSm,
-                            fontWeight: t.font.weightMedium,
-                            color: t.color.text,
-                          }}
-                        >
-                          <div
-                            style={{
-                              display: 'flex',
-                              flexDirection: 'column',
-                              gap: 4,
-                            }}
-                          >
-                            <span>{def.label}</span>
-                            <span
-                              style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}
-                            >
-                              {def.id}
-                            </span>
-                          </div>
-                        </td>
-                        <td
-                          style={{
-                            padding: `${t.space.sm}px ${t.space.md}px`,
-                            fontSize: t.font.sizeSm,
-                            color: t.color.text,
-                          }}
-                        >
-                          <div
-                            style={{
-                              display: 'flex',
-                              flexDirection: 'column',
-                              gap: 4,
-                            }}
-                          >
-                            <span>{def.event_name || '—'}</span>
-                            {renderTypeBadge(def)}
-                          </div>
-                        </td>
-                        <td
-                          style={{
-                            padding: `${t.space.sm}px ${t.space.md}px`,
-                            fontSize: t.font.sizeSm,
-                            color: t.color.text,
-                          }}
-                        >
-                          {def.value_field || '—'}
-                        </td>
-                        <td
-                          style={{
-                            padding: `${t.space.sm}px ${t.space.md}px`,
-                            textAlign: 'right',
-                            fontSize: t.font.sizeSm,
-                            color: t.color.text,
-                          }}
-                        >
-                          {def.weight}
-                        </td>
-                        <td
-                          style={{
-                            padding: `${t.space.sm}px ${t.space.md}px`,
-                            textAlign: 'right',
-                            fontSize: t.font.sizeSm,
-                            color: t.color.text,
-                          }}
-                        >
-                          {def.lookback_days ?? '—'}
-                        </td>
-                        <td
-                          style={{
-                            padding: `${t.space.sm}px ${t.space.md}px`,
-                            textAlign: 'center',
-                          }}
-                        >
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              handleDeleteKpi(index)
-                            }}
-                            style={{
-                              border: 'none',
-                              background: 'transparent',
-                              color: t.color.danger,
-                              cursor: 'pointer',
-                              fontSize: t.font.sizeSm,
-                            }}
-                          >
-                            Remove
-                          </button>
-                        </td>
-                      </tr>
-                    )
-                  })
-                )}
-              </tbody>
-            </table>
+                {label}
+              </button>
+            ))}
           </div>
 
-          {kpiValidation.primaryError && (
-            <div
-              style={{
-                border: `1px solid ${t.color.warning}`,
-                background: t.color.warningSubtle,
-                color: t.color.warning,
-                borderRadius: t.radius.md,
-                padding: t.space.sm,
-                fontSize: t.font.sizeXs,
-              }}
-            >
-              {kpiValidation.primaryError}
-            </div>
+          {kpiActiveTab === 'overview' && (
+            <KpiOverviewPanel
+              overview={kpiOverviewQuery.data}
+              loading={kpiOverviewQuery.isLoading}
+              error={(kpiOverviewQuery.error as Error | undefined)?.message || null}
+            />
           )}
-          {!kpiValidation.primaryError && kpiValidation.hasErrors && (
-            <div
-              style={{
-                border: `1px solid ${t.color.danger}`,
-                background: t.color.dangerSubtle,
-                color: t.color.danger,
-                borderRadius: t.radius.md,
-                padding: t.space.sm,
-                fontSize: t.font.sizeXs,
-              }}
-            >
-              Some KPI definitions need attention. Open a KPI to resolve field-level
-              validation errors.
-            </div>
+
+          {kpiActiveTab === 'suggestions' && (
+            <KpiSuggestionsPanel
+              suggestions={kpiSuggestionsQuery.data}
+              loading={kpiSuggestionsQuery.isLoading}
+              error={(kpiSuggestionsQuery.error as Error | undefined)?.message || null}
+              onApplySuggestion={handleApplyKpiSuggestion}
+            />
+          )}
+
+          {kpiActiveTab === 'preview' && (
+            <KpiPreviewPanel
+              preview={kpiPreviewQuery.data}
+              loading={kpiPreviewQuery.isLoading}
+              error={(kpiPreviewQuery.error as Error | undefined)?.message || null}
+              dirty={kpiDirty}
+            />
+          )}
+
+          {kpiActiveTab === 'advanced' && (
+            <>
+              <div
+                style={{
+                  fontSize: t.font.sizeSm,
+                  color: t.color.textSecondary,
+                  background: t.color.bgSubtle,
+                  borderRadius: t.radius.md,
+                  border: `1px solid ${t.color.borderLight}`,
+                  padding: t.space.md,
+                }}
+              >
+                Manage KPIs through guided dialogs to avoid accidental edits. The primary
+                KPI drives attribution defaults and ROI calculations, while micro
+                conversions enrich reporting and next-best-action models.
+              </div>
+
+              <RevenueKpiDefinitionCard />
+
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: t.space.sm,
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: t.font.sizeXs,
+                    color: t.color.textMuted,
+                  }}
+                >
+                  {kpiDraft.primary_kpi_id
+                    ? `Primary KPI: ${
+                        kpiDraft.definitions.find(
+                          (def) => def.id === kpiDraft.primary_kpi_id,
+                        )?.label ?? kpiDraft.primary_kpi_id
+                      }`
+                    : 'No primary KPI selected'}
+                </div>
+                <button
+                  type="button"
+                  onClick={handleOpenCreateKpi}
+                  style={{
+                    padding: `${t.space.sm}px ${t.space.md}px`,
+                    borderRadius: t.radius.sm,
+                    border: 'none',
+                    background: t.color.accent,
+                    color: t.color.surface,
+                    fontSize: t.font.sizeSm,
+                    fontWeight: t.font.weightSemibold,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Add KPI
+                </button>
+              </div>
+
+              <div
+                style={{
+                  border: `1px solid ${t.color.borderLight}`,
+                  borderRadius: t.radius.lg,
+                  overflow: 'hidden',
+                }}
+              >
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead
+                    style={{
+                      background: t.color.bgSubtle,
+                      color: t.color.textSecondary,
+                      fontSize: t.font.sizeXs,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.05em',
+                    }}
+                  >
+                    <tr>
+                      <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>KPI</th>
+                      <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Event</th>
+                      <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Value field</th>
+                      <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right' }}>Weight</th>
+                      <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right' }}>Lookback</th>
+                      <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'center' }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedDefinitions.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} style={{ padding: `${t.space.lg}px`, textAlign: 'center', color: t.color.textSecondary, fontSize: t.font.sizeSm }}>
+                          No KPIs configured yet. Add your primary KPI to get started.
+                        </td>
+                      </tr>
+                    ) : (
+                      sortedDefinitions.map(({ definition: def, index }) => {
+                        const rowError = kpiValidation.rowErrors[index]
+                        const hasRowErrors =
+                          rowError &&
+                          Object.keys(rowError).some(
+                            (key) => !!rowError[key as keyof typeof rowError],
+                          )
+                        const isPrimary = kpiDraft.primary_kpi_id === def.id
+                        return (
+                          <tr
+                            key={def.id}
+                            onClick={() => handleOpenEditKpi(index)}
+                            style={{
+                              cursor: 'pointer',
+                              background: hasRowErrors
+                                ? t.color.dangerSubtle
+                                : isPrimary
+                                ? t.color.accentMuted
+                                : 'transparent',
+                              borderBottom: `1px solid ${t.color.borderLight}`,
+                              transition: 'background-color 120ms ease',
+                            }}
+                          >
+                            <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, fontSize: t.font.sizeSm, fontWeight: t.font.weightMedium, color: t.color.text }}>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                <span>{def.label}</span>
+                                <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{def.id}</span>
+                              </div>
+                            </td>
+                            <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, fontSize: t.font.sizeSm, color: t.color.text }}>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                <span>{def.event_name || '—'}</span>
+                                {renderTypeBadge(def)}
+                              </div>
+                            </td>
+                            <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, fontSize: t.font.sizeSm, color: t.color.text }}>{def.value_field || '—'}</td>
+                            <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right', fontSize: t.font.sizeSm, color: t.color.text }}>{def.weight}</td>
+                            <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right', fontSize: t.font.sizeSm, color: t.color.text }}>{def.lookback_days ?? '—'}</td>
+                            <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'center' }}>
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  handleDeleteKpi(index)
+                                }}
+                                style={{
+                                  border: 'none',
+                                  background: 'transparent',
+                                  color: t.color.danger,
+                                  cursor: 'pointer',
+                                  fontSize: t.font.sizeSm,
+                                }}
+                              >
+                                Remove
+                              </button>
+                            </td>
+                          </tr>
+                        )
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {kpiValidation.primaryError && (
+                <div style={{ border: `1px solid ${t.color.warning}`, background: t.color.warningSubtle, color: t.color.warning, borderRadius: t.radius.md, padding: t.space.sm, fontSize: t.font.sizeXs }}>
+                  {kpiValidation.primaryError}
+                </div>
+              )}
+              {!kpiValidation.primaryError && kpiValidation.hasErrors && (
+                <div style={{ border: `1px solid ${t.color.danger}`, background: t.color.dangerSubtle, color: t.color.danger, borderRadius: t.radius.md, padding: t.space.sm, fontSize: t.font.sizeXs }}>
+                  Some KPI definitions need attention. Open a KPI to resolve field-level
+                  validation errors.
+                </div>
+              )}
+            </>
           )}
         </div>
       )
@@ -6063,24 +6211,6 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
 
       return (
         <div style={{ display: 'grid', gap: t.space.xl }}>
-          <TaxonomyInsightsPanel
-            unknownShare={taxonomyUnknownShareQuery.data}
-            coverage={taxonomyCoverageQuery.data}
-            suggestions={taxonomySuggestionsQuery.data}
-            loading={
-              taxonomyUnknownShareQuery.isLoading ||
-              taxonomyCoverageQuery.isLoading ||
-              taxonomySuggestionsQuery.isLoading
-            }
-            error={
-              (taxonomyUnknownShareQuery.error as Error | undefined)?.message ||
-              (taxonomyCoverageQuery.error as Error | undefined)?.message ||
-              (taxonomySuggestionsQuery.error as Error | undefined)?.message ||
-              null
-            }
-            onApplySuggestion={handleApplyTaxonomySuggestion}
-          />
-
           {taxonomyQuery.isError && !taxonomyBaseline && (
             <div
               style={{
@@ -6095,6 +6225,66 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
             </div>
           )}
 
+          <div
+            style={{
+              display: 'flex',
+              gap: t.space.xs,
+              flexWrap: 'wrap',
+            }}
+          >
+            {([
+              ['overview', 'Overview'],
+              ['suggestions', 'Suggestions'],
+              ['preview', 'Preview'],
+              ['advanced', 'Advanced'],
+            ] as Array<[TaxonomyTabKey, string]>).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setTaxonomyActiveTab(key)}
+                style={{
+                  padding: `${t.space.xs}px ${t.space.sm}px`,
+                  borderRadius: t.radius.sm,
+                  border: `1px solid ${taxonomyActiveTab === key ? t.color.accent : t.color.borderLight}`,
+                  background: taxonomyActiveTab === key ? t.color.accentMuted : t.color.surface,
+                  color: taxonomyActiveTab === key ? t.color.accent : t.color.text,
+                  fontSize: t.font.sizeXs,
+                  cursor: 'pointer',
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {taxonomyActiveTab === 'overview' && (
+            <TaxonomyOverviewPanel
+              overview={taxonomyOverviewQuery.data}
+              loading={taxonomyOverviewQuery.isLoading}
+              error={(taxonomyOverviewQuery.error as Error | undefined)?.message || null}
+            />
+          )}
+
+          {taxonomyActiveTab === 'suggestions' && (
+            <TaxonomySuggestionsPanel
+              suggestions={taxonomySuggestionsQuery.data}
+              loading={taxonomySuggestionsQuery.isLoading}
+              error={(taxonomySuggestionsQuery.error as Error | undefined)?.message || null}
+              onApplySuggestion={handleApplyTaxonomySuggestion}
+            />
+          )}
+
+          {taxonomyActiveTab === 'preview' && (
+            <TaxonomyPreviewPanel
+              preview={taxonomyPreviewQuery.data}
+              loading={taxonomyPreviewQuery.isLoading}
+              error={(taxonomyPreviewQuery.error as Error | undefined)?.message || null}
+              dirty={taxonomyDirty}
+            />
+          )}
+
+          {taxonomyActiveTab === 'advanced' && (
+          <>
           <div style={cardStyle}>
             <div
               style={{
@@ -6601,6 +6791,8 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
               )}
             </div>
           </div>
+          </>
+          )}
         </div>
       )
     }

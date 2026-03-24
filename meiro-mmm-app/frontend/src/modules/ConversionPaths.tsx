@@ -4,6 +4,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { tokens } from '../theme/tokens'
 import ExplainabilityPanel from '../components/ExplainabilityPanel'
 import ConfidenceBadge, { type Confidence } from '../components/ConfidenceBadge'
+import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { apiGetJson } from '../lib/apiClient'
 
 interface NextBestRec {
@@ -55,17 +56,6 @@ interface PathAnalysis {
   } | null
   next_best_by_prefix?: Record<string, NextBestRec[]>
   next_best_by_prefix_campaign?: Record<string, NextBestRec[]>
-}
-
-interface JourneysSummary {
-  loaded: boolean
-  count: number
-  converted: number
-  non_converted: number
-  primary_kpi_id?: string | null
-  primary_kpi_label?: string | null
-  date_min?: string | null
-  date_max?: string | null
 }
 
 interface PathStepBreakdown {
@@ -173,6 +163,7 @@ function exportPathsCSV(
 }
 
 export default function ConversionPaths() {
+  const { journeysSummary: journeys } = useWorkspaceContext()
   const [pathSort, setPathSort] = useState<'count' | 'share' | 'avg_time' | 'length'>('count')
   const [pathSortDir, setPathSortDir] = useState<'asc' | 'desc'>('desc')
   const [freqSort, setFreqSort] = useState<'channel' | 'count' | 'pct'>('count')
@@ -199,22 +190,15 @@ export default function ConversionPaths() {
   const [selectedPathLoading, setSelectedPathLoading] = useState(false)
   const [selectedPathError, setSelectedPathError] = useState<string | null>(null)
 
-  const journeysQuery = useQuery<JourneysSummary>({
-    queryKey: ['journeys-summary-for-paths'],
-    queryFn: async () => apiGetJson<JourneysSummary>('/api/attribution/journeys', {
-      fallbackMessage: 'Failed to load journeys summary',
-    }),
-  })
-
   const pathsQuery = useQuery<PathAnalysis>({
-    queryKey: ['path-analysis', directMode, pathScope, journeysQuery.data?.date_min, journeysQuery.data?.date_max],
+    queryKey: ['path-analysis', directMode, pathScope, journeys?.date_min, journeys?.date_max],
     queryFn: async () => {
       const params = new URLSearchParams({
         direct_mode: directMode,
         path_scope: pathScope === 'all' ? 'all' : 'converted',
       })
-      if (journeysQuery.data?.date_min) params.set('date_from', journeysQuery.data.date_min.slice(0, 10))
-      if (journeysQuery.data?.date_max) params.set('date_to', journeysQuery.data.date_max.slice(0, 10))
+      if (journeys?.date_min) params.set('date_from', journeys.date_min.slice(0, 10))
+      if (journeys?.date_max) params.set('date_to', journeys.date_max.slice(0, 10))
       return apiGetJson<PathAnalysis>(`/api/conversion-paths/analysis?${params.toString()}`, {
         fallbackMessage: 'Failed to fetch path analysis',
       })
@@ -361,7 +345,6 @@ export default function ConversionPaths() {
     )
   }
 
-  const journeys = journeysQuery.data
   const periodLabel =
     journeys?.date_min && journeys?.date_max
       ? `${journeys.date_min.slice(0, 10)} – ${journeys.date_max.slice(0, 10)}`
@@ -515,6 +498,31 @@ export default function ConversionPaths() {
           </div>
         </div>
       </div>
+
+      {journeys?.readiness && (journeys.readiness.status === 'blocked' || journeys.readiness.warnings.length > 0) ? (
+        <div
+          style={{
+            marginBottom: t.space.lg,
+            background: t.color.warningSubtle,
+            border: `1px solid ${journeys.readiness.status === 'blocked' ? t.color.danger : t.color.warning}`,
+            borderRadius: t.radius.lg,
+            padding: t.space.md,
+            boxShadow: t.shadowSm,
+            display: 'grid',
+            gap: 4,
+          }}
+        >
+          <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: journeys.readiness.status === 'blocked' ? t.color.danger : t.color.warning }}>
+            Path analysis reliability warning
+          </div>
+          {journeys.readiness.blockers.map((item) => (
+            <div key={item} style={{ fontSize: t.font.sizeXs, color: t.color.text }}>{item}</div>
+          ))}
+          {journeys.readiness.warnings.slice(0, 3).map((item) => (
+            <div key={item} style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>{item}</div>
+          ))}
+        </div>
+      ) : null}
 
       {showWhy && (
         <div style={{ marginBottom: t.space.lg }}>
@@ -1296,8 +1304,8 @@ export default function ConversionPaths() {
                         direct_mode: directMode,
                         path_scope: pathScope === 'all' ? 'all' : 'converted',
                       })
-                      if (journeysQuery.data?.date_min) params.set('date_from', journeysQuery.data.date_min.slice(0, 10))
-                      if (journeysQuery.data?.date_max) params.set('date_to', journeysQuery.data.date_max.slice(0, 10))
+                      if (journeys?.date_min) params.set('date_from', journeys.date_min.slice(0, 10))
+                      if (journeys?.date_max) params.set('date_to', journeys.date_max.slice(0, 10))
                       const json = await apiGetJson<PathDetails>(`/api/conversion-paths/details?${params.toString()}`, {
                         fallbackMessage: 'Failed to load path details',
                       })

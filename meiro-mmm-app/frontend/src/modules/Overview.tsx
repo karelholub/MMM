@@ -73,7 +73,7 @@ interface KpiTileResponse {
 }
 
 interface HighlightItem {
-  type: 'kpi_delta' | 'alert'
+  type: 'kpi_delta' | 'alert' | 'consistency_warning'
   kpi_key?: string
   message: string
   delta_pct?: number
@@ -92,6 +92,8 @@ interface OverviewSummaryResponse {
   kpi_tiles: KpiTileResponse[]
   highlights: HighlightItem[]
   freshness: FreshnessResponse
+  readiness?: JourneyReadinessResponse
+  consistency_warnings?: string[]
   current_period?: {
     date_from: string
     date_to: string
@@ -224,6 +226,17 @@ interface OverviewAlertItem {
 interface OverviewAlertsResponse {
   alerts: OverviewAlertItem[]
   total: number
+}
+
+interface JourneyReadinessResponse {
+  status: string
+  summary: {
+    primary_kpi_coverage: number
+    taxonomy_unknown_share: number
+    freshness_hours?: number | null
+  }
+  blockers: string[]
+  warnings: string[]
 }
 
 interface JourneyOverviewAlertRow {
@@ -429,6 +442,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
   const selectedFunnel = funnelRows[0] ?? null
   const freshness = summary?.freshness
   const trendInsights = trendsQuery.data
+  const journeysReadiness = summary?.readiness
 
   const hasAnyData =
     kpiTiles.some((k) => typeof k.value === 'number' && Number.isFinite(k.value) && k.value !== 0) ||
@@ -876,10 +890,25 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
             </button>
           }
         >
-          <div style={{ display: 'grid', gap: t.space.lg }}>
-            <div
-              style={{
-                display: 'grid',
+        <div style={{ display: 'grid', gap: t.space.lg }}>
+          {journeysReadiness && (journeysReadiness.status === 'blocked' || journeysReadiness.warnings.length > 0) ? (
+            <SectionCard
+              title="Readiness"
+              subtitle="Canonical health signals from taxonomy, KPI coverage, and journeys freshness."
+            >
+              <div style={{ display: 'grid', gap: t.space.xs }}>
+                {journeysReadiness.blockers.map((item) => (
+                  <div key={item} style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{item}</div>
+                ))}
+                {journeysReadiness.warnings.slice(0, 3).map((item) => (
+                  <div key={item} style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>{item}</div>
+                ))}
+              </div>
+            </SectionCard>
+          ) : null}
+          <div
+            style={{
+              display: 'grid',
                 gap: t.space.md,
                 gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
               }}

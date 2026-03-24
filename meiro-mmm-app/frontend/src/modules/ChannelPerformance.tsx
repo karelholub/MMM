@@ -149,6 +149,12 @@ interface ChannelSummaryResponse {
     value_mapped: number
     value_total: number
   } | null
+  readiness?: {
+    status: string
+    blockers: string[]
+    warnings: string[]
+  } | null
+  consistency_warnings?: string[]
   meta?: { query_context?: { compare?: boolean } }
 }
 
@@ -748,6 +754,31 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
           </button>
         </div>
       </div>
+
+      {summaryQuery.data?.readiness && (summaryQuery.data.readiness.status === 'blocked' || summaryQuery.data.readiness.warnings.length > 0) ? (
+        <div
+          style={{
+            marginBottom: t.space.lg,
+            background: t.color.warningSubtle,
+            border: `1px solid ${summaryQuery.data.readiness.status === 'blocked' ? t.color.danger : t.color.warning}`,
+            borderRadius: t.radius.lg,
+            padding: t.space.md,
+            boxShadow: t.shadowSm,
+            display: 'grid',
+            gap: 4,
+          }}
+        >
+          <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: summaryQuery.data.readiness.status === 'blocked' ? t.color.danger : t.color.warning }}>
+            Performance reliability warning
+          </div>
+          {summaryQuery.data.readiness.blockers.map((item) => (
+            <div key={item} style={{ fontSize: t.font.sizeXs, color: t.color.text }}>{item}</div>
+          ))}
+          {summaryQuery.data.readiness.warnings.slice(0, 3).map((item) => (
+            <div key={item} style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>{item}</div>
+          ))}
+        </div>
+      ) : null}
 
       {summaryQuery.isError && (
         <div

@@ -48,6 +48,7 @@ def create_router(
     archive_config_fn: Callable[..., Any],
     validate_model_config_fn: Callable[[Dict[str, Any]], tuple[bool, str]],
     get_kpi_config_fn: Callable[[], Any],
+    get_import_runs_fn: Callable[..., List[Dict[str, Any]]],
     get_journeys_fn: Callable[[Any], List[Dict[str, Any]]],
     apply_model_config_fn: Callable[..., List[Dict[str, Any]]],
     suggest_model_config_from_journeys_fn: Callable[..., Dict[str, Any]],
@@ -362,6 +363,24 @@ def create_router(
     ):
         active = ensure_active_journey_settings_fn(db, actor="system")
         return _serialize_journey_settings_version(active)
+
+    @router.get("/api/settings/journeys/readiness")
+    def get_journeys_readiness_route(
+        db=Depends(get_db_dependency),
+        _ctx=Depends(require_permission_dependency("settings.view")),
+    ):
+        from app.services_journey_readiness import build_journey_readiness
+
+        journeys = get_journeys_fn(db)
+        active = ensure_active_journey_settings_fn(db, actor="system")
+        active_preview = build_journey_settings_impact_preview_fn(db, draft_settings_json=active.settings_json or {})
+        return build_journey_readiness(
+            journeys=journeys,
+            kpi_config=get_kpi_config_fn(),
+            get_import_runs_fn=get_import_runs_fn,
+            active_settings=active,
+            active_settings_preview=active_preview,
+        )
 
     @router.post("/api/settings/journeys/validate")
     def validate_journeys_settings_route(

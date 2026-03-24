@@ -43,6 +43,7 @@ import {
 } from '../connectors/oauthConnectionsConnector'
 import { apiGetJson, apiRequest, apiSendJson } from '../lib/apiClient'
 import { usePermissions } from '../hooks/usePermissions'
+import { useWorkspaceContext, type JourneysSummary } from '../components/WorkspaceContext'
 import MeiroIntegrationPanel from '../features/meiro/MeiroIntegrationPanel'
 import {
   DEFAULT_MEIRO_PULL_CONFIG,
@@ -225,6 +226,7 @@ const DEFAULT_AD_PROVIDER_ROWS: Array<{
 ]
 
 export default function DataSources({ onJourneysImported }: DataSourcesProps) {
+  const { journeysSummary } = useWorkspaceContext()
   const queryClient = useQueryClient()
   const fileRef = useRef<HTMLInputElement>(null)
   const permissions = usePermissions()
@@ -261,20 +263,6 @@ export default function DataSources({ onJourneysImported }: DataSourcesProps) {
     developer_token: '',
     app_id: '',
     app_secret: '',
-  })
-
-  const journeysQuery = useQuery({
-    queryKey: ['journeys-summary'],
-    queryFn: async () =>
-      apiGetJson<any>('/api/attribution/journeys', { fallbackMessage: 'Failed to load journeys summary' })
-        .catch(() => ({ loaded: false, count: 0, converted: 0 })),
-  })
-
-  const validationQuery = useQuery({
-    queryKey: ['journeys-validation-summary'],
-    queryFn: async () =>
-      apiGetJson<any>('/api/attribution/journeys/validation', { fallbackMessage: 'Failed to load validation summary' })
-        .catch(() => ({ error_count: 0, warn_count: 0, validation_items: [] })),
   })
 
   const previewQuery = useQuery({
@@ -609,39 +597,45 @@ export default function DataSources({ onJourneysImported }: DataSourcesProps) {
 
 
   const readiness = useMemo(() => {
-    const j = journeysQuery.data || {}
-    const validation = validationQuery.data || { error_count: 0, warn_count: 0 }
+    const j: JourneysSummary = journeysSummary ?? { loaded: false, count: 0, converted: 0, non_converted: 0 }
+    const readinessSummary = journeysSummary?.readiness?.summary ?? {
+      primary_kpi_coverage: undefined,
+      taxonomy_unknown_share: undefined,
+      journeys_loaded: undefined,
+      freshness_hours: undefined,
+    }
+    const readinessStatus = journeysSummary?.readiness?.status || 'unknown'
     return [
       {
         key: 'journeys',
         label: 'Journeys',
-        value: (j.count || 0).toLocaleString(),
-        tone: j.loaded ? t.color.success : t.color.warning,
+        value: (readinessSummary.journeys_loaded ?? j.count ?? 0).toLocaleString(),
+        tone: readinessStatus === 'blocked' ? t.color.danger : (j.loaded ? t.color.success : t.color.warning),
         onClick: () => setIngestionMethod('sample'),
       },
       {
-        key: 'coverage',
-        label: 'Spend coverage',
-        value: j.loaded ? 'Tracked' : 'Not ready',
-        tone: j.loaded ? t.color.success : t.color.textMuted,
-        onClick: () => setSystemsTab('ad_platforms'),
+        key: 'taxonomy',
+        label: 'Taxonomy coverage',
+        value: readinessSummary.taxonomy_unknown_share == null ? '—' : `${Math.max(0, 100 - readinessSummary.taxonomy_unknown_share * 100).toFixed(1)}%`,
+        tone: (readinessSummary.taxonomy_unknown_share ?? 1) >= 0.2 ? t.color.danger : (readinessSummary.taxonomy_unknown_share ?? 1) > 0.08 ? t.color.warning : t.color.success,
+        onClick: () => window.location.assign('#settings/taxonomy'),
       },
       {
         key: 'freshness',
         label: 'Freshness',
-        value: j.data_freshness_hours == null ? '—' : `${Math.round(j.data_freshness_hours)}h`,
-        tone: (j.data_freshness_hours ?? 9999) <= 24 ? t.color.success : t.color.warning,
+        value: readinessSummary.freshness_hours == null ? (j.data_freshness_hours == null ? '—' : `${Math.round(j.data_freshness_hours)}h`) : `${Math.round(readinessSummary.freshness_hours)}h`,
+        tone: (readinessSummary.freshness_hours ?? j.data_freshness_hours ?? 9999) <= 24 ? t.color.success : t.color.warning,
         onClick: () => setSystemsTab('cdp'),
       },
       {
-        key: 'validation',
-        label: 'Validation issues',
-        value: `${validation.error_count || 0} errors / ${validation.warn_count || 0} warnings`,
-        tone: (validation.error_count || 0) > 0 ? t.color.danger : (validation.warn_count || 0) > 0 ? t.color.warning : t.color.success,
-        onClick: () => setShowPreviewValidation(true),
+        key: 'kpi',
+        label: 'Primary KPI coverage',
+        value: readinessSummary.primary_kpi_coverage == null ? '—' : `${(readinessSummary.primary_kpi_coverage * 100).toFixed(1)}%`,
+        tone: (readinessSummary.primary_kpi_coverage ?? 0) < 0.2 ? t.color.warning : t.color.success,
+        onClick: () => window.location.assign('#settings/kpi'),
       },
     ]
-  }, [journeysQuery.data, validationQuery.data])
+  }, [journeysSummary])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)

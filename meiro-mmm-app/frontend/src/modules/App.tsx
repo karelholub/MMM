@@ -211,13 +211,13 @@ export default function App() {
     [hasAnyPermission, hasPermission, rbacEnabled],
   )
 
-  const journeysQuery = useQuery({
+  const journeysQuery = useQuery<JourneysSummary>({
     queryKey: ['journeys-summary'],
     queryFn: async () => {
       try {
-        return await apiGetJson<any>('/api/attribution/journeys', { fallbackMessage: 'Failed to load journeys summary' })
+        return await apiGetJson<JourneysSummary>('/api/attribution/journeys', { fallbackMessage: 'Failed to load journeys summary' })
       } catch {
-        return { loaded: false, count: 0 }
+        return { loaded: false, count: 0, converted: 0, non_converted: 0 }
       }
     },
     refetchInterval: 15 * 1000,
@@ -359,7 +359,7 @@ export default function App() {
   const journeysLoaded = journeysQuery.data?.loaded ?? false
   const journeyCount = journeysQuery.data?.count ?? 0
   const convertedCount = journeysQuery.data?.converted ?? 0
-  const primaryKpiLabel: string | undefined = journeysQuery.data?.primary_kpi_label
+  const primaryKpiLabel: string | undefined = journeysQuery.data?.primary_kpi_label ?? undefined
   const primaryKpiId: string | undefined = journeysQuery.data?.primary_kpi_id ?? undefined
   const primaryKpiCount: number | undefined = journeysQuery.data?.primary_kpi_count
   const channels = useMemo(() => journeysQuery.data?.channels ?? [], [journeysQuery.data?.channels])
@@ -519,7 +519,7 @@ export default function App() {
         setAttributionModel: setSelectedModel,
         selectedConfigId,
         setSelectedConfigId,
-        journeysSummary: journeysQuery.data as JourneysSummary | undefined,
+        journeysSummary: journeysQuery.data,
         journeysLoaded,
         globalDateFrom: globalDateRange.dateFrom,
         globalDateTo: globalDateRange.dateTo,

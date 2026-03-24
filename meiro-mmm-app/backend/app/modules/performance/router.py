@@ -2,7 +2,7 @@ from typing import Any, Callable, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.services_import_runs import get_last_successful_run
+from app.services_import_runs import get_last_successful_run, get_runs as get_import_runs
 from app.services_overview import (
     get_overview_drivers,
     get_overview_funnels,
@@ -47,6 +47,36 @@ def _add_summary_derivatives(items: list[dict], scope_type: str, diagnostics: di
         else:
             diag_key = str(item.get("campaign_id") or item.get("channel"))
         item["diagnostics"] = diagnostics.get(diag_key, {})
+
+
+def _build_consistency_payload(db: Any, journeys: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, list[str]]:
+    try:
+        from app.services_journey_readiness import build_journey_readiness
+        from app.services_journey_settings import (
+            build_journey_settings_impact_preview,
+            ensure_active_journey_settings,
+        )
+        from app.utils.kpi_config import load_kpi_config
+
+        active_settings = ensure_active_journey_settings(db, actor="system")
+        active_preview = build_journey_settings_impact_preview(
+            db,
+            draft_settings_json=active_settings.settings_json or {},
+        )
+        readiness = build_journey_readiness(
+            journeys=journeys,
+            kpi_config=load_kpi_config(),
+            get_import_runs_fn=get_import_runs,
+            active_settings=active_settings,
+            active_settings_preview=active_preview,
+        )
+        warnings = [
+            *readiness.get("blockers", []),
+            *readiness.get("warnings", []),
+        ]
+        return readiness, warnings
+    except Exception:
+        return None, []
 
 
 def create_router(
@@ -259,6 +289,9 @@ def create_router(
             channels=query_ctx.channels,
             conversion_key=effective_conversion_key,
         )
+        readiness, consistency_warnings = _build_consistency_payload(db, journeys)
+        out["readiness"] = readiness
+        out["consistency_warnings"] = consistency_warnings
         out["meta"] = build_meta_fn(ctx=query_ctx, conversion_key=effective_conversion_key)
         return out
 
@@ -383,6 +416,9 @@ def create_router(
             channels=query_ctx.channels,
             conversion_key=effective_conversion_key,
         )
+        readiness, consistency_warnings = _build_consistency_payload(db, journeys)
+        out["readiness"] = readiness
+        out["consistency_warnings"] = consistency_warnings
         out["meta"] = build_meta_fn(ctx=query_ctx, conversion_key=effective_conversion_key)
         return out
 

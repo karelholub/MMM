@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { tokens } from '../theme/tokens'
+import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { apiGetJson } from '../lib/apiClient'
 
 interface AttributionComparisonProps {
@@ -9,19 +10,14 @@ interface AttributionComparisonProps {
   onSelectModel: (model: string) => void
 }
 
-interface JourneysSummary {
-  loaded: boolean
-  count: number
-  converted: number
-  non_converted: number
-  channels: string[]
-  total_value: number
-  primary_kpi_id?: string | null
-  primary_kpi_label?: string | null
-  primary_kpi_count?: number
-  kpi_counts?: Record<string, number>
-  date_min?: string | null
-  date_max?: string | null
+interface JourneyReadiness {
+  status: string
+  blockers: string[]
+  warnings: string[]
+  summary: {
+    primary_kpi_coverage: number
+    taxonomy_unknown_share: number
+  }
 }
 
 type Reliability = 'ok' | 'warning' | 'unreliable'
@@ -129,6 +125,7 @@ function exportComparisonCSV(
 }
 
 export default function AttributionComparison({ selectedModel, onSelectModel }: AttributionComparisonProps) {
+  const { journeysSummary } = useWorkspaceContext()
   const [sortBy, setSortBy] = useState<'channel' | string>('channel')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [comparisonMode, setComparisonMode] = useState<'absolute' | 'delta'>('absolute')
@@ -149,17 +146,11 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
   const models = Object.keys(results).filter((k) => !results[k].error)
   const t = tokens
 
-  const journeysQuery = useQuery<JourneysSummary>({
-    queryKey: ['attribution-journeys-summary'],
-    queryFn: async () => apiGetJson<JourneysSummary>('/api/attribution/journeys', {
-      fallbackMessage: 'Failed to load journeys summary',
-    }),
-  })
-
   const anyResult: ModelResult | undefined = models.length ? results[models[0]] : undefined
   const configMeta = anyResult?.config ?? null
-  const conversionKey = configMeta?.conversion_key ?? journeysQuery.data?.primary_kpi_id ?? null
+  const conversionKey = configMeta?.conversion_key ?? journeysSummary?.primary_kpi_id ?? null
   const configVersion = configMeta?.config_version ?? null
+  const readiness = journeysSummary?.readiness ?? null
 
   const baselineKey = useMemo(() => {
     if (models.includes(baselineModel)) return baselineModel
@@ -327,6 +318,31 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
         Compare how different attribution models distribute credit across channels.
       </p>
 
+      {readiness && (readiness.status === 'blocked' || readiness.warnings.length > 0) ? (
+        <div
+          style={{
+            marginBottom: t.space.lg,
+            background: t.color.warningSubtle,
+            border: `1px solid ${readiness.status === 'blocked' ? t.color.danger : t.color.warning}`,
+            borderRadius: t.radius.lg,
+            padding: t.space.md,
+            boxShadow: t.shadowSm,
+            display: 'grid',
+            gap: 4,
+          }}
+        >
+          <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: readiness.status === 'blocked' ? t.color.danger : t.color.warning }}>
+            Attribution reliability warning
+          </div>
+          {readiness.blockers.map((item) => (
+            <div key={item} style={{ fontSize: t.font.sizeXs, color: t.color.text }}>{item}</div>
+          ))}
+          {readiness.warnings.slice(0, 3).map((item) => (
+            <div key={item} style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>{item}</div>
+          ))}
+        </div>
+      ) : null}
+
       {/* Measurement context header */}
       <div
         style={{
@@ -368,9 +384,9 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
             Date range
           </span>
           <span style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
-            {journeysQuery.data?.date_min && journeysQuery.data?.date_max
-              ? `${new Date(journeysQuery.data.date_min).toLocaleDateString()} – ${new Date(
-                  journeysQuery.data.date_max,
+            {journeysSummary?.date_min && journeysSummary?.date_max
+              ? `${new Date(journeysSummary.date_min).toLocaleDateString()} – ${new Date(
+                  journeysSummary.date_max,
                 ).toLocaleDateString()}`
               : 'Current dataset (range not configured)'}
           </span>

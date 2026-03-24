@@ -13,6 +13,28 @@ type FeatureFlags = {
 
 type Status = 'draft' | 'active' | 'archived'
 
+interface JourneyReadiness {
+  status: string
+  summary: {
+    journeys_loaded: number
+    converted_journeys: number
+    primary_kpi_coverage: number
+    freshness_hours?: number | null
+    taxonomy_unknown_share: number
+    journey_validation_errors: number
+    journey_validation_warnings: number
+    active_settings_version?: string | null
+  }
+  blockers: string[]
+  warnings: string[]
+  recommended_actions: Array<{
+    id: string
+    label: string
+    benefit?: string
+    domain?: string
+  }>
+}
+
 interface JourneySettingsVersion {
   id: string
   status: Status
@@ -169,6 +191,13 @@ export default function JourneysSettingsSection({
     }),
   })
 
+  const readinessQuery = useQuery<JourneyReadiness>({
+    queryKey: ['journeys-settings-readiness'],
+    queryFn: async () => apiGetJson<JourneyReadiness>('/api/settings/journeys/readiness', {
+      fallbackMessage: 'Failed to load journeys readiness',
+    }),
+  })
+
   const createDraftMutation = useMutation({
     mutationFn: async (payload: { description?: string; settings_json?: Record<string, any> }) => {
       return apiSendJson<JourneySettingsVersion>('/api/settings/journeys/versions', 'POST', {
@@ -302,6 +331,69 @@ export default function JourneysSettingsSection({
 
   return (
     <div style={{ display: 'grid', gap: t.space.xl }}>
+      <div style={cardStyle}>
+        <div>
+          <h3 style={{ margin: 0, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold }}>Journeys readiness</h3>
+          <p style={{ margin: `${t.space.xs}px 0 0`, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+            Combined readiness from journeys health, taxonomy, KPI coverage, and active journey settings.
+          </p>
+        </div>
+
+        {readinessQuery.isError ? (
+          <div style={{ fontSize: t.font.sizeXs, color: t.color.danger }}>
+            {(readinessQuery.error as Error)?.message}
+          </div>
+        ) : null}
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: t.space.sm }}>
+          <div style={cardStyle}>
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Status</div>
+            <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: readinessQuery.data?.status === 'blocked' ? t.color.danger : readinessQuery.data?.status === 'warning' ? t.color.warning : t.color.success }}>
+              {readinessQuery.isLoading ? '…' : (readinessQuery.data?.status || 'unknown')}
+            </div>
+          </div>
+          <div style={cardStyle}>
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Journeys loaded</div>
+            <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold }}>{readinessQuery.data?.summary.journeys_loaded ?? 0}</div>
+          </div>
+          <div style={cardStyle}>
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Primary KPI coverage</div>
+            <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold }}>{`${(((readinessQuery.data?.summary.primary_kpi_coverage ?? 0) * 100)).toFixed(1)}%`}</div>
+          </div>
+          <div style={cardStyle}>
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Taxonomy unknown share</div>
+            <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold }}>{`${(((readinessQuery.data?.summary.taxonomy_unknown_share ?? 0) * 100)).toFixed(1)}%`}</div>
+          </div>
+        </div>
+
+        {!!readinessQuery.data?.blockers?.length && (
+          <div style={{ border: `1px solid ${t.color.danger}`, background: t.color.dangerSubtle, color: t.color.danger, borderRadius: t.radius.sm, padding: t.space.sm, fontSize: t.font.sizeXs }}>
+            {readinessQuery.data.blockers.map((item) => (
+              <div key={item}>{item}</div>
+            ))}
+          </div>
+        )}
+
+        {!!readinessQuery.data?.warnings?.length && (
+          <div style={{ border: `1px solid ${t.color.warning}`, background: t.color.warningSubtle, color: t.color.warning, borderRadius: t.radius.sm, padding: t.space.sm, fontSize: t.font.sizeXs }}>
+            {readinessQuery.data.warnings.map((item) => (
+              <div key={item}>{item}</div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ display: 'grid', gap: t.space.xs }}>
+          <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>Recommended actions</div>
+          {readinessQuery.data?.recommended_actions?.length ? readinessQuery.data.recommended_actions.map((item) => (
+            <div key={item.id} style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+              {item.label}{item.benefit ? ` — ${item.benefit}` : ''}
+            </div>
+          )) : (
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>No immediate readiness actions suggested.</div>
+          )}
+        </div>
+      </div>
+
       <div style={cardStyle}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.md, flexWrap: 'wrap' }}>
           <div>

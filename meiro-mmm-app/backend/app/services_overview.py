@@ -690,10 +690,46 @@ def get_overview_summary(
         pass
     highlights = highlights[:10]
 
+    readiness = None
+    consistency_warnings: List[str] = []
+    try:
+        from app.services_conversions import load_journeys_from_db
+        from app.services_journey_readiness import build_journey_readiness
+        from app.services_journey_settings import build_journey_settings_impact_preview, ensure_active_journey_settings
+        from app.utils.kpi_config import load_kpi_config
+
+        journeys = load_journeys_from_db(db, limit=50000)
+        kpi_config = load_kpi_config()
+        active_settings = ensure_active_journey_settings(db, actor="system")
+        active_preview = build_journey_settings_impact_preview(db, draft_settings_json=active_settings.settings_json or {})
+        readiness = build_journey_readiness(
+            journeys=journeys,
+            kpi_config=kpi_config,
+            get_import_runs_fn=lambda limit=50: [],
+            active_settings=active_settings,
+            active_settings_preview=active_preview,
+        )
+        consistency_warnings = [
+            *readiness.get("blockers", []),
+            *readiness.get("warnings", []),
+        ][:5]
+        for warning in consistency_warnings[:3]:
+            highlights.append(
+                {
+                    "type": "consistency_warning",
+                    "message": warning,
+                }
+            )
+    except Exception:
+        readiness = None
+        consistency_warnings = []
+
     return {
         "kpi_tiles": kpi_tiles,
         "highlights": highlights,
         "freshness": freshness,
+        "readiness": readiness,
+        "consistency_warnings": consistency_warnings,
         "current_period": current_period,
         "previous_period": previous_period,
         "model_id": model_id,

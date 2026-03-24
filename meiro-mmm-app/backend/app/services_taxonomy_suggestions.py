@@ -73,6 +73,11 @@ def _infer_channel(source: str, medium: str) -> Optional[str]:
     return None
 
 
+def _confidence(score: float) -> Dict[str, Any]:
+    band = "high" if score >= 0.85 else "medium" if score >= 0.6 else "low"
+    return {"score": round(score, 3), "band": band}
+
+
 def generate_taxonomy_suggestions(
     journeys: List[Dict[str, Any]],
     taxonomy: Optional[Taxonomy] = None,
@@ -108,10 +113,12 @@ def generate_taxonomy_suggestions(
                             "type": "source_alias",
                             "title": f"Normalize source '{source}' to '{canonical}'",
                             "description": "Observed raw source looks like a noisy variant of an existing canonical source.",
-                            "confidence": 0.93,
+                            "confidence": _confidence(0.93),
                             "impact_count": count,
                             "estimated_unknown_share_delta": count / total_touchpoints,
                             "channel": None,
+                            "reasons": ["source_alias_hint", "high_volume_unmapped_pattern"],
+                            "recommended_action": "Apply alias to the draft and recheck unresolved traffic.",
                             "sample": {"source": source, "medium": medium, "campaign": campaign or None},
                             "payload": {"source_alias": {"raw": source, "canonical": canonical}},
                         }
@@ -131,10 +138,12 @@ def generate_taxonomy_suggestions(
                             "type": "medium_alias",
                             "title": f"Normalize medium '{medium}' to '{canonical}'",
                             "description": "Observed raw medium is a strong candidate for alias normalization.",
-                            "confidence": 0.9,
+                            "confidence": _confidence(0.9),
                             "impact_count": count,
                             "estimated_unknown_share_delta": count / total_touchpoints,
                             "channel": None,
+                            "reasons": ["medium_alias_hint", "high_volume_unmapped_pattern"],
+                            "recommended_action": "Apply alias to the draft and review coverage improvement.",
                             "sample": {"source": source, "medium": medium, "campaign": campaign or None},
                             "payload": {"medium_alias": {"raw": medium, "canonical": canonical}},
                         }
@@ -162,10 +171,12 @@ def generate_taxonomy_suggestions(
                             "type": "channel_rule",
                             "title": f"Map {source or '—'} / {medium or '—'} to {channel}",
                             "description": "This high-volume source/medium pattern is currently unresolved and looks stable enough for a direct channel rule.",
-                            "confidence": 0.78,
+                            "confidence": _confidence(0.78),
                             "impact_count": count,
                             "estimated_unknown_share_delta": count / total_touchpoints,
                             "channel": channel,
+                            "reasons": ["source_medium_pattern", "channel_inference"],
+                            "recommended_action": "Apply the rule to the draft and verify the preview delta.",
                             "sample": {"source": source, "medium": medium, "campaign": campaign or None},
                             "payload": {
                                 "channel_rule": {
@@ -223,10 +234,12 @@ def generate_taxonomy_suggestions(
                 "type": "channel_rule",
                 "title": f"Map campaign '{campaign}' to {channel}",
                 "description": f"Source and medium are missing, but this campaign almost always arrives with raw channel '{raw_channel}'.",
-                "confidence": min(0.95, 0.65 + dominance * 0.3),
+                "confidence": _confidence(min(0.95, 0.65 + dominance * 0.3)),
                 "impact_count": count,
                 "estimated_unknown_share_delta": count / total_touchpoints,
                 "channel": channel,
+                "reasons": ["campaign_consistency", "missing_source_medium_fallback"],
+                "recommended_action": "Apply the campaign rule to the draft and confirm the preview impact.",
                 "sample": {"source": "", "medium": "", "campaign": campaign},
                 "payload": {
                     "channel_rule": {
@@ -253,6 +266,10 @@ def generate_taxonomy_suggestions(
         },
         "suggestions": sorted(
             suggestions[:limit],
-            key=lambda item: (-float(item.get("estimated_unknown_share_delta") or 0), -float(item.get("confidence") or 0), -int(item.get("impact_count") or 0)),
+            key=lambda item: (
+                -float(item.get("estimated_unknown_share_delta") or 0),
+                -float((item.get("confidence") or {}).get("score") or 0),
+                -int(item.get("impact_count") or 0),
+            ),
         ),
     }

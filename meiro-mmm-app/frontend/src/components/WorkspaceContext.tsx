@@ -1,11 +1,24 @@
 import { createContext, useContext } from 'react'
 
+export interface JourneyReadiness {
+  status: string
+  blockers: string[]
+  warnings: string[]
+  summary: {
+    primary_kpi_coverage: number
+    taxonomy_unknown_share: number
+    journeys_loaded?: number
+    freshness_hours?: number | null
+  }
+}
+
 // Keep this in sync with /api/attribution/journeys response shape
 export interface JourneysSummary {
   loaded: boolean
   count: number
   converted: number
   non_converted: number
+  data_freshness_hours?: number | null
   channels?: string[]
   total_value?: number
   primary_kpi_id?: string | null
@@ -14,6 +27,8 @@ export interface JourneysSummary {
   kpi_counts?: Record<string, number>
   date_min?: string | null
   date_max?: string | null
+  readiness?: JourneyReadiness | null
+  consistency_warnings?: string[]
 }
 
 export interface WorkspaceContextValue {

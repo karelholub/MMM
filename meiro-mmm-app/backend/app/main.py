@@ -2456,6 +2456,7 @@ app.include_router(
         archive_config_fn=archive_config,
         validate_model_config_fn=validate_model_config,
         get_kpi_config_fn=lambda: KPI_CONFIG,
+        get_import_runs_fn=get_import_runs,
         get_journeys_fn=_ensure_journeys_loaded,
         apply_model_config_fn=apply_model_config_to_journeys,
         suggest_model_config_from_journeys_fn=suggest_model_config_from_journeys,

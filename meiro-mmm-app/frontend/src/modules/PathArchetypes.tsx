@@ -1,18 +1,8 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { tokens as t } from '../theme/tokens'
+import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { apiGetJson } from '../lib/apiClient'
-
-interface JourneysSummary {
-  loaded: boolean
-  count: number
-  converted: number
-  non_converted: number
-  primary_kpi_id?: string | null
-  primary_kpi_label?: string | null
-  date_min?: string | null
-  date_max?: string | null
-}
 
 interface PathVariant {
   path: string
@@ -186,6 +176,7 @@ function exportArchetypesCSV(clusters: PathCluster[], meta: { period?: string; c
 }
 
 export default function PathArchetypes() {
+  const { journeysSummary: journeys } = useWorkspaceContext()
   const [kMode, setKMode] = useState<'auto' | 'fixed'>('auto')
   const [kFixed, setKFixed] = useState(6)
   const [selectedId, setSelectedId] = useState<number | null>(null)
@@ -197,13 +188,6 @@ export default function PathArchetypes() {
   const [maxAvgLength, setMaxAvgLength] = useState<number | ''>('')
   const [detailTab, setDetailTab] = useState<'overview' | 'composition' | 'transitions' | 'variants' | 'actions'>('overview')
   const [selectedPathForDrawer, setSelectedPathForDrawer] = useState<PathVariant | null>(null)
-
-  const journeysQuery = useQuery<JourneysSummary>({
-    queryKey: ['journeys-summary-for-archetypes'],
-    queryFn: async () => apiGetJson<JourneysSummary>('/api/attribution/journeys', {
-      fallbackMessage: 'Failed to load journeys summary',
-    }),
-  })
 
   const archetypesQuery = useQuery<ArchetypesResponse>({
     queryKey: ['path-archetypes', kMode, kFixed, directMode, comparePrevious],
@@ -222,7 +206,6 @@ export default function PathArchetypes() {
   const data = archetypesQuery.data
   const clustersRaw = data?.clusters ?? []
 
-  const journeys = journeysQuery.data
   const periodLabel =
     journeys?.date_min && journeys?.date_max
       ? `${journeys.date_min.slice(0, 10)} – ${journeys.date_max.slice(0, 10)}`
@@ -535,6 +518,31 @@ export default function PathArchetypes() {
           )}
         </div>
       </div>
+
+      {journeys?.readiness && (journeys.readiness.status === 'blocked' || journeys.readiness.warnings.length > 0) ? (
+        <div
+          style={{
+            marginBottom: tkn.space.lg,
+            background: tkn.color.warningSubtle,
+            border: `1px solid ${journeys.readiness.status === 'blocked' ? tkn.color.danger : tkn.color.warning}`,
+            borderRadius: tkn.radius.lg,
+            padding: tkn.space.md,
+            boxShadow: tkn.shadowSm,
+            display: 'grid',
+            gap: 4,
+          }}
+        >
+          <div style={{ fontSize: tkn.font.sizeSm, fontWeight: tkn.font.weightSemibold, color: journeys.readiness.status === 'blocked' ? tkn.color.danger : tkn.color.warning }}>
+            Archetype reliability warning
+          </div>
+          {journeys.readiness.blockers.map((item) => (
+            <div key={item} style={{ fontSize: tkn.font.sizeXs, color: tkn.color.text }}>{item}</div>
+          ))}
+          {journeys.readiness.warnings.slice(0, 3).map((item) => (
+            <div key={item} style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>{item}</div>
+          ))}
+        </div>
+      ) : null}
 
       <div
         style={{

@@ -59,6 +59,42 @@ def _serialize_taxonomy() -> Dict[str, Any]:
     }
 
 
+def _parse_taxonomy_payload(payload: Dict[str, Any]) -> Taxonomy:
+    def _parse_expression(data: Optional[Dict[str, Any]], fallback_regex: Optional[str] = None):
+        if isinstance(data, dict):
+            return {
+                "operator": data.get("operator", "any"),
+                "value": data.get("value", ""),
+            }
+        if fallback_regex:
+            return {"operator": "regex", "value": fallback_regex}
+        return {"operator": "any", "value": ""}
+
+    rules: list[ChannelRule] = []
+    channel_rules_payload = payload.get("channel_rules", [])
+    for idx, rule_payload in enumerate(channel_rules_payload):
+        expr_source = _parse_expression(rule_payload.get("source"), rule_payload.get("source_regex"))
+        expr_medium = _parse_expression(rule_payload.get("medium"), rule_payload.get("medium_regex"))
+        expr_campaign = _parse_expression(rule_payload.get("campaign"))
+        rules.append(
+            ChannelRule(
+                name=rule_payload.get("name", ""),
+                channel=rule_payload.get("channel", ""),
+                priority=int(rule_payload.get("priority", (idx + 1) * 10)),
+                enabled=bool(rule_payload.get("enabled", True)),
+                source=MatchExpression(**expr_source),
+                medium=MatchExpression(**expr_medium),
+                campaign=MatchExpression(**expr_campaign),
+            )
+        )
+    rules.sort(key=lambda r: (r.priority, r.name))
+    return Taxonomy(
+        channel_rules=rules,
+        source_aliases=payload.get("source_aliases", {}),
+        medium_aliases=payload.get("medium_aliases", {}),
+    )
+
+
 def create_router(
     *,
     get_db_dependency: Callable[..., Any],
@@ -103,35 +139,8 @@ def create_router(
 
     @router.post("/api/taxonomy")
     def update_taxonomy(payload: Dict[str, Any]):
-        def _parse_expression(data: Optional[Dict[str, Any]], fallback_regex: Optional[str] = None):
-            if isinstance(data, dict):
-                return {
-                    "operator": data.get("operator", "any"),
-                    "value": data.get("value", ""),
-                }
-            if fallback_regex:
-                return {"operator": "regex", "value": fallback_regex}
-            return {"operator": "any", "value": ""}
-
-        rules: list[ChannelRule] = []
-        channel_rules_payload = payload.get("channel_rules", [])
-        for idx, rule_payload in enumerate(channel_rules_payload):
-            expr_source = _parse_expression(rule_payload.get("source"), rule_payload.get("source_regex"))
-            expr_medium = _parse_expression(rule_payload.get("medium"), rule_payload.get("medium_regex"))
-            expr_campaign = _parse_expression(rule_payload.get("campaign"))
-            rules.append(
-                ChannelRule(
-                    name=rule_payload.get("name", ""),
-                    channel=rule_payload.get("channel", ""),
-                    priority=int(rule_payload.get("priority", (idx + 1) * 10)),
-                    enabled=bool(rule_payload.get("enabled", True)),
-                    source=MatchExpression(**expr_source),
-                    medium=MatchExpression(**expr_medium),
-                    campaign=MatchExpression(**expr_campaign),
-                )
-            )
-
-        rules.sort(key=lambda r: (r.priority, r.name))
+        parsed = _parse_taxonomy_payload(payload)
+        rules = parsed.channel_rules
         invalid_rules = [
             rule.name or rule.channel or f"Rule {idx + 1}"
             for idx, rule in enumerate(rules)
@@ -144,13 +153,41 @@ def create_router(
             )
 
         save_taxonomy(
-            Taxonomy(
-                channel_rules=rules,
-                source_aliases=payload.get("source_aliases", {}),
-                medium_aliases=payload.get("medium_aliases", {}),
-            )
+            parsed
         )
         return _serialize_taxonomy()
+
+    @router.get("/api/taxonomy/overview")
+    def get_taxonomy_overview(db=Depends(get_db_dependency)):
+        from app.services_conversions import load_journeys_from_db
+        from app.services_taxonomy_decisions import build_taxonomy_overview
+        from app.services_taxonomy_suggestions import generate_taxonomy_suggestions
+
+        journeys = load_journeys_from_db(db, limit=10000)
+        suggestions = generate_taxonomy_suggestions(journeys, limit=8)
+        return build_taxonomy_overview(
+            journeys,
+            suggestion_count=len(suggestions.get("suggestions", [])),
+        )
+
+    @router.post("/api/taxonomy/preview")
+    def preview_taxonomy(payload: Dict[str, Any], db=Depends(get_db_dependency)):
+        from app.services_conversions import load_journeys_from_db
+        from app.services_taxonomy_decisions import build_taxonomy_preview
+
+        journeys = load_journeys_from_db(db, limit=10000)
+        draft_taxonomy = _parse_taxonomy_payload(payload)
+        invalid_rules = [
+            rule.name or rule.channel or f"Rule {idx + 1}"
+            for idx, rule in enumerate(draft_taxonomy.channel_rules)
+            if rule.enabled and is_catch_all_rule(rule)
+        ]
+        if invalid_rules:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Enabled taxonomy rules must include at least one match condition. Invalid: {', '.join(invalid_rules[:5])}",
+            )
+        return build_taxonomy_preview(journeys, draft_taxonomy=draft_taxonomy)
 
     @router.post("/api/taxonomy/validate-utm")
     def validate_utm_endpoint(params: Dict[str, Any]):
@@ -276,6 +313,34 @@ def create_router(
     @router.get("/api/kpis", response_model=KpiConfigModel)
     def get_kpis():
         return get_kpi_config_model_fn()
+
+    @router.get("/api/kpis/overview")
+    def get_kpi_overview(db=Depends(get_db_dependency)):
+        from app.services_kpi_decisions import build_kpi_overview, build_kpi_suggestions
+
+        journeys = ensure_journeys_loaded_fn(db)
+        cfg = get_kpi_config_model_fn()
+        suggestions = build_kpi_suggestions(journeys, cfg, limit=6)
+        return build_kpi_overview(journeys, cfg, suggestion_count=len(suggestions.get("suggestions", [])))
+
+    @router.get("/api/kpis/suggestions")
+    def get_kpi_suggestions(limit: int = 8, db=Depends(get_db_dependency)):
+        from app.services_kpi_decisions import build_kpi_suggestions
+
+        journeys = ensure_journeys_loaded_fn(db)
+        cfg = get_kpi_config_model_fn()
+        return build_kpi_suggestions(journeys, cfg, limit=max(1, min(limit, 20)))
+
+    @router.post("/api/kpis/preview")
+    def preview_kpis(cfg: KpiConfigModel, db=Depends(get_db_dependency)):
+        from app.services_kpi_decisions import build_kpi_preview
+
+        journeys = ensure_journeys_loaded_fn(db)
+        return build_kpi_preview(
+            journeys,
+            current_cfg=get_kpi_config_model_fn(),
+            draft_cfg=cfg,
+        )
 
     @router.post("/api/kpis/test")
     def test_kpi_definition(payload: KpiTestPayload, db=Depends(get_db_dependency)):

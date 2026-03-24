@@ -74,6 +74,35 @@ def create_router(
     def _results_store() -> Dict[str, Any]:
         return get_attribution_results_obj()
 
+    def _build_consistency_payload(db: Any, journeys: List[Dict[str, Any]]) -> tuple[Dict[str, Any] | None, List[str]]:
+        try:
+            from app.services_journey_readiness import build_journey_readiness
+            from app.services_journey_settings import (
+                build_journey_settings_impact_preview,
+                ensure_active_journey_settings,
+            )
+            from app.utils.kpi_config import load_kpi_config
+
+            active_settings = ensure_active_journey_settings(db, actor="system")
+            active_preview = build_journey_settings_impact_preview(
+                db,
+                draft_settings_json=active_settings.settings_json or {},
+            )
+            readiness = build_journey_readiness(
+                journeys=journeys,
+                kpi_config=load_kpi_config(),
+                get_import_runs_fn=get_import_runs_fn,
+                active_settings=active_settings,
+                active_settings_preview=active_preview,
+            )
+            warnings = [
+                *readiness.get("blockers", []),
+                *readiness.get("warnings", []),
+            ]
+            return readiness, warnings
+        except Exception:
+            return None, []
+
     @router.get("/api/attribution/models")
     def list_attribution_models():
         return {"models": attribution_models_obj}
@@ -84,6 +113,7 @@ def create_router(
         if not journeys:
             runs = get_import_runs_fn(limit=1)
             last_run = runs[0] if runs and runs[0].get("status") == "success" else None
+            readiness, consistency_warnings = _build_consistency_payload(db, [])
             return {
                 "loaded": False,
                 "count": 0,
@@ -94,13 +124,19 @@ def create_router(
                 "data_freshness_hours": None,
                 "system_state": "empty",
                 "validation": {"error_count": 0, "warn_count": 0},
+                "readiness": readiness,
+                "consistency_warnings": consistency_warnings,
             }
 
-        return build_journeys_summary_fn(
+        summary = build_journeys_summary_fn(
             journeys=journeys,
             kpi_config=get_kpi_config_fn(),
             get_import_runs_fn=get_import_runs_fn,
         )
+        readiness, consistency_warnings = _build_consistency_payload(db, journeys)
+        summary["readiness"] = readiness
+        summary["consistency_warnings"] = consistency_warnings
+        return summary
 
     @router.get("/api/attribution/journeys/source-state")
     def get_journeys_source_state():
