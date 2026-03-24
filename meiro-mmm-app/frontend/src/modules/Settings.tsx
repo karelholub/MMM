@@ -630,6 +630,18 @@ function describeMatchExpression(
   return `${label} matches /${value}/`
 }
 
+function isUnconstrainedMatchExpression(expr: MatchExpression): boolean {
+  return expr.operator === 'any' || !expr.value.trim()
+}
+
+function isCatchAllChannelRule(rule: ChannelRule): boolean {
+  return (
+    isUnconstrainedMatchExpression(rule.source) &&
+    isUnconstrainedMatchExpression(rule.medium) &&
+    isUnconstrainedMatchExpression(rule.campaign)
+  )
+}
+
 function generateRowId(): string {
   if (
     typeof globalThis !== 'undefined' &&
@@ -3227,6 +3239,22 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                 .sort(
                   (a, b) => a.priority - b.priority || a.name.localeCompare(b.name),
                 )
+
+              const invalidCatchAllRules = sanitizedRules.filter(
+                (rule) => rule.enabled && isCatchAllChannelRule(rule as ChannelRule),
+              )
+              if (invalidCatchAllRules.length > 0) {
+                toastIdRef.current += 1
+                setToast({
+                  id: toastIdRef.current,
+                  type: 'error',
+                  message: `Enabled taxonomy rules must include at least one match condition. Fix: ${invalidCatchAllRules
+                    .slice(0, 3)
+                    .map((rule) => rule.name || rule.channel)
+                    .join(', ')}`,
+                })
+                return false
+              }
 
               const payload: Taxonomy = {
                 channel_rules: sanitizedRules as ChannelRule[],

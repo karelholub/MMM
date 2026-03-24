@@ -225,6 +225,14 @@ const METRIC_CONFIG: Record<
   },
 }
 
+const SCOPE_SOURCE_MAP: Record<string, string[] | null> = {
+  overall: null,
+  meiro_web: ['meiro_web', 'journeys', 'taxonomy'],
+  meta_cost: ['meta_cost'],
+  google_ads_cost: ['google_ads_cost'],
+  linkedin_cost: ['linkedin_cost'],
+}
+
 function getStatus(
   value: number,
   cfg: { okThreshold?: number; warnThreshold?: number; criticalThreshold?: number; invert?: boolean }
@@ -455,9 +463,10 @@ export default function DataQuality() {
 
   // Derive tile data from snapshots (filter by scope)
   const snapshots = snapshotsQuery.data ?? []
+  const activeSources = SCOPE_SOURCE_MAP[scope] ?? [scope]
   const latest = snapshots.filter((s) => {
-    if (scope === 'overall') return true
-    return s.source === scope
+    if (activeSources == null) return true
+    return activeSources.includes(s.source)
   })
 
   const freshness = latest.filter((s) => s.metric_key === 'freshness_lag_minutes')
@@ -476,11 +485,12 @@ export default function DataQuality() {
   const prevBucket = buckets[1]
   const getTrend = (metricKey: string, source?: string) => {
     if (!latestBucket || !prevBucket) return null
+    const trendSources = source ? [source] : activeSources
     const latestSnap = snapshots.find(
-      (s) => s.metric_key === metricKey && s.ts_bucket === latestBucket && (!source || s.source === source)
+      (s) => s.metric_key === metricKey && s.ts_bucket === latestBucket && (trendSources == null || trendSources.includes(s.source))
     )
     const prevSnap = snapshots.find(
-      (s) => s.metric_key === metricKey && s.ts_bucket === prevBucket && (!source || s.source === source)
+      (s) => s.metric_key === metricKey && s.ts_bucket === prevBucket && (trendSources == null || trendSources.includes(s.source))
     )
     if (!latestSnap || !prevSnap) return null
     const delta = latestSnap.metric_value - prevSnap.metric_value

@@ -71,6 +71,18 @@ class ChannelRule:
         return True
 
 
+def is_unconstrained_expression(expr: MatchExpression) -> bool:
+    return expr.normalize_operator() == "any" or not (expr.value or "").strip()
+
+
+def is_catch_all_rule(rule: ChannelRule) -> bool:
+    return (
+        is_unconstrained_expression(rule.source)
+        and is_unconstrained_expression(rule.medium)
+        and is_unconstrained_expression(rule.campaign)
+    )
+
+
 @dataclass
 class Taxonomy:
     channel_rules: List[ChannelRule] = field(default_factory=list)
@@ -158,12 +170,23 @@ def load_taxonomy() -> Taxonomy:
         )
 
     rules.sort(key=lambda rule: (rule.priority, rule.name))
-
-    return Taxonomy(
+    taxonomy = Taxonomy(
         channel_rules=rules,
         source_aliases=raw.get("source_aliases", {}),
         medium_aliases=raw.get("medium_aliases", {}),
     )
+    catch_all_rules = [rule for rule in taxonomy.channel_rules if rule.enabled and is_catch_all_rule(rule)]
+    if catch_all_rules:
+        has_specific_rules = any(not is_catch_all_rule(rule) for rule in taxonomy.channel_rules)
+        has_aliases = bool(taxonomy.source_aliases or taxonomy.medium_aliases)
+        if not has_specific_rules and not has_aliases:
+            taxonomy = Taxonomy.default()
+        else:
+            for rule in taxonomy.channel_rules:
+                if rule.enabled and is_catch_all_rule(rule):
+                    rule.enabled = False
+        save_taxonomy(taxonomy)
+    return taxonomy
 
 
 def save_taxonomy(taxonomy: Taxonomy) -> None:
@@ -236,4 +259,3 @@ def normalize_touchpoint(tp: Dict[str, Any], taxonomy: Optional[Taxonomy] = None
         normalized["creative"] = creative
 
     return normalized
-

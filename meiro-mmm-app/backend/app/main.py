@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 from app.utils.token_store import save_token, get_token, delete_token, get_all_connected_platforms
 from app.utils.encrypt import encrypt, decrypt
 from app.utils import datasource_config as ds_config
-from app.utils.taxonomy import load_taxonomy, save_taxonomy, Taxonomy, MatchExpression, ChannelRule
+from app.utils.taxonomy import load_taxonomy, save_taxonomy, Taxonomy, MatchExpression, ChannelRule, is_catch_all_rule
 from app.utils.kpi_config import load_kpi_config, save_kpi_config, KpiConfig, KpiDefinition
 from app.utils.api_params import clamp_int, resolve_per_page, resolve_sort_dir
 from app.db import Base, engine, get_db, SessionLocal
@@ -2861,6 +2861,13 @@ def update_taxonomy(payload: Dict[str, Any]):
         )
 
     rules.sort(key=lambda r: (r.priority, r.name))
+
+    invalid_rules = [rule.name or rule.channel or f"Rule {idx + 1}" for idx, rule in enumerate(rules) if rule.enabled and is_catch_all_rule(rule)]
+    if invalid_rules:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Enabled taxonomy rules must include at least one match condition. Invalid: {', '.join(invalid_rules[:5])}",
+        )
 
     tax = Taxonomy(
         channel_rules=rules,
@@ -10505,10 +10512,15 @@ def meiro_webhook_suggestions(limit: int = Query(100, ge=1, le=500)):
         raw_source, raw_medium = (pair_key.split("||", 1) + [""])[:2]
         source_norm = source_aliases.get(raw_source, raw_source)
         medium_norm = medium_aliases.get(raw_medium, raw_medium)
+        if not source_norm and not medium_norm:
+            continue
         if _matches_existing_rule(source_norm, medium_norm):
             continue
         suggested_channel = _classify_channel(source_norm, medium_norm)
         if suggested_channel:
+            active_conditions = int(bool(source_norm)) + int(bool(medium_norm))
+            if active_conditions == 0:
+                continue
             rule_key = (
                 suggested_channel,
                 "equals",

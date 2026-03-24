@@ -1,17 +1,17 @@
 {
   "channel_rules": [
     {
-      "name": "Auto: direct",
-      "channel": "direct",
+      "name": "Paid Search",
+      "channel": "paid_search",
       "priority": 10,
       "enabled": true,
       "source": {
-        "operator": "any",
-        "value": ""
+        "operator": "regex",
+        "value": "google|bing|baidu"
       },
       "medium": {
-        "operator": "any",
-        "value": ""
+        "operator": "regex",
+        "value": "cpc|ppc|paid_search"
       },
       "campaign": {
         "operator": "any",
@@ -19,17 +19,17 @@
       }
     },
     {
-      "name": "Auto: firmy.cz",
-      "channel": "firmy.cz",
+      "name": "Paid Social",
+      "channel": "paid_social",
       "priority": 20,
       "enabled": true,
       "source": {
-        "operator": "any",
-        "value": ""
+        "operator": "regex",
+        "value": "facebook|meta|instagram|linkedin|twitter|tiktok"
       },
       "medium": {
-        "operator": "any",
-        "value": ""
+        "operator": "regex",
+        "value": "cpc|paid_social|social"
       },
       "campaign": {
         "operator": "any",
@@ -37,8 +37,8 @@
       }
     },
     {
-      "name": "Auto: microsite",
-      "channel": "microsite",
+      "name": "Email",
+      "channel": "email",
       "priority": 30,
       "enabled": true,
       "source": {
@@ -46,8 +46,8 @@
         "value": ""
       },
       "medium": {
-        "operator": "any",
-        "value": ""
+        "operator": "contains",
+        "value": "email"
       },
       "campaign": {
         "operator": "any",
@@ -55,8 +55,8 @@
       }
     },
     {
-      "name": "Auto: home_page",
-      "channel": "home_page",
+      "name": "Direct",
+      "channel": "direct",
       "priority": 40,
       "enabled": true,
       "source": {
@@ -64,44 +64,8 @@
         "value": ""
       },
       "medium": {
-        "operator": "any",
-        "value": ""
-      },
-      "campaign": {
-        "operator": "any",
-        "value": ""
-      }
-    },
-    {
-      "name": "Auto: micrisite",
-      "channel": "micrisite",
-      "priority": 50,
-      "enabled": true,
-      "source": {
-        "operator": "any",
-        "value": ""
-      },
-      "medium": {
-        "operator": "any",
-        "value": ""
-      },
-      "campaign": {
-        "operator": "any",
-        "value": ""
-      }
-    },
-    {
-      "name": "Auto: pinterest",
-      "channel": "pinterest",
-      "priority": 60,
-      "enabled": true,
-      "source": {
-        "operator": "any",
-        "value": ""
-      },
-      "medium": {
-        "operator": "any",
-        "value": ""
+        "operator": "regex",
+        "value": "(none|direct)"
       },
       "campaign": {
         "operator": "any",
@@ -109,6 +73,14 @@
       }
     }
   ],
-  "source_aliases": {},
-  "medium_aliases": {}
+  "source_aliases": {
+    "fb": "facebook",
+    "ig": "instagram",
+    "g": "google"
+  },
+  "medium_aliases": {
+    "paid": "cpc",
+    "cpm": "display",
+    "paidsocial": "paid_social"
+  }
 }
