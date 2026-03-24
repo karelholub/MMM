@@ -2,6 +2,9 @@ import { useMemo, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { tokens as t } from '../theme/tokens'
+import DecisionStatusCard from '../components/DecisionStatusCard'
+import RecommendedActionsList, { type RecommendedActionItem } from '../components/RecommendedActionsList'
+import { navigateForRecommendedAction } from '../lib/recommendedActions'
 import { apiGetJson, apiSendJson, getUserContext, withQuery } from '../lib/apiClient'
 
 type FeatureFlags = {
@@ -329,6 +332,10 @@ export default function JourneysSettingsSection({
     gap: t.space.sm,
   }
 
+  const handleRecommendedAction = (action: RecommendedActionItem) => {
+    navigateForRecommendedAction(action, { defaultPage: 'settings' })
+  }
+
   return (
     <div style={{ display: 'grid', gap: t.space.xl }}>
       <div style={cardStyle}>
@@ -366,32 +373,17 @@ export default function JourneysSettingsSection({
           </div>
         </div>
 
-        {!!readinessQuery.data?.blockers?.length && (
-          <div style={{ border: `1px solid ${t.color.danger}`, background: t.color.dangerSubtle, color: t.color.danger, borderRadius: t.radius.sm, padding: t.space.sm, fontSize: t.font.sizeXs }}>
-            {readinessQuery.data.blockers.map((item) => (
-              <div key={item}>{item}</div>
-            ))}
-          </div>
-        )}
-
-        {!!readinessQuery.data?.warnings?.length && (
-          <div style={{ border: `1px solid ${t.color.warning}`, background: t.color.warningSubtle, color: t.color.warning, borderRadius: t.radius.sm, padding: t.space.sm, fontSize: t.font.sizeXs }}>
-            {readinessQuery.data.warnings.map((item) => (
-              <div key={item}>{item}</div>
-            ))}
-          </div>
-        )}
-
-        <div style={{ display: 'grid', gap: t.space.xs }}>
-          <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>Recommended actions</div>
-          {readinessQuery.data?.recommended_actions?.length ? readinessQuery.data.recommended_actions.map((item) => (
-            <div key={item.id} style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-              {item.label}{item.benefit ? ` — ${item.benefit}` : ''}
-            </div>
-          )) : (
-            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>No immediate readiness actions suggested.</div>
-          )}
-        </div>
+        {(readinessQuery.data?.blockers?.length || readinessQuery.data?.warnings?.length || readinessQuery.data?.recommended_actions?.length) ? (
+          <DecisionStatusCard
+            title="Journeys Readiness Guidance"
+            status={readinessQuery.data?.status}
+            blockers={readinessQuery.data?.blockers}
+            warnings={readinessQuery.data?.warnings}
+            actions={readinessQuery.data?.recommended_actions}
+            onActionClick={handleRecommendedAction}
+            compact
+          />
+        ) : null}
       </div>
 
       <div style={cardStyle}>
@@ -826,25 +818,12 @@ export default function JourneysSettingsSection({
                 )}
 
                 {validationResult && (
-                  <div style={{ ...cardStyle, borderColor: validationResult.valid ? t.color.success : t.color.warning }}>
-                    <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: validationResult.valid ? t.color.success : t.color.warning }}>
-                      {validationResult.valid ? 'Validation passed' : 'Validation issues found'}
-                    </div>
-                    {!!validationResult.errors?.length && (
-                      <ul style={{ margin: 0, paddingLeft: 16, fontSize: t.font.sizeXs }}>
-                        {validationResult.errors.map((err: any, idx: number) => (
-                          <li key={`${err.path}-${idx}`}>{err.path}: {err.message}</li>
-                        ))}
-                      </ul>
-                    )}
-                    {!!validationResult.warnings?.length && (
-                      <ul style={{ margin: 0, paddingLeft: 16, fontSize: t.font.sizeXs, color: t.color.warning }}>
-                        {validationResult.warnings.map((warn: any, idx: number) => (
-                          <li key={`${warn.path}-${idx}`}>{warn.path}: {warn.message}</li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
+                  <DecisionStatusCard
+                    title={validationResult.valid ? 'Draft validation passed' : 'Draft validation issues'}
+                    status={validationResult.valid ? 'ready' : 'warning'}
+                    blockers={(validationResult.errors ?? []).map((err: any) => `${err.path}: ${err.message}`)}
+                    warnings={(validationResult.warnings ?? []).map((warn: any) => `${warn.path}: ${warn.message}`)}
+                  />
                 )}
 
                 {previewResult?.preview_available && (
@@ -859,11 +838,12 @@ export default function JourneysSettingsSection({
                       Estimated paths returned: {previewResult.estimated_paths_returned ?? 0}
                     </div>
                     {!!previewResult.warnings?.length && (
-                      <ul style={{ margin: 0, paddingLeft: 16, fontSize: t.font.sizeXs, color: t.color.warning }}>
-                        {previewResult.warnings.map((warn: string) => (
-                          <li key={warn}>{warn}</li>
-                        ))}
-                      </ul>
+                      <DecisionStatusCard
+                        title="Preview warnings"
+                        status="warning"
+                        compact
+                        warnings={previewResult.warnings}
+                      />
                     )}
                   </div>
                 )}

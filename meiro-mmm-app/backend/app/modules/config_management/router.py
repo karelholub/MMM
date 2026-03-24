@@ -15,6 +15,11 @@ from app.modules.config_management.schemas import (
     ModelConfigUpdatePayload,
     ModelConfigValidatePayload,
 )
+from app.services_model_config_decisions import (
+    build_model_config_activation_decision,
+    build_model_config_preview_decision,
+    build_model_config_validation_decision,
+)
 
 
 def _compute_journey_metrics(journeys: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -134,6 +139,12 @@ def create_router(
 
     @router.post("/api/model-configs/{cfg_id}/activate")
     def activate_model_config(cfg_id: str, payload: ModelConfigActivatePayload, db=Depends(get_db_dependency)):
+        validation_payload = validate_model_config_route(cfg_id, ModelConfigValidatePayload(), db)
+        preview_payload = preview_model_config(cfg_id, ModelConfigPreviewPayload(), db)
+        activation_decision = build_model_config_activation_decision(
+            validation=validation_payload.get("decision"),
+            preview=preview_payload.get("decision"),
+        )
         try:
             cfg = activate_config_fn(
                 db=db,
@@ -144,7 +155,13 @@ def create_router(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-        return {"id": cfg.id, "status": cfg.status, "version": cfg.version, "activated_at": cfg.activated_at}
+        return {
+            "id": cfg.id,
+            "status": cfg.status,
+            "version": cfg.version,
+            "activated_at": cfg.activated_at,
+            "decision": activation_decision,
+        }
 
     @router.post("/api/model-configs/{cfg_id}/archive")
     def archive_model_config(cfg_id: str, actor: str = "system", db=Depends(get_db_dependency)):
@@ -188,12 +205,20 @@ def create_router(
                     errors.append(f"'{field}' must be an array of strings")
 
         valid = not errors and not schema_errors
+        decision = build_model_config_validation_decision(
+            valid=valid,
+            errors=errors,
+            warnings=warnings,
+            schema_errors=schema_errors,
+            missing_conversions=missing_conversions,
+        )
         return {
             "valid": valid,
             "errors": errors,
             "warnings": warnings,
             "missing_conversions": missing_conversions,
             "schema_errors": schema_errors,
+            "decision": decision,
         }
 
     @router.post("/api/model-configs/{cfg_id}/preview")
@@ -203,10 +228,32 @@ def create_router(
             raise HTTPException(status_code=404, detail="Config not found")
         cfg_json: Any = payload.config_json or cfg.config_json or {}
         if not isinstance(cfg_json, dict):
-            return {"preview_available": False, "reason": "Config JSON must be an object"}
+            reason = "Config JSON must be an object"
+            return {
+                "preview_available": False,
+                "reason": reason,
+                "decision": build_model_config_preview_decision(
+                    preview_available=False,
+                    reason=reason,
+                    warnings=[],
+                    coverage_warning=False,
+                    changed_keys=[],
+                ),
+            }
         journeys = get_journeys_fn(db)
         if not journeys:
-            return {"preview_available": False, "reason": "No journeys loaded"}
+            reason = "No journeys loaded"
+            return {
+                "preview_available": False,
+                "reason": reason,
+                "decision": build_model_config_preview_decision(
+                    preview_available=False,
+                    reason=reason,
+                    warnings=[],
+                    coverage_warning=False,
+                    changed_keys=[],
+                ),
+            }
 
         baseline_cfg = (
             db.query(model_config_cls)
@@ -232,6 +279,13 @@ def create_router(
             coverage_warning = True
             warnings.append("Projected attributable conversions decrease by more than 10% versus the active config.")
         changed_keys = _changed_top_level_keys(baseline_json or {}, cfg_json)
+        decision = build_model_config_preview_decision(
+            preview_available=True,
+            reason=None,
+            warnings=warnings,
+            coverage_warning=coverage_warning,
+            changed_keys=changed_keys,
+        )
         return {
             "preview_available": True,
             "baseline": baseline_metrics,
@@ -244,6 +298,7 @@ def create_router(
             "active_config_id": baseline_cfg.id if baseline_cfg else None,
             "active_version": baseline_cfg.version if baseline_cfg else None,
             "reason": None,
+            "decision": decision,
         }
 
     @router.post("/api/model-configs/{cfg_id}/suggest")

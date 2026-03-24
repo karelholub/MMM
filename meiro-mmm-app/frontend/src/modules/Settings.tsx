@@ -21,7 +21,10 @@ import KpiPreviewPanel from '../features/kpi/KpiPreviewPanel'
 import TaxonomyOverviewPanel from '../features/taxonomy/TaxonomyOverviewPanel'
 import TaxonomySuggestionsPanel from '../features/taxonomy/TaxonomySuggestionsPanel'
 import TaxonomyPreviewPanel from '../features/taxonomy/TaxonomyPreviewPanel'
+import DecisionStatusCard from '../components/DecisionStatusCard'
+import type { RecommendedActionItem } from '../components/RecommendedActionsList'
 import { usePermissions } from '../hooks/usePermissions'
+import { navigateForRecommendedAction } from '../lib/recommendedActions'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
 
 export type SectionKey =
@@ -453,6 +456,14 @@ interface AttributionPreviewSummary {
   useConvertedFlagImpact: number
   useConvertedFlagDirection: ConvertedFlagDirection
   reason?: string | null
+  decision?: {
+    status: string
+    confidence?: { score: number; band: string } | null
+    blockers?: string[]
+    warnings?: string[]
+    reasons?: string[]
+    recommended_actions?: RecommendedActionItem[]
+  } | null
 }
 
 interface NBAPreviewSummary {
@@ -465,6 +476,14 @@ interface NBAPreviewSummary {
   filteredBySupportPct: number
   filteredByConversionPct: number
   reason?: string | null
+  decision?: {
+    status: string
+    confidence?: { score: number; band: string } | null
+    blockers?: string[]
+    warnings?: string[]
+    reasons?: string[]
+    recommended_actions?: RecommendedActionItem[]
+  } | null
 }
 
 interface NBATestRecommendationRow {
@@ -487,6 +506,14 @@ interface NBATestResult {
   baselineConversionRate: number
   recommendations: NBATestRecommendationRow[]
   reason?: string | null
+  decision?: {
+    status: string
+    confidence?: { score: number; band: string } | null
+    blockers?: string[]
+    warnings?: string[]
+    reasons?: string[]
+    recommended_actions?: RecommendedActionItem[]
+  } | null
 }
 
 interface ModelConfigSummary {
@@ -512,6 +539,23 @@ interface ModelConfigValidationResult {
   warnings: string[]
   missing_conversions: string[]
   schema_errors: string[]
+  decision?: {
+    status: string
+    confidence?: { score: number; band: string } | null
+    blockers?: string[]
+    warnings?: string[]
+    reasons?: string[]
+    recommended_actions?: Array<{
+      id: string
+      label: string
+      benefit?: string
+      domain?: string
+      target_page?: string
+      target_section?: string
+      target_tab?: string
+      requires_review?: boolean
+    }>
+  } | null
 }
 
 interface ModelConfigPreviewMetrics {
@@ -532,6 +576,23 @@ interface ModelConfigPreviewResult {
   changed_keys?: string[]
   active_config_id?: string | null
   active_version?: number | null
+  decision?: {
+    status: string
+    confidence?: { score: number; band: string } | null
+    blockers?: string[]
+    warnings?: string[]
+    reasons?: string[]
+    recommended_actions?: Array<{
+      id: string
+      label: string
+      benefit?: string
+      domain?: string
+      target_page?: string
+      target_section?: string
+      target_tab?: string
+      requires_review?: boolean
+    }>
+  } | null
 }
 
 interface ModelConfigSuggestionResult {
@@ -552,6 +613,17 @@ interface ModelConfigSuggestionResult {
     score: number
     label: string
   } | null
+  status?: string
+  recommended_actions?: Array<{
+    id: string
+    label: string
+    benefit?: string
+    domain?: string
+    target_page?: string
+    target_section?: string
+    target_tab?: string
+    requires_review?: boolean
+  }>
 }
 
 interface NotificationChannelRow {
@@ -4534,19 +4606,43 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
             )}
 
             {previewUnavailableMessage && (
-              <span style={{ color: t.color.textSecondary, fontSize: t.font.sizeSm }}>
-                {previewUnavailableMessage}
-              </span>
+              <DecisionStatusCard
+                title="Preview unavailable"
+                status="blocked"
+                compact
+                blockers={[previewUnavailableMessage]}
+              />
             )}
 
             {previewErrorMessage && (
-              <span style={{ color: t.color.danger, fontSize: t.font.sizeSm }}>
-                {previewErrorMessage}
-              </span>
+              <DecisionStatusCard
+                title="Preview error"
+                status="blocked"
+                compact
+                blockers={[previewErrorMessage]}
+              />
             )}
 
             {attributionPreviewStatus === 'ready' && attributionPreview && (
               <div style={{ display: 'grid', gap: t.space.sm }}>
+                {attributionPreview.decision ? (
+                  <DecisionStatusCard
+                    title="Preview assessment"
+                    status={attributionPreview.decision.status}
+                    compact
+                    subtitle={
+                      attributionPreview.decision.confidence?.score != null
+                        ? `Confidence ${attributionPreview.decision.confidence.band} (${attributionPreview.decision.confidence.score}/100)`
+                        : undefined
+                    }
+                    blockers={attributionPreview.decision.blockers}
+                    warnings={attributionPreview.decision.warnings}
+                    actions={attributionPreview.decision.recommended_actions}
+                    onActionClick={(action) =>
+                      navigateForRecommendedAction(action, { defaultPage: 'settings' })
+                    }
+                  />
+                ) : null}
                 <ul
                   style={{
                     margin: 0,
@@ -5219,17 +5315,25 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
             )}
 
             {previewUnavailableMessage && (
-              <span style={{ color: t.color.textSecondary, fontSize: t.font.sizeSm }}>
-                {previewUnavailableMessage.toLowerCase().includes('no journeys')
-                  ? 'Load sample data or journeys to preview NBA impact.'
-                  : previewUnavailableMessage}
-              </span>
+              <DecisionStatusCard
+                title="Preview unavailable"
+                status="blocked"
+                compact
+                blockers={[
+                  previewUnavailableMessage.toLowerCase().includes('no journeys')
+                    ? 'Load sample data or journeys to preview NBA impact.'
+                    : previewUnavailableMessage,
+                ]}
+              />
             )}
 
             {previewErrorMessage && (
-              <span style={{ color: t.color.danger, fontSize: t.font.sizeSm }}>
-                {previewErrorMessage}
-              </span>
+              <DecisionStatusCard
+                title="Preview error"
+                status="blocked"
+                compact
+                blockers={[previewErrorMessage]}
+              />
             )}
 
             {nbaPreviewStatus === 'ready' && nbaPreview && (
@@ -5241,6 +5345,24 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                   color: t.color.textSecondary,
                 }}
               >
+                {nbaPreview.decision ? (
+                  <DecisionStatusCard
+                    title="Preview assessment"
+                    status={nbaPreview.decision.status}
+                    compact
+                    subtitle={
+                      nbaPreview.decision.confidence?.score != null
+                        ? `Confidence ${nbaPreview.decision.confidence.band} (${nbaPreview.decision.confidence.score}/100)`
+                        : undefined
+                    }
+                    blockers={nbaPreview.decision.blockers}
+                    warnings={nbaPreview.decision.warnings}
+                    actions={nbaPreview.decision.recommended_actions}
+                    onActionClick={(action) =>
+                      navigateForRecommendedAction(action, { defaultPage: 'settings' })
+                    }
+                  />
+                ) : null}
                 <ul
                   style={{
                     margin: 0,
@@ -5380,23 +5502,61 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
             )}
 
             {nbaTestResult?.reason && (
-              <span style={{ color: t.color.textSecondary, fontSize: t.font.sizeSm }}>
-                {nbaTestResult.reason.toLowerCase().includes('no journeys')
-                  ? 'Load sample data or journeys to preview NBA impact.'
-                  : nbaTestResult.reason}
-              </span>
+              <DecisionStatusCard
+                title="Test console status"
+                status={nbaTestResult.decision?.status ?? 'warning'}
+                compact
+                subtitle={
+                  nbaTestResult.decision?.confidence?.score != null
+                    ? `Confidence ${nbaTestResult.decision.confidence.band} (${nbaTestResult.decision.confidence.score}/100)`
+                    : undefined
+                }
+                blockers={nbaTestResult.decision?.blockers}
+                warnings={
+                  nbaTestResult.decision?.warnings ??
+                  [
+                    nbaTestResult.reason.toLowerCase().includes('no journeys')
+                      ? 'Load sample data or journeys to preview NBA impact.'
+                      : nbaTestResult.reason,
+                  ]
+                }
+                actions={nbaTestResult.decision?.recommended_actions}
+                onActionClick={(action) =>
+                  navigateForRecommendedAction(action, { defaultPage: 'settings' })
+                }
+              />
             )}
 
             {nbaTestResult?.previewAvailable === false && !nbaTestResult.reason && (
-              <span style={{ color: t.color.textSecondary, fontSize: t.font.sizeSm }}>
-                Load sample data or journeys to power the test console.
-              </span>
+              <DecisionStatusCard
+                title="Test console unavailable"
+                status="blocked"
+                compact
+                blockers={['Load sample data or journeys to power the test console.']}
+              />
             )}
 
             {nbaTestResult?.previewAvailable && testRecommendations.length === 0 && (
-              <span style={{ color: t.color.textSecondary, fontSize: t.font.sizeSm }}>
-                No recommendations meet the current thresholds for this prefix.
-              </span>
+              <DecisionStatusCard
+                title="Test console assessment"
+                status={nbaTestResult.decision?.status ?? 'warning'}
+                compact
+                subtitle={
+                  nbaTestResult.decision?.confidence?.score != null
+                    ? `Confidence ${nbaTestResult.decision.confidence.band} (${nbaTestResult.decision.confidence.score}/100)`
+                    : undefined
+                }
+                blockers={nbaTestResult.decision?.blockers}
+                warnings={
+                  nbaTestResult.decision?.warnings ?? [
+                    'No recommendations meet the current thresholds for this prefix.',
+                  ]
+                }
+                actions={nbaTestResult.decision?.recommended_actions}
+                onActionClick={(action) =>
+                  navigateForRecommendedAction(action, { defaultPage: 'settings' })
+                }
+              />
             )}
 
             {testRecommendations.length > 0 && (
@@ -5709,6 +5869,12 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
               overview={kpiOverviewQuery.data}
               loading={kpiOverviewQuery.isLoading}
               error={(kpiOverviewQuery.error as Error | undefined)?.message || null}
+              onActionClick={(action) => {
+                if (action.target_tab === 'suggestions' || action.target_tab === 'advanced') {
+                  setKpiActiveTab(action.target_tab)
+                }
+                navigateForRecommendedAction(action, { defaultPage: 'settings' })
+              }}
             />
           )}
 
@@ -6262,6 +6428,12 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
               overview={taxonomyOverviewQuery.data}
               loading={taxonomyOverviewQuery.isLoading}
               error={(taxonomyOverviewQuery.error as Error | undefined)?.message || null}
+              onActionClick={(action) => {
+                if (action.target_tab === 'suggestions' || action.target_tab === 'advanced') {
+                  setTaxonomyActiveTab(action.target_tab)
+                }
+                navigateForRecommendedAction(action, { defaultPage: 'settings' })
+              }}
             />
           )}
 
@@ -7691,78 +7863,43 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                           </div>
                         ) : null}
 
-                        {modelConfigSuggestion.warnings?.length ? (
-                          <div
-                            style={{
-                              border: `1px solid ${t.color.warning}`,
-                              background: t.color.warningSubtle,
-                              color: t.color.warning,
-                              borderRadius: t.radius.sm,
-                              padding: t.space.sm,
-                              display: 'grid',
-                              gap: 4,
-                              fontSize: t.font.sizeXs,
-                            }}
-                          >
-                            {modelConfigSuggestion.warnings.map((item, index) => (
-                              <div key={`warn-${index}`}>{item}</div>
-                            ))}
-                          </div>
+                        {modelConfigSuggestion.status || modelConfigSuggestion.recommended_actions?.length ? (
+                          <DecisionStatusCard
+                            title="Suggestion readiness"
+                            status={modelConfigSuggestion.status ?? (modelConfigSuggestion.warnings?.length ? 'warning' : 'ready')}
+                            compact
+                            subtitle={
+                              modelConfigSuggestion.confidence?.score != null
+                                ? `Confidence ${modelConfigSuggestion.confidence.label} (${modelConfigSuggestion.confidence.score}/100)`
+                                : undefined
+                            }
+                            warnings={modelConfigSuggestion.warnings}
+                            actions={modelConfigSuggestion.recommended_actions}
+                            onActionClick={(action) =>
+                              navigateForRecommendedAction(action, { defaultPage: 'settings' })
+                            }
+                          />
                         ) : null}
+
                       </div>
                     )}
 
                     {modelConfigValidation && (
-                      <div
-                        style={{
-                          border: `1px solid ${
-                            modelConfigValidation.valid
-                              ? t.color.success
-                              : t.color.warning
-                          }`,
-                          background: modelConfigValidation.valid
-                            ? 'rgba(34,197,94,0.12)'
-                            : t.color.warningSubtle,
-                          borderRadius: t.radius.md,
-                          padding: t.space.md,
-                          display: 'grid',
-                          gap: 6,
-                        }}
-                      >
-                        <div
-                          style={{
-                            fontSize: t.font.sizeSm,
-                            fontWeight: t.font.weightSemibold,
-                            color: modelConfigValidation.valid
-                              ? t.color.success
-                              : t.color.warning,
-                          }}
-                        >
-                          {modelConfigValidation.valid
-                            ? 'Validation passed'
-                            : 'Validation issues found'}
-                        </div>
-                        {modelConfigValidation.errors.length > 0 && (
-                          <div style={{ fontSize: t.font.sizeXs }}>
-                            <strong>Errors:</strong>
-                            <ul style={{ margin: '4px 0 0 16px' }}>
-                              {modelConfigValidation.errors.map((err) => (
-                                <li key={err}>{err}</li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-                        {modelConfigValidation.warnings.length > 0 && (
-                          <div style={{ fontSize: t.font.sizeXs }}>
-                            <strong>Warnings:</strong>
-                            <ul style={{ margin: '4px 0 0 16px' }}>
-                              {modelConfigValidation.warnings.map((warn) => (
-                                <li key={warn}>{warn}</li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-                      </div>
+                      <DecisionStatusCard
+                        title={modelConfigValidation.valid ? 'Validation passed' : 'Validation issues found'}
+                        status={modelConfigValidation.decision?.status ?? (modelConfigValidation.valid ? 'ready' : 'warning')}
+                        subtitle={
+                          modelConfigValidation.decision?.confidence?.score != null
+                            ? `Confidence ${modelConfigValidation.decision.confidence.band} (${modelConfigValidation.decision.confidence.score}/100)`
+                            : undefined
+                        }
+                        blockers={modelConfigValidation.decision?.blockers ?? modelConfigValidation.errors}
+                        warnings={modelConfigValidation.decision?.warnings ?? modelConfigValidation.warnings}
+                        actions={modelConfigValidation.decision?.recommended_actions}
+                        onActionClick={(action) =>
+                          navigateForRecommendedAction(action, { defaultPage: 'settings' })
+                        }
+                      />
                     )}
 
                     {previewAvailable && (
@@ -7804,6 +7941,24 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                             </span>
                           )}
                         </div>
+                        {modelConfigPreview?.decision ? (
+                          <DecisionStatusCard
+                            title="Preview assessment"
+                            status={modelConfigPreview.decision.status}
+                            compact
+                            subtitle={
+                              modelConfigPreview.decision.confidence?.score != null
+                                ? `Confidence ${modelConfigPreview.decision.confidence.band} (${modelConfigPreview.decision.confidence.score}/100)`
+                                : undefined
+                            }
+                            blockers={modelConfigPreview.decision.blockers}
+                            warnings={modelConfigPreview.decision.warnings}
+                            actions={modelConfigPreview.decision.recommended_actions}
+                            onActionClick={(action) =>
+                              navigateForRecommendedAction(action, { defaultPage: 'settings' })
+                            }
+                          />
+                        ) : null}
                         <table
                           style={{
                             width: '100%',
@@ -7867,20 +8022,6 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                             ))}
                           </tbody>
                         </table>
-                        {modelConfigPreview?.warnings?.length ? (
-                          <ul
-                            style={{
-                              margin: 0,
-                              paddingLeft: 16,
-                              color: t.color.warning,
-                              fontSize: t.font.sizeXs,
-                            }}
-                          >
-                            {modelConfigPreview.warnings.map((warn) => (
-                              <li key={warn}>{warn}</li>
-                            ))}
-                          </ul>
-                        ) : null}
                       </div>
                     )}
 
@@ -10224,23 +10365,31 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
               </div>
 
               {modelConfigValidation ? (
-                <div
-                  style={{
-                    border: `1px solid ${
-                      modelConfigValidation.valid ? t.color.success : t.color.warning
-                    }`,
-                    background: modelConfigValidation.valid
-                      ? 'rgba(34,197,94,0.12)'
-                      : t.color.warningSubtle,
-                    borderRadius: t.radius.md,
-                    padding: t.space.sm,
-                    fontSize: t.font.sizeXs,
-                  }}
-                >
-                  {modelConfigValidation.valid
-                    ? 'Validation passed. Required fields look good.'
-                    : 'Validation issues found. Resolve them before activating.'}
-                </div>
+                <DecisionStatusCard
+                  title={
+                    modelConfigValidation.valid
+                      ? 'Validation passed'
+                      : 'Validation issues found'
+                  }
+                  status={
+                    modelConfigValidation.decision?.status ??
+                    (modelConfigValidation.valid ? 'ready' : 'warning')
+                  }
+                  compact
+                  subtitle={
+                    modelConfigValidation.decision?.confidence?.score != null
+                      ? `Confidence ${modelConfigValidation.decision.confidence.band} (${modelConfigValidation.decision.confidence.score}/100)`
+                      : modelConfigValidation.valid
+                      ? 'Required fields look good.'
+                      : 'Resolve validation issues before activating.'
+                  }
+                  blockers={modelConfigValidation.decision?.blockers}
+                  warnings={modelConfigValidation.decision?.warnings}
+                  actions={modelConfigValidation.decision?.recommended_actions}
+                  onActionClick={(action) =>
+                    navigateForRecommendedAction(action, { defaultPage: 'settings' })
+                  }
+                />
               ) : (
                 <div
                   style={{
@@ -10351,19 +10500,23 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                       )}
                     </tbody>
                   </table>
-                  {activationSummary.warnings?.length ? (
-                    <ul
-                      style={{
-                        margin: 0,
-                        paddingLeft: 16,
-                        fontSize: t.font.sizeXs,
-                        color: t.color.warning,
-                      }}
-                    >
-                      {activationSummary.warnings.map((warn) => (
-                        <li key={warn}>{warn}</li>
-                      ))}
-                    </ul>
+                  {activationSummary.decision ? (
+                    <DecisionStatusCard
+                      title="Activation assessment"
+                      status={activationSummary.decision.status}
+                      compact
+                      subtitle={
+                        activationSummary.decision.confidence?.score != null
+                          ? `Confidence ${activationSummary.decision.confidence.band} (${activationSummary.decision.confidence.score}/100)`
+                          : undefined
+                      }
+                      blockers={activationSummary.decision.blockers}
+                      warnings={activationSummary.decision.warnings}
+                      actions={activationSummary.decision.recommended_actions}
+                      onActionClick={(action) =>
+                        navigateForRecommendedAction(action, { defaultPage: 'settings' })
+                      }
+                    />
                   ) : null}
                 </div>
               ) : (

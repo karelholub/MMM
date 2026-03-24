@@ -6,6 +6,8 @@ import math
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
 
+from app.services_model_config_decisions import build_model_config_preview_decision
+
 
 def _normalize_token(value: Any) -> str:
     return str(value or "").strip().lower()
@@ -82,6 +84,17 @@ def suggest_model_config_from_journeys(
             "warnings": ["Load journeys before requesting a suggested config."],
             "data_summary": {"journeys": 0},
             "confidence": {"score": 0.0, "label": "low"},
+            "status": "blocked",
+            "recommended_actions": [
+                {
+                    "id": "load_model_config_data",
+                    "label": "Load journeys before requesting a suggestion",
+                    "benefit": "Enable data-backed config calibration",
+                    "domain": "measurement_model",
+                    "target_page": "datasources",
+                    "requires_review": True,
+                }
+            ],
         }
 
     strategy = (strategy or "balanced").strip().lower()
@@ -263,6 +276,14 @@ def suggest_model_config_from_journeys(
         },
     }
 
+    preview_decision = build_model_config_preview_decision(
+        preview_available=True,
+        reason=None,
+        warnings=warnings,
+        coverage_warning=False,
+        changed_keys=list(config_json.keys()),
+    )
+
     return {
         "config_json": config_json,
         "preview_available": True,
@@ -280,4 +301,6 @@ def suggest_model_config_from_journeys(
             "unresolved_touchpoint_pct": round(unresolved_share, 2),
         },
         "confidence": {"score": round(confidence_score, 1), "label": confidence_label},
+        "status": "ready" if not warnings else "warning",
+        "recommended_actions": preview_decision["recommended_actions"],
     }

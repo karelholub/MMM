@@ -2,6 +2,9 @@ import { useMemo, useState } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { tokens as t } from '../theme/tokens'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
+import DecisionStatusCard from '../components/DecisionStatusCard'
+import RecommendedActionsList, { type RecommendedActionItem } from '../components/RecommendedActionsList'
+import { navigateForRecommendedAction } from '../lib/recommendedActions'
 import { apiGetJson, apiSendJson, withQuery } from '../lib/apiClient'
 import {
   listJourneyAlertDefinitions,
@@ -237,6 +240,7 @@ interface JourneyReadinessResponse {
   }
   blockers: string[]
   warnings: string[]
+  recommended_actions?: RecommendedActionItem[]
 }
 
 interface JourneyOverviewAlertRow {
@@ -443,6 +447,10 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
   const freshness = summary?.freshness
   const trendInsights = trendsQuery.data
   const journeysReadiness = summary?.readiness
+
+  const handleOverviewAction = (action: RecommendedActionItem) => {
+    navigateForRecommendedAction(action, { onNavigate, defaultPage: 'datasources' })
+  }
 
   const hasAnyData =
     kpiTiles.some((k) => typeof k.value === 'number' && Number.isFinite(k.value) && k.value !== 0) ||
@@ -681,6 +689,15 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
       emptyState={emptyState}
     >
       <div style={{ display: 'grid', gap: t.space.xl }}>
+        {journeysReadiness?.recommended_actions?.length ? (
+          <SectionCard title="Recommended Actions" subtitle="Highest-value next steps from the current decision state.">
+            <RecommendedActionsList
+              actions={journeysReadiness.recommended_actions}
+              onActionClick={handleOverviewAction}
+            />
+          </SectionCard>
+        ) : null}
+
         {/* B) KPI Tiles row */}
         <div
           style={{
@@ -896,14 +913,13 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
               title="Readiness"
               subtitle="Canonical health signals from taxonomy, KPI coverage, and journeys freshness."
             >
-              <div style={{ display: 'grid', gap: t.space.xs }}>
-                {journeysReadiness.blockers.map((item) => (
-                  <div key={item} style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{item}</div>
-                ))}
-                {journeysReadiness.warnings.slice(0, 3).map((item) => (
-                  <div key={item} style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>{item}</div>
-                ))}
-              </div>
+              <DecisionStatusCard
+                title="Readiness"
+                status={journeysReadiness.status}
+                blockers={journeysReadiness.blockers}
+                warnings={journeysReadiness.warnings.slice(0, 3)}
+                compact
+              />
             </SectionCard>
           ) : null}
           <div

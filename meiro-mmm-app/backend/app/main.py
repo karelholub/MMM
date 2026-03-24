@@ -60,6 +60,11 @@ from app.services_model_config import (
     get_default_config_id,
     validate_model_config,
 )
+from app.services_settings_decisions import (
+    build_attribution_preview_decision,
+    build_nba_preview_decision,
+    build_nba_test_decision,
+)
 from app.services_model_config_suggestions import suggest_model_config_from_journeys
 from app.services_journey_settings import (
     activate_journey_settings_version,
@@ -718,6 +723,7 @@ class AttributionPreviewResponse(BaseModel):
     useConvertedFlagImpact: int
     useConvertedFlagDirection: str
     reason: Optional[str] = None
+    decision: Optional[Dict[str, Any]] = None
 
 
 class NBAPreviewPayload(BaseModel):
@@ -735,6 +741,7 @@ class NBAPreviewResponse(BaseModel):
     filteredBySupportPct: float
     filteredByConversionPct: float
     reason: Optional[str] = None
+    decision: Optional[Dict[str, Any]] = None
 
 
 class NBATestPayload(BaseModel):
@@ -763,6 +770,7 @@ class NBATestResponse(BaseModel):
     baselineConversionRate: float
     recommendations: List[NBATestRecommendation]
     reason: Optional[str] = None
+    decision: Optional[Dict[str, Any]] = None
 
 
 SETTINGS_PATH = DATA_DIR / "settings.json"
@@ -1268,6 +1276,7 @@ def attribution_preview(
         JOURNEYS = load_journeys_from_db(db, limit=50000)
 
     if not JOURNEYS:
+        reason = "Preview unavailable (no journeys loaded)"
         return AttributionPreviewResponse(
             previewAvailable=False,
             totalJourneys=0,
@@ -1275,7 +1284,16 @@ def attribution_preview(
             windowDirection="none",
             useConvertedFlagImpact=0,
             useConvertedFlagDirection="none",
-            reason="Preview unavailable (no journeys loaded)",
+            reason=reason,
+            decision=build_attribution_preview_decision(
+                preview_available=False,
+                reason=reason,
+                total_journeys=0,
+                window_impact_count=0,
+                window_direction="none",
+                converted_impact_count=0,
+                converted_direction="none",
+            ),
         )
 
     baseline = SETTINGS.attribution
@@ -1336,6 +1354,15 @@ def attribution_preview(
         windowDirection=window_direction,
         useConvertedFlagImpact=converted_impact,
         useConvertedFlagDirection=converted_direction,
+        decision=build_attribution_preview_decision(
+            preview_available=True,
+            reason=None,
+            total_journeys=len(JOURNEYS),
+            window_impact_count=window_impact,
+            window_direction=window_direction,
+            converted_impact_count=converted_impact,
+            converted_direction=converted_direction,
+        ),
     )
 
 
@@ -1353,6 +1380,7 @@ def nba_preview(
         JOURNEYS = load_journeys_from_db(db, limit=50000)
 
     if not JOURNEYS:
+        reason = "Preview unavailable (no journeys loaded)"
         return NBAPreviewResponse(
             previewAvailable=False,
             datasetJourneys=0,
@@ -1362,7 +1390,17 @@ def nba_preview(
             averageRecommendationsPerPrefix=0.0,
             filteredBySupportPct=0.0,
             filteredByConversionPct=0.0,
-            reason="Preview unavailable (no journeys loaded)",
+            reason=reason,
+            decision=build_nba_preview_decision(
+                preview_available=False,
+                reason=reason,
+                dataset_journeys=0,
+                prefixes_eligible=0,
+                total_prefixes=0,
+                total_recommendations=0,
+                filtered_by_support_pct=0.0,
+                filtered_by_conversion_pct=0.0,
+            ),
         )
 
     requested_level = (payload.level or "channel").lower()
@@ -1407,6 +1445,16 @@ def nba_preview(
         filteredBySupportPct=round(filtered_support_pct, 2),
         filteredByConversionPct=round(filtered_conversion_pct, 2),
         reason=reason,
+        decision=build_nba_preview_decision(
+            preview_available=True,
+            reason=reason,
+            dataset_journeys=len(JOURNEYS),
+            prefixes_eligible=prefixes_eligible,
+            total_prefixes=stats.get("prefixes_considered", 0),
+            total_recommendations=total_after,
+            filtered_by_support_pct=round(filtered_support_pct, 2),
+            filtered_by_conversion_pct=round(filtered_conversion_pct, 2),
+        ),
     )
 
 
@@ -1424,6 +1472,7 @@ def nba_test(
         JOURNEYS = load_journeys_from_db(db, limit=50000)
 
     if not JOURNEYS:
+        reason = "Recommendations unavailable (no journeys loaded)"
         return NBATestResponse(
             previewAvailable=False,
             prefix=payload.path_prefix or "",
@@ -1431,7 +1480,13 @@ def nba_test(
             totalPrefixSupport=0,
             baselineConversionRate=0.0,
             recommendations=[],
-            reason="Recommendations unavailable (no journeys loaded)",
+            reason=reason,
+            decision=build_nba_test_decision(
+                preview_available=False,
+                reason=reason,
+                total_prefix_support=0,
+                recommendations_count=0,
+            ),
         )
 
     requested_level = (payload.level or "channel").lower()
@@ -1496,6 +1551,12 @@ def nba_test(
         baselineConversionRate=baseline_rate,
         recommendations=recommendations,
         reason=reason,
+        decision=build_nba_test_decision(
+            preview_available=True,
+            reason=reason,
+            total_prefix_support=prefix_support,
+            recommendations_count=len(recommendations),
+        ),
     )
 
 
@@ -1986,73 +2047,73 @@ _DQ_DRILLDOWN = {
     "freshness_lag_minutes": {
         "definition": "How delayed the most recent event is per source. High lag means attribution windows may miss recent touchpoints.",
         "recommended_actions": [
-            "Check Meiro event ingestion delay in Data Sources",
-            "Verify ad platform connector sync schedule",
-            "Review Expenses reconciliation timing",
+            {"id": "check_meiro_ingestion", "label": "Check Meiro event ingestion delay in Data Sources", "domain": "data_sources", "target_page": "datasources"},
+            {"id": "verify_connector_sync", "label": "Verify ad platform connector sync schedule", "domain": "data_sources", "target_page": "datasources"},
+            {"id": "review_expense_timing", "label": "Review Expenses reconciliation timing", "domain": "data_sources", "target_page": "expenses"},
         ],
     },
     "missing_profile_pct": {
         "definition": "Share of journeys without a profile/customer ID. Without IDs, paths cannot be joined to conversions.",
         "recommended_actions": [
-            "Verify gclid/fbclid capture and consent on landing pages",
-            "Check Meiro identity resolution and profile stitching",
-            "Ensure event tracking includes customer_id or equivalent",
+            {"id": "verify_click_ids", "label": "Verify gclid/fbclid capture and consent on landing pages", "domain": "data_sources", "target_page": "datasources"},
+            {"id": "check_identity_resolution", "label": "Check Meiro identity resolution and profile stitching", "domain": "data_sources", "target_page": "datasources"},
+            {"id": "ensure_customer_id", "label": "Ensure event tracking includes customer_id or equivalent", "domain": "data_sources", "target_page": "datasources"},
         ],
     },
     "missing_timestamp_pct": {
         "definition": "Share of journeys with no touchpoint timestamps. Without timestamps, windowing and path ordering break.",
         "recommended_actions": [
-            "Ensure all events include timestamp or event_time",
-            "Check UTM taxonomy mapping for server-side events",
-            "Verify event enrichment pipelines add timestamps",
+            {"id": "ensure_event_timestamps", "label": "Ensure all events include timestamp or event_time", "domain": "data_sources", "target_page": "datasources"},
+            {"id": "check_taxonomy_mapping", "label": "Check UTM taxonomy mapping for server-side events", "domain": "taxonomy", "target_page": "settings", "target_section": "taxonomy", "target_tab": "advanced"},
+            {"id": "verify_timestamp_enrichment", "label": "Verify event enrichment pipelines add timestamps", "domain": "data_sources", "target_page": "datasources"},
         ],
     },
     "duplicate_id_pct": {
         "definition": "Share of duplicate profile IDs across journeys. Duplicates can cause double-counting in attribution.",
         "recommended_actions": [
-            "Review identity resolution and deduplication rules",
-            "Check for multiple event streams emitting same profile_id",
-            "Verify Conversion Paths deduplication logic",
+            {"id": "review_dedup_rules", "label": "Review identity resolution and deduplication rules", "domain": "data_sources", "target_page": "datasources"},
+            {"id": "check_multiple_streams", "label": "Check for multiple event streams emitting same profile_id", "domain": "data_sources", "target_page": "datasources"},
+            {"id": "verify_path_dedup_logic", "label": "Verify Conversion Paths deduplication logic", "domain": "journeys_settings", "target_page": "settings", "target_section": "journeys"},
         ],
     },
     "conversion_attributable_pct": {
         "definition": "Share of conversions with at least one eligible touchpoint. Low values mean many conversions cannot be attributed.",
         "recommended_actions": [
-            "Review eligible touchpoints config in Model Configurator",
-            "Fix UTM taxonomy mapping for new sources in Taxonomy",
-            "Check Connectors for missing channel mapping",
+            {"id": "review_model_touchpoints", "label": "Review eligible touchpoints config in Model Configurator", "domain": "measurement_models", "target_page": "settings", "target_section": "measurement-models"},
+            {"id": "fix_taxonomy_mapping", "label": "Fix UTM taxonomy mapping for new sources in Taxonomy", "domain": "taxonomy", "target_page": "settings", "target_section": "taxonomy", "target_tab": "suggestions"},
+            {"id": "check_missing_channel_mapping", "label": "Check Connectors for missing channel mapping", "domain": "data_sources", "target_page": "datasources"},
         ],
     },
     "defaulted_conversion_value_pct": {
         "definition": "Share of conversion entries where the configured default value was applied because the raw value was missing or invalid.",
         "recommended_actions": [
-            "Review Revenue KPI defaults and per-conversion overrides in Settings",
-            "Confirm the correct conversion value field is mapped from Meiro payloads",
-            "Inspect webhook suggestions for missing value-field paths",
+            {"id": "review_revenue_defaults", "label": "Review Revenue KPI defaults and per-conversion overrides in Settings", "domain": "kpi", "target_page": "settings", "target_section": "kpi", "target_tab": "advanced"},
+            {"id": "confirm_meiro_value_field", "label": "Confirm the correct conversion value field is mapped from Meiro payloads", "domain": "data_sources", "target_page": "datasources"},
+            {"id": "inspect_webhook_value_suggestions", "label": "Inspect webhook suggestions for missing value-field paths", "domain": "data_sources", "target_page": "datasources"},
         ],
     },
     "raw_zero_conversion_value_pct": {
         "definition": "Share of conversion entries that arrived with a raw numeric value of zero before any fallback logic.",
         "recommended_actions": [
-            "Check whether zero is a valid business value for this conversion type",
-            "Use per-conversion defaults only where zero should mean missing revenue",
-            "Validate source event schemas and test payloads from Meiro",
+            {"id": "check_zero_value_semantics", "label": "Check whether zero is a valid business value for this conversion type", "domain": "kpi", "target_page": "settings", "target_section": "kpi", "target_tab": "advanced"},
+            {"id": "use_defaults_selectively", "label": "Use per-conversion defaults only where zero should mean missing revenue", "domain": "kpi", "target_page": "settings", "target_section": "kpi", "target_tab": "advanced"},
+            {"id": "validate_meiro_payloads", "label": "Validate source event schemas and test payloads from Meiro", "domain": "data_sources", "target_page": "datasources"},
         ],
     },
     "unresolved_source_medium_touchpoint_pct": {
         "definition": "Share of touchpoints whose source/medium pair does not match any current taxonomy rule after alias normalization.",
         "recommended_actions": [
-            "Apply draft taxonomy suggestions from the Meiro payload analysis card",
-            "Add missing source aliases and medium aliases for new traffic values",
-            "Create channel rules for repeated unresolved source/medium pairs",
+            {"id": "apply_taxonomy_suggestions", "label": "Apply draft taxonomy suggestions from the Meiro payload analysis card", "domain": "taxonomy", "target_page": "settings", "target_section": "taxonomy", "target_tab": "suggestions"},
+            {"id": "add_missing_aliases", "label": "Add missing source aliases and medium aliases for new traffic values", "domain": "taxonomy", "target_page": "settings", "target_section": "taxonomy", "target_tab": "advanced"},
+            {"id": "create_channel_rules", "label": "Create channel rules for repeated unresolved source/medium pairs", "domain": "taxonomy", "target_page": "settings", "target_section": "taxonomy", "target_tab": "advanced"},
         ],
     },
     "inferred_mapping_journey_pct": {
         "definition": "Share of journeys where the parser had to fall back to inferred field mappings instead of only using explicitly configured paths.",
         "recommended_actions": [
-            "Review and apply Meiro mapping suggestions for touchpoints, IDs, and conversion fields",
-            "Confirm webhook payloads use stable field paths for source, medium, campaign, value, and timestamp",
-            "Audit journey parser metadata to identify the fields relying on fallback extraction",
+            {"id": "apply_meiro_mapping_suggestions", "label": "Review and apply Meiro mapping suggestions for touchpoints, IDs, and conversion fields", "domain": "data_sources", "target_page": "datasources"},
+            {"id": "confirm_stable_webhook_paths", "label": "Confirm webhook payloads use stable field paths for source, medium, campaign, value, and timestamp", "domain": "data_sources", "target_page": "datasources"},
+            {"id": "audit_parser_fallbacks", "label": "Audit journey parser metadata to identify the fields relying on fallback extraction", "domain": "data_sources", "target_page": "datasources"},
         ],
     },
 }

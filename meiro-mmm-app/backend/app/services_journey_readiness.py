@@ -85,6 +85,8 @@ def build_journey_readiness(
                 "benefit": "Allow safe preview and activation",
                 "requires_review": True,
                 "domain": "journeys_settings",
+                "target_page": "settings",
+                "target_section": "journeys",
             }
         )
     elif active_settings_preview.get("warnings"):
@@ -95,6 +97,8 @@ def build_journey_readiness(
                 "benefit": "Reduce noisy paths and expensive queries",
                 "requires_review": True,
                 "domain": "journeys_settings",
+                "target_page": "settings",
+                "target_section": "journeys",
             }
         )
 

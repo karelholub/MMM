@@ -1,6 +1,8 @@
 import { Fragment, useState, useCallback, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { tokens as t } from '../theme/tokens'
+import RecommendedActionsList, { type RecommendedActionItem } from '../components/RecommendedActionsList'
+import { navigateForRecommendedAction } from '../lib/recommendedActions'
 import { apiGetJson, apiSendJson, withQuery } from '../lib/apiClient'
 
 // --- Types ---
@@ -42,7 +44,7 @@ interface DQDrilldown {
   definition: string
   breakdown: { source: string; value: number }[]
   top_offenders: { key?: string; value?: unknown }[]
-  recommended_actions: string[]
+  recommended_actions: RecommendedActionItem[]
 }
 
 interface RunResult {
@@ -2022,11 +2024,10 @@ function DrilldownDrawer(props: {
           </section>
           <section>
             <h4 style={{ margin: '0 0 8px', fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Recommended actions</h4>
-            <ul style={{ margin: 0, paddingLeft: t.space.lg, fontSize: t.font.sizeSm, color: t.color.text, lineHeight: 1.6 }}>
-              {data.recommended_actions.map((action, i) => (
-                <li key={i}>{action}</li>
-              ))}
-            </ul>
+            <RecommendedActionsList
+              actions={data.recommended_actions}
+              onActionClick={(action) => navigateForRecommendedAction(action, { defaultPage: 'datasources' })}
+            />
           </section>
         </>
       ) : (

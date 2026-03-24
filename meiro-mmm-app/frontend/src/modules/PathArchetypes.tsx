@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { tokens as t } from '../theme/tokens'
+import DecisionStatusCard from '../components/DecisionStatusCard'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { apiGetJson } from '../lib/apiClient'
 
@@ -520,28 +521,12 @@ export default function PathArchetypes() {
       </div>
 
       {journeys?.readiness && (journeys.readiness.status === 'blocked' || journeys.readiness.warnings.length > 0) ? (
-        <div
-          style={{
-            marginBottom: tkn.space.lg,
-            background: tkn.color.warningSubtle,
-            border: `1px solid ${journeys.readiness.status === 'blocked' ? tkn.color.danger : tkn.color.warning}`,
-            borderRadius: tkn.radius.lg,
-            padding: tkn.space.md,
-            boxShadow: tkn.shadowSm,
-            display: 'grid',
-            gap: 4,
-          }}
-        >
-          <div style={{ fontSize: tkn.font.sizeSm, fontWeight: tkn.font.weightSemibold, color: journeys.readiness.status === 'blocked' ? tkn.color.danger : tkn.color.warning }}>
-            Archetype reliability warning
-          </div>
-          {journeys.readiness.blockers.map((item) => (
-            <div key={item} style={{ fontSize: tkn.font.sizeXs, color: tkn.color.text }}>{item}</div>
-          ))}
-          {journeys.readiness.warnings.slice(0, 3).map((item) => (
-            <div key={item} style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>{item}</div>
-          ))}
-        </div>
+        <DecisionStatusCard
+          title="Archetype Reliability Warning"
+          status={journeys.readiness.status}
+          blockers={journeys.readiness.blockers}
+          warnings={journeys.readiness.warnings.slice(0, 3)}
+        />
       ) : null}
 
       <div

@@ -118,6 +118,10 @@ def _recommended_actions(
                 "label": f"Review {suggestion_count} taxonomy suggestions",
                 "benefit": "Reduce unknown traffic with low-risk draft changes",
                 "requires_review": True,
+                "domain": "taxonomy",
+                "target_page": "settings",
+                "target_section": "taxonomy",
+                "target_tab": "suggestions",
             }
         )
     if unknown_share >= 0.1:
@@ -127,6 +131,10 @@ def _recommended_actions(
                 "label": "Reduce unknown traffic before relying on attribution outputs",
                 "benefit": "Improve channel-level reporting consistency",
                 "requires_review": True,
+                "domain": "taxonomy",
+                "target_page": "settings",
+                "target_section": "taxonomy",
+                "target_tab": "suggestions",
             }
         )
     if low_confidence_share >= 0.1:
@@ -136,6 +144,10 @@ def _recommended_actions(
                 "label": "Review low-confidence channel mappings",
                 "benefit": "Raise trust in summaries and suggestions",
                 "requires_review": True,
+                "domain": "taxonomy",
+                "target_page": "settings",
+                "target_section": "taxonomy",
+                "target_tab": "advanced",
             }
         )
     return actions

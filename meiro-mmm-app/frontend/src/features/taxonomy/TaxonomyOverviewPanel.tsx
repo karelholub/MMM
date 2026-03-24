@@ -1,4 +1,5 @@
 import { tokens as t } from '../../theme/tokens'
+import RecommendedActionsList, { type RecommendedActionItem } from '../../components/RecommendedActionsList'
 
 type AttentionItem = {
   type: string
@@ -13,6 +14,7 @@ type RecommendedAction = {
   label: string
   benefit?: string
   requires_review?: boolean
+  domain?: string
 }
 
 type TaxonomyOverview = {
@@ -39,6 +41,7 @@ interface TaxonomyOverviewPanelProps {
   overview?: TaxonomyOverview
   loading: boolean
   error?: string | null
+  onActionClick?: (action: RecommendedActionItem) => void
 }
 
 function pct(value?: number) {
@@ -53,6 +56,7 @@ export default function TaxonomyOverviewPanel({
   overview,
   loading,
   error,
+  onActionClick,
 }: TaxonomyOverviewPanelProps) {
   const cards = [
     {
@@ -127,12 +131,11 @@ export default function TaxonomyOverviewPanel({
 
         <div style={{ display: 'grid', gap: t.space.sm }}>
           <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Recommended actions</div>
-          {overview?.recommended_actions?.length ? overview.recommended_actions.map((action) => (
-            <div key={action.id} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.bg }}>
-              <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{action.label}</div>
-              {action.benefit ? <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>{action.benefit}</div> : null}
-            </div>
-          )) : <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>No immediate actions suggested.</div>}
+          <RecommendedActionsList
+            actions={overview?.recommended_actions}
+            emptyMessage="No immediate actions suggested."
+            onActionClick={onActionClick}
+          />
         </div>
 
         <div style={{ display: 'grid', gap: t.space.sm }}>

@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { tokens } from '../theme/tokens'
+import DecisionStatusCard from '../components/DecisionStatusCard'
 import ExplainabilityPanel from '../components/ExplainabilityPanel'
 import ConfidenceBadge, { type Confidence } from '../components/ConfidenceBadge'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
@@ -500,28 +501,12 @@ export default function ConversionPaths() {
       </div>
 
       {journeys?.readiness && (journeys.readiness.status === 'blocked' || journeys.readiness.warnings.length > 0) ? (
-        <div
-          style={{
-            marginBottom: t.space.lg,
-            background: t.color.warningSubtle,
-            border: `1px solid ${journeys.readiness.status === 'blocked' ? t.color.danger : t.color.warning}`,
-            borderRadius: t.radius.lg,
-            padding: t.space.md,
-            boxShadow: t.shadowSm,
-            display: 'grid',
-            gap: 4,
-          }}
-        >
-          <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: journeys.readiness.status === 'blocked' ? t.color.danger : t.color.warning }}>
-            Path analysis reliability warning
-          </div>
-          {journeys.readiness.blockers.map((item) => (
-            <div key={item} style={{ fontSize: t.font.sizeXs, color: t.color.text }}>{item}</div>
-          ))}
-          {journeys.readiness.warnings.slice(0, 3).map((item) => (
-            <div key={item} style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>{item}</div>
-          ))}
-        </div>
+        <DecisionStatusCard
+          title="Path Analysis Reliability Warning"
+          status={journeys.readiness.status}
+          blockers={journeys.readiness.blockers}
+          warnings={journeys.readiness.warnings.slice(0, 3)}
+        />
       ) : null}
 
       {showWhy && (

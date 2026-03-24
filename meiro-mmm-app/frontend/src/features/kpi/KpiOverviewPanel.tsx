@@ -1,4 +1,5 @@
 import { tokens as t } from '../../theme/tokens'
+import RecommendedActionsList, { type RecommendedActionItem } from '../../components/RecommendedActionsList'
 
 type KpiOverview = {
   status: string
@@ -20,13 +21,14 @@ interface KpiOverviewPanelProps {
   overview?: KpiOverview
   loading: boolean
   error?: string | null
+  onActionClick?: (action: RecommendedActionItem) => void
 }
 
 function pct(value?: number) {
   return `${((value || 0) * 100).toFixed(1)}%`
 }
 
-export default function KpiOverviewPanel({ overview, loading, error }: KpiOverviewPanelProps) {
+export default function KpiOverviewPanel({ overview, loading, error, onActionClick }: KpiOverviewPanelProps) {
   const cards = [
     {
       label: 'Primary coverage',
@@ -78,12 +80,11 @@ export default function KpiOverviewPanel({ overview, loading, error }: KpiOvervi
 
         <div style={{ display: 'grid', gap: t.space.sm }}>
           <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Recommended actions</div>
-          {overview?.recommended_actions?.length ? overview.recommended_actions.map((action) => (
-            <div key={action.id} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.bg }}>
-              <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{action.label}</div>
-              {action.benefit ? <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>{action.benefit}</div> : null}
-            </div>
-          )) : <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>No immediate KPI actions suggested.</div>}
+          <RecommendedActionsList
+            actions={overview?.recommended_actions}
+            emptyMessage="No immediate KPI actions suggested."
+            onActionClick={onActionClick}
+          />
         </div>
 
         {overview?.warnings?.length ? (

@@ -1,4 +1,5 @@
 import { tokens as t } from '../../theme/tokens'
+import DecisionStatusCard from '../../components/DecisionStatusCard'
 
 type TaxonomyPreviewResponse = {
   before: {
@@ -83,11 +84,14 @@ export default function TaxonomyPreviewPanel({
         </p>
       </div>
 
-      {error && (
-        <div style={{ border: `1px solid ${t.color.danger}`, background: t.color.dangerSubtle, color: t.color.danger, borderRadius: t.radius.sm, padding: t.space.sm, fontSize: t.font.sizeXs }}>
-          {error}
-        </div>
-      )}
+      {error ? (
+        <DecisionStatusCard
+          title="Preview unavailable"
+          status="blocked"
+          compact
+          blockers={[error]}
+        />
+      ) : null}
 
       {!dirty ? (
         <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
@@ -142,9 +146,12 @@ export default function TaxonomyPreviewPanel({
           </div>
 
           {preview.warnings.length ? (
-            <div style={{ border: `1px solid ${t.color.warning}`, background: t.color.warningSubtle, color: t.color.warning, borderRadius: t.radius.sm, padding: t.space.sm, fontSize: t.font.sizeXs, display: 'grid', gap: 4 }}>
-              {preview.warnings.map((warning) => <div key={warning}>{warning}</div>)}
-            </div>
+            <DecisionStatusCard
+              title="Preview warnings"
+              status="warning"
+              compact
+              warnings={preview.warnings}
+            />
           ) : null}
         </>
       )}

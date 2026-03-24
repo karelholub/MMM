@@ -103,6 +103,10 @@ def _recommended_actions(
                 "label": "Select a primary KPI",
                 "benefit": "Unlock consistent attribution defaults and KPI summaries",
                 "requires_review": True,
+                "domain": "kpi",
+                "target_page": "settings",
+                "target_section": "kpi",
+                "target_tab": "advanced",
             }
         )
     if suggestion_count > 0:
@@ -112,6 +116,10 @@ def _recommended_actions(
                 "label": f"Review {suggestion_count} KPI suggestions",
                 "benefit": "Improve KPI coverage without editing raw JSON",
                 "requires_review": True,
+                "domain": "kpi",
+                "target_page": "settings",
+                "target_section": "kpi",
+                "target_tab": "suggestions",
             }
         )
     if total_journeys > 0 and primary_coverage < 0.2 and cfg.primary_kpi_id:
@@ -121,6 +129,10 @@ def _recommended_actions(
                 "label": "Review primary KPI coverage",
                 "benefit": "Raise trust in attribution and reporting outputs",
                 "requires_review": True,
+                "domain": "kpi",
+                "target_page": "settings",
+                "target_section": "kpi",
+                "target_tab": "advanced",
             }
         )
     return actions

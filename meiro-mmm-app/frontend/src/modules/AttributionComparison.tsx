@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { tokens } from '../theme/tokens'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
+import DecisionStatusCard from '../components/DecisionStatusCard'
 import { apiGetJson } from '../lib/apiClient'
 
 interface AttributionComparisonProps {
@@ -319,28 +320,12 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
       </p>
 
       {readiness && (readiness.status === 'blocked' || readiness.warnings.length > 0) ? (
-        <div
-          style={{
-            marginBottom: t.space.lg,
-            background: t.color.warningSubtle,
-            border: `1px solid ${readiness.status === 'blocked' ? t.color.danger : t.color.warning}`,
-            borderRadius: t.radius.lg,
-            padding: t.space.md,
-            boxShadow: t.shadowSm,
-            display: 'grid',
-            gap: 4,
-          }}
-        >
-          <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: readiness.status === 'blocked' ? t.color.danger : t.color.warning }}>
-            Attribution reliability warning
-          </div>
-          {readiness.blockers.map((item) => (
-            <div key={item} style={{ fontSize: t.font.sizeXs, color: t.color.text }}>{item}</div>
-          ))}
-          {readiness.warnings.slice(0, 3).map((item) => (
-            <div key={item} style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>{item}</div>
-          ))}
-        </div>
+        <DecisionStatusCard
+          title="Attribution Reliability Warning"
+          status={readiness.status}
+          blockers={readiness.blockers}
+          warnings={readiness.warnings.slice(0, 3)}
+        />
       ) : null}
 
       {/* Measurement context header */}

@@ -8,6 +8,7 @@ import TrendPanel from '../components/dashboard/TrendPanel'
 import { apiGetJson } from '../lib/apiClient'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import AdsActionsDrawer from '../components/ads/AdsActionsDrawer'
+import DecisionStatusCard from '../components/DecisionStatusCard'
 import { getAdsDeepLink, type AdsProviderKey } from '../connectors/adsManagerConnector'
 
 interface CampaignPerformanceProps {
@@ -719,28 +720,12 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       </div>
 
       {summaryQuery.data?.readiness && (summaryQuery.data.readiness.status === 'blocked' || summaryQuery.data.readiness.warnings.length > 0) ? (
-        <div
-          style={{
-            marginBottom: t.space.lg,
-            background: t.color.warningSubtle,
-            border: `1px solid ${summaryQuery.data.readiness.status === 'blocked' ? t.color.danger : t.color.warning}`,
-            borderRadius: t.radius.lg,
-            padding: t.space.md,
-            boxShadow: t.shadowSm,
-            display: 'grid',
-            gap: 4,
-          }}
-        >
-          <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: summaryQuery.data.readiness.status === 'blocked' ? t.color.danger : t.color.warning }}>
-            Performance reliability warning
-          </div>
-          {summaryQuery.data.readiness.blockers.map((item) => (
-            <div key={item} style={{ fontSize: t.font.sizeXs, color: t.color.text }}>{item}</div>
-          ))}
-          {summaryQuery.data.readiness.warnings.slice(0, 3).map((item) => (
-            <div key={item} style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>{item}</div>
-          ))}
-        </div>
+        <DecisionStatusCard
+          title="Performance Reliability Warning"
+          status={summaryQuery.data.readiness.status}
+          blockers={summaryQuery.data.readiness.blockers}
+          warnings={summaryQuery.data.readiness.warnings.slice(0, 3)}
+        />
       ) : null}
 
       {summaryQuery.isError && (
