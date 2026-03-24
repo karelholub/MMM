@@ -161,6 +161,24 @@
         "operator": "any",
         "value": ""
       }
+    },
+    {
+      "name": "Direct - letaky",
+      "channel": "direct",
+      "priority": 100,
+      "enabled": true,
+      "source": {
+        "operator": "any",
+        "value": ""
+      },
+      "medium": {
+        "operator": "any",
+        "value": ""
+      },
+      "campaign": {
+        "operator": "equals",
+        "value": "letaky"
+      }
     }
   ],
   "source_aliases": {

@@ -4,6 +4,7 @@ import { tokens as t } from '../theme/tokens'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import RecommendedActionsList, { type RecommendedActionItem } from '../components/RecommendedActionsList'
+import WorkspaceAssistantPanel from '../components/WorkspaceAssistantPanel'
 import { navigateForRecommendedAction } from '../lib/recommendedActions'
 import { apiGetJson, apiSendJson, withQuery } from '../lib/apiClient'
 import {
@@ -31,6 +32,7 @@ type PageKey =
   | 'campaigns'
   | 'expenses'
   | 'datasources'
+  | 'meiro'
   | 'mmm'
   | 'settings'
   | 'dq'
@@ -96,6 +98,7 @@ interface OverviewSummaryResponse {
   highlights: HighlightItem[]
   freshness: FreshnessResponse
   readiness?: JourneyReadinessResponse
+  attention_queue?: RecommendedActionItem[]
   consistency_warnings?: string[]
   current_period?: {
     date_from: string
@@ -447,6 +450,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
   const freshness = summary?.freshness
   const trendInsights = trendsQuery.data
   const journeysReadiness = summary?.readiness
+  const overviewAttentionQueue = summary?.attention_queue ?? journeysReadiness?.recommended_actions ?? []
 
   const handleOverviewAction = (action: RecommendedActionItem) => {
     navigateForRecommendedAction(action, { onNavigate, defaultPage: 'datasources' })
@@ -689,10 +693,10 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
       emptyState={emptyState}
     >
       <div style={{ display: 'grid', gap: t.space.xl }}>
-        {journeysReadiness?.recommended_actions?.length ? (
-          <SectionCard title="Recommended Actions" subtitle="Highest-value next steps from the current decision state.">
-            <RecommendedActionsList
-              actions={journeysReadiness.recommended_actions}
+        {overviewAttentionQueue.length ? (
+          <SectionCard title="Workspace Assistant" subtitle="Ranked next steps across taxonomy, KPI, journeys, Meiro, and data sources.">
+            <WorkspaceAssistantPanel
+              actions={overviewAttentionQueue}
               onActionClick={handleOverviewAction}
             />
           </SectionCard>

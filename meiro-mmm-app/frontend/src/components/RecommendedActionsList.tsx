@@ -6,6 +6,13 @@ export type RecommendedActionItem = {
   benefit?: string
   requires_review?: boolean
   domain?: string
+  source?: string
+  source_status?: string
+  source_confidence?: {
+    score?: number
+    band?: string
+  }
+  priority_score?: number
   target_page?: string
   target_section?: string
   target_tab?: string

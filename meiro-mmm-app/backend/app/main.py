@@ -65,6 +65,13 @@ from app.services_settings_decisions import (
     build_nba_preview_decision,
     build_nba_test_decision,
 )
+from app.services_attention_queue import build_attention_queue
+from app.services_data_sources import list_data_sources
+from app.services_data_sources_readiness import build_data_sources_readiness
+from app.services_import_health import build_import_health
+from app.services_journey_readiness import build_journey_readiness
+from app.services_meiro_readiness import build_meiro_readiness
+from app.services_kpi_decisions import build_kpi_overview, build_kpi_suggestions
 from app.services_model_config_suggestions import suggest_model_config_from_journeys
 from app.services_journey_settings import (
     activate_journey_settings_version,
@@ -110,6 +117,8 @@ from app.services_journeys_health import (
     build_journeys_preview,
     build_journeys_summary,
 )
+from app.services_taxonomy_decisions import build_taxonomy_overview
+from app.services_taxonomy_suggestions import generate_taxonomy_suggestions
 from app.modules.journeys.router import create_router as create_journeys_router
 from app.modules.performance.router import create_router as create_performance_router
 from app.modules.settings.router import create_router as create_settings_router
@@ -1053,6 +1062,76 @@ def _ensure_journeys_loaded(db: Any) -> List[Dict[str, Any]]:
     if not JOURNEYS:
         JOURNEYS = load_journeys_from_db(db)
     return JOURNEYS or []
+
+
+def _build_overview_attention_queue(db: Any) -> List[Dict[str, Any]]:
+    journeys = _ensure_journeys_loaded(db)
+    taxonomy = load_taxonomy()
+    kpi_config = load_kpi_config()
+
+    taxonomy_suggestions = generate_taxonomy_suggestions(journeys, taxonomy=taxonomy, limit=8)
+    taxonomy_overview = build_taxonomy_overview(
+        journeys,
+        taxonomy=taxonomy,
+        suggestion_count=len(taxonomy_suggestions.get("suggestions", [])),
+    )
+
+    kpi_suggestions = build_kpi_suggestions(journeys, kpi_config, limit=8)
+    kpi_overview = build_kpi_overview(
+        journeys,
+        kpi_config,
+        suggestion_count=len(kpi_suggestions.get("suggestions", [])),
+    )
+
+    active_settings = ensure_active_journey_settings(db, actor="system")
+    active_preview = build_journey_settings_impact_preview(
+        db,
+        draft_settings_json=active_settings.settings_json or {},
+    )
+    journeys_readiness = build_journey_readiness(
+        journeys=journeys,
+        kpi_config=kpi_config,
+        get_import_runs_fn=get_import_runs,
+        active_settings=active_settings,
+        active_settings_preview=active_preview,
+    )
+
+    meiro_metadata = meiro_cdp.get_connection_metadata() or {}
+    meiro_readiness = build_meiro_readiness(
+        meiro_connected=meiro_cdp.is_connected(),
+        meiro_config={
+            "connected": meiro_cdp.is_connected(),
+            "api_base_url": meiro_metadata.get("api_base_url"),
+            "last_test_at": meiro_metadata.get("last_test_at") or get_last_test_at(),
+            "has_key": meiro_metadata.get("has_key", False),
+            "webhook_last_received_at": get_webhook_last_received_at(),
+            "webhook_received_count": get_webhook_received_count(),
+            "webhook_has_secret": bool(get_webhook_secret()),
+        },
+        mapping_state=get_mapping_state(),
+        archive_status=get_webhook_archive_status(),
+        pull_config=get_pull_config(),
+    )
+
+    data_sources_payload = list_data_sources(db, workspace_id=DEFAULT_WORKSPACE_ID, category=None)
+    data_sources = data_sources_payload.get("items", []) if isinstance(data_sources_payload, dict) else (data_sources_payload or [])
+    data_sources_readiness = build_data_sources_readiness(
+        data_sources=data_sources,
+        import_health=build_import_health(IMPORT_SYNC_STATE, SYNC_IN_PROGRESS),
+        meiro_readiness=meiro_readiness,
+        journeys_loaded=len(journeys),
+    )
+
+    return build_attention_queue(
+        decisions={
+            "taxonomy": taxonomy_overview,
+            "kpi": kpi_overview,
+            "journeys": journeys_readiness,
+            "meiro": meiro_readiness,
+            "data_sources": data_sources_readiness,
+        },
+        limit=10,
+    )
 
 
 # Initialize sample datasets
@@ -2382,6 +2461,7 @@ app.include_router(
         get_db_dependency=get_db,
         require_permission_dependency=require_permission,
         ensure_journeys_loaded_fn=_ensure_journeys_loaded,
+        get_overview_attention_queue_fn=_build_overview_attention_queue,
         build_query_context_fn=_build_performance_query_context,
         build_meta_fn=_build_performance_meta,
         attach_scope_confidence_fn=_attach_scope_confidence,
@@ -2578,6 +2658,23 @@ app.include_router(
         get_access_token_for_provider_fn=get_access_token_for_provider,
         get_ds_config_effective_fn=ds_config.get_effective,
         build_smart_suggestions_fn=build_smart_suggestions,
+        get_meiro_readiness_fn=lambda: build_meiro_readiness(
+            meiro_connected=meiro_cdp.is_connected(),
+            meiro_config={
+                "connected": meiro_cdp.is_connected(),
+                "api_base_url": (meiro_cdp.get_connection_metadata() or {}).get("api_base_url"),
+                "last_test_at": (meiro_cdp.get_connection_metadata() or {}).get("last_test_at") or get_last_test_at(),
+                "has_key": (meiro_cdp.get_connection_metadata() or {}).get("has_key", False),
+                "webhook_url": f"{BASE_URL}/api/connectors/meiro/profiles",
+                "webhook_last_received_at": get_webhook_last_received_at(),
+                "webhook_received_count": get_webhook_received_count(),
+                "webhook_has_secret": bool(get_webhook_secret() or os.getenv("MEIRO_WEBHOOK_SECRET", "").strip()),
+            },
+            mapping_state=get_mapping_state(),
+            archive_status=get_webhook_archive_status(),
+            pull_config=get_pull_config(),
+        ),
+        get_journeys_fn=_ensure_journeys_loaded,
     )
 )
 

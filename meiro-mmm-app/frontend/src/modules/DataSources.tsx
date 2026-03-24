@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import DashboardPage from '../components/dashboard/DashboardPage'
 import SectionCard from '../components/dashboard/SectionCard'
 import DashboardTable from '../components/dashboard/DashboardTable'
+import DecisionStatusCard from '../components/DecisionStatusCard'
 import { tokens as t } from '../theme/tokens'
 import {
   connectMeiroCDP,
@@ -44,6 +45,7 @@ import {
 import { apiGetJson, apiRequest, apiSendJson } from '../lib/apiClient'
 import { usePermissions } from '../hooks/usePermissions'
 import { useWorkspaceContext, type JourneysSummary } from '../components/WorkspaceContext'
+import { navigateForRecommendedAction } from '../lib/recommendedActions'
 import MeiroIntegrationPanel from '../features/meiro/MeiroIntegrationPanel'
 import {
   DEFAULT_MEIRO_PULL_CONFIG,
@@ -55,6 +57,7 @@ import {
 
 interface DataSourcesProps {
   onJourneysImported: () => void
+  onOpenMeiro?: () => void
 }
 
 type IngestionMethod = 'sample' | 'upload' | 'meiro'
@@ -63,6 +66,34 @@ type WarehouseType = 'bigquery' | 'snowflake'
 type ProviderModalState = { provider: OAuthProviderKey; displayName: string } | null
 type ConnectPickerState = { open: boolean } 
 type CredentialsModalState = { open: boolean; provider: OAuthProviderKey | null }
+
+interface DataSourcesReadinessResponse {
+  status: string
+  confidence: { score: number; band: string }
+  summary: {
+    journeys_loaded: number
+    connected_sources: number
+    warehouse_sources: number
+    ad_platform_sources: number
+    overall_import_freshness: string
+    healthy_import_sources: number
+    syncing_sources: number
+    meiro_status: string
+  }
+  blockers: string[]
+  warnings: string[]
+  reasons: string[]
+  recommended_actions: Array<{
+    id: string
+    label: string
+    benefit?: string
+    domain?: string
+    target_page?: string
+    target_section?: string
+    target_tab?: string
+    requires_review?: boolean
+  }>
+}
 
 type WarehouseDraft = {
   type: WarehouseType
@@ -225,7 +256,7 @@ const DEFAULT_AD_PROVIDER_ROWS: Array<{
   },
 ]
 
-export default function DataSources({ onJourneysImported }: DataSourcesProps) {
+export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSourcesProps) {
   const { journeysSummary } = useWorkspaceContext()
   const queryClient = useQueryClient()
   const fileRef = useRef<HTMLInputElement>(null)
@@ -299,6 +330,13 @@ export default function DataSources({ onJourneysImported }: DataSourcesProps) {
         '/api/datasources/connections',
         { fallbackMessage: 'Failed to load datasource connections' },
       ),
+  })
+  const dataSourcesReadinessQuery = useQuery<DataSourcesReadinessResponse>({
+    queryKey: ['data-sources-readiness'],
+    queryFn: async () =>
+      apiGetJson<DataSourcesReadinessResponse>('/api/data-sources/readiness', {
+        fallbackMessage: 'Failed to load data-source readiness',
+      }),
   })
 
   const providerAccountsQuery = useQuery({
@@ -598,44 +636,50 @@ export default function DataSources({ onJourneysImported }: DataSourcesProps) {
 
   const readiness = useMemo(() => {
     const j: JourneysSummary = journeysSummary ?? { loaded: false, count: 0, converted: 0, non_converted: 0 }
-    const readinessSummary = journeysSummary?.readiness?.summary ?? {
-      primary_kpi_coverage: undefined,
-      taxonomy_unknown_share: undefined,
-      journeys_loaded: undefined,
-      freshness_hours: undefined,
-    }
-    const readinessStatus = journeysSummary?.readiness?.status || 'unknown'
+    const summary = dataSourcesReadinessQuery.data?.summary
+    const importFreshness = summary?.overall_import_freshness || 'unknown'
+    const meiroStatus = (summary?.meiro_status || 'unknown').toLowerCase()
     return [
       {
         key: 'journeys',
         label: 'Journeys',
-        value: (readinessSummary.journeys_loaded ?? j.count ?? 0).toLocaleString(),
-        tone: readinessStatus === 'blocked' ? t.color.danger : (j.loaded ? t.color.success : t.color.warning),
+        value: (summary?.journeys_loaded ?? j.count ?? 0).toLocaleString(),
+        tone: (summary?.journeys_loaded ?? j.count ?? 0) > 0 ? t.color.success : t.color.warning,
         onClick: () => setIngestionMethod('sample'),
       },
       {
-        key: 'taxonomy',
-        label: 'Taxonomy coverage',
-        value: readinessSummary.taxonomy_unknown_share == null ? '—' : `${Math.max(0, 100 - readinessSummary.taxonomy_unknown_share * 100).toFixed(1)}%`,
-        tone: (readinessSummary.taxonomy_unknown_share ?? 1) >= 0.2 ? t.color.danger : (readinessSummary.taxonomy_unknown_share ?? 1) > 0.08 ? t.color.warning : t.color.success,
-        onClick: () => window.location.assign('#settings/taxonomy'),
+        key: 'sources',
+        label: 'Connected sources',
+        value: (summary?.connected_sources ?? 0).toLocaleString(),
+        tone: (summary?.connected_sources ?? 0) > 0 ? t.color.success : t.color.warning,
+        onClick: () => setSystemsTab('warehouses'),
       },
       {
         key: 'freshness',
-        label: 'Freshness',
-        value: readinessSummary.freshness_hours == null ? (j.data_freshness_hours == null ? '—' : `${Math.round(j.data_freshness_hours)}h`) : `${Math.round(readinessSummary.freshness_hours)}h`,
-        tone: (readinessSummary.freshness_hours ?? j.data_freshness_hours ?? 9999) <= 24 ? t.color.success : t.color.warning,
+        label: 'Import freshness',
+        value: importFreshness,
+        tone: importFreshness === 'Healthy' ? t.color.success : importFreshness === 'unknown' ? t.color.textMuted : t.color.warning,
         onClick: () => setSystemsTab('cdp'),
       },
       {
-        key: 'kpi',
-        label: 'Primary KPI coverage',
-        value: readinessSummary.primary_kpi_coverage == null ? '—' : `${(readinessSummary.primary_kpi_coverage * 100).toFixed(1)}%`,
-        tone: (readinessSummary.primary_kpi_coverage ?? 0) < 0.2 ? t.color.warning : t.color.success,
-        onClick: () => window.location.assign('#settings/kpi'),
+        key: 'meiro',
+        label: 'Meiro status',
+        value: summary?.meiro_status ? summary.meiro_status.replace('_', ' ') : 'unknown',
+        tone: meiroStatus === 'ready' ? t.color.success : meiroStatus === 'blocked' ? t.color.danger : t.color.warning,
+        onClick: () => {
+          if (onOpenMeiro) onOpenMeiro()
+        },
       },
     ]
-  }, [journeysSummary])
+  }, [dataSourcesReadinessQuery.data?.summary, journeysSummary, onOpenMeiro])
+
+  const handleReadinessAction = (action: DataSourcesReadinessResponse['recommended_actions'][number]) => {
+    if (action.target_page === 'meiro' && onOpenMeiro) {
+      onOpenMeiro()
+      return
+    }
+    navigateForRecommendedAction(action as any, { defaultPage: 'datasources' })
+  }
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -760,26 +804,39 @@ export default function DataSources({ onJourneysImported }: DataSourcesProps) {
               </div>
             </SectionCard>
           )}
-          <SectionCard title="Data readiness" subtitle="Click any KPI to jump to the relevant area.">
-            <div style={{ display: 'grid', gap: t.space.sm, gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))' }}>
-              {readiness.map((kpi) => (
-                <button
-                  key={kpi.key}
-                  type="button"
-                  onClick={kpi.onClick}
-                  style={{
-                    textAlign: 'left',
-                    border: `1px solid ${t.color.borderLight}`,
-                    borderRadius: t.radius.md,
-                    background: t.color.surface,
-                    padding: t.space.md,
-                    cursor: 'pointer',
-                  }}
-                >
-                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{kpi.label}</div>
-                  <div style={{ fontSize: t.font.sizeBase, fontWeight: t.font.weightSemibold, color: kpi.tone }}>{kpi.value}</div>
-                </button>
-              ))}
+          <SectionCard title="Data readiness" subtitle="Operational health across ingestion, imports, and connected systems.">
+            <div style={{ display: 'grid', gap: t.space.sm }}>
+              {dataSourcesReadinessQuery.data ? (
+                <DecisionStatusCard
+                  title="Operational readiness"
+                  status={dataSourcesReadinessQuery.data.status}
+                  subtitle={`Confidence ${dataSourcesReadinessQuery.data.confidence.band} (${dataSourcesReadinessQuery.data.confidence.score}/100)`}
+                  blockers={dataSourcesReadinessQuery.data.blockers}
+                  warnings={[...dataSourcesReadinessQuery.data.warnings, ...dataSourcesReadinessQuery.data.reasons]}
+                  actions={dataSourcesReadinessQuery.data.recommended_actions as any}
+                  onActionClick={handleReadinessAction as any}
+                />
+              ) : null}
+              <div style={{ display: 'grid', gap: t.space.sm, gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))' }}>
+                {readiness.map((kpi) => (
+                  <button
+                    key={kpi.key}
+                    type="button"
+                    onClick={kpi.onClick}
+                    style={{
+                      textAlign: 'left',
+                      border: `1px solid ${t.color.borderLight}`,
+                      borderRadius: t.radius.md,
+                      background: t.color.surface,
+                      padding: t.space.md,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{kpi.label}</div>
+                    <div style={{ fontSize: t.font.sizeBase, fontWeight: t.font.weightSemibold, color: kpi.tone }}>{kpi.value}</div>
+                  </button>
+                ))}
+              </div>
             </div>
           </SectionCard>
 
@@ -1082,13 +1139,17 @@ export default function DataSources({ onJourneysImported }: DataSourcesProps) {
                         <button
                           type="button"
                           onClick={() => {
+                            if (item.type === 'meiro' && onOpenMeiro) {
+                              onOpenMeiro()
+                              return
+                            }
                             setDrawerConnector({ id: item.id, name: item.name, type: item.type, category: item.category })
                             if (item.type === 'meiro') setMeiroTab('overview')
                             setDrawerOpen(true)
                           }}
                           style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '4px 8px', cursor: 'pointer', fontSize: t.font.sizeXs }}
                         >
-                          Configure
+                          {item.type === 'meiro' ? 'Open workspace' : 'Configure'}
                         </button>
                         {item.category === 'warehouse' && (
                           <button

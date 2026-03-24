@@ -10,24 +10,8 @@ from app.modules.data_sources.schemas import (
     DataSourceTestPayload,
     DataSourceUpdatePayload,
 )
-
-
-IMPORT_SOURCES = ["google_ads", "meta_ads", "linkedin_ads"]
-
-
-def _import_status_from_state(state: Dict[str, Any]) -> str:
-    if not state:
-        return "unknown"
-    status = state.get("status") or "unknown"
-    if status in ("Healthy", "Stale", "Broken", "Partial"):
-        return status
-    if state.get("last_error"):
-        return "Broken"
-    if state.get("last_success_at"):
-        return "Healthy"
-    if state.get("last_attempt_at"):
-        return "Partial"
-    return "unknown"
+from app.services_data_sources_readiness import build_data_sources_readiness
+from app.services_import_health import IMPORT_SOURCES, build_import_health
 
 
 def create_router(
@@ -54,6 +38,8 @@ def create_router(
     get_access_token_for_provider_fn: Callable[..., Optional[str]],
     get_ds_config_effective_fn: Callable[[str, str], Any],
     build_smart_suggestions_fn: Callable[..., Dict[str, Any]],
+    get_meiro_readiness_fn: Callable[[], Dict[str, Any]],
+    get_journeys_fn: Callable[[Any], Any],
 ) -> APIRouter:
     router = APIRouter(tags=["data_sources"])
 
@@ -184,32 +170,26 @@ def create_router(
 
     @router.get("/api/imports/health")
     def get_import_health():
-        result = []
         import_sync_state = get_import_sync_state_obj()
         sync_in_progress = get_sync_in_progress_obj()
-        for source in IMPORT_SOURCES:
-            state = import_sync_state.get(source, {})
-            result.append(
-                {
-                    "source": source,
-                    "status": _import_status_from_state(state),
-                    "last_success_at": state.get("last_success_at"),
-                    "last_attempt_at": state.get("last_attempt_at"),
-                    "records_imported": state.get("records_imported"),
-                    "period_start": state.get("period_start"),
-                    "period_end": state.get("period_end"),
-                    "last_error": state.get("last_error"),
-                    "action_hint": state.get("action_hint"),
-                    "syncing": source in sync_in_progress,
-                }
-            )
-        status_order = {"Broken": 3, "Stale": 2, "Partial": 1, "Healthy": 0, "unknown": -1}
-        attempted = [row for row in result if row["last_attempt_at"]]
-        overall = "Healthy"
-        if attempted:
-            worst = max(attempted, key=lambda row: status_order.get(row["status"], -1))
-            overall = worst["status"] if worst["status"] != "unknown" else "Stale"
-        return {"sources": result, "overall_freshness": overall}
+        return build_import_health(import_sync_state, sync_in_progress)
+
+    @router.get("/api/data-sources/readiness")
+    def get_data_sources_readiness(
+        workspace_id: str = Query("default"),
+        db=Depends(get_db_dependency),
+    ):
+        data_sources_payload = list_data_sources_fn(db, workspace_id=workspace_id, category=None)
+        data_sources = data_sources_payload.get("items", []) if isinstance(data_sources_payload, dict) else (data_sources_payload or [])
+        import_health = get_import_health()
+        meiro_readiness = get_meiro_readiness_fn()
+        journeys = get_journeys_fn(db) or []
+        return build_data_sources_readiness(
+            data_sources=data_sources,
+            import_health=import_health,
+            meiro_readiness=meiro_readiness,
+            journeys_loaded=len(journeys),
+        )
 
     @router.post("/api/imports/sync/{source}")
     def trigger_sync(

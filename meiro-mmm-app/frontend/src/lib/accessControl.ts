@@ -7,6 +7,7 @@ export type AppPageKey =
   | 'campaigns'
   | 'expenses'
   | 'datasources'
+  | 'meiro'
   | 'mmm'
   | 'settings'
   | 'dq'

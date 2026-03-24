@@ -84,6 +84,7 @@ def create_router(
     get_db_dependency: Callable[..., Any],
     require_permission_dependency: Callable[[str], Callable[..., Any]],
     ensure_journeys_loaded_fn: Callable[[Any], list[dict]],
+    get_overview_attention_queue_fn: Callable[[Any], list[dict[str, Any]]],
     build_query_context_fn: Callable[..., Any],
     build_meta_fn: Callable[..., dict[str, Any]],
     attach_scope_confidence_fn: Callable[..., None],
@@ -105,7 +106,7 @@ def create_router(
         db=Depends(get_db_dependency),
         _ctx=Depends(require_permission_dependency("attribution.view")),
     ):
-        return get_overview_summary(
+        payload = get_overview_summary(
             db=db,
             date_from=date_from,
             date_to=date_to,
@@ -117,6 +118,8 @@ def create_router(
             expenses=expenses_obj,
             import_runs_get_last_successful=get_last_successful_run,
         )
+        payload["attention_queue"] = get_overview_attention_queue_fn(db)
+        return payload
 
     @router.get("/api/overview/drivers")
     def overview_drivers(

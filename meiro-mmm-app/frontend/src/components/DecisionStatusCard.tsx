@@ -25,6 +25,8 @@ export default function DecisionStatusCard({
   const tone =
     status === 'blocked'
       ? { border: t.color.danger, fg: t.color.danger, bg: t.color.dangerSubtle }
+      : status === 'ready'
+      ? { border: t.color.success, fg: t.color.success, bg: t.color.successMuted }
       : { border: t.color.warning, fg: t.color.warning, bg: t.color.warningSubtle }
 
   return (

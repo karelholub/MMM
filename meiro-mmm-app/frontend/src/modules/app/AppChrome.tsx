@@ -10,6 +10,7 @@ export type AppPage =
   | 'campaigns'
   | 'expenses'
   | 'datasources'
+  | 'meiro'
   | 'mmm'
   | 'settings'
   | 'dq'
@@ -48,6 +49,7 @@ export const NAV_ITEMS: NavItem[] = [
   { key: 'mmm', label: 'MMM (advanced)', section: 'Causal / Planning', icon: 'MM', breadcrumb: 'Causal / MMM (advanced)' },
   { key: 'dq', label: 'Data quality', section: 'Data & Ops', icon: 'DQ', breadcrumb: 'Data & Ops / Data quality' },
   { key: 'datasources', label: 'Data sources', section: 'Data & Ops', icon: 'DS', breadcrumb: 'Data & Ops / Data sources' },
+  { key: 'meiro', label: 'Meiro', section: 'Data & Ops', icon: 'ME', breadcrumb: 'Data & Ops / Meiro' },
   { key: 'expenses', label: 'Expenses', section: 'Data & Ops', icon: 'EX', breadcrumb: 'Data & Ops / Expenses' },
   { key: 'settings', label: 'Settings', section: 'Admin', icon: 'ST', breadcrumb: 'Admin / Settings' },
 ]
@@ -101,7 +103,7 @@ function renderNavIcon(page: AppPage, active: boolean) {
       </svg>
     )
   }
-  if (page === 'datasources' || page === 'datasets' || page === 'expenses') {
+  if (page === 'datasources' || page === 'datasets' || page === 'expenses' || page === 'meiro') {
     return (
       <svg {...common}>
         <ellipse cx="8" cy="3.5" rx="5.5" ry="2" />

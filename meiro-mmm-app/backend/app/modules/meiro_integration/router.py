@@ -36,6 +36,7 @@ from app.utils.meiro_config import (
     set_webhook_received,
     update_mapping_approval,
 )
+from app.services_meiro_readiness import build_meiro_readiness
 from app.utils.taxonomy import load_taxonomy
 
 
@@ -317,6 +318,20 @@ def create_router(
             "webhook_received_count": get_webhook_received_count(),
             "webhook_has_secret": bool(get_webhook_secret() or os.getenv("MEIRO_WEBHOOK_SECRET", "").strip()),
         }
+
+    @router.get("/api/connectors/meiro/readiness")
+    def meiro_readiness():
+        config = meiro_config()
+        mapping_state = get_mapping_state()
+        archive_status = get_webhook_archive_status()
+        pull_config = get_pull_config()
+        return build_meiro_readiness(
+            meiro_connected=meiro_cdp.is_connected(),
+            meiro_config=config,
+            mapping_state=mapping_state,
+            archive_status=archive_status,
+            pull_config=pull_config,
+        )
 
     @router.get("/api/connectors/meiro/attributes")
     def meiro_attributes():

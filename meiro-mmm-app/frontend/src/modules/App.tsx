@@ -35,6 +35,7 @@ const AttributionComparison = lazy(() => import('./AttributionComparison'))
 const ConversionPaths = lazy(() => import('./ConversionPaths'))
 const ExpenseManager = lazy(() => import('./ExpenseManager'))
 const DataSources = lazy(() => import('./DataSources'))
+const MeiroIntegrationPage = lazy(() => import('./MeiroIntegration'))
 const CampaignPerformance = lazy(() => import('./CampaignPerformance'))
 const SettingsPage = lazy(() => import('./Settings'))
 const DataQuality = lazy(() => import('./DataQuality'))
@@ -666,7 +667,13 @@ export default function App() {
               {page === 'paths' && <ConversionPaths />}
               {page === 'path_archetypes' && <PathArchetypes />}
               {page === 'expenses' && <ExpenseManager />}
-              {page === 'datasources' && <DataSources onJourneysImported={onJourneysImported} />}
+              {page === 'datasources' && (
+                <DataSources
+                  onJourneysImported={onJourneysImported}
+                  onOpenMeiro={() => setPage('meiro')}
+                />
+              )}
+              {page === 'meiro' && <MeiroIntegrationPage onJourneysImported={onJourneysImported} />}
               {page === 'settings' && (
                 <SettingsPage
                   ref={settingsRef}
