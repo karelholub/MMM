@@ -89,7 +89,12 @@ from app.services_auth import (
     revoke_session,
     verify_csrf,
 )
-from dataclasses import dataclass
+from app.core.permissions import (
+    PermissionContext,
+    require_any_permission,
+    require_permission,
+    workspace_scope_or_403,
+)
 from app.services_data_quality import compute_dq_snapshots, evaluate_alert_rules
 from app.services_conversions import (
     apply_model_config_to_journeys,
@@ -105,15 +110,8 @@ from app.services_import_runs import (
 )
 from app.services_journey_definitions import (
     ensure_default_journey_definition,
-    list_journey_definitions,
-    create_journey_definition,
-    update_journey_definition,
-    archive_journey_definition,
-    serialize_journey_definition,
     get_journey_definition,
 )
-from app.services_journey_paths import list_paths_for_journey_definition
-from app.services_journey_transitions import list_transitions_for_journey_definition
 from app.services_journey_aggregates import run_daily_journey_aggregates
 from app.services_journeys_health import (
     build_journeys_preview,
@@ -126,7 +124,8 @@ from app.services_funnels import (
     get_funnel_results as compute_funnel_results,
     list_funnels,
 )
-from app.services_journey_attribution import build_journey_attribution_summary
+from app.modules.journeys.router import create_router as create_journeys_router
+from app.modules.performance.router import create_router as create_performance_router
 from app.services_data_sources import (
     create_data_source,
     delete_data_source,
@@ -185,20 +184,7 @@ from app.services_alerts import (
     update_alert_rule,
     delete_alert_rule,
 )
-from app.services_overview import (
-    get_overview_summary,
-    get_overview_drivers,
-    get_overview_alerts,
-    get_overview_funnels,
-    get_overview_trend_insights,
-)
-from app.services_performance_trends import (
-    build_channel_trend_response,
-    build_campaign_trend_response,
-    build_channel_summary_response,
-    build_campaign_summary_response,
-)
-from app.services_performance_diagnostics import build_scope_diagnostics
+from app.services_overview import get_overview_alerts
 from app.services_performance_helpers import (
     build_performance_query_context as _build_performance_query_context,
     build_performance_meta as _build_performance_meta,
@@ -462,107 +448,6 @@ async def csrf_protection_middleware(request: Request, call_next):
             db.close()
     return await call_next(request)
 
-
-@dataclass
-class PermissionContext:
-    user_id: str
-    workspace_id: str
-    permissions: set[str]
-    source: str  # session | legacy_header
-
-
-_ALL_PERMISSION_KEYS = {p["key"] for p in RBAC_PERMISSIONS}
-_VIEW_PERMISSIONS = {p for p in _ALL_PERMISSION_KEYS if p.endswith(".view")}
-_EDITOR_PERMISSIONS = _ALL_PERMISSION_KEYS - {"users.manage", "roles.manage", "audit.view"}
-_LEGACY_ROLE_PERMISSION_MAP: Dict[str, set[str]] = {
-    "viewer": set(_VIEW_PERMISSIONS),
-    "analyst": set(_EDITOR_PERMISSIONS),
-    "editor": set(_EDITOR_PERMISSIONS),
-    "power_user": set(_ALL_PERMISSION_KEYS),
-    "admin": set(_ALL_PERMISSION_KEYS),
-}
-
-
-def get_permission_context(
-    request: Request,
-    db=Depends(get_db),
-    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
-    x_user_role: Optional[str] = Header(None, alias="X-User-Role"),
-) -> PermissionContext:
-    raw_session_id = request.cookies.get(SESSION_COOKIE_NAME)
-    if raw_session_id:
-        ctx = resolve_auth_context(db, raw_session_id=raw_session_id)
-        if not ctx:
-            raise HTTPException(status_code=401, detail={"code": "auth_required", "message": "Authentication required"})
-        return PermissionContext(
-            user_id=ctx.user.id,
-            workspace_id=ctx.workspace.id,
-            permissions=set(ctx.permissions),
-            source="session",
-        )
-    # Legacy compatibility: treat headerless callers as viewer so read-only
-    # settings/taxonomy pages keep working without explicit auth headers.
-    role = (x_user_role or "viewer").strip().lower()
-    perms = _LEGACY_ROLE_PERMISSION_MAP.get(role, set())
-    return PermissionContext(
-        user_id=(x_user_id or "system"),
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        permissions=set(perms),
-        source="legacy_header",
-    )
-
-
-def has_permission(ctx: PermissionContext, permission_key: str) -> bool:
-    return permission_key in ctx.permissions
-
-
-def require_permission(permission_key: str):
-    def _dep(ctx: PermissionContext = Depends(get_permission_context)) -> PermissionContext:
-        if not has_permission(ctx, permission_key):
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "code": "permission_denied",
-                    "message": f"Missing permission: {permission_key}",
-                    "permission": permission_key,
-                },
-            )
-        return ctx
-
-    return _dep
-
-
-def require_any_permission(permission_keys: List[str]):
-    keys = tuple(dict.fromkeys(permission_keys))
-
-    def _dep(ctx: PermissionContext = Depends(get_permission_context)) -> PermissionContext:
-        for key in keys:
-            if key in ctx.permissions:
-                return ctx
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "code": "forbidden",
-                "message": "Missing required permission",
-                "permission_any_of": list(keys),
-            },
-        )
-
-    return _dep
-
-
-def _workspace_scope_or_403(ctx: PermissionContext, workspace_id: Optional[str]) -> str:
-    target = (workspace_id or ctx.workspace_id or DEFAULT_WORKSPACE_ID).strip() or DEFAULT_WORKSPACE_ID
-    if ctx.source == "session" and target != ctx.workspace_id:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "code": "workspace_scope_denied",
-                "message": "Requested workspace is outside current session scope",
-                "workspace_id": target,
-            },
-        )
-    return target
 
 # ==================== Pydantic Models ====================
 
@@ -2151,7 +2036,7 @@ def get_ads_entities(
     db=Depends(get_db),
     ctx: PermissionContext = Depends(require_permission("ads.view")),
 ):
-    workspace_id = _workspace_scope_or_403(ctx, None)
+    workspace_id = workspace_scope_or_403(ctx, None)
     try:
         if provider and provider not in ADS_PROVIDER_KEYS:
             raise ValueError("Unsupported provider")
@@ -2178,7 +2063,7 @@ def get_ads_deeplink(
     db=Depends(get_db),
     ctx: PermissionContext = Depends(require_permission("ads.view")),
 ):
-    workspace_id = _workspace_scope_or_403(ctx, None)
+    workspace_id = workspace_scope_or_403(ctx, None)
     try:
         url = ads_get_deep_link(
             db,
@@ -2202,7 +2087,7 @@ def get_ads_state(
     db=Depends(get_db),
     ctx: PermissionContext = Depends(require_permission("ads.view")),
 ):
-    workspace_id = _workspace_scope_or_403(ctx, None)
+    workspace_id = workspace_scope_or_403(ctx, None)
     try:
         return ads_fetch_state(
             db,
@@ -2222,7 +2107,7 @@ def create_ads_change_request(
     db=Depends(get_db),
     ctx: PermissionContext = Depends(require_permission("ads.propose")),
 ):
-    workspace_id = _workspace_scope_or_403(ctx, None)
+    workspace_id = workspace_scope_or_403(ctx, None)
     governance = _ads_governance_settings()
     try:
         return ads_create_change_request(
@@ -2249,7 +2134,7 @@ def get_ads_change_requests(
     db=Depends(get_db),
     ctx: PermissionContext = Depends(require_permission("ads.view")),
 ):
-    workspace_id = _workspace_scope_or_403(ctx, None)
+    workspace_id = workspace_scope_or_403(ctx, None)
     try:
         if status and status not in {"draft", "pending_approval", "approved", "rejected", "applied", "failed", "cancelled"}:
             raise ValueError("Unsupported status")
@@ -2272,7 +2157,7 @@ def approve_ads_change_request(
     db=Depends(get_db),
     ctx: PermissionContext = Depends(require_permission("ads.apply")),
 ):
-    workspace_id = _workspace_scope_or_403(ctx, None)
+    workspace_id = workspace_scope_or_403(ctx, None)
     try:
         return ads_approve_change_request(
             db,
@@ -2291,7 +2176,7 @@ def reject_ads_change_request(
     db=Depends(get_db),
     ctx: PermissionContext = Depends(require_permission("ads.apply")),
 ):
-    workspace_id = _workspace_scope_or_403(ctx, None)
+    workspace_id = workspace_scope_or_403(ctx, None)
     try:
         return ads_reject_change_request(
             db,
@@ -2311,7 +2196,7 @@ def apply_ads_change_request(
     db=Depends(get_db),
     ctx: PermissionContext = Depends(require_permission("ads.apply")),
 ):
-    workspace_id = _workspace_scope_or_403(ctx, None)
+    workspace_id = workspace_scope_or_403(ctx, None)
     governance = _ads_governance_settings()
     try:
         return ads_apply_change_request(
@@ -2335,7 +2220,7 @@ def get_ads_audit(
     db=Depends(get_db),
     ctx: PermissionContext = Depends(require_permission("ads.view")),
 ):
-    workspace_id = _workspace_scope_or_403(ctx, None)
+    workspace_id = workspace_scope_or_403(ctx, None)
     try:
         if provider and provider not in ADS_PROVIDER_KEYS:
             raise ValueError("Unsupported provider")
@@ -5729,7 +5614,7 @@ def admin_list_audit_log(
 ):
     if not getattr(SETTINGS.feature_flags, "audit_log_enabled", False):
         raise HTTPException(status_code=404, detail="audit_log_enabled flag is off")
-    workspace_id = _workspace_scope_or_403(_ctx, workspaceId)
+    workspace_id = workspace_scope_or_403(_ctx, workspaceId)
     from_dt = _parse_admin_audit_datetime(date_from, field_name="date_from")
     to_dt = _parse_admin_audit_datetime(date_to, field_name="date_to")
     if from_dt and to_dt and from_dt > to_dt:
@@ -5800,7 +5685,7 @@ def admin_list_roles(
     _ctx: PermissionContext = Depends(require_permission("roles.manage")),
     db=Depends(get_db),
 ):
-    workspace_id = _workspace_scope_or_403(_ctx, workspaceId)
+    workspace_id = workspace_scope_or_403(_ctx, workspaceId)
     roles = (
         db.query(ORMRole)
         .filter((ORMRole.workspace_id == workspace_id) | (ORMRole.workspace_id.is_(None)))
@@ -5850,7 +5735,7 @@ def admin_create_role(
 ):
     if not SETTINGS.feature_flags.custom_roles_enabled:
         raise HTTPException(status_code=403, detail="custom_roles_enabled flag is off")
-    workspace_id = _workspace_scope_or_403(_ctx, body.workspace_id)
+    workspace_id = workspace_scope_or_403(_ctx, body.workspace_id)
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
@@ -5905,7 +5790,7 @@ def admin_update_role(
     role = db.get(ORMRole, role_id)
     if not role:
         raise HTTPException(status_code=404, detail="Role not found")
-    workspace_id = _workspace_scope_or_403(_ctx, role.workspace_id or _ctx.workspace_id)
+    workspace_id = workspace_scope_or_403(_ctx, role.workspace_id or _ctx.workspace_id)
     if role.is_system:
         raise HTTPException(status_code=400, detail="System roles are read-only")
     if body.name is not None:
@@ -5962,7 +5847,7 @@ def admin_delete_role(
     role = db.get(ORMRole, role_id)
     if not role:
         raise HTTPException(status_code=404, detail="Role not found")
-    workspace_id = _workspace_scope_or_403(_ctx, role.workspace_id or _ctx.workspace_id)
+    workspace_id = workspace_scope_or_403(_ctx, role.workspace_id or _ctx.workspace_id)
     if role.is_system:
         raise HTTPException(status_code=400, detail="System roles cannot be deleted")
     active_members = (
@@ -6001,7 +5886,7 @@ def admin_list_users(
     _ctx: PermissionContext = Depends(require_permission("users.manage")),
     db=Depends(get_db),
 ):
-    workspace_id = _workspace_scope_or_403(_ctx, workspaceId)
+    workspace_id = workspace_scope_or_403(_ctx, workspaceId)
     q = (
         db.query(ORMUser, WorkspaceMembership, ORMRole)
         .join(
@@ -6117,7 +6002,7 @@ def admin_list_memberships(
     _ctx: PermissionContext = Depends(require_permission("users.manage")),
     db=Depends(get_db),
 ):
-    workspace_id = _workspace_scope_or_403(_ctx, workspaceId)
+    workspace_id = workspace_scope_or_403(_ctx, workspaceId)
     rows = (
         db.query(WorkspaceMembership, ORMUser, ORMRole)
         .join(ORMUser, ORMUser.id == WorkspaceMembership.user_id)
@@ -6156,7 +6041,7 @@ def admin_update_membership(
     membership = db.get(WorkspaceMembership, membership_id)
     if not membership:
         raise HTTPException(status_code=404, detail="Membership not found")
-    workspace_id = _workspace_scope_or_403(_ctx, membership.workspace_id)
+    workspace_id = workspace_scope_or_403(_ctx, membership.workspace_id)
     role = db.get(ORMRole, body.role_id)
     if not role:
         raise HTTPException(status_code=404, detail="Role not found")
@@ -6189,7 +6074,7 @@ def admin_remove_membership(
     membership = db.get(WorkspaceMembership, membership_id)
     if not membership:
         raise HTTPException(status_code=404, detail="Membership not found")
-    workspace_id = _workspace_scope_or_403(_ctx, membership.workspace_id)
+    workspace_id = workspace_scope_or_403(_ctx, membership.workspace_id)
     membership.status = "removed"
     membership.role_id = None
     membership.updated_at = datetime.utcnow()
@@ -6215,7 +6100,7 @@ def admin_create_invitation(
     _ctx: PermissionContext = Depends(require_permission("users.manage")),
     db=Depends(get_db),
 ):
-    workspace_id = _workspace_scope_or_403(_ctx, body.workspace_id)
+    workspace_id = workspace_scope_or_403(_ctx, body.workspace_id)
     email = (body.email or "").strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="email is required")
@@ -6265,7 +6150,7 @@ def admin_list_invitations(
     _ctx: PermissionContext = Depends(require_permission("users.manage")),
     db=Depends(get_db),
 ):
-    workspace_id = _workspace_scope_or_403(_ctx, workspaceId)
+    workspace_id = workspace_scope_or_403(_ctx, workspaceId)
     rows = (
         db.query(ORMInvitation, ORMRole, ORMUser)
         .outerjoin(ORMRole, ORMRole.id == ORMInvitation.role_id)
@@ -6303,7 +6188,7 @@ def admin_resend_invitation(
     inv = db.get(ORMInvitation, invitation_id)
     if not inv:
         raise HTTPException(status_code=404, detail="Invitation not found")
-    workspace_id = _workspace_scope_or_403(_ctx, inv.workspace_id)
+    workspace_id = workspace_scope_or_403(_ctx, inv.workspace_id)
     raw_token = _invite_token()
     inv.token_hash = _hash_invite_token(raw_token)
     inv.expires_at = datetime.utcnow() + timedelta(days=7)
@@ -6333,7 +6218,7 @@ def admin_revoke_invitation(
     inv = db.get(ORMInvitation, invitation_id)
     if not inv:
         raise HTTPException(status_code=404, detail="Invitation not found")
-    workspace_id = _workspace_scope_or_403(_ctx, inv.workspace_id)
+    workspace_id = workspace_scope_or_403(_ctx, inv.workspace_id)
     db.delete(inv)
     db.commit()
     _write_security_audit(
@@ -6695,405 +6580,6 @@ def update_alert_note(alert_id: int, body: AlertNoteUpdate, db=Depends(get_db)):
     return {"id": alert.id, "note": alert.note}
 
 
-# ==================== Overview (Cover) Dashboard ====================
-
-
-@app.get("/api/overview/summary")
-def overview_summary(
-    date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
-    date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
-    timezone: str = Query("UTC", description="Timezone for display"),
-    currency: Optional[str] = Query(None, description="Filter/display currency"),
-    workspace: Optional[str] = Query(None, description="Workspace filter"),
-    account: Optional[str] = Query(None, description="Account filter"),
-    model_id: Optional[str] = Query(None, description="Optional model config id (for metadata only)"),
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("attribution.view")),
-):
-    """
-    Overview summary: KPI tiles, highlights (what changed), freshness.
-    Does not block on MMM/Incrementality; robust to missing data.
-    """
-    return get_overview_summary(
-        db=db,
-        date_from=date_from,
-        date_to=date_to,
-        timezone=timezone,
-        currency=currency,
-        workspace=workspace,
-        account=account,
-        model_id=model_id,
-        expenses=EXPENSES,
-        import_runs_get_last_successful=get_last_successful_run,
-    )
-
-
-@app.get("/api/overview/drivers")
-def overview_drivers(
-    date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
-    date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
-    top_campaigns_n: int = Query(10, ge=1, le=50, description="Top N campaigns"),
-    conversion_key: Optional[str] = Query(None, description="Filter by conversion key"),
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("attribution.view")),
-):
-    """
-    Top drivers: by_channel (spend, conversions, revenue, delta), by_campaign (top N), biggest_movers.
-    Uses raw paths + expenses; does not require MMM.
-    """
-    return get_overview_drivers(
-        db=db,
-        date_from=date_from,
-        date_to=date_to,
-        expenses=EXPENSES,
-        top_campaigns_n=top_campaigns_n,
-        conversion_key=conversion_key,
-    )
-
-
-@app.get("/api/overview/funnels")
-def overview_funnels(
-    date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
-    date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
-    conversion_key: Optional[str] = Query(None, description="Optional conversion key filter"),
-    limit: int = Query(5, ge=1, le=10, description="Rows per tab"),
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("attribution.view")),
-):
-    """Top converting, top revenue, and fastest funnel paths for the overview page."""
-    return get_overview_funnels(
-        db=db,
-        date_from=date_from,
-        date_to=date_to,
-        conversion_key=conversion_key,
-        limit=limit,
-    )
-
-
-@app.get("/api/overview/trends")
-def overview_trends(
-    date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
-    date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
-    conversion_key: Optional[str] = Query(None, description="Optional conversion key filter"),
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("attribution.view")),
-):
-    """Compact overview trend insights: decomposition, momentum, and channel mix shift."""
-    return get_overview_trend_insights(
-        db=db,
-        date_from=date_from,
-        date_to=date_to,
-        conversion_key=conversion_key,
-    )
-
-
-@app.get("/api/performance/channel/trend")
-def performance_channel_trend(
-    date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
-    date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
-    timezone: str = Query("UTC", description="IANA timezone for bucketing"),
-    currency: Optional[str] = Query(None, description="Display currency (metadata only)"),
-    workspace: Optional[str] = Query(None, description="Workspace filter (reserved)"),
-    account: Optional[str] = Query(None, description="Account filter (reserved)"),
-    channels: Optional[List[str]] = Query(None, description="Optional channel filter list"),
-    model_id: Optional[str] = Query(None, description="Optional model config id"),
-    kpi_key: str = Query("revenue", description="spend|visits|conversions|revenue|cpa|roas"),
-    conversion_key: Optional[str] = Query(None, description="Optional conversion key filter"),
-    grain: str = Query("auto", description="auto|daily|weekly"),
-    compare: bool = Query(True, description="Include previous-period series"),
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("attribution.view")),
-):
-    """
-    Channel performance trend for selected KPI and period.
-    Returns current period series and optional previous period series.
-    """
-    journeys = _ensure_journeys_loaded(db)
-    try:
-        query_ctx = _build_performance_query_context(
-            date_from=date_from,
-            date_to=date_to,
-            timezone=timezone,
-            currency=currency,
-            workspace=workspace,
-            account=account,
-            model_id=model_id,
-            kpi_key=kpi_key,
-            grain=grain,
-            compare=compare,
-            channels=channels,
-            conversion_key=conversion_key,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    try:
-        out = build_channel_trend_response(
-            journeys=journeys,
-            expenses=EXPENSES,
-            date_from=query_ctx.date_from,
-            date_to=query_ctx.date_to,
-            timezone=query_ctx.timezone,
-            kpi_key=query_ctx.kpi_key,
-            grain=query_ctx.grain,
-            compare=query_ctx.compare,
-            channels=query_ctx.channels,
-            conversion_key=query_ctx.conversion_key,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    out["meta"] = _build_performance_meta(ctx=query_ctx, include_kpi=True)
-    return out
-
-
-@app.get("/api/performance/channel/summary")
-def performance_channel_summary(
-    date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
-    date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
-    timezone: str = Query("UTC", description="IANA timezone for bucketing"),
-    currency: Optional[str] = Query(None, description="Display currency (metadata only)"),
-    workspace: Optional[str] = Query(None, description="Workspace filter (reserved)"),
-    account: Optional[str] = Query(None, description="Account filter (reserved)"),
-    model_id: Optional[str] = Query(None, description="Optional model config id"),
-    conversion_key: Optional[str] = Query(None, description="Optional conversion key filter"),
-    compare: bool = Query(True, description="Include previous-period summary"),
-    channels: Optional[List[str]] = Query(None, description="Optional channel filter list"),
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("attribution.view")),
-):
-    journeys = _ensure_journeys_loaded(db)
-    query_ctx = _build_performance_query_context(
-        date_from=date_from,
-        date_to=date_to,
-        timezone=timezone,
-        currency=currency,
-        workspace=workspace,
-        account=account,
-        model_id=model_id,
-        kpi_key="revenue",
-        grain="daily",
-        compare=compare,
-        channels=channels,
-        conversion_key=conversion_key,
-    )
-    _resolved_cfg, config_meta = load_config_and_meta(db, query_ctx.model_id)
-    effective_conversion_key = query_ctx.conversion_key or (config_meta.get("conversion_key") if config_meta else None)
-    out = build_channel_summary_response(
-        journeys=journeys,
-        expenses=EXPENSES,
-        date_from=query_ctx.date_from,
-        date_to=query_ctx.date_to,
-        timezone=query_ctx.timezone,
-        compare=query_ctx.compare,
-        channels=query_ctx.channels,
-        conversion_key=effective_conversion_key,
-    )
-    diagnostics = build_scope_diagnostics(
-        db=db,
-        scope_type="channel",
-        date_from=query_ctx.date_from,
-        date_to=query_ctx.date_to,
-        conversion_key=effective_conversion_key,
-        channels=query_ctx.channels,
-    )
-    for item in out.get("items", []):
-        current = item.get("current") or {}
-        previous = item.get("previous") or {}
-        visits = float(current.get("visits", 0.0) or 0.0)
-        conversions = float(current.get("conversions", 0.0) or 0.0)
-        revenue = float(current.get("revenue", 0.0) or 0.0)
-        spend = float(current.get("spend", 0.0) or 0.0)
-        derived = item.setdefault("derived", {})
-        derived["cvr"] = round((conversions / visits), 4) if visits > 0 else None
-        derived["cost_per_visit"] = round((spend / visits), 4) if visits > 0 else None
-        derived["revenue_per_visit"] = round((revenue / visits), 4) if visits > 0 else None
-        prev_visits = float(previous.get("visits", 0.0) or 0.0)
-        prev_conversions = float(previous.get("conversions", 0.0) or 0.0)
-        prev_revenue = float(previous.get("revenue", 0.0) or 0.0)
-        prev_spend = float(previous.get("spend", 0.0) or 0.0)
-        item["previous_derived"] = {
-            "cvr": round((prev_conversions / prev_visits), 4) if prev_visits > 0 else None,
-            "cost_per_visit": round((prev_spend / prev_visits), 4) if prev_visits > 0 else None,
-            "revenue_per_visit": round((prev_revenue / prev_visits), 4) if prev_visits > 0 else None,
-        } if previous else None
-        item["diagnostics"] = diagnostics.get(str(item.get("channel")), {})
-    _attach_scope_confidence(
-        db=db,
-        items=out.get("items", []),
-        scope_type="channel",
-        id_field="channel",
-        conversion_key=effective_conversion_key,
-    )
-    mapped = _summarize_mapped_current(out.get("items", []))
-    out["config"] = config_meta
-    out["mapping_coverage"] = _build_mapping_coverage(
-        mapped_spend=mapped["mapped_spend"],
-        mapped_value=mapped["mapped_value"],
-        expenses=EXPENSES,
-        journeys=journeys,
-        date_from=query_ctx.date_from,
-        date_to=query_ctx.date_to,
-        timezone_name=query_ctx.timezone,
-        channels=query_ctx.channels,
-        conversion_key=effective_conversion_key,
-    )
-    out["meta"] = _build_performance_meta(ctx=query_ctx, conversion_key=effective_conversion_key)
-    return out
-
-
-@app.get("/api/performance/campaign/trend")
-def performance_campaign_trend(
-    date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
-    date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
-    timezone: str = Query("UTC", description="IANA timezone for bucketing"),
-    currency: Optional[str] = Query(None, description="Display currency (metadata only)"),
-    workspace: Optional[str] = Query(None, description="Workspace filter (reserved)"),
-    account: Optional[str] = Query(None, description="Account filter (reserved)"),
-    channels: Optional[List[str]] = Query(None, description="Optional channel filter list"),
-    model_id: Optional[str] = Query(None, description="Optional model config id"),
-    kpi_key: str = Query("revenue", description="spend|visits|conversions|revenue|cpa|roas"),
-    conversion_key: Optional[str] = Query(None, description="Optional conversion key filter"),
-    grain: str = Query("auto", description="auto|daily|weekly"),
-    compare: bool = Query(True, description="Include previous-period series"),
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("attribution.view")),
-):
-    """
-    Campaign performance trend for selected KPI and period.
-    Returns current period series and optional previous period series.
-    """
-    journeys = _ensure_journeys_loaded(db)
-    try:
-        query_ctx = _build_performance_query_context(
-            date_from=date_from,
-            date_to=date_to,
-            timezone=timezone,
-            currency=currency,
-            workspace=workspace,
-            account=account,
-            model_id=model_id,
-            kpi_key=kpi_key,
-            grain=grain,
-            compare=compare,
-            channels=channels,
-            conversion_key=conversion_key,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    try:
-        out = build_campaign_trend_response(
-            journeys=journeys,
-            expenses=EXPENSES,
-            date_from=query_ctx.date_from,
-            date_to=query_ctx.date_to,
-            timezone=query_ctx.timezone,
-            kpi_key=query_ctx.kpi_key,
-            grain=query_ctx.grain,
-            compare=query_ctx.compare,
-            channels=query_ctx.channels,
-            conversion_key=query_ctx.conversion_key,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    out["meta"] = _build_performance_meta(ctx=query_ctx, include_kpi=True)
-    return out
-
-
-@app.get("/api/performance/campaign/summary")
-def performance_campaign_summary(
-    date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
-    date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
-    timezone: str = Query("UTC", description="IANA timezone for bucketing"),
-    currency: Optional[str] = Query(None, description="Display currency (metadata only)"),
-    workspace: Optional[str] = Query(None, description="Workspace filter (reserved)"),
-    account: Optional[str] = Query(None, description="Account filter (reserved)"),
-    model_id: Optional[str] = Query(None, description="Optional model config id"),
-    conversion_key: Optional[str] = Query(None, description="Optional conversion key filter"),
-    compare: bool = Query(True, description="Include previous-period summary"),
-    channels: Optional[List[str]] = Query(None, description="Optional channel filter list"),
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("attribution.view")),
-):
-    journeys = _ensure_journeys_loaded(db)
-    query_ctx = _build_performance_query_context(
-        date_from=date_from,
-        date_to=date_to,
-        timezone=timezone,
-        currency=currency,
-        workspace=workspace,
-        account=account,
-        model_id=model_id,
-        kpi_key="revenue",
-        grain="daily",
-        compare=compare,
-        channels=channels,
-        conversion_key=conversion_key,
-    )
-    _resolved_cfg, config_meta = load_config_and_meta(db, query_ctx.model_id)
-    effective_conversion_key = query_ctx.conversion_key or (config_meta.get("conversion_key") if config_meta else None)
-    out = build_campaign_summary_response(
-        journeys=journeys,
-        expenses=EXPENSES,
-        date_from=query_ctx.date_from,
-        date_to=query_ctx.date_to,
-        timezone=query_ctx.timezone,
-        compare=query_ctx.compare,
-        channels=query_ctx.channels,
-        conversion_key=effective_conversion_key,
-    )
-    diagnostics = build_scope_diagnostics(
-        db=db,
-        scope_type="campaign",
-        date_from=query_ctx.date_from,
-        date_to=query_ctx.date_to,
-        conversion_key=effective_conversion_key,
-        channels=query_ctx.channels,
-    )
-    for item in out.get("items", []):
-        current = item.get("current") or {}
-        previous = item.get("previous") or {}
-        visits = float(current.get("visits", 0.0) or 0.0)
-        conversions = float(current.get("conversions", 0.0) or 0.0)
-        revenue = float(current.get("revenue", 0.0) or 0.0)
-        spend = float(current.get("spend", 0.0) or 0.0)
-        derived = item.setdefault("derived", {})
-        derived["cvr"] = round((conversions / visits), 4) if visits > 0 else None
-        derived["cost_per_visit"] = round((spend / visits), 4) if visits > 0 else None
-        derived["revenue_per_visit"] = round((revenue / visits), 4) if visits > 0 else None
-        prev_visits = float(previous.get("visits", 0.0) or 0.0)
-        prev_conversions = float(previous.get("conversions", 0.0) or 0.0)
-        prev_revenue = float(previous.get("revenue", 0.0) or 0.0)
-        prev_spend = float(previous.get("spend", 0.0) or 0.0)
-        item["previous_derived"] = {
-            "cvr": round((prev_conversions / prev_visits), 4) if prev_visits > 0 else None,
-            "cost_per_visit": round((prev_spend / prev_visits), 4) if prev_visits > 0 else None,
-            "revenue_per_visit": round((prev_revenue / prev_visits), 4) if prev_visits > 0 else None,
-        } if previous else None
-        diag_key = str(item.get("campaign_id") or item.get("channel"))
-        item["diagnostics"] = diagnostics.get(diag_key, {})
-    _attach_scope_confidence(
-        db=db,
-        items=out.get("items", []),
-        scope_type="campaign",
-        id_field="campaign_id",
-        conversion_key=effective_conversion_key,
-    )
-    mapped = _summarize_mapped_current(out.get("items", []))
-    out["config"] = config_meta
-    out["mapping_coverage"] = _build_mapping_coverage(
-        mapped_spend=mapped["mapped_spend"],
-        mapped_value=mapped["mapped_value"],
-        expenses=EXPENSES,
-        journeys=journeys,
-        date_from=query_ctx.date_from,
-        date_to=query_ctx.date_to,
-        timezone_name=query_ctx.timezone,
-        channels=query_ctx.channels,
-        conversion_key=effective_conversion_key,
-    )
-    out["meta"] = _build_performance_meta(ctx=query_ctx, conversion_key=effective_conversion_key)
-    return out
-
-
 @app.get("/api/overview/alerts")
 def overview_alerts(
     scope: Optional[str] = Query(None, description="Filter by workspace/account scope"),
@@ -7176,22 +6662,6 @@ class AlertRuleUpdate(BaseModel):
     schedule: Optional[str] = Field(None, pattern="^(hourly|daily)$")
 
 
-class JourneyDefinitionCreate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=255)
-    description: Optional[str] = Field(None, max_length=5000)
-    conversion_kpi_id: Optional[str] = Field(None, max_length=64)
-    lookback_window_days: int = Field(30, ge=1, le=365)
-    mode_default: str = Field("conversion_only", pattern="^(conversion_only|all_journeys)$")
-
-
-class JourneyDefinitionUpdate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=255)
-    description: Optional[str] = Field(None, max_length=5000)
-    conversion_kpi_id: Optional[str] = Field(None, max_length=64)
-    lookback_window_days: int = Field(..., ge=1, le=365)
-    mode_default: str = Field(..., pattern="^(conversion_only|all_journeys)$")
-
-
 class FunnelCreatePayload(BaseModel):
     journey_definition_id: str = Field(..., min_length=1, max_length=64)
     name: str = Field(..., min_length=1, max_length=255)
@@ -7235,6 +6705,33 @@ def _validate_conversion_kpi_id(conversion_kpi_id: Optional[str]) -> Optional[st
     if value not in available:
         raise HTTPException(status_code=400, detail=f"conversion_kpi_id '{value}' is not defined in KPI config")
     return value
+
+
+app.include_router(
+    create_journeys_router(
+        get_db_dependency=get_db,
+        require_permission_dependency=require_permission,
+        clamp_int_fn=clamp_int,
+        resolve_per_page_fn=resolve_per_page,
+        resolve_sort_dir_fn=resolve_sort_dir,
+        validate_conversion_kpi_id_fn=_validate_conversion_kpi_id,
+        get_settings_obj=lambda: SETTINGS,
+    )
+)
+
+app.include_router(
+    create_performance_router(
+        get_db_dependency=get_db,
+        require_permission_dependency=require_permission,
+        ensure_journeys_loaded_fn=_ensure_journeys_loaded,
+        build_query_context_fn=_build_performance_query_context,
+        build_meta_fn=_build_performance_meta,
+        attach_scope_confidence_fn=_attach_scope_confidence,
+        build_mapping_coverage_fn=_build_mapping_coverage,
+        summarize_mapped_current_fn=_summarize_mapped_current,
+        expenses_obj=EXPENSES,
+    )
+)
 
 
 def _validate_journey_alert_payload(type: str, domain: str, metric: str, condition: Dict[str, Any]) -> None:
@@ -7284,240 +6781,6 @@ def _validate_journey_alert_scope_and_metric(
             raise HTTPException(status_code=400, detail="scope.step_index is required")
         if step_index < 0:
             raise HTTPException(status_code=400, detail="scope.step_index must be >= 0")
-
-
-@app.get("/api/journeys/definitions")
-def api_list_journey_definitions(
-    page: int = Query(1, ge=1, description="Page number"),
-    per_page: Optional[int] = Query(None, description="Items per page"),
-    page_size: Optional[int] = Query(None, description="Alias for per_page"),
-    limit: Optional[int] = Query(None, description="Alias for per_page"),
-    search: Optional[str] = Query(None, description="Search by name/description"),
-    sort: Optional[str] = Query(None, description="Sort direction asc|desc"),
-    order: Optional[str] = Query(None, description="Alias for sort direction asc|desc"),
-    include_archived: bool = Query(False, description="Include archived definitions"),
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("journeys.view")),
-):
-    """List journey definitions with pagination and search."""
-    resolved_page = clamp_int(page, default=1, minimum=1, maximum=1_000_000)
-    resolved_per_page = resolve_per_page(
-        per_page=per_page,
-        page_size=page_size,
-        limit=limit,
-        default=20,
-        maximum=100,
-    )
-    resolved_sort_dir = resolve_sort_dir(sort=sort, order=order, default="desc")
-    try:
-        return list_journey_definitions(
-            db,
-            page=resolved_page,
-            per_page=resolved_per_page,
-            search=search,
-            sort_dir=resolved_sort_dir,
-            include_archived=include_archived,
-        )
-    except Exception as e:
-        logger.warning("List journey definitions failed: %s", e, exc_info=True)
-        return {"items": [], "total": 0, "page": resolved_page, "per_page": resolved_per_page}
-
-
-@app.post("/api/journeys/definitions")
-def api_create_journey_definition(
-    body: JourneyDefinitionCreate,
-    db=Depends(get_db),
-    ctx: PermissionContext = Depends(require_permission("journeys.manage")),
-):
-    """Create journey definition. Requires edit role."""
-    user_id = ctx.user_id
-    if not body.name.strip():
-        raise HTTPException(status_code=400, detail="name is required")
-    conversion_kpi_id = _validate_conversion_kpi_id(body.conversion_kpi_id)
-    item = create_journey_definition(
-        db,
-        name=body.name,
-        description=body.description,
-        conversion_kpi_id=conversion_kpi_id,
-        lookback_window_days=body.lookback_window_days,
-        mode_default=body.mode_default,
-        created_by=user_id,
-    )
-    return serialize_journey_definition(item)
-
-
-@app.put("/api/journeys/definitions/{definition_id}")
-def api_update_journey_definition(
-    definition_id: str,
-    body: JourneyDefinitionUpdate,
-    db=Depends(get_db),
-    ctx: PermissionContext = Depends(require_permission("journeys.manage")),
-):
-    """Update journey definition. Requires edit role."""
-    user_id = ctx.user_id
-    if not body.name.strip():
-        raise HTTPException(status_code=400, detail="name is required")
-    conversion_kpi_id = _validate_conversion_kpi_id(body.conversion_kpi_id)
-    item = update_journey_definition(
-        db,
-        definition_id,
-        name=body.name,
-        description=body.description,
-        conversion_kpi_id=conversion_kpi_id,
-        lookback_window_days=body.lookback_window_days,
-        mode_default=body.mode_default,
-        updated_by=user_id,
-    )
-    if not item:
-        raise HTTPException(status_code=404, detail="Journey definition not found")
-    return serialize_journey_definition(item)
-
-
-@app.delete("/api/journeys/definitions/{definition_id}")
-def api_delete_journey_definition(
-    definition_id: str,
-    db=Depends(get_db),
-    ctx: PermissionContext = Depends(require_permission("journeys.manage")),
-):
-    """Archive journey definition (soft delete). Requires edit role."""
-    user_id = ctx.user_id
-    item = archive_journey_definition(db, definition_id, archived_by=user_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="Journey definition not found")
-    return {"id": item.id, "status": "archived"}
-
-
-@app.get("/api/journeys/{definition_id}/paths")
-def api_get_journey_paths(
-    definition_id: str,
-    date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
-    date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
-    mode: str = Query("conversion_only", pattern="^(conversion_only|all_journeys)$"),
-    channel_group: Optional[str] = Query(None),
-    campaign_id: Optional[str] = Query(None),
-    device: Optional[str] = Query(None),
-    country: Optional[str] = Query(None),
-    page: int = Query(1, ge=1, description="Page number"),
-    limit: int = Query(50, ge=1, le=200, description="Items per page (max 200)"),
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("journeys.view")),
-):
-    """Return pre-aggregated journey paths from journey_paths_daily only."""
-    jd = get_journey_definition(db, definition_id)
-    if not jd or jd.is_archived:
-        raise HTTPException(status_code=404, detail="Journey definition not found")
-    try:
-        d_from = datetime.fromisoformat(date_from).date()
-        d_to = datetime.fromisoformat(date_to).date()
-    except Exception:
-        raise HTTPException(status_code=400, detail="date_from/date_to must be YYYY-MM-DD")
-    if d_from > d_to:
-        raise HTTPException(status_code=400, detail="date_from must be <= date_to")
-
-    return list_paths_for_journey_definition(
-        db,
-        journey_definition_id=definition_id,
-        date_from=d_from,
-        date_to=d_to,
-        mode=mode,
-        channel_group=channel_group,
-        campaign_id=campaign_id,
-        device=device,
-        country=country,
-        page=page,
-        limit=limit,
-    )
-
-
-@app.get("/api/journeys/{definition_id}/transitions")
-def api_get_journey_transitions(
-    definition_id: str,
-    date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
-    date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
-    mode: str = Query("conversion_only", pattern="^(conversion_only|all_journeys)$"),
-    channel_group: Optional[str] = Query(None),
-    campaign_id: Optional[str] = Query(None),
-    device: Optional[str] = Query(None),
-    country: Optional[str] = Query(None),
-    min_count: int = Query(5, ge=1, le=100000),
-    max_nodes: int = Query(20, ge=2, le=200),
-    max_depth: int = Query(5, ge=1, le=20),
-    group_other: bool = Query(True, description="Group rare steps into 'Other'"),
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("journeys.view")),
-):
-    """Return Sankey-ready transition graph from journey_transitions_daily."""
-    jd = get_journey_definition(db, definition_id)
-    if not jd or jd.is_archived:
-        raise HTTPException(status_code=404, detail="Journey definition not found")
-    try:
-        d_from = datetime.fromisoformat(date_from).date()
-        d_to = datetime.fromisoformat(date_to).date()
-    except Exception:
-        raise HTTPException(status_code=400, detail="date_from/date_to must be YYYY-MM-DD")
-    if d_from > d_to:
-        raise HTTPException(status_code=400, detail="date_from must be <= date_to")
-
-    return list_transitions_for_journey_definition(
-        db,
-        journey_definition_id=definition_id,
-        date_from=d_from,
-        date_to=d_to,
-        mode=mode,
-        channel_group=channel_group,
-        campaign_id=campaign_id,
-        device=device,
-        country=country,
-        min_count=min_count,
-        max_nodes=max_nodes,
-        max_depth=max_depth,
-        group_other=group_other,
-    )
-
-
-@app.get("/api/journeys/{definition_id}/attribution-summary")
-def api_get_journey_attribution_summary(
-    definition_id: str,
-    date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
-    date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
-    model: str = Query("linear", description="Attribution model"),
-    mode: str = Query("conversion_only", pattern="^(conversion_only|all_journeys)$"),
-    channel_group: Optional[str] = Query(None),
-    campaign_id: Optional[str] = Query(None),
-    device: Optional[str] = Query(None),
-    country: Optional[str] = Query(None),
-    path_hash: Optional[str] = Query(None),
-    include_campaign: bool = Query(False, description="Include campaign-level credit split"),
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("journeys.view")),
-):
-    """Return attribution credit split for a journey definition (and optional path hash)."""
-    jd = get_journey_definition(db, definition_id)
-    if not jd or jd.is_archived:
-        raise HTTPException(status_code=404, detail="Journey definition not found")
-    try:
-        _ = datetime.fromisoformat(date_from).date()
-        _ = datetime.fromisoformat(date_to).date()
-    except Exception:
-        raise HTTPException(status_code=400, detail="date_from/date_to must be YYYY-MM-DD")
-    try:
-        return build_journey_attribution_summary(
-            db,
-            definition=jd,
-            date_from=date_from,
-            date_to=date_to,
-            model=model,
-            mode=mode,
-            channel_group=channel_group,
-            campaign_id=campaign_id,
-            device=device,
-            country=country,
-            path_hash=path_hash,
-            include_campaign=include_campaign,
-            settings_obj=SETTINGS,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/api/funnels")
@@ -10396,6 +9659,17 @@ def meiro_webhook_suggestions(limit: int = Query(100, ge=1, le=500)):
     top_medium_field_paths = _top_items(medium_field_path_counts, n=5)
     top_campaign_field_paths = _top_items(campaign_field_path_counts, n=5)
     best_dedup_key = sorted(dedup_key_counts.items(), key=lambda kv: kv[1], reverse=True)[0][0]
+    dedup_key_candidates = []
+    for key, count in sorted(dedup_key_counts.items(), key=lambda kv: kv[1], reverse=True):
+        coverage = (count / total_conversions) if total_conversions > 0 else 0.0
+        dedup_key_candidates.append(
+            {
+                "key": key,
+                "count": count,
+                "coverage_pct": round(coverage * 100, 2),
+                "recommended": key == best_dedup_key,
+            }
+        )
 
     kpi_suggestions = []
     for idx, (event_name, count) in enumerate(top_conversion_names):
@@ -10609,6 +9883,7 @@ def meiro_webhook_suggestions(limit: int = Query(100, ge=1, le=500)):
         "total_conversions_observed": total_conversions,
         "total_touchpoints_observed": total_touchpoints,
         "dedup_key_suggestion": best_dedup_key,
+        "dedup_key_candidates": dedup_key_candidates,
         "kpi_suggestions": kpi_suggestions,
         "conversion_event_suggestions": [
             {"event_name": name, "count": count}
@@ -10744,6 +10019,7 @@ def meiro_pull(since: Optional[str] = None, until: Optional[str] = None, db=Depe
         conversion_selector=pull_cfg.get("conversion_selector", "purchase"),
         session_gap_minutes=pull_cfg.get("session_gap_minutes", 30),
         dedup_interval_minutes=pull_cfg.get("dedup_interval_minutes", 5),
+        dedup_mode=pull_cfg.get("dedup_mode", "balanced"),
         channel_mapping=saved.get("channel_mapping"),
     )
     global JOURNEYS
@@ -10758,7 +10034,15 @@ def meiro_pull(since: Optional[str] = None, until: Optional[str] = None, db=Depe
     _append_import_run(
         "meiro_pull", len(journeys), "success",
         total=len(journeys), valid=len(journeys), converted=converted, channels_detected=sorted(ch_set),
-        config_snapshot={"lookback_days": pull_cfg.get("lookback_days"), "session_gap_minutes": pull_cfg.get("session_gap_minutes"), "conversion_selector": pull_cfg.get("conversion_selector")},
+        config_snapshot={
+            "lookback_days": pull_cfg.get("lookback_days"),
+            "session_gap_minutes": pull_cfg.get("session_gap_minutes"),
+            "conversion_selector": pull_cfg.get("conversion_selector"),
+            "dedup_interval_minutes": pull_cfg.get("dedup_interval_minutes"),
+            "dedup_mode": pull_cfg.get("dedup_mode"),
+            "primary_dedup_key": pull_cfg.get("primary_dedup_key"),
+            "fallback_dedup_keys": pull_cfg.get("fallback_dedup_keys"),
+        },
         preview_rows=[{"customer_id": j.get("customer_id", "?"), "touchpoints": len(j.get("touchpoints", [])), "value": journey_revenue_value(j)} for j in journeys[:20]],
     )
     _set_active_journey_source("meiro")

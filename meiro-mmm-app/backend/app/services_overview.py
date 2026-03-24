@@ -1223,9 +1223,10 @@ def get_overview_funnels(
     items = [_format_item(entry) for entry in aggs.values()]
     by_conversions = sorted(items, key=lambda item: (item["conversions"], item["revenue"]), reverse=True)
     by_revenue = sorted(items, key=lambda item: (item["revenue"], item["conversions"]), reverse=True)
-    speed_candidates = [item for item in items if item["median_days_to_convert"] is not None and item["conversions"] >= 2]
-    if not speed_candidates:
-        speed_candidates = [item for item in items if item["median_days_to_convert"] is not None]
+    speed_candidates = [item for item in items if item["median_days_to_convert"] is not None]
+    direct_speed_candidates = [item for item in speed_candidates if item.get("ends_with_direct")]
+    if direct_speed_candidates:
+        speed_candidates = direct_speed_candidates
     by_speed = sorted(
         speed_candidates,
         key=lambda item: (item["median_days_to_convert"], -item["conversions"], -item["revenue"]),

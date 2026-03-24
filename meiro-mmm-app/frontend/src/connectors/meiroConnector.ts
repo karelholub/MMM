@@ -47,6 +47,31 @@ export interface MeiroWebhookEvent {
   payload_shape?: string | null
 }
 
+export interface MeiroPullConfig {
+  lookback_days: number
+  session_gap_minutes: number
+  conversion_selector: string
+  output_mode?: string
+  dedup_interval_minutes: number
+  dedup_mode: 'strict' | 'balanced' | 'aggressive'
+  primary_dedup_key: 'auto' | 'conversion_id' | 'order_id' | 'event_id'
+  fallback_dedup_keys: Array<'conversion_id' | 'order_id' | 'event_id'>
+}
+
+export interface MeiroWebhookSuggestions {
+  generated_at: string
+  events_analyzed: number
+  total_conversions_observed: number
+  total_touchpoints_observed: number
+  dedup_key_suggestion: string
+  dedup_key_candidates: Array<{
+    key: string
+    count: number
+    coverage_pct: number
+    recommended: boolean
+  }>
+}
+
 export async function connectMeiroCDP(params: { api_base_url: string; api_key: string }) {
   return apiSendJson<any>('/api/connectors/meiro/connect', 'POST', params, { fallbackMessage: 'Connection failed' })
 }
@@ -122,16 +147,23 @@ export async function updateMeiroMappingApproval(payload: { status: string; note
   })
 }
 
-export async function getMeiroPullConfig(): Promise<Record<string, unknown>> {
-  return apiGetJson<Record<string, unknown>>('/api/connectors/meiro/pull-config', {
+export async function getMeiroPullConfig(): Promise<MeiroPullConfig> {
+  return apiGetJson<MeiroPullConfig>('/api/connectors/meiro/pull-config', {
     fallbackMessage: 'Failed to fetch pull config',
   })
 }
 
-export async function saveMeiroPullConfig(config: Record<string, unknown>) {
+export async function saveMeiroPullConfig(config: MeiroPullConfig | Record<string, unknown>) {
   return apiSendJson<any>('/api/connectors/meiro/pull-config', 'POST', config, {
     fallbackMessage: 'Save failed',
   })
+}
+
+export async function getMeiroWebhookSuggestions(limit = 100): Promise<MeiroWebhookSuggestions> {
+  return apiGetJson<MeiroWebhookSuggestions>(
+    withQuery('/api/connectors/meiro/webhook/suggestions', { limit }),
+    { fallbackMessage: 'Failed to fetch webhook suggestions' },
+  )
 }
 
 export async function meiroPull(since?: string, until?: string) {

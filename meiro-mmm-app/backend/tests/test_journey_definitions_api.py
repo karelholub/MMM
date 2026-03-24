@@ -6,10 +6,15 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base, get_db
 from app.main import app
+import app.main as main_module
+from app.utils.kpi_config import default_kpi_config
 
 
 @pytest.fixture
 def client():
+    original_kpi_config = main_module.KPI_CONFIG
+    main_module.KPI_CONFIG = default_kpi_config()
+
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -30,6 +35,7 @@ def client():
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
+    main_module.KPI_CONFIG = original_kpi_config
     engine.dispose()
 
 

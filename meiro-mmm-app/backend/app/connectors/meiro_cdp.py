@@ -324,6 +324,7 @@ def build_journeys_from_events(
     conversion_selector: str = "purchase",
     session_gap_minutes: int = 30,
     dedup_interval_minutes: int = 5,
+    dedup_mode: str = "balanced",
     channel_mapping: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, Any]]:
     """
@@ -331,6 +332,9 @@ def build_journeys_from_events(
     Groups by customer, sessionizes, dedupes, identifies conversions.
     """
     channel_mapping = channel_mapping or {}
+    dedup_mode = str(dedup_mode or "balanced").strip().lower()
+    if dedup_mode not in {"strict", "balanced", "aggressive"}:
+        dedup_mode = "balanced"
     ts_col = timestamp_attr
     ch_col = channel_attr
     id_col = id_attr
@@ -360,20 +364,41 @@ def build_journeys_from_events(
         events = sorted(events, key=lambda x: x["ts"])
         touchpoints = []
         last_ts = None
+        last_identity = None
         gap_sec = session_gap_minutes * 60
         dedup_sec = dedup_interval_minutes * 60
 
         for e in events:
             ts = e["ts"]
             ch = e["channel"]
+            raw = e.get("raw") or {}
             try:
                 t = pd.Timestamp(ts)
                 ts_val = t.timestamp()
             except Exception:
                 ts_val = 0
-            if last_ts and (ts_val - last_ts) < dedup_sec and touchpoints and touchpoints[-1].get("channel") == ch:
+
+            event_identity = (
+                str(raw.get("event_name") or raw.get("event_type") or raw.get("name") or "").strip().lower(),
+                str(raw.get("source") or raw.get("utm_source") or raw.get("traffic_source") or "").strip().lower(),
+                str(raw.get("medium") or raw.get("utm_medium") or "").strip().lower(),
+                str(raw.get("campaign") or raw.get("utm_campaign") or "").strip().lower(),
+            )
+            should_skip = False
+            if last_ts and (ts_val - last_ts) < dedup_sec and touchpoints:
+                same_channel = touchpoints[-1].get("channel") == ch
+                if dedup_mode == "strict":
+                    should_skip = same_channel and last_identity == event_identity
+                elif dedup_mode == "aggressive":
+                    should_skip = same_channel or (
+                        last_identity is not None and event_identity[1:] == last_identity[1:] and any(event_identity[1:])
+                    )
+                else:
+                    should_skip = same_channel
+            if should_skip:
                 continue
             last_ts = ts_val
+            last_identity = event_identity
             touchpoints.append({"channel": ch, "timestamp": ts})
 
         is_conversion = any(

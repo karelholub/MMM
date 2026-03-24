@@ -287,17 +287,61 @@ def update_mapping_approval(status: str, note: Optional[str] = None) -> Dict[str
     return get_mapping_state()
 
 
-def get_pull_config() -> Dict[str, Any]:
-    return _load().get("pull_config", {
-        "lookback_days": 30,
-        "session_gap_minutes": 30,
-        "conversion_selector": "purchase",
+def _normalize_pull_config(raw: Any) -> Dict[str, Any]:
+    if not isinstance(raw, dict):
+        raw = {}
+    allowed_dedup_modes = {"strict", "balanced", "aggressive"}
+    allowed_dedup_keys = {"auto", "conversion_id", "order_id", "event_id"}
+
+    def _as_int(value: Any, default: int, minimum: int, maximum: int) -> int:
+        try:
+            parsed = int(value)
+        except Exception:
+            parsed = default
+        return max(minimum, min(maximum, parsed))
+
+    dedup_mode = str(raw.get("dedup_mode") or "balanced").strip().lower()
+    if dedup_mode not in allowed_dedup_modes:
+        dedup_mode = "balanced"
+
+    primary_dedup_key = str(raw.get("primary_dedup_key") or "auto").strip().lower()
+    if primary_dedup_key not in allowed_dedup_keys:
+        primary_dedup_key = "auto"
+
+    fallback_raw = raw.get("fallback_dedup_keys")
+    fallback_keys: list[str] = []
+    if isinstance(fallback_raw, list):
+        source_values = fallback_raw
+    elif isinstance(fallback_raw, str):
+        source_values = [part.strip() for part in fallback_raw.split(",")]
+    else:
+        source_values = []
+    for item in source_values:
+        key = str(item or "").strip().lower()
+        if key in {"conversion_id", "order_id", "event_id"} and key != primary_dedup_key and key not in fallback_keys:
+            fallback_keys.append(key)
+    if not fallback_keys:
+        fallback_keys = ["conversion_id", "order_id", "event_id"]
+
+    return {
+        "lookback_days": _as_int(raw.get("lookback_days"), 30, 1, 365),
+        "session_gap_minutes": _as_int(raw.get("session_gap_minutes"), 30, 1, 720),
+        "conversion_selector": str(raw.get("conversion_selector") or "purchase").strip() or "purchase",
         "output_mode": "single",  # single | per_conversion
-        "dedup_interval_minutes": 5,
-    })
+        "dedup_interval_minutes": _as_int(raw.get("dedup_interval_minutes"), 5, 0, 1440),
+        "dedup_mode": dedup_mode,
+        "primary_dedup_key": primary_dedup_key,
+        "fallback_dedup_keys": fallback_keys,
+    }
+
+
+def get_pull_config() -> Dict[str, Any]:
+    return _normalize_pull_config(_load().get("pull_config", {}))
 
 
 def save_pull_config(pull_config: Dict[str, Any]) -> None:
     d = _load()
-    d["pull_config"] = {**get_pull_config(), **pull_config}
+    current = get_pull_config()
+    merged = {**current, **(pull_config if isinstance(pull_config, dict) else {})}
+    d["pull_config"] = _normalize_pull_config(merged)
     _save(d)
