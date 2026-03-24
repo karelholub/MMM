@@ -30,6 +30,9 @@ _LEGACY_ROLE_PERMISSION_MAP: Dict[str, set[str]] = {
 _LEGACY_HEADERLESS_VIEWER_PREFIXES = (
     "/api/settings",
     "/api/taxonomy",
+    "/api/alerts",
+    "/api/alert-rules",
+    "/api/funnels",
 )
 
 

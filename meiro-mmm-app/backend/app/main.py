@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, Response, JSONResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any, Tuple
+from contextlib import contextmanager
 import pandas as pd
 from pathlib import Path
 import io
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 from app.utils.token_store import save_token, get_token, delete_token, get_all_connected_platforms
 from app.utils.encrypt import encrypt, decrypt
 from app.utils import datasource_config as ds_config
-from app.utils.taxonomy import load_taxonomy, save_taxonomy, Taxonomy, MatchExpression, ChannelRule, is_catch_all_rule
+from app.utils.taxonomy import load_taxonomy
 from app.utils.kpi_config import load_kpi_config, save_kpi_config, KpiConfig, KpiDefinition
 from app.utils.api_params import clamp_int, resolve_per_page, resolve_sort_dir
 from app.db import Base, engine, get_db, SessionLocal
@@ -75,20 +76,7 @@ from app.services_journey_settings import (
 )
 from app.services_access_control import ensure_access_control_seed_data, DEFAULT_WORKSPACE_ID
 from app.services_access_control import PERMISSIONS as RBAC_PERMISSIONS
-from app.services_auth import (
-    CSRF_HEADER_NAME,
-    SESSION_COOKIE_NAME,
-    authenticate_local_user,
-    create_session,
-    ensure_local_password_seed_users,
-    ensure_user_and_membership,
-    issue_csrf_token,
-    require_auth_context,
-    resolve_auth_context,
-    revoke_all_user_sessions,
-    revoke_session,
-    verify_csrf,
-)
+from app.services_auth import SESSION_COOKIE_NAME, resolve_auth_context, verify_csrf
 from app.core.permissions import (
     PermissionContext,
     require_any_permission,
@@ -117,15 +105,30 @@ from app.services_journeys_health import (
     build_journeys_preview,
     build_journeys_summary,
 )
-from app.services_funnels import (
-    create_funnel,
-    get_funnel,
-    get_funnel_diagnostics as compute_funnel_diagnostics,
-    get_funnel_results as compute_funnel_results,
-    list_funnels,
-)
 from app.modules.journeys.router import create_router as create_journeys_router
 from app.modules.performance.router import create_router as create_performance_router
+from app.modules.settings.router import create_router as create_settings_router
+from app.modules.admin_access.router import create_router as create_admin_access_router
+from app.modules.auth_access.router import create_router as create_auth_access_router
+from app.modules.alerts_funnels.router import create_router as create_alerts_funnels_router
+from app.modules.admin_access.schemas import (
+    AdminInvitationCreatePayload,
+    AdminMembershipUpdatePayload,
+    AdminRoleCreatePayload,
+    AdminRoleUpdatePayload,
+    AdminUserUpdatePayload,
+    InvitationAcceptPayload,
+)
+from app.modules.settings.schemas import (
+    AdsGovernanceSettings,
+    AttributionSettings,
+    FeatureFlags,
+    KpiConfigModel,
+    MMMSettings,
+    NBASettings,
+    RevenueConfig,
+    Settings,
+)
 from app.services_data_sources import (
     create_data_source,
     delete_data_source,
@@ -137,16 +140,6 @@ from app.services_data_sources import (
     update_data_source,
 )
 from app.services_oauth_connections import (
-    OAUTH_PROVIDER_LABELS,
-    build_authorization_url,
-    complete_oauth_callback,
-    create_oauth_session,
-    disconnect_connection,
-    list_oauth_connections,
-    list_provider_accounts,
-    normalize_provider_key,
-    select_accounts,
-    test_connection_health,
     get_access_token_for_provider,
 )
 from app.services_ads_ops import (
@@ -162,28 +155,7 @@ from app.services_ads_ops import (
     list_change_requests as ads_list_change_requests,
     reject_change_request as ads_reject_change_request,
 )
-from app.services_journey_alerts import (
-    ALERT_DOMAINS as JOURNEY_ALERT_DOMAINS,
-    ALERT_TYPES as JOURNEY_ALERT_TYPES,
-    create_alert_definition as create_journey_alert_definition,
-    list_alert_definitions as list_journey_alert_definitions,
-    list_alert_events as list_journey_alert_events,
-    preview_alert as preview_journey_alert,
-    update_alert_definition as update_journey_alert_definition,
-)
 from app.models_overview_alerts import AlertEvent, AlertRule, NotificationChannel, UserNotificationPref
-from app.services_alerts import (
-    list_alerts,
-    get_alert_by_id,
-    ack_alert,
-    snooze_alert,
-    resolve_alert,
-    list_alert_rules,
-    get_alert_rule_by_id,
-    create_alert_rule,
-    update_alert_rule,
-    delete_alert_rule,
-)
 from app.services_overview import get_overview_alerts
 from app.services_performance_helpers import (
     build_performance_query_context as _build_performance_query_context,
@@ -429,6 +401,28 @@ app.add_middleware(
 )
 
 
+@contextmanager
+def _internal_db_session():
+    provider = app.dependency_overrides.get(get_db, get_db)
+    resource = provider()
+    if hasattr(resource, "__next__"):
+        db = next(resource)
+        try:
+            yield db
+        finally:
+            try:
+                next(resource)
+            except StopIteration:
+                pass
+        return
+    try:
+        yield resource
+    finally:
+        close = getattr(resource, "close", None)
+        if callable(close):
+            close()
+
+
 @app.middleware("http")
 async def csrf_protection_middleware(request: Request, call_next):
     # Enforce CSRF for cookie-authenticated unsafe methods. Legacy header-based
@@ -439,13 +433,11 @@ async def csrf_protection_middleware(request: Request, call_next):
         and request.url.path not in CSRF_EXEMPT_PATHS
         and request.cookies.get(SESSION_COOKIE_NAME)
     ):
-        db = SessionLocal()
         try:
-            verify_csrf(db, request)
+            with _internal_db_session() as db:
+                verify_csrf(db, request)
         except HTTPException as exc:
             return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
-        finally:
-            db.close()
     return await call_next(request)
 
 
@@ -812,80 +804,6 @@ def _journey_source_availability() -> List[Dict[str, Any]]:
 # ==================== Settings ====================
 
 
-class AttributionSettings(BaseModel):
-    """Configurable knobs for attribution models and path analysis."""
-
-    lookback_window_days: int = 30
-    use_converted_flag: bool = True
-    min_conversion_value: float = 0.0
-
-    time_decay_half_life_days: float = 7.0
-    position_first_pct: float = 0.4
-    position_last_pct: float = 0.4
-    markov_min_paths: int = 5
-
-
-class MMMSettings(BaseModel):
-    """High-level MMM configuration (used as defaults when starting new runs)."""
-
-    frequency: str = "W"  # "W" or "M"
-
-
-class NBASettings(BaseModel):
-    """Next-best-action configuration."""
-
-    min_prefix_support: int = 5
-    min_conversion_rate: float = 0.01  # 1%
-    max_prefix_depth: int = 5
-    min_next_support: int = 5
-    max_suggestions_per_prefix: int = 3
-    min_uplift_pct: Optional[float] = None  # expressed as decimal (e.g., 0.1 = 10%)
-    excluded_channels: List[str] = Field(default_factory=lambda: ["direct"])
-
-
-class FeatureFlags(BaseModel):
-    """Workspace feature switches."""
-
-    journeys_enabled: bool = False
-    journey_examples_enabled: bool = False
-    funnel_builder_enabled: bool = False
-    funnel_diagnostics_enabled: bool = False
-    access_control_enabled: bool = False
-    custom_roles_enabled: bool = False
-    audit_log_enabled: bool = False
-    scim_enabled: bool = False
-    sso_enabled: bool = False
-
-
-class AdsGovernanceSettings(BaseModel):
-    require_approval: bool = True
-    max_budget_change_pct: float = 30.0
-
-
-class RevenueConfig(BaseModel):
-    conversion_names: List[str] = Field(default_factory=lambda: ["purchase"])
-    value_field_path: str = "value"
-    currency_field_path: str = "currency"
-    dedup_key: str = "conversion_id"
-    default_value: float = 0.0
-    default_value_mode: str = "missing_only"
-    per_conversion_overrides: List[Dict[str, Any]] = Field(default_factory=list)
-    base_currency: str = "EUR"
-    fx_enabled: bool = False
-    fx_mode: str = "none"
-    fx_rates_json: Dict[str, float] = Field(default_factory=dict)
-    source_type: str = "conversion_event"
-
-
-class Settings(BaseModel):
-    attribution: AttributionSettings = AttributionSettings()
-    mmm: MMMSettings = MMMSettings()
-    nba: NBASettings = NBASettings()
-    feature_flags: FeatureFlags = FeatureFlags()
-    ads_governance: AdsGovernanceSettings = AdsGovernanceSettings()
-    revenue_config: RevenueConfig = RevenueConfig()
-
-
 class AttributionPreviewPayload(BaseModel):
     settings: AttributionSettings
 
@@ -966,6 +884,45 @@ SETTINGS: Settings = _load_settings()
 
 def _save_settings() -> None:
     SETTINGS_PATH.write_text(SETTINGS.model_dump_json(indent=2))
+
+
+def _replace_settings(new_settings: Settings) -> Settings:
+    global SETTINGS, JOURNEYS
+    SETTINGS = new_settings
+    JOURNEYS = []
+    _save_settings()
+    return SETTINGS
+
+
+def _replace_revenue_config(payload: RevenueConfig) -> Dict[str, Any]:
+    global SETTINGS, JOURNEYS
+    SETTINGS = Settings(
+        attribution=SETTINGS.attribution,
+        mmm=SETTINGS.mmm,
+        nba=SETTINGS.nba,
+        feature_flags=SETTINGS.feature_flags,
+        ads_governance=getattr(SETTINGS, "ads_governance", AdsGovernanceSettings()),
+        revenue_config=RevenueConfig(**normalize_revenue_config(payload.model_dump())),
+    )
+    JOURNEYS = []
+    _save_settings()
+    return normalize_revenue_config(SETTINGS.revenue_config.model_dump())
+
+
+def _get_kpi_config_model() -> KpiConfigModel:
+    cfg = KPI_CONFIG
+    return KpiConfigModel(
+        definitions=[KpiDefinitionModel(**d.__dict__) for d in cfg.definitions],
+        primary_kpi_id=cfg.primary_kpi_id,
+    )
+
+
+def _replace_kpi_config(cfg: KpiConfigModel) -> KpiConfigModel:
+    global KPI_CONFIG
+    defs = [KpiDefinition(**d.dict()) for d in cfg.definitions]
+    KPI_CONFIG = KpiConfig(definitions=defs, primary_kpi_id=cfg.primary_kpi_id)
+    save_kpi_config(KPI_CONFIG)
+    return _get_kpi_config_model()
 
 
 def _filter_nba_recommendations(
@@ -1884,40 +1841,6 @@ BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
 
-class AuthLoginPayload(BaseModel):
-    email: Optional[str] = None
-    username: Optional[str] = None
-    password: Optional[str] = None
-    provider: str = "bootstrap"
-    name: Optional[str] = None
-    workspace_id: str = "default"
-
-
-class AuthWorkspaceSwitchPayload(BaseModel):
-    workspace_id: str
-
-
-def _set_session_cookie(response: Response, session_id: str) -> None:
-    response.set_cookie(
-        key=SESSION_COOKIE_NAME,
-        value=session_id,
-        max_age=SESSION_COOKIE_MAX_AGE,
-        httponly=True,
-        secure=SESSION_COOKIE_SECURE,
-        samesite=SESSION_COOKIE_SAMESITE,
-        path="/",
-    )
-
-
-def _clear_session_cookie(response: Response) -> None:
-    response.delete_cookie(
-        key=SESSION_COOKIE_NAME,
-        path="/",
-        secure=SESSION_COOKIE_SECURE,
-        samesite=SESSION_COOKIE_SAMESITE,
-    )
-
-
 def _admin_role_id_for_workspace(db, workspace_id: str) -> Optional[str]:
     role = (
         db.query(ORMRole)
@@ -1967,52 +1890,6 @@ def _invite_token() -> str:
 
 def _hash_invite_token(raw: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
-# ==================== Settings API ====================
-
-
-@app.get("/api/settings")
-def get_settings(_ctx: PermissionContext = Depends(require_permission("settings.view"))):
-    """Return current configuration for attribution, MMM, and NBA."""
-    return SETTINGS
-
-
-@app.post("/api/settings")
-def update_settings(
-    new_settings: Settings,
-    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
-):
-    """Update global configuration. Overwrites previous settings."""
-    global SETTINGS, JOURNEYS
-    SETTINGS = new_settings
-    JOURNEYS = []
-    _save_settings()
-    return SETTINGS
-
-
-@app.get("/api/settings/revenue-config")
-def get_revenue_config_settings(_ctx: PermissionContext = Depends(require_permission("settings.view"))):
-    return normalize_revenue_config(getattr(SETTINGS, "revenue_config", None).model_dump() if getattr(SETTINGS, "revenue_config", None) else None)
-
-
-@app.put("/api/settings/revenue-config")
-def update_revenue_config_settings(
-    payload: RevenueConfig,
-    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
-):
-    global SETTINGS, JOURNEYS
-    SETTINGS = Settings(
-        attribution=SETTINGS.attribution,
-        mmm=SETTINGS.mmm,
-        nba=SETTINGS.nba,
-        feature_flags=SETTINGS.feature_flags,
-        ads_governance=getattr(SETTINGS, "ads_governance", AdsGovernanceSettings()),
-        revenue_config=RevenueConfig(**normalize_revenue_config(payload.model_dump())),
-    )
-    JOURNEYS = []
-    _save_settings()
-    return normalize_revenue_config(SETTINGS.revenue_config.model_dump())
 
 
 def _ads_governance_settings() -> AdsGovernanceSettings:
@@ -2235,199 +2112,15 @@ def get_ads_audit(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-# ---- Notification settings (channels + user prefs) ----
-from app.services_notifications import (
-    list_channels as list_notification_channels,
-    create_channel as create_notification_channel,
-    get_channel as get_notification_channel,
-    update_channel as update_notification_channel,
-    delete_channel as delete_notification_channel,
-    list_prefs as list_notification_prefs,
-    get_pref as get_notification_pref,
-    upsert_pref as upsert_notification_pref,
-    update_pref as update_notification_pref,
-    delete_pref as delete_notification_pref,
-)
-
-
 def _current_user_id(request: Request) -> str:
     """Resolve current user for notification prefs; session first, then legacy fallback."""
     raw_session_id = request.cookies.get(SESSION_COOKIE_NAME)
     if raw_session_id:
-        db = SessionLocal()
-        try:
+        with _internal_db_session() as db:
             ctx = resolve_auth_context(db, raw_session_id=raw_session_id)
             if ctx:
                 return ctx.user.id
-        finally:
-            db.close()
     return request.headers.get("X-User-Id") or request.query_params.get("user_id") or "default"
-
-
-class NotificationChannelCreate(BaseModel):
-    type: str  # email | slack_webhook
-    config: Dict[str, Any] = Field(default_factory=dict)
-    slack_webhook_url: Optional[str] = None  # only for type=slack_webhook; stored securely
-
-
-class NotificationChannelUpdate(BaseModel):
-    config: Optional[Dict[str, Any]] = None
-    slack_webhook_url: Optional[str] = None
-
-
-class NotificationPrefUpdate(BaseModel):
-    severities: Optional[List[str]] = None
-    digest_mode: Optional[str] = None  # realtime | daily
-    quiet_hours: Optional[Dict[str, Any]] = None  # { start, end, timezone }
-    is_enabled: Optional[bool] = None
-
-
-class NotificationPrefUpsert(BaseModel):
-    channel_id: int
-    severities: List[str] = Field(default_factory=list)
-    digest_mode: str = "realtime"
-    quiet_hours: Optional[Dict[str, Any]] = None
-    is_enabled: bool = False
-
-
-@app.get("/api/settings/notification-channels")
-def api_list_notification_channels(
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("settings.view")),
-):
-    """List notification channels. Slack webhook URLs are never returned."""
-    return list_notification_channels(db)
-
-
-@app.post("/api/settings/notification-channels")
-def api_create_notification_channel(
-    body: NotificationChannelCreate,
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
-):
-    """Create a channel. For slack_webhook, provide slack_webhook_url; it is stored securely."""
-    try:
-        return create_notification_channel(
-            db,
-            body.type,
-            body.config,
-            slack_webhook_url=body.slack_webhook_url if body.type == "slack_webhook" else None,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@app.get("/api/settings/notification-channels/{channel_id}")
-def api_get_notification_channel(
-    channel_id: int,
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("settings.view")),
-):
-    out = get_notification_channel(db, channel_id)
-    if out is None:
-        raise HTTPException(status_code=404, detail="Channel not found")
-    return out
-
-
-@app.put("/api/settings/notification-channels/{channel_id}")
-def api_update_notification_channel(
-    channel_id: int,
-    body: NotificationChannelUpdate,
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
-):
-    out = update_notification_channel(
-        db,
-        channel_id,
-        config=body.config,
-        slack_webhook_url=body.slack_webhook_url,
-    )
-    if out is None:
-        raise HTTPException(status_code=404, detail="Channel not found")
-    return out
-
-
-@app.delete("/api/settings/notification-channels/{channel_id}")
-def api_delete_notification_channel(
-    channel_id: int,
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
-):
-    if not delete_notification_channel(db, channel_id):
-        raise HTTPException(status_code=404, detail="Channel not found")
-    return {"ok": True}
-
-
-@app.get("/api/settings/notification-preferences")
-def api_list_notification_preferences(
-    request: Request,
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("settings.view")),
-):
-    user_id = _current_user_id(request)
-    return list_notification_prefs(db, user_id)
-
-
-@app.post("/api/settings/notification-preferences")
-def api_upsert_notification_preference(
-    body: NotificationPrefUpsert,
-    request: Request,
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
-):
-    user_id = _current_user_id(request)
-    return upsert_notification_pref(
-        db,
-        user_id,
-        body.channel_id,
-        severities=body.severities,
-        digest_mode=body.digest_mode,
-        quiet_hours=body.quiet_hours,
-        is_enabled=body.is_enabled,
-    )
-
-
-@app.get("/api/settings/notification-preferences/{pref_id}")
-def api_get_notification_preference(
-    pref_id: int,
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("settings.view")),
-):
-    out = get_notification_pref(db, pref_id)
-    if out is None:
-        raise HTTPException(status_code=404, detail="Preference not found")
-    return out
-
-
-@app.put("/api/settings/notification-preferences/{pref_id}")
-def api_update_notification_preference(
-    pref_id: int,
-    body: NotificationPrefUpdate,
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
-):
-    out = update_notification_pref(
-        db,
-        pref_id,
-        severities=body.severities,
-        digest_mode=body.digest_mode,
-        quiet_hours=body.quiet_hours,
-        is_enabled=body.is_enabled,
-    )
-    if out is None:
-        raise HTTPException(status_code=404, detail="Preference not found")
-    return out
-
-
-@app.delete("/api/settings/notification-preferences/{pref_id}")
-def api_delete_notification_preference(
-    pref_id: int,
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
-):
-    if not delete_notification_pref(db, pref_id):
-        raise HTTPException(status_code=404, detail="Preference not found")
-    return {"ok": True}
 
 
 @app.post(
@@ -2673,394 +2366,6 @@ def nba_test(
         recommendations=recommendations,
         reason=reason,
     )
-
-
-# ==================== Taxonomy API ====================
-
-
-@app.get("/api/taxonomy")
-def get_taxonomy():
-    """Return current channel/source/medium/campaign taxonomy rules."""
-    tax = load_taxonomy()
-
-    def _serialize_expression(expr):
-        return {
-            "operator": expr.normalize_operator(),
-            "value": expr.value or "",
-        }
-
-    return {
-        "channel_rules": [
-            {
-                "name": r.name,
-                "channel": r.channel,
-                "priority": r.priority,
-                "enabled": r.enabled,
-                "source": _serialize_expression(r.source),
-                "medium": _serialize_expression(r.medium),
-                "campaign": _serialize_expression(r.campaign),
-            }
-            for r in tax.channel_rules
-        ],
-        "source_aliases": tax.source_aliases,
-        "medium_aliases": tax.medium_aliases,
-    }
-
-
-@app.post("/api/taxonomy")
-def update_taxonomy(payload: Dict[str, Any]):
-    """Replace taxonomy rules and aliases."""
-    def _parse_expression(data: Optional[Dict[str, Any]], fallback_regex: Optional[str] = None):
-        if isinstance(data, dict):
-            return {
-                "operator": data.get("operator", "any"),
-                "value": data.get("value", ""),
-            }
-        if fallback_regex:
-            return {"operator": "regex", "value": fallback_regex}
-        return {"operator": "any", "value": ""}
-
-    rules: List[ChannelRule] = []
-    channel_rules_payload = payload.get("channel_rules", [])
-    for idx, rule_payload in enumerate(channel_rules_payload):
-        expr_source = _parse_expression(
-            rule_payload.get("source"),
-            rule_payload.get("source_regex"),
-        )
-        expr_medium = _parse_expression(
-            rule_payload.get("medium"),
-            rule_payload.get("medium_regex"),
-        )
-        expr_campaign = _parse_expression(rule_payload.get("campaign"))
-
-        rules.append(
-            ChannelRule(
-                name=rule_payload.get("name", ""),
-                channel=rule_payload.get("channel", ""),
-                priority=int(rule_payload.get("priority", (idx + 1) * 10)),
-                enabled=bool(rule_payload.get("enabled", True)),
-                source=MatchExpression(**expr_source),
-                medium=MatchExpression(**expr_medium),
-                campaign=MatchExpression(**expr_campaign),
-            )
-        )
-
-    rules.sort(key=lambda r: (r.priority, r.name))
-
-    invalid_rules = [rule.name or rule.channel or f"Rule {idx + 1}" for idx, rule in enumerate(rules) if rule.enabled and is_catch_all_rule(rule)]
-    if invalid_rules:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Enabled taxonomy rules must include at least one match condition. Invalid: {', '.join(invalid_rules[:5])}",
-        )
-
-    tax = Taxonomy(
-        channel_rules=rules,
-        source_aliases=payload.get("source_aliases", {}),
-        medium_aliases=payload.get("medium_aliases", {}),
-    )
-    save_taxonomy(tax)
-    return get_taxonomy()
-
-
-@app.post("/api/taxonomy/validate-utm")
-def validate_utm_endpoint(params: Dict[str, Any]):
-    """
-    Validate UTM parameters and return normalized values with warnings/errors.
-    
-    Example: {"utm_source": "google", "utm_medium": "cpc", "utm_campaign": "brand"}
-    """
-    from app.services_taxonomy import validate_utm_params
-    
-    result = validate_utm_params(params)
-    return {
-        "is_valid": result.is_valid,
-        "warnings": result.warnings,
-        "errors": result.errors,
-        "normalized": result.normalized,
-        "confidence": result.confidence,
-    }
-
-
-@app.post("/api/taxonomy/map-channel")
-def map_channel_endpoint(body: Dict[str, Any]):
-    """
-    Map source/medium to channel with confidence score.
-    
-    Example: {"source": "google", "medium": "cpc"}
-    """
-    from app.services_taxonomy import map_to_channel
-    
-    source = body.get("source")
-    medium = body.get("medium")
-    campaign = body.get("campaign")
-    
-    mapping = map_to_channel(source, medium, campaign)
-    return {
-        "channel": mapping.channel,
-        "matched_rule": mapping.matched_rule,
-        "confidence": mapping.confidence,
-        "source": mapping.source,
-        "medium": mapping.medium,
-        "fallback_reason": mapping.fallback_reason,
-    }
-
-
-@app.get("/api/taxonomy/unknown-share")
-def get_unknown_share(limit: int = 20, db=Depends(get_db)):
-    """
-    Get unknown/unmapped traffic report.
-    
-    Returns unknown share, breakdowns by source/medium, and sample unmapped touchpoints.
-    """
-    from app.services_taxonomy import compute_unknown_share
-    from app.services_conversions import load_journeys_from_db
-    
-    journeys = load_journeys_from_db(db, limit=10000)
-    if not journeys:
-        return {
-            "total_touchpoints": 0,
-            "unknown_count": 0,
-            "unknown_share": 0.0,
-            "by_source": {},
-            "by_medium": {},
-            "top_unmapped_patterns": [],
-            "sample_unmapped": [],
-        }
-    
-    report = compute_unknown_share(journeys, sample_size=limit)
-    
-    # Convert tuple keys to strings for JSON
-    top_patterns = sorted(
-        [(k, v) for k, v in report.by_source_medium.items()],
-        key=lambda x: -x[1]
-    )[:limit]
-    
-    return {
-        "total_touchpoints": report.total_touchpoints,
-        "unknown_count": report.unknown_count,
-        "unknown_share": report.unknown_share,
-        "by_source": report.by_source,
-        "by_medium": report.by_medium,
-        "top_unmapped_patterns": [
-            {"source": s, "medium": m, "count": count}
-            for (s, m), count in top_patterns
-        ],
-        "sample_unmapped": report.sample_unmapped,
-    }
-
-
-@app.get("/api/taxonomy/coverage")
-def get_taxonomy_coverage(db=Depends(get_db)):
-    """
-    Get taxonomy coverage report.
-    
-    Returns channel distribution, source/medium coverage, rule usage, and top unmapped patterns.
-    """
-    from app.services_taxonomy import compute_taxonomy_coverage
-    from app.services_conversions import load_journeys_from_db
-    
-    journeys = load_journeys_from_db(db, limit=10000)
-    if not journeys:
-        return {
-            "channel_distribution": {},
-            "source_coverage": 0.0,
-            "medium_coverage": 0.0,
-            "rule_usage": {},
-            "top_unmapped_patterns": [],
-        }
-    
-    coverage = compute_taxonomy_coverage(journeys)
-    return coverage
-
-
-@app.get("/api/taxonomy/channel-confidence")
-def get_channel_confidence(channel: str, db=Depends(get_db)):
-    """
-    Get confidence metrics for a specific channel.
-    
-    Returns mean confidence, touchpoint count, low-confidence share, and samples.
-    """
-    from app.services_taxonomy import compute_channel_confidence
-    from app.services_conversions import load_journeys_from_db
-    
-    journeys = load_journeys_from_db(db, limit=10000)
-    if not journeys:
-        return {
-            "mean_confidence": 0.0,
-            "touchpoint_count": 0,
-            "low_confidence_count": 0,
-            "low_confidence_share": 0.0,
-            "sample_low_confidence": [],
-        }
-    
-    confidence = compute_channel_confidence(journeys, channel)
-    return confidence
-
-
-@app.post("/api/taxonomy/compute-dq")
-def compute_taxonomy_dq(db=Depends(get_db)):
-    """
-    Compute and persist taxonomy-specific DQ snapshots.
-    
-    Metrics: unknown_channel_share, mean_touchpoint_confidence, mean_journey_confidence,
-    source_coverage, medium_coverage, low_confidence_touchpoint_share.
-    """
-    from app.services_taxonomy import persist_taxonomy_dq_snapshots
-    from app.services_conversions import load_journeys_from_db
-    
-    journeys = load_journeys_from_db(db, limit=10000)
-    if not journeys:
-        return {"computed": 0, "message": "No journeys found"}
-    
-    snapshots = persist_taxonomy_dq_snapshots(db, journeys)
-    
-    return {
-        "computed": len(snapshots),
-        "metrics": [
-            {
-                "source": s.source,
-                "metric_key": s.metric_key,
-                "metric_value": s.metric_value,
-                "ts_bucket": s.ts_bucket,
-            }
-            for s in snapshots
-        ],
-    }
-
-
-# ==================== KPI / Conversion API ====================
-
-
-class KpiDefinitionModel(BaseModel):
-    id: str
-    label: str
-    type: str  # "primary" or "micro"
-    event_name: str
-    value_field: Optional[str] = None
-    weight: float = 1.0
-    lookback_days: Optional[int] = None
-
-
-class KpiConfigModel(BaseModel):
-    definitions: List[KpiDefinitionModel]
-    primary_kpi_id: Optional[str] = None
-
-
-class KpiTestPayload(BaseModel):
-    definition: KpiDefinitionModel
-
-
-@app.get("/api/kpis", response_model=KpiConfigModel)
-def get_kpis():
-    """Return configured KPI and micro-conversion definitions."""
-    cfg = KPI_CONFIG
-    return KpiConfigModel(
-        definitions=[KpiDefinitionModel(**d.__dict__) for d in cfg.definitions],
-        primary_kpi_id=cfg.primary_kpi_id,
-    )
-
-
-@app.post("/api/kpis/test")
-def test_kpi_definition(payload: KpiTestPayload, db=Depends(get_db)):
-    """Evaluate a KPI definition against loaded journeys for quick validation."""
-    journeys = _ensure_journeys_loaded(db)
-    if not journeys:
-        return {
-            "testAvailable": False,
-            "eventsMatched": 0,
-            "journeysMatched": 0,
-            "journeysTotal": 0,
-            "journeysPct": 0.0,
-            "missingValueChecks": 0,
-            "missingValueCount": 0,
-            "missingValuePct": None,
-            "message": None,
-            "reason": "Load sample data to test",
-        }
-
-    definition = payload.definition
-    total_journeys = len(journeys)
-    target_event = (definition.event_name or definition.id or "").strip().lower()
-    matched_events = 0
-    journeys_matched = 0
-    missing_value_checks = 0
-    missing_value_count = 0
-    fallback_used = False
-
-    def _record_value(source: Dict[str, Any]) -> None:
-        nonlocal missing_value_checks, missing_value_count
-        if definition.value_field:
-            missing_value_checks += 1
-            value = source.get(definition.value_field)
-            if value in (None, "", []):
-                missing_value_count += 1
-
-    for journey in journeys:
-        journey_matches = False
-        events = journey.get("events") or []
-
-        if target_event:
-            for event in events:
-                name = str(event.get("name") or event.get("event_name") or "").strip().lower()
-                if name and name == target_event:
-                    matched_events += 1
-                    journey_matches = True
-                    _record_value(event)
-
-        if not journey_matches:
-            journey_type = str(journey.get("kpi_type") or "").strip().lower()
-            if definition.id and journey_type == definition.id.strip().lower():
-                matched_events += 1
-                journey_matches = True
-                _record_value(journey)
-                fallback_used = True
-            elif not target_event and definition.event_name == "":
-                # If no specific event provided, treat conversion flag as match
-                if journey.get("converted", False):
-                    matched_events += 1
-                    journey_matches = True
-                    _record_value(journey)
-                    fallback_used = True
-
-        if journey_matches:
-            journeys_matched += 1
-
-    journeys_pct = (
-        (journeys_matched / total_journeys) * 100.0 if total_journeys else 0.0
-    )
-    missing_value_pct = (
-        (missing_value_count / missing_value_checks) * 100.0
-        if missing_value_checks
-        else None
-    )
-
-    return {
-        "testAvailable": True,
-        "eventsMatched": matched_events,
-        "journeysMatched": journeys_matched,
-        "journeysTotal": total_journeys,
-        "journeysPct": round(journeys_pct, 2),
-        "missingValueChecks": missing_value_checks,
-        "missingValueCount": missing_value_count,
-        "missingValuePct": round(missing_value_pct, 2) if missing_value_pct is not None else None,
-        "message": (
-            "Matched using KPI ID fallback; event stream not found."
-            if fallback_used and target_event
-            else None
-        ),
-        "reason": None,
-    }
-
-
-@app.post("/api/kpis", response_model=KpiConfigModel)
-def update_kpis(cfg: KpiConfigModel):
-    """Replace KPI configuration."""
-    global KPI_CONFIG
-    defs = [KpiDefinition(**d.dict()) for d in cfg.definitions]
-    KPI_CONFIG = KpiConfig(definitions=defs, primary_kpi_id=cfg.primary_kpi_id)
-    save_kpi_config(KPI_CONFIG)
-    return get_kpis()
 
 
 # ==================== Health ====================
@@ -3678,10 +2983,12 @@ def import_journeys_from_cdp(
         raise HTTPException(status_code=404, detail="No CDP data found. Fetch from Meiro CDP first.")
 
     try:
+        pull_cfg = get_pull_config()
         result = canonicalize_meiro_profiles(
             profiles,
             mapping=mapping.model_dump(),
             revenue_config=(SETTINGS.revenue_config.model_dump() if hasattr(SETTINGS.revenue_config, "model_dump") else SETTINGS.revenue_config),
+            dedup_config=pull_cfg,
         )
         journeys = result["valid_journeys"]
     except Exception as e:
@@ -3705,7 +3012,14 @@ def import_journeys_from_cdp(
     _append_import_run(
         source_label, len(journeys), "success",
         total=len(journeys), valid=len(journeys), converted=converted, channels_detected=sorted(ch_set),
-        config_snapshot={"mapping_preset": "saved", "schema_version": "1.0"},
+        config_snapshot={
+            "mapping_preset": "saved",
+            "schema_version": "1.0",
+            "dedup_interval_minutes": pull_cfg.get("dedup_interval_minutes"),
+            "dedup_mode": pull_cfg.get("dedup_mode"),
+            "primary_dedup_key": pull_cfg.get("primary_dedup_key"),
+            "fallback_dedup_keys": pull_cfg.get("fallback_dedup_keys"),
+        },
         preview_rows=[
             {
                 "customer_id": j.get("customer_id", "?"),
@@ -5088,1229 +4402,6 @@ def get_reconciliation_drilldown(
     return out
 
 
-# ==================== OAuth Routes ====================
-
-
-@app.post("/api/auth/login")
-def login_with_session(payload: AuthLoginPayload, response: Response, request: Request, db=Depends(get_db)):
-    """
-    Session login endpoint.
-    - provider=local_password: username/email + password
-    - provider=bootstrap: legacy dev bootstrap by email (no password)
-    """
-    provider = (payload.provider or "bootstrap").strip().lower()
-    workspace_id = (payload.workspace_id or DEFAULT_WORKSPACE_ID).strip() or DEFAULT_WORKSPACE_ID
-    if provider not in {"bootstrap", "local_password"}:
-        raise HTTPException(status_code=400, detail="Unsupported auth provider")
-
-    user = None
-    if provider == "local_password":
-        identifier = (payload.username or payload.email or "").strip().lower()
-        if not identifier:
-            raise HTTPException(status_code=400, detail="username or email is required")
-        if not payload.password:
-            raise HTTPException(status_code=400, detail="password is required")
-        ensure_local_password_seed_users(db, workspace_id=workspace_id)
-        user = authenticate_local_user(
-            db,
-            identifier=identifier,
-            password=payload.password,
-            workspace_id=workspace_id,
-        )
-        if not user:
-            raise HTTPException(status_code=401, detail="Invalid credentials")
-    else:
-        email = (payload.email or "").strip()
-        if not email:
-            raise HTTPException(status_code=400, detail="email is required")
-        try:
-            user = ensure_user_and_membership(
-                db,
-                email=email,
-                name=payload.name,
-                workspace_id=workspace_id,
-            )
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-    session_tokens = create_session(
-        db,
-        user=user,
-        workspace_id=workspace_id,
-        request=request,
-    )
-    _set_session_cookie(response, session_tokens["session_id"])
-    ctx = resolve_auth_context(db, raw_session_id=session_tokens["session_id"])
-    if not ctx:
-        raise HTTPException(status_code=500, detail="Failed to establish session")
-    return {
-        "user": {
-            "id": ctx.user.id,
-            "email": ctx.user.email,
-            "name": ctx.user.name,
-            "status": ctx.user.status,
-        },
-        "workspace": {
-            "id": ctx.workspace.id,
-            "name": ctx.workspace.name,
-            "slug": ctx.workspace.slug,
-        },
-        "role": ctx.role.name if ctx.role else None,
-        "permissions": sorted(ctx.permissions),
-        "csrf_token": session_tokens["csrf_token"],
-        "provider": provider,
-    }
-
-
-@app.get("/api/auth/providers")
-def auth_providers():
-    """Auth provider registry scaffold for future SSO/Google integrations."""
-    return {
-        "providers": [
-            {"id": "local_password", "label": "Username & Password", "enabled": True},
-            {"id": "google_oauth", "label": "Google", "enabled": False, "coming_soon": True},
-            {"id": "sso_oidc", "label": "SSO (OIDC/SAML)", "enabled": False, "coming_soon": True},
-        ]
-    }
-
-
-@app.get("/api/auth/me")
-def get_auth_me(request: Request, db=Depends(get_db)):
-    ctx = require_auth_context(db, request)
-    csrf_token = issue_csrf_token(
-        db,
-        request.cookies.get(SESSION_COOKIE_NAME),
-        request.headers.get(CSRF_HEADER_NAME),
-    )
-    return {
-        "authenticated": True,
-        "user": {
-            "id": ctx.user.id,
-            "username": getattr(ctx.user, "username", None),
-            "email": ctx.user.email,
-            "name": ctx.user.name,
-            "status": ctx.user.status,
-            "last_login_at": ctx.user.last_login_at,
-        },
-        "workspace": {
-            "id": ctx.workspace.id,
-            "name": ctx.workspace.name,
-            "slug": ctx.workspace.slug,
-        },
-        "membership": {
-            "id": ctx.membership.id,
-            "status": ctx.membership.status,
-            "role_id": ctx.membership.role_id,
-            "role_name": ctx.role.name if ctx.role else None,
-        },
-        "permissions": sorted(ctx.permissions),
-        "csrf_token": csrf_token,
-    }
-
-
-@app.post("/api/auth/workspace")
-def switch_auth_workspace(
-    payload: AuthWorkspaceSwitchPayload,
-    request: Request,
-    response: Response,
-    db=Depends(get_db),
-):
-    current_ctx = require_auth_context(db, request)
-    membership = (
-        db.query(WorkspaceMembership)
-        .filter(
-            WorkspaceMembership.workspace_id == payload.workspace_id,
-            WorkspaceMembership.user_id == current_ctx.user.id,
-            WorkspaceMembership.status == "active",
-        )
-        .first()
-    )
-    if not membership:
-        raise HTTPException(status_code=403, detail="No active membership for requested workspace")
-    revoke_session(db, request.cookies.get(SESSION_COOKIE_NAME) or "")
-    tokens = create_session(
-        db,
-        user=current_ctx.user,
-        workspace_id=payload.workspace_id,
-        request=request,
-    )
-    _set_session_cookie(response, tokens["session_id"])
-    next_ctx = resolve_auth_context(db, raw_session_id=tokens["session_id"])
-    if not next_ctx:
-        raise HTTPException(status_code=500, detail="Failed to switch workspace")
-    return {
-        "workspace": {
-            "id": next_ctx.workspace.id,
-            "name": next_ctx.workspace.name,
-            "slug": next_ctx.workspace.slug,
-        },
-        "role": next_ctx.role.name if next_ctx.role else None,
-        "permissions": sorted(next_ctx.permissions),
-        "csrf_token": tokens["csrf_token"],
-    }
-
-
-@app.post("/api/auth/logout")
-def logout_session(request: Request, response: Response, db=Depends(get_db)):
-    raw = request.cookies.get(SESSION_COOKIE_NAME)
-    if raw:
-        revoke_session(db, raw)
-    _clear_session_cookie(response)
-    return {"ok": True}
-
-
-@app.post("/api/auth/logout-all")
-def logout_all_sessions(request: Request, response: Response, db=Depends(get_db)):
-    ctx = require_auth_context(db, request)
-    revoked = revoke_all_user_sessions(db, ctx.user.id)
-    _clear_session_cookie(response)
-    return {"ok": True, "sessions_revoked": revoked}
-
-@app.get("/api/auth/status")
-def auth_status():
-    connected = get_all_connected_platforms()
-    if meiro_cdp.is_connected() and "meiro_cdp" not in connected:
-        connected.append("meiro_cdp")
-    return {"connected": connected}
-
-def _resolve_workspace_user_from_request(request: Request, db) -> Tuple[str, str]:
-    raw_session_id = request.cookies.get(SESSION_COOKIE_NAME)
-    if raw_session_id:
-        ctx = require_auth_context(db, request)
-        return ctx.workspace.id, ctx.user.id
-    workspace_id = (request.headers.get("X-Workspace-Id") or request.query_params.get("workspace_id") or "default").strip() or "default"
-    user_id = (request.headers.get("X-User-Id") or request.query_params.get("user_id") or "system").strip() or "system"
-    return workspace_id, user_id
-
-
-def _oauth_redirect_uri(provider_key: str) -> str:
-    return f"{BASE_URL}/oauth/{provider_key}/callback"
-
-
-class OAuthStartPayload(BaseModel):
-    return_url: Optional[str] = None
-
-
-class OAuthSelectAccountsPayload(BaseModel):
-    account_ids: List[str] = Field(default_factory=list)
-
-
-@app.get("/api/connections")
-def api_list_connections(
-    request: Request,
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("settings.view")),
-):
-    workspace_id, _user_id = _resolve_workspace_user_from_request(request, db)
-    return list_oauth_connections(db, workspace_id=workspace_id)
-
-
-@app.post("/api/connections/{provider}/start")
-def api_start_connection(
-    provider: str,
-    body: OAuthStartPayload = Body(default=OAuthStartPayload()),
-    request: Request = None,
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
-):
-    provider_key = normalize_provider_key(provider)
-    if provider_key not in OAUTH_PROVIDER_LABELS:
-        raise HTTPException(status_code=404, detail="Unsupported provider")
-    workspace_id, user_id = _resolve_workspace_user_from_request(request, db)
-    try:
-        session_data = create_oauth_session(
-            db,
-            workspace_id=workspace_id,
-            user_id=user_id,
-            provider_key=provider_key,
-            return_url=body.return_url,
-        )
-        auth_url = build_authorization_url(
-            provider_key=provider_key,
-            state=session_data["state"],
-            code_challenge=session_data["code_challenge"],
-            redirect_uri=_oauth_redirect_uri(provider_key),
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return {"authorization_url": auth_url}
-
-
-@app.post("/api/connections/{provider}/reauth")
-def api_reauth_connection(
-    provider: str,
-    body: OAuthStartPayload = Body(default=OAuthStartPayload()),
-    request: Request = None,
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
-):
-    return api_start_connection(provider=provider, body=body, request=request, db=db)
-
-
-@app.get("/oauth/{provider}/callback")
-def oauth_callback(provider: str, code: Optional[str] = Query(None), state: Optional[str] = Query(None), error: Optional[str] = Query(None), db=Depends(get_db)):
-    provider_key = normalize_provider_key(provider)
-    if provider_key not in OAUTH_PROVIDER_LABELS:
-        return RedirectResponse(url=f"{FRONTEND_URL}/datasources?oauth_error=unsupported_provider")
-
-    if error:
-        return RedirectResponse(url=f"{FRONTEND_URL}/datasources?oauth_provider={provider_key}&oauth_error={error}")
-    if not code or not state:
-        return RedirectResponse(url=f"{FRONTEND_URL}/datasources?oauth_provider={provider_key}&oauth_error=missing_code_or_state")
-    try:
-        connection, return_url, normalized_error = complete_oauth_callback(
-            db,
-            provider_key=provider_key,
-            code=code,
-            state=state,
-            redirect_uri=_oauth_redirect_uri(provider_key),
-        )
-        if normalized_error:
-            message = normalized_error.message.replace(" ", "+")
-            return RedirectResponse(
-                url=f"{FRONTEND_URL}/datasources?oauth_provider={provider_key}&oauth_status=error&oauth_error={normalized_error.code}&oauth_message={message}"
-            )
-        redirect_base = f"{FRONTEND_URL}/datasources"
-        if return_url and (return_url.startswith("/") or return_url.startswith(FRONTEND_URL)):
-            redirect_base = f"{FRONTEND_URL}{return_url}" if return_url.startswith("/") else return_url
-        return RedirectResponse(
-            url=f"{redirect_base}?oauth_provider={provider_key}&oauth_status=connected&accounts={len((connection.config_json or {}).get('available_accounts') or [])}"
-        )
-    except Exception:
-        return RedirectResponse(url=f"{FRONTEND_URL}/datasources?oauth_provider={provider_key}&oauth_status=error&oauth_error=callback_failed")
-
-
-@app.get("/api/connections/{provider}/accounts")
-def api_connection_accounts(
-    provider: str,
-    request: Request,
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("settings.view")),
-):
-    provider_key = normalize_provider_key(provider)
-    workspace_id, _user_id = _resolve_workspace_user_from_request(request, db)
-    try:
-        accounts = list_provider_accounts(db, workspace_id=workspace_id, provider_key=provider_key)
-        return {"provider_key": provider_key, "accounts": accounts}
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except RuntimeError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@app.post("/api/connections/{provider}/select-accounts")
-def api_connection_select_accounts(
-    provider: str,
-    body: OAuthSelectAccountsPayload,
-    request: Request,
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
-):
-    provider_key = normalize_provider_key(provider)
-    workspace_id, _user_id = _resolve_workspace_user_from_request(request, db)
-    try:
-        out = select_accounts(
-            db,
-            workspace_id=workspace_id,
-            provider_key=provider_key,
-            account_ids=body.account_ids,
-        )
-        return out
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-
-
-@app.post("/api/connections/{provider}/test")
-def api_connection_test(
-    provider: str,
-    request: Request,
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
-):
-    provider_key = normalize_provider_key(provider)
-    workspace_id, _user_id = _resolve_workspace_user_from_request(request, db)
-    try:
-        return test_connection_health(db, workspace_id=workspace_id, provider_key=provider_key)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-
-
-@app.post("/api/connections/{provider}/disconnect")
-def api_connection_disconnect(
-    provider: str,
-    request: Request,
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
-):
-    provider_key = normalize_provider_key(provider)
-    workspace_id, _user_id = _resolve_workspace_user_from_request(request, db)
-    try:
-        out = disconnect_connection(db, workspace_id=workspace_id, provider_key=provider_key)
-        return {"ok": True, "connection": out}
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-
-
-@app.delete("/api/auth/{platform}")
-def disconnect_platform(platform: str):
-    if delete_token(platform):
-        return {"message": f"Disconnected {platform}"}
-    raise HTTPException(status_code=404, detail=f"No connection found for {platform}")
-
-
-# ==================== Data Source Administration ====================
-
-class DatasourceCredentialUpdate(BaseModel):
-    """Update OAuth credentials for a platform. Only provided fields are updated."""
-    platform: str  # "google" | "meta" | "linkedin"
-    client_id: Optional[str] = None
-    client_secret: Optional[str] = None
-    developer_token: Optional[str] = None  # Google Ads only
-    app_id: Optional[str] = None      # Meta only
-    app_secret: Optional[str] = None   # Meta only
-
-
-@app.get("/api/admin/datasource-config")
-def get_datasource_config_status(
-    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
-):
-    """Return which platforms have credentials configured (no secret values)."""
-    return ds_config.get_status()
-
-
-@app.post("/api/admin/datasource-config")
-def update_datasource_config(
-    body: DatasourceCredentialUpdate,
-    _ctx: PermissionContext = Depends(require_permission("settings.manage")),
-):
-    """Store OAuth credentials for a platform. Encrypted at rest. Env vars override if set."""
-    platform = body.platform.lower()
-    if platform not in ("google", "meta", "linkedin"):
-        raise HTTPException(status_code=400, detail="platform must be google, meta, or linkedin")
-    try:
-        if platform == "google":
-            if body.client_id is not None:
-                ds_config.set_stored("google", client_id=body.client_id)
-            if body.client_secret is not None:
-                ds_config.set_stored("google", client_secret=body.client_secret)
-            if body.developer_token is not None:
-                ds_config.set_stored("google", developer_token=body.developer_token)
-        elif platform == "meta":
-            if body.app_id is not None:
-                ds_config.set_stored("meta", app_id=body.app_id)
-            if body.app_secret is not None:
-                ds_config.set_stored("meta", app_secret=body.app_secret)
-        elif platform == "linkedin":
-            if body.client_id is not None:
-                ds_config.set_stored("linkedin", client_id=body.client_id)
-            if body.client_secret is not None:
-                ds_config.set_stored("linkedin", client_secret=body.client_secret)
-        return {"message": "Credentials updated", "platform": platform, "configured": ds_config.get_platform_configured(platform)}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-@app.get("/api/auth/{platform}")
-def start_oauth(platform: str, request: Request, db=Depends(get_db)):
-    provider_key = normalize_provider_key(platform)
-    if provider_key not in OAUTH_PROVIDER_LABELS:
-        raise HTTPException(status_code=400, detail=f"Unknown platform: {platform}")
-    workspace_id, user_id = _resolve_workspace_user_from_request(request, db)
-    try:
-        session_data = create_oauth_session(
-            db,
-            workspace_id=workspace_id,
-            user_id=user_id,
-            provider_key=provider_key,
-            return_url="/datasources",
-        )
-        auth_url = build_authorization_url(
-            provider_key=provider_key,
-            state=session_data["state"],
-            code_challenge=session_data["code_challenge"],
-            redirect_uri=_oauth_redirect_uri(provider_key),
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return RedirectResponse(url=auth_url)
-
-
-class AdminUserUpdatePayload(BaseModel):
-    status: str = Field(..., pattern="^(active|disabled)$")
-
-
-class AdminMembershipUpdatePayload(BaseModel):
-    role_id: str
-
-
-class AdminInvitationCreatePayload(BaseModel):
-    email: str
-    role_id: str
-    workspace_id: Optional[str] = None
-    expires_in_days: int = Field(default=7, ge=1, le=30)
-
-
-class AdminRoleCreatePayload(BaseModel):
-    name: str = Field(..., min_length=1, max_length=128)
-    description: Optional[str] = None
-    permission_keys: List[str] = Field(default_factory=list)
-    workspace_id: Optional[str] = None
-
-
-class AdminRoleUpdatePayload(BaseModel):
-    name: Optional[str] = Field(None, min_length=1, max_length=128)
-    description: Optional[str] = None
-    permission_keys: Optional[List[str]] = None
-
-
-class InvitationAcceptPayload(BaseModel):
-    token: str
-    name: Optional[str] = None
-
-
-@app.get("/api/admin/permissions")
-def admin_list_permissions(
-    category: Optional[str] = Query(None),
-    _ctx: PermissionContext = Depends(require_permission("roles.manage")),
-    db=Depends(get_db),
-):
-    q = db.query(ORMPermission)
-    if category:
-        q = q.filter(ORMPermission.category == category)
-    rows = q.order_by(ORMPermission.category.asc(), ORMPermission.key.asc()).all()
-    return [
-        {"key": r.key, "description": r.description, "category": r.category}
-        for r in rows
-    ]
-
-
-def _parse_admin_audit_datetime(value: Optional[str], *, field_name: str) -> Optional[datetime]:
-    if not value:
-        return None
-    raw = value.strip()
-    if not raw:
-        return None
-    try:
-        if raw.endswith("Z"):
-            raw = f"{raw[:-1]}+00:00"
-        parsed = datetime.fromisoformat(raw)
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"Invalid {field_name}; expected ISO-8601 datetime")
-    if parsed.tzinfo is not None:
-        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
-    return parsed
-
-
-@app.get("/api/admin/audit-log")
-def admin_list_audit_log(
-    workspaceId: Optional[str] = Query(None),
-    action: Optional[str] = Query(None),
-    actor: Optional[str] = Query(None, description="Actor name/email contains"),
-    date_from: Optional[str] = Query(None, description="ISO datetime"),
-    date_to: Optional[str] = Query(None, description="ISO datetime"),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=200),
-    _ctx: PermissionContext = Depends(require_any_permission(["audit.view", "settings.manage"])),
-    db=Depends(get_db),
-):
-    if not getattr(SETTINGS.feature_flags, "audit_log_enabled", False):
-        raise HTTPException(status_code=404, detail="audit_log_enabled flag is off")
-    workspace_id = workspace_scope_or_403(_ctx, workspaceId)
-    from_dt = _parse_admin_audit_datetime(date_from, field_name="date_from")
-    to_dt = _parse_admin_audit_datetime(date_to, field_name="date_to")
-    if from_dt and to_dt and from_dt > to_dt:
-        raise HTTPException(status_code=400, detail="date_from must be <= date_to")
-
-    q = (
-        db.query(
-            ORMSecurityAuditLog,
-            ORMUser.name.label("actor_name"),
-            ORMUser.email.label("actor_email"),
-        )
-        .outerjoin(ORMUser, ORMUser.id == ORMSecurityAuditLog.actor_user_id)
-        .filter(ORMSecurityAuditLog.workspace_id == workspace_id)
-    )
-
-    if action:
-        action_like = action.strip()
-        if action_like:
-            q = q.filter(ORMSecurityAuditLog.action_key.ilike(f"%{action_like}%"))
-    if actor:
-        actor_like = actor.strip()
-        if actor_like:
-            q = q.filter(
-                (ORMUser.name.ilike(f"%{actor_like}%"))
-                | (ORMUser.email.ilike(f"%{actor_like}%"))
-            )
-    if from_dt:
-        q = q.filter(ORMSecurityAuditLog.created_at >= from_dt)
-    if to_dt:
-        q = q.filter(ORMSecurityAuditLog.created_at <= to_dt)
-
-    total = int(q.count() or 0)
-    rows = (
-        q.order_by(ORMSecurityAuditLog.created_at.desc(), ORMSecurityAuditLog.id.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-        .all()
-    )
-    items = []
-    for row, actor_name, actor_email in rows:
-        items.append(
-            {
-                "id": row.id,
-                "workspace_id": row.workspace_id,
-                "actor_user_id": row.actor_user_id,
-                "actor_name": actor_name,
-                "actor_email": actor_email,
-                "action_key": row.action_key,
-                "target_type": row.target_type,
-                "target_id": row.target_id,
-                "metadata_json": row.metadata_json or {},
-                "ip": row.ip,
-                "user_agent": row.user_agent,
-                "created_at": row.created_at,
-            }
-        )
-    return {
-        "items": items,
-        "page": page,
-        "page_size": page_size,
-        "total": total,
-    }
-
-
-@app.get("/api/admin/roles")
-def admin_list_roles(
-    workspaceId: Optional[str] = Query(None),
-    _ctx: PermissionContext = Depends(require_permission("roles.manage")),
-    db=Depends(get_db),
-):
-    workspace_id = workspace_scope_or_403(_ctx, workspaceId)
-    roles = (
-        db.query(ORMRole)
-        .filter((ORMRole.workspace_id == workspace_id) | (ORMRole.workspace_id.is_(None)))
-        .order_by(ORMRole.is_system.desc(), ORMRole.name.asc())
-        .all()
-    )
-    out = []
-    for role in roles:
-        member_count = (
-            db.query(func.count(WorkspaceMembership.id))
-            .filter(
-                WorkspaceMembership.workspace_id == workspace_id,
-                WorkspaceMembership.role_id == role.id,
-                WorkspaceMembership.status == "active",
-            )
-            .scalar()
-            or 0
-        )
-        perm_keys = [
-            p[0]
-            for p in db.query(ORMRolePermission.permission_key)
-            .filter(ORMRolePermission.role_id == role.id)
-            .all()
-        ]
-        out.append(
-            {
-                "id": role.id,
-                "workspace_id": role.workspace_id,
-                "name": role.name,
-                "description": role.description,
-                "is_system": bool(role.is_system),
-                "member_count": int(member_count),
-                "permission_keys": sorted(perm_keys),
-                "created_at": role.created_at,
-                "updated_at": role.updated_at,
-            }
-        )
-    return {"items": out}
-
-
-@app.post("/api/admin/roles")
-def admin_create_role(
-    body: AdminRoleCreatePayload,
-    request: Request,
-    _ctx: PermissionContext = Depends(require_permission("roles.manage")),
-    db=Depends(get_db),
-):
-    if not SETTINGS.feature_flags.custom_roles_enabled:
-        raise HTTPException(status_code=403, detail="custom_roles_enabled flag is off")
-    workspace_id = workspace_scope_or_403(_ctx, body.workspace_id)
-    name = body.name.strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="name is required")
-    exists = (
-        db.query(ORMRole)
-        .filter(ORMRole.workspace_id == workspace_id, ORMRole.name == name)
-        .first()
-    )
-    if exists:
-        raise HTTPException(status_code=409, detail="Role name already exists in workspace")
-    known_permissions = {p.key for p in db.query(ORMPermission).all()}
-    unknown = [k for k in (body.permission_keys or []) if k not in known_permissions]
-    if unknown:
-        raise HTTPException(status_code=400, detail=f"Unknown permission keys: {', '.join(sorted(unknown))}")
-    role = ORMRole(
-        id=str(uuid.uuid4()),
-        workspace_id=workspace_id,
-        name=name,
-        description=body.description,
-        is_system=False,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
-    )
-    db.add(role)
-    db.flush()
-    for key in sorted(set(body.permission_keys or [])):
-        db.add(ORMRolePermission(role_id=role.id, permission_key=key, created_at=datetime.utcnow()))
-    db.commit()
-    _write_security_audit(
-        db,
-        actor_user_id=_ctx.user_id,
-        workspace_id=workspace_id,
-        action_key="role.created",
-        target_type="role",
-        target_id=role.id,
-        metadata={"name": role.name, "permission_keys": sorted(set(body.permission_keys or []))},
-        request=request,
-    )
-    return {"id": role.id, "name": role.name, "workspace_id": role.workspace_id}
-
-
-@app.put("/api/admin/roles/{role_id}")
-def admin_update_role(
-    role_id: str,
-    body: AdminRoleUpdatePayload,
-    request: Request,
-    _ctx: PermissionContext = Depends(require_permission("roles.manage")),
-    db=Depends(get_db),
-):
-    if not SETTINGS.feature_flags.custom_roles_enabled:
-        raise HTTPException(status_code=403, detail="custom_roles_enabled flag is off")
-    role = db.get(ORMRole, role_id)
-    if not role:
-        raise HTTPException(status_code=404, detail="Role not found")
-    workspace_id = workspace_scope_or_403(_ctx, role.workspace_id or _ctx.workspace_id)
-    if role.is_system:
-        raise HTTPException(status_code=400, detail="System roles are read-only")
-    if body.name is not None:
-        next_name = body.name.strip()
-        if not next_name:
-            raise HTTPException(status_code=400, detail="name is required")
-        dupe = (
-            db.query(ORMRole)
-            .filter(
-                ORMRole.workspace_id == workspace_id,
-                ORMRole.name == next_name,
-                ORMRole.id != role.id,
-            )
-            .first()
-        )
-        if dupe:
-            raise HTTPException(status_code=409, detail="Role name already exists in workspace")
-        role.name = next_name
-    if body.description is not None:
-        role.description = body.description
-    if body.permission_keys is not None:
-        known_permissions = {p.key for p in db.query(ORMPermission).all()}
-        unknown = [k for k in body.permission_keys if k not in known_permissions]
-        if unknown:
-            raise HTTPException(status_code=400, detail=f"Unknown permission keys: {', '.join(sorted(unknown))}")
-        db.query(ORMRolePermission).filter(ORMRolePermission.role_id == role.id).delete(synchronize_session=False)
-        for key in sorted(set(body.permission_keys)):
-            db.add(ORMRolePermission(role_id=role.id, permission_key=key, created_at=datetime.utcnow()))
-    role.updated_at = datetime.utcnow()
-    db.add(role)
-    db.commit()
-    _write_security_audit(
-        db,
-        actor_user_id=_ctx.user_id,
-        workspace_id=workspace_id,
-        action_key="role.updated",
-        target_type="role",
-        target_id=role.id,
-        metadata={"name": role.name},
-        request=request,
-    )
-    return {"id": role.id, "name": role.name}
-
-
-@app.delete("/api/admin/roles/{role_id}")
-def admin_delete_role(
-    role_id: str,
-    request: Request,
-    _ctx: PermissionContext = Depends(require_permission("roles.manage")),
-    db=Depends(get_db),
-):
-    if not SETTINGS.feature_flags.custom_roles_enabled:
-        raise HTTPException(status_code=403, detail="custom_roles_enabled flag is off")
-    role = db.get(ORMRole, role_id)
-    if not role:
-        raise HTTPException(status_code=404, detail="Role not found")
-    workspace_id = workspace_scope_or_403(_ctx, role.workspace_id or _ctx.workspace_id)
-    if role.is_system:
-        raise HTTPException(status_code=400, detail="System roles cannot be deleted")
-    active_members = (
-        db.query(func.count(WorkspaceMembership.id))
-        .filter(
-            WorkspaceMembership.workspace_id == workspace_id,
-            WorkspaceMembership.role_id == role.id,
-            WorkspaceMembership.status == "active",
-        )
-        .scalar()
-        or 0
-    )
-    if int(active_members) > 0:
-        raise HTTPException(status_code=400, detail="Role has active members; reassign them first")
-    db.query(ORMRolePermission).filter(ORMRolePermission.role_id == role.id).delete(synchronize_session=False)
-    db.delete(role)
-    db.commit()
-    _write_security_audit(
-        db,
-        actor_user_id=_ctx.user_id,
-        workspace_id=workspace_id,
-        action_key="role.deleted",
-        target_type="role",
-        target_id=role_id,
-        metadata={},
-        request=request,
-    )
-    return {"id": role_id, "deleted": True}
-
-
-@app.get("/api/admin/users")
-def admin_list_users(
-    search: Optional[str] = Query(None),
-    status: Optional[str] = Query(None),
-    workspaceId: Optional[str] = Query(None),
-    _ctx: PermissionContext = Depends(require_permission("users.manage")),
-    db=Depends(get_db),
-):
-    workspace_id = workspace_scope_or_403(_ctx, workspaceId)
-    q = (
-        db.query(ORMUser, WorkspaceMembership, ORMRole)
-        .join(
-            WorkspaceMembership,
-            (WorkspaceMembership.user_id == ORMUser.id)
-            & (WorkspaceMembership.workspace_id == workspace_id),
-        )
-        .outerjoin(ORMRole, ORMRole.id == WorkspaceMembership.role_id)
-    )
-    if status:
-        q = q.filter(ORMUser.status == status)
-    if search:
-        term = f"%{search.strip().lower()}%"
-        q = q.filter(
-            func.lower(ORMUser.email).like(term) | func.lower(func.coalesce(ORMUser.name, "")).like(term)
-        )
-    rows = q.order_by(ORMUser.email.asc()).all()
-    return {
-        "items": [
-            {
-                "id": user.id,
-                "email": user.email,
-                "name": user.name,
-                "status": user.status,
-                "last_login_at": user.last_login_at,
-                "membership_id": membership.id,
-                "membership_status": membership.status,
-                "role_id": membership.role_id,
-                "role_name": role.name if role else None,
-            }
-            for user, membership, role in rows
-        ]
-    }
-
-
-@app.patch("/api/admin/users/{user_id}")
-def admin_update_user(
-    user_id: str,
-    body: AdminUserUpdatePayload,
-    request: Request,
-    _ctx: PermissionContext = Depends(require_permission("users.manage")),
-    db=Depends(get_db),
-):
-    user = db.get(ORMUser, user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    membership = (
-        db.query(WorkspaceMembership)
-        .filter(
-            WorkspaceMembership.workspace_id == _ctx.workspace_id,
-            WorkspaceMembership.user_id == user.id,
-        )
-        .first()
-    )
-    if not membership:
-        raise HTTPException(status_code=404, detail="User is not a member of this workspace")
-    user.status = body.status
-    user.updated_at = datetime.utcnow()
-    db.add(user)
-    db.commit()
-    if body.status == "disabled":
-        revoke_all_user_sessions(db, user.id)
-    _write_security_audit(
-        db,
-        actor_user_id=_ctx.user_id,
-        workspace_id=_ctx.workspace_id,
-        action_key="user.status_updated",
-        target_type="user",
-        target_id=user.id,
-        metadata={"status": body.status},
-        request=request,
-    )
-    return {"id": user.id, "status": user.status}
-
-
-@app.post("/api/admin/users/{user_id}/reset-sessions")
-def admin_reset_user_sessions(
-    user_id: str,
-    request: Request,
-    _ctx: PermissionContext = Depends(require_permission("users.manage")),
-    db=Depends(get_db),
-):
-    user = db.get(ORMUser, user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    membership = (
-        db.query(WorkspaceMembership)
-        .filter(
-            WorkspaceMembership.workspace_id == _ctx.workspace_id,
-            WorkspaceMembership.user_id == user.id,
-        )
-        .first()
-    )
-    if not membership:
-        raise HTTPException(status_code=404, detail="User is not a member of this workspace")
-    revoked = revoke_all_user_sessions(db, user.id)
-    _write_security_audit(
-        db,
-        actor_user_id=_ctx.user_id,
-        workspace_id=_ctx.workspace_id,
-        action_key="user.sessions_reset",
-        target_type="user",
-        target_id=user.id,
-        metadata={"sessions_revoked": revoked},
-        request=request,
-    )
-    return {"id": user.id, "sessions_revoked": revoked}
-
-
-@app.get("/api/admin/memberships")
-def admin_list_memberships(
-    workspaceId: Optional[str] = Query(None),
-    _ctx: PermissionContext = Depends(require_permission("users.manage")),
-    db=Depends(get_db),
-):
-    workspace_id = workspace_scope_or_403(_ctx, workspaceId)
-    rows = (
-        db.query(WorkspaceMembership, ORMUser, ORMRole)
-        .join(ORMUser, ORMUser.id == WorkspaceMembership.user_id)
-        .outerjoin(ORMRole, ORMRole.id == WorkspaceMembership.role_id)
-        .filter(WorkspaceMembership.workspace_id == workspace_id)
-        .order_by(WorkspaceMembership.created_at.desc())
-        .all()
-    )
-    return {
-        "items": [
-            {
-                "id": m.id,
-                "workspace_id": m.workspace_id,
-                "user_id": m.user_id,
-                "email": u.email,
-                "name": u.name,
-                "status": m.status,
-                "role_id": m.role_id,
-                "role_name": r.name if r else None,
-                "created_at": m.created_at,
-                "updated_at": m.updated_at,
-            }
-            for m, u, r in rows
-        ]
-    }
-
-
-@app.patch("/api/admin/memberships/{membership_id}")
-def admin_update_membership(
-    membership_id: str,
-    body: AdminMembershipUpdatePayload,
-    request: Request,
-    _ctx: PermissionContext = Depends(require_permission("users.manage")),
-    db=Depends(get_db),
-):
-    membership = db.get(WorkspaceMembership, membership_id)
-    if not membership:
-        raise HTTPException(status_code=404, detail="Membership not found")
-    workspace_id = workspace_scope_or_403(_ctx, membership.workspace_id)
-    role = db.get(ORMRole, body.role_id)
-    if not role:
-        raise HTTPException(status_code=404, detail="Role not found")
-    if role.workspace_id not in (None, workspace_id):
-        raise HTTPException(status_code=400, detail="Role is not available in this workspace")
-    membership.role_id = role.id
-    membership.updated_at = datetime.utcnow()
-    db.add(membership)
-    db.commit()
-    _write_security_audit(
-        db,
-        actor_user_id=_ctx.user_id,
-        workspace_id=workspace_id,
-        action_key="membership.role_changed",
-        target_type="membership",
-        target_id=membership.id,
-        metadata={"role_id": role.id, "role_name": role.name},
-        request=request,
-    )
-    return {"id": membership.id, "role_id": membership.role_id}
-
-
-@app.delete("/api/admin/memberships/{membership_id}")
-def admin_remove_membership(
-    membership_id: str,
-    request: Request,
-    _ctx: PermissionContext = Depends(require_permission("users.manage")),
-    db=Depends(get_db),
-):
-    membership = db.get(WorkspaceMembership, membership_id)
-    if not membership:
-        raise HTTPException(status_code=404, detail="Membership not found")
-    workspace_id = workspace_scope_or_403(_ctx, membership.workspace_id)
-    membership.status = "removed"
-    membership.role_id = None
-    membership.updated_at = datetime.utcnow()
-    db.add(membership)
-    db.commit()
-    _write_security_audit(
-        db,
-        actor_user_id=_ctx.user_id,
-        workspace_id=workspace_id,
-        action_key="membership.removed",
-        target_type="membership",
-        target_id=membership.id,
-        metadata={"user_id": membership.user_id},
-        request=request,
-    )
-    return {"id": membership.id, "status": membership.status}
-
-
-@app.post("/api/admin/invitations")
-def admin_create_invitation(
-    body: AdminInvitationCreatePayload,
-    request: Request,
-    _ctx: PermissionContext = Depends(require_permission("users.manage")),
-    db=Depends(get_db),
-):
-    workspace_id = workspace_scope_or_403(_ctx, body.workspace_id)
-    email = (body.email or "").strip().lower()
-    if not email:
-        raise HTTPException(status_code=400, detail="email is required")
-    role = db.get(ORMRole, body.role_id)
-    if not role:
-        raise HTTPException(status_code=404, detail="Role not found")
-    if role.workspace_id not in (None, workspace_id):
-        raise HTTPException(status_code=400, detail="Role is not available in this workspace")
-    raw_token = _invite_token()
-    inv = ORMInvitation(
-        id=str(uuid.uuid4()),
-        workspace_id=workspace_id,
-        email=email,
-        role_id=role.id,
-        token_hash=_hash_invite_token(raw_token),
-        expires_at=datetime.utcnow() + timedelta(days=body.expires_in_days),
-        invited_by_user_id=_ctx.user_id,
-        accepted_at=None,
-        created_at=datetime.utcnow(),
-    )
-    db.add(inv)
-    db.commit()
-    _write_security_audit(
-        db,
-        actor_user_id=_ctx.user_id,
-        workspace_id=workspace_id,
-        action_key="invitation.created",
-        target_type="invitation",
-        target_id=inv.id,
-        metadata={"email": inv.email, "role_id": inv.role_id},
-        request=request,
-    )
-    return {
-        "id": inv.id,
-        "workspace_id": inv.workspace_id,
-        "email": inv.email,
-        "role_id": inv.role_id,
-        "expires_at": inv.expires_at,
-        "created_at": inv.created_at,
-        "token": raw_token,
-    }
-
-
-@app.get("/api/admin/invitations")
-def admin_list_invitations(
-    workspaceId: Optional[str] = Query(None),
-    _ctx: PermissionContext = Depends(require_permission("users.manage")),
-    db=Depends(get_db),
-):
-    workspace_id = workspace_scope_or_403(_ctx, workspaceId)
-    rows = (
-        db.query(ORMInvitation, ORMRole, ORMUser)
-        .outerjoin(ORMRole, ORMRole.id == ORMInvitation.role_id)
-        .outerjoin(ORMUser, ORMUser.id == ORMInvitation.invited_by_user_id)
-        .filter(ORMInvitation.workspace_id == workspace_id)
-        .order_by(ORMInvitation.created_at.desc())
-        .all()
-    )
-    return {
-        "items": [
-            {
-                "id": inv.id,
-                "workspace_id": inv.workspace_id,
-                "email": inv.email,
-                "role_id": inv.role_id,
-                "role_name": role.name if role else None,
-                "expires_at": inv.expires_at,
-                "accepted_at": inv.accepted_at,
-                "created_at": inv.created_at,
-                "invited_by_user_id": inv.invited_by_user_id,
-                "invited_by_name": user.name if user else None,
-            }
-            for inv, role, user in rows
-        ]
-    }
-
-
-@app.post("/api/admin/invitations/{invitation_id}/resend")
-def admin_resend_invitation(
-    invitation_id: str,
-    request: Request,
-    _ctx: PermissionContext = Depends(require_permission("users.manage")),
-    db=Depends(get_db),
-):
-    inv = db.get(ORMInvitation, invitation_id)
-    if not inv:
-        raise HTTPException(status_code=404, detail="Invitation not found")
-    workspace_id = workspace_scope_or_403(_ctx, inv.workspace_id)
-    raw_token = _invite_token()
-    inv.token_hash = _hash_invite_token(raw_token)
-    inv.expires_at = datetime.utcnow() + timedelta(days=7)
-    inv.created_at = datetime.utcnow()
-    db.add(inv)
-    db.commit()
-    _write_security_audit(
-        db,
-        actor_user_id=_ctx.user_id,
-        workspace_id=workspace_id,
-        action_key="invitation.resent",
-        target_type="invitation",
-        target_id=inv.id,
-        metadata={"email": inv.email},
-        request=request,
-    )
-    return {"id": inv.id, "expires_at": inv.expires_at, "token": raw_token}
-
-
-@app.delete("/api/admin/invitations/{invitation_id}/revoke")
-def admin_revoke_invitation(
-    invitation_id: str,
-    request: Request,
-    _ctx: PermissionContext = Depends(require_permission("users.manage")),
-    db=Depends(get_db),
-):
-    inv = db.get(ORMInvitation, invitation_id)
-    if not inv:
-        raise HTTPException(status_code=404, detail="Invitation not found")
-    workspace_id = workspace_scope_or_403(_ctx, inv.workspace_id)
-    db.delete(inv)
-    db.commit()
-    _write_security_audit(
-        db,
-        actor_user_id=_ctx.user_id,
-        workspace_id=workspace_id,
-        action_key="invitation.revoked",
-        target_type="invitation",
-        target_id=invitation_id,
-        metadata={},
-        request=request,
-    )
-    return {"id": invitation_id, "revoked": True}
-
-
-@app.post("/api/invitations/accept")
-def accept_invitation(
-    body: InvitationAcceptPayload,
-    request: Request,
-    db=Depends(get_db),
-):
-    token = (body.token or "").strip()
-    if not token:
-        raise HTTPException(status_code=400, detail="token is required")
-    token_hash = _hash_invite_token(token)
-    inv = db.query(ORMInvitation).filter(ORMInvitation.token_hash == token_hash).first()
-    if not inv:
-        raise HTTPException(status_code=404, detail="Invitation not found")
-    if inv.accepted_at is not None:
-        raise HTTPException(status_code=400, detail="Invitation already accepted")
-    if inv.expires_at < datetime.utcnow():
-        raise HTTPException(status_code=400, detail="Invitation expired")
-
-    email = inv.email.strip().lower()
-    user = db.query(ORMUser).filter(ORMUser.email == email).first()
-    if not user:
-        user = ORMUser(
-            id=str(uuid.uuid4()),
-            email=email,
-            name=(body.name or email.split("@")[0]),
-            status="active",
-            auth_provider="local",
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
-        )
-        db.add(user)
-        db.flush()
-    membership = (
-        db.query(WorkspaceMembership)
-        .filter(
-            WorkspaceMembership.workspace_id == inv.workspace_id,
-            WorkspaceMembership.user_id == user.id,
-        )
-        .first()
-    )
-    if not membership:
-        membership = WorkspaceMembership(
-            id=str(uuid.uuid4()),
-            workspace_id=inv.workspace_id,
-            user_id=user.id,
-            role_id=inv.role_id,
-            status="active",
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
-        )
-        db.add(membership)
-    else:
-        membership.status = "active"
-        membership.role_id = inv.role_id or membership.role_id
-        membership.updated_at = datetime.utcnow()
-        db.add(membership)
-    inv.accepted_at = datetime.utcnow()
-    db.add(inv)
-    db.commit()
-    _write_security_audit(
-        db,
-        actor_user_id=user.id,
-        workspace_id=inv.workspace_id,
-        action_key="invitation.accepted",
-        target_type="invitation",
-        target_id=inv.id,
-        metadata={"membership_id": membership.id},
-        request=request,
-    )
-    return {
-        "ok": True,
-        "workspace_id": inv.workspace_id,
-        "user_id": user.id,
-        "membership_id": membership.id,
-    }
-
-
 # ==================== Data Quality API ====================
 
 
@@ -6634,69 +4725,6 @@ def overview_alert_update_status(
 # ==================== Alerts API (events + rules) ====================
 
 
-class AlertSnoozeBody(BaseModel):
-    duration_minutes: int = Field(..., ge=1, le=10080, description="Snooze duration in minutes (max 7 days)")
-
-
-class AlertRuleCreate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=255)
-    description: Optional[str] = None
-    is_enabled: bool = True
-    scope: str = Field(..., min_length=1, max_length=64)
-    severity: str = Field(..., pattern="^(info|warn|critical)$")
-    rule_type: str = Field(..., pattern="^(anomaly_kpi|threshold|data_freshness|pipeline_health)$")
-    kpi_key: Optional[str] = Field(None, max_length=128)
-    dimension_filters_json: Optional[Dict[str, Any]] = None
-    params_json: Optional[Dict[str, Any]] = None
-    schedule: str = Field(..., pattern="^(hourly|daily)$")
-
-
-class AlertRuleUpdate(BaseModel):
-    name: Optional[str] = Field(None, min_length=1, max_length=255)
-    description: Optional[str] = None
-    is_enabled: Optional[bool] = None
-    severity: Optional[str] = Field(None, pattern="^(info|warn|critical)$")
-    kpi_key: Optional[str] = Field(None, max_length=128)
-    dimension_filters_json: Optional[Dict[str, Any]] = None
-    params_json: Optional[Dict[str, Any]] = None
-    schedule: Optional[str] = Field(None, pattern="^(hourly|daily)$")
-
-
-class FunnelCreatePayload(BaseModel):
-    journey_definition_id: str = Field(..., min_length=1, max_length=64)
-    name: str = Field(..., min_length=1, max_length=255)
-    description: Optional[str] = Field(None, max_length=5000)
-    steps: List[str] = Field(..., min_length=2)
-    counting_method: str = Field("ordered", pattern="^(ordered)$")
-    window_days: int = Field(30, ge=1, le=365)
-    workspace_id: Optional[str] = Field("default", max_length=128)
-
-
-class JourneyAlertCreatePayload(BaseModel):
-    name: str = Field(..., min_length=1, max_length=255)
-    type: str = Field(..., description="path_cr_drop | path_volume_change | funnel_dropoff_spike | ttc_shift")
-    domain: str = Field(..., description="journeys | funnels")
-    scope: Dict[str, Any] = Field(default_factory=dict)
-    metric: str = Field(..., min_length=1, max_length=128)
-    condition: Dict[str, Any] = Field(default_factory=dict)
-    schedule: Optional[Dict[str, Any]] = None
-    is_enabled: bool = True
-
-
-class JourneyAlertUpdatePayload(BaseModel):
-    name: Optional[str] = Field(None, min_length=1, max_length=255)
-    condition: Optional[Dict[str, Any]] = None
-    schedule: Optional[Dict[str, Any]] = None
-    is_enabled: Optional[bool] = None
-
-
-class JourneyAlertPreviewPayload(BaseModel):
-    type: str = Field(..., description="path_cr_drop | path_volume_change | funnel_dropoff_spike | ttc_shift")
-    scope: Dict[str, Any] = Field(default_factory=dict)
-    metric: str = Field(..., min_length=1, max_length=128)
-    condition: Dict[str, Any] = Field(default_factory=dict)
-
-
 def _validate_conversion_kpi_id(conversion_kpi_id: Optional[str]) -> Optional[str]:
     value = (conversion_kpi_id or "").strip()
     if not value:
@@ -6733,478 +4761,57 @@ app.include_router(
     )
 )
 
-
-def _validate_journey_alert_payload(type: str, domain: str, metric: str, condition: Dict[str, Any]) -> None:
-    if type not in JOURNEY_ALERT_TYPES:
-        raise HTTPException(status_code=400, detail=f"type must be one of: {', '.join(sorted(JOURNEY_ALERT_TYPES))}")
-    if domain not in JOURNEY_ALERT_DOMAINS:
-        raise HTTPException(status_code=400, detail=f"domain must be one of: {', '.join(sorted(JOURNEY_ALERT_DOMAINS))}")
-    metric_clean = (metric or "").strip()
-    if not metric_clean:
-        raise HTTPException(status_code=400, detail="metric is required")
-    mode = str((condition or {}).get("comparison_mode") or "previous_period")
-    if mode not in {"previous_period", "rolling_baseline"}:
-        raise HTTPException(status_code=400, detail="condition.comparison_mode must be previous_period or rolling_baseline")
-
-
-def _validate_journey_alert_scope_and_metric(
-    type: str,
-    scope: Dict[str, Any],
-    metric: str,
-) -> None:
-    scope = scope or {}
-    metric = (metric or "").strip()
-    allowed_metrics = {
-        "path_cr_drop": {"conversion_rate"},
-        "path_volume_change": {"count_journeys"},
-        "funnel_dropoff_spike": {"dropoff_rate"},
-        "ttc_shift": {"p50_time_to_convert_sec"},
-    }
-    if metric not in allowed_metrics.get(type, set()):
-        raise HTTPException(
-            status_code=400,
-            detail=f"metric '{metric}' is not valid for alert type '{type}'",
-        )
-
-    if type in {"path_cr_drop", "path_volume_change", "ttc_shift"}:
-        journey_definition_id = str(scope.get("journey_definition_id") or "").strip()
-        if not journey_definition_id:
-            raise HTTPException(status_code=400, detail="scope.journey_definition_id is required")
-
-    if type == "funnel_dropoff_spike":
-        funnel_id = str(scope.get("funnel_id") or "").strip()
-        if not funnel_id:
-            raise HTTPException(status_code=400, detail="scope.funnel_id is required")
-        try:
-            step_index = int(scope.get("step_index"))
-        except Exception:
-            raise HTTPException(status_code=400, detail="scope.step_index is required")
-        if step_index < 0:
-            raise HTTPException(status_code=400, detail="scope.step_index must be >= 0")
-
-
-@app.get("/api/funnels")
-def api_list_funnels(
-    workspace_id: str = Query("default"),
-    user_id: Optional[str] = Query(None),
-    journey_definition_id: Optional[str] = Query(None),
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("funnels.view")),
-):
-    """List non-archived funnel definitions for workspace/user."""
-    return {
-        "items": list_funnels(
-            db,
-            workspace_id=workspace_id,
-            user_id=user_id,
-            journey_definition_id=journey_definition_id,
-        )
-    }
-
-
-@app.post("/api/funnels")
-def api_create_funnel(
-    body: FunnelCreatePayload,
-    db=Depends(get_db),
-    ctx: PermissionContext = Depends(require_permission("funnels.manage")),
-):
-    """Create funnel definition. Requires edit role."""
-    user_id = ctx.user_id
-    jd = get_journey_definition(db, body.journey_definition_id)
-    if not jd or jd.is_archived:
-        raise HTTPException(status_code=404, detail="Journey definition not found")
-    steps = [str(s).strip() for s in (body.steps or []) if str(s).strip()]
-    if len(steps) < 2:
-        raise HTTPException(status_code=400, detail="steps must include at least 2 items")
-    return create_funnel(
-        db,
-        journey_definition_id=body.journey_definition_id,
-        workspace_id=body.workspace_id or "default",
-        user_id=user_id,
-        name=body.name,
-        description=body.description,
-        steps=steps,
-        counting_method=body.counting_method,
-        window_days=body.window_days,
-        actor=user_id,
+app.include_router(
+    create_settings_router(
+        get_db_dependency=get_db,
+        require_permission_dependency=require_permission,
+        get_settings_obj=lambda: SETTINGS,
+        replace_settings_fn=_replace_settings,
+        replace_revenue_config_fn=_replace_revenue_config,
+        get_kpi_config_model_fn=_get_kpi_config_model,
+        replace_kpi_config_fn=_replace_kpi_config,
+        ensure_journeys_loaded_fn=_ensure_journeys_loaded,
+        resolve_current_user_id_fn=_current_user_id,
     )
+)
 
-
-@app.get("/api/funnels/{funnel_id}/results")
-def api_get_funnel_results(
-    funnel_id: str,
-    date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
-    date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
-    device: Optional[str] = Query(None),
-    channel_group: Optional[str] = Query(None),
-    country: Optional[str] = Query(None),
-    campaign_id: Optional[str] = Query(None),
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("funnels.view")),
-):
-    """Compute funnel results from transitions aggregates when possible, with raw fallback when needed."""
-    funnel = get_funnel(db, funnel_id)
-    if not funnel or funnel.is_archived:
-        raise HTTPException(status_code=404, detail="Funnel not found")
-    jd = get_journey_definition(db, funnel.journey_definition_id)
-    if not jd or jd.is_archived:
-        raise HTTPException(status_code=404, detail="Journey definition not found")
-    try:
-        d_from = datetime.fromisoformat(date_from).date()
-        d_to = datetime.fromisoformat(date_to).date()
-    except Exception:
-        raise HTTPException(status_code=400, detail="date_from/date_to must be YYYY-MM-DD")
-    if d_from > d_to:
-        raise HTTPException(status_code=400, detail="date_from must be <= date_to")
-    return compute_funnel_results(
-        db,
-        funnel=funnel,
-        journey_definition=jd,
-        date_from=d_from,
-        date_to=d_to,
-        device=device,
-        channel_group=channel_group,
-        country=country,
-        campaign_id=campaign_id,
+app.include_router(
+    create_admin_access_router(
+        get_db_dependency=get_db,
+        require_permission_dependency=require_permission,
+        require_any_permission_dependency=require_any_permission,
+        workspace_scope_or_403_fn=workspace_scope_or_403,
+        get_settings_obj=lambda: SETTINGS,
+        write_security_audit_fn=_write_security_audit,
+        invite_token_fn=_invite_token,
+        hash_invite_token_fn=_hash_invite_token,
     )
+)
 
-
-@app.get("/api/funnels/{funnel_id}/diagnostics")
-def api_get_funnel_diagnostics(
-    funnel_id: str,
-    step: str = Query(..., description="Funnel step label to diagnose"),
-    date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
-    date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
-    device: Optional[str] = Query(None),
-    channel_group: Optional[str] = Query(None),
-    country: Optional[str] = Query(None),
-    campaign_id: Optional[str] = Query(None),
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("funnels.view")),
-):
-    """Evidence-based hypotheses for funnel drop-off changes at a specific step."""
-    funnel = get_funnel(db, funnel_id)
-    if not funnel or funnel.is_archived:
-        raise HTTPException(status_code=404, detail="Funnel not found")
-    jd = get_journey_definition(db, funnel.journey_definition_id)
-    if not jd or jd.is_archived:
-        raise HTTPException(status_code=404, detail="Journey definition not found")
-    try:
-        d_from = datetime.fromisoformat(date_from).date()
-        d_to = datetime.fromisoformat(date_to).date()
-    except Exception:
-        raise HTTPException(status_code=400, detail="date_from/date_to must be YYYY-MM-DD")
-    if d_from > d_to:
-        raise HTTPException(status_code=400, detail="date_from must be <= date_to")
-    return compute_funnel_diagnostics(
-        db,
-        funnel=funnel,
-        journey_definition=jd,
-        step=step,
-        date_from=d_from,
-        date_to=d_to,
-        device=device,
-        channel_group=channel_group,
-        country=country,
-        campaign_id=campaign_id,
+app.include_router(
+    create_auth_access_router(
+        get_db_dependency=get_db,
+        require_permission_dependency=require_permission,
+        get_base_url_fn=lambda: BASE_URL,
+        get_frontend_url_fn=lambda: FRONTEND_URL,
+        get_connected_platforms_fn=get_all_connected_platforms,
+        meiro_connected_fn=meiro_cdp.is_connected,
+        delete_token_fn=delete_token,
+        datasource_config_obj=ds_config,
+        session_cookie_secure=SESSION_COOKIE_SECURE,
+        session_cookie_samesite=SESSION_COOKIE_SAMESITE,
+        session_cookie_max_age=SESSION_COOKIE_MAX_AGE,
     )
-
-
-@app.get("/api/alerts")
-def api_list_alerts(
-    domain: Optional[str] = Query(None, description="journeys | funnels (new journey/funnel alerts domain)"),
-    status: str = Query("open", description="open | all"),
-    severity: Optional[str] = Query(None, description="Filter by severity"),
-    rule_type: Optional[str] = Query(None, description="Filter by rule type"),
-    search: Optional[str] = Query(None, description="Search in title, message, rule name"),
-    page: int = Query(1, ge=1, description="Page number"),
-    per_page: Optional[int] = Query(None, description="Items per page"),
-    page_size: Optional[int] = Query(None, description="Alias for per_page"),
-    limit: Optional[int] = Query(None, description="Alias for per_page"),
-    scope: Optional[str] = Query(None, description="Filter by scope (workspace/account)"),
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("alerts.view")),
-):
-    """List alerts with pagination and filters. All roles can view."""
-    resolved_page = clamp_int(page, default=1, minimum=1, maximum=1_000_000)
-    resolved_per_page = resolve_per_page(
-        per_page=per_page,
-        page_size=page_size,
-        limit=limit,
-        default=20,
-        maximum=100,
+)
+app.include_router(
+    create_alerts_funnels_router(
+        get_db_dependency=get_db,
+        require_permission_dependency=require_permission,
+        clamp_int_fn=clamp_int,
+        resolve_per_page_fn=resolve_per_page,
+        get_journey_definition_fn=get_journey_definition,
     )
-    try:
-        if domain in JOURNEY_ALERT_DOMAINS:
-            return list_journey_alert_definitions(
-                db=db,
-                domain=domain,
-                page=resolved_page,
-                per_page=resolved_per_page,
-            )
-        return list_alerts(
-            db=db,
-            status=status,
-            severity=severity,
-            rule_type=rule_type,
-            search=search,
-            page=resolved_page,
-            per_page=resolved_per_page,
-            scope=scope,
-        )
-    except Exception as e:
-        logger.warning("List alerts failed (tables or schema may be missing): %s", e, exc_info=True)
-        return {"items": [], "total": 0, "page": resolved_page, "per_page": resolved_per_page}
-
-
-@app.get("/api/alerts/events")
-def api_list_alert_events(
-    domain: Optional[str] = Query(None, description="journeys | funnels"),
-    page: int = Query(1, ge=1),
-    per_page: Optional[int] = Query(None),
-    page_size: Optional[int] = Query(None, description="Alias for per_page"),
-    limit: Optional[int] = Query(None, description="Alias for per_page"),
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("alerts.view")),
-):
-    """List recent journey/funnel alert events."""
-    resolved_page = clamp_int(page, default=1, minimum=1, maximum=1_000_000)
-    resolved_per_page = resolve_per_page(
-        per_page=per_page,
-        page_size=page_size,
-        limit=limit,
-        default=20,
-        maximum=200,
-    )
-    if domain not in JOURNEY_ALERT_DOMAINS:
-        raise HTTPException(status_code=400, detail="domain must be journeys or funnels")
-    try:
-        return list_journey_alert_events(db=db, domain=domain, page=resolved_page, per_page=resolved_per_page)
-    except Exception as e:
-        logger.warning("List journey alert events failed: %s", e, exc_info=True)
-        return {"items": [], "total": 0, "page": resolved_page, "per_page": resolved_per_page}
-
-
-@app.post("/api/alerts")
-def api_create_alert(
-    body: JourneyAlertCreatePayload,
-    db=Depends(get_db),
-    ctx: PermissionContext = Depends(require_permission("alerts.manage")),
-):
-    """Create journey/funnel alert definition. Requires edit role."""
-    user_id = ctx.user_id
-    _validate_journey_alert_payload(body.type, body.domain, body.metric, body.condition)
-    _validate_journey_alert_scope_and_metric(body.type, body.scope or {}, body.metric)
-    return create_journey_alert_definition(
-        db,
-        name=body.name,
-        type=body.type,
-        domain=body.domain,
-        scope=body.scope or {},
-        metric=body.metric,
-        condition=body.condition or {},
-        schedule=body.schedule or {"cadence": "daily"},
-        is_enabled=body.is_enabled,
-        actor=user_id,
-    )
-
-
-@app.put("/api/alerts/{alert_definition_id}")
-def api_update_alert(
-    alert_definition_id: str,
-    body: JourneyAlertUpdatePayload,
-    db=Depends(get_db),
-    ctx: PermissionContext = Depends(require_permission("alerts.manage")),
-):
-    """Update journey/funnel alert definition fields. Requires edit role."""
-    user_id = ctx.user_id
-    out = update_journey_alert_definition(
-        db,
-        definition_id=alert_definition_id,
-        actor=user_id,
-        name=body.name,
-        is_enabled=body.is_enabled,
-        condition=body.condition,
-        schedule=body.schedule,
-    )
-    if not out:
-        raise HTTPException(status_code=404, detail="Alert definition not found")
-    return out
-
-
-@app.post("/api/alerts/preview")
-def api_preview_alert(
-    body: JourneyAlertPreviewPayload,
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("alerts.view")),
-):
-    """Preview baseline/current values for alert authoring."""
-    _validate_journey_alert_payload(body.type, "journeys" if body.type != "funnel_dropoff_spike" else "funnels", body.metric, body.condition)
-    _validate_journey_alert_scope_and_metric(body.type, body.scope or {}, body.metric)
-    return preview_journey_alert(
-        db,
-        type=body.type,
-        scope=body.scope or {},
-        metric=body.metric,
-        condition=body.condition or {},
-    )
-
-
-@app.get("/api/alerts/{alert_id}")
-def api_get_alert(
-    alert_id: int,
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("alerts.view")),
-):
-    """Alert detail including context_json, related_entities, deep_link (entity_type, entity_id, url)."""
-    out = get_alert_by_id(db=db, alert_id=alert_id)
-    if not out:
-        raise HTTPException(status_code=404, detail="Alert not found")
-    return out
-
-
-@app.post("/api/alerts/{alert_id}/ack")
-def api_ack_alert(
-    alert_id: int,
-    db=Depends(get_db),
-    ctx: PermissionContext = Depends(require_permission("alerts.manage")),
-):
-    """Acknowledge alert. Requires edit role (X-User-Role: admin or editor)."""
-    user_id = ctx.user_id
-    ev = ack_alert(db=db, alert_id=alert_id, user_id=user_id)
-    if not ev:
-        raise HTTPException(status_code=404, detail="Alert not found")
-    return {"id": ev.id, "status": ev.status}
-
-
-@app.post("/api/alerts/{alert_id}/snooze")
-def api_snooze_alert(
-    alert_id: int,
-    body: AlertSnoozeBody,
-    db=Depends(get_db),
-    ctx: PermissionContext = Depends(require_permission("alerts.manage")),
-):
-    """Snooze alert for duration_minutes. Requires edit role."""
-    user_id = ctx.user_id
-    ev = snooze_alert(db=db, alert_id=alert_id, duration_minutes=body.duration_minutes, user_id=user_id)
-    if not ev:
-        raise HTTPException(status_code=404, detail="Alert not found")
-    return {"id": ev.id, "status": ev.status, "snooze_until": ev.snooze_until.isoformat() if getattr(ev, "snooze_until", None) and ev.snooze_until else None}
-
-
-@app.post("/api/alerts/{alert_id}/resolve")
-def api_resolve_alert(
-    alert_id: int,
-    db=Depends(get_db),
-    ctx: PermissionContext = Depends(require_permission("alerts.manage")),
-):
-    """Manually resolve alert. Requires edit role."""
-    user_id = ctx.user_id
-    ev = resolve_alert(db=db, alert_id=alert_id, user_id=user_id)
-    if not ev:
-        raise HTTPException(status_code=404, detail="Alert not found")
-    return {"id": ev.id, "status": ev.status}
-
-
-@app.get("/api/alert-rules")
-def api_list_alert_rules(
-    scope: Optional[str] = Query(None),
-    is_enabled: Optional[bool] = Query(None, description="Filter by enabled"),
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("alerts.view")),
-):
-    """List alert rules. All roles can view."""
-    try:
-        return list_alert_rules(db=db, scope=scope, is_enabled=is_enabled)
-    except Exception as e:
-        logger.warning("List alert rules failed (tables or schema may be missing): %s", e, exc_info=True)
-        return []
-
-
-@app.post("/api/alert-rules")
-def api_create_alert_rule(
-    body: AlertRuleCreate,
-    db=Depends(get_db),
-    ctx: PermissionContext = Depends(require_permission("alerts.manage")),
-):
-    """Create alert rule. Requires edit role. params_json validated per rule_type."""
-    user_id = ctx.user_id
-    try:
-        r = create_alert_rule(
-            db=db,
-            name=body.name,
-            scope=body.scope,
-            severity=body.severity,
-            rule_type=body.rule_type,
-            schedule=body.schedule,
-            created_by=user_id,
-            description=body.description,
-            is_enabled=body.is_enabled,
-            kpi_key=body.kpi_key,
-            dimension_filters_json=body.dimension_filters_json,
-            params_json=body.params_json,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return get_alert_rule_by_id(db=db, rule_id=r.id)
-
-
-@app.get("/api/alert-rules/{rule_id}")
-def api_get_alert_rule(
-    rule_id: int,
-    db=Depends(get_db),
-    _ctx: PermissionContext = Depends(require_permission("alerts.view")),
-):
-    """Get single alert rule."""
-    out = get_alert_rule_by_id(db=db, rule_id=rule_id)
-    if not out:
-        raise HTTPException(status_code=404, detail="Alert rule not found")
-    return out
-
-
-@app.put("/api/alert-rules/{rule_id}")
-def api_update_alert_rule(
-    rule_id: int,
-    body: AlertRuleUpdate,
-    db=Depends(get_db),
-    ctx: PermissionContext = Depends(require_permission("alerts.manage")),
-):
-    """Update alert rule. Requires edit role. params_json validated."""
-    user_id = ctx.user_id
-    try:
-        r = update_alert_rule(
-            db=db,
-            rule_id=rule_id,
-            updated_by=user_id,
-            name=body.name,
-            description=body.description,
-            is_enabled=body.is_enabled,
-            severity=body.severity,
-            kpi_key=body.kpi_key,
-            dimension_filters_json=body.dimension_filters_json,
-            params_json=body.params_json,
-            schedule=body.schedule,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    if not r:
-        raise HTTPException(status_code=404, detail="Alert rule not found")
-    return get_alert_rule_by_id(db=db, rule_id=r.id)
-
-
-@app.delete("/api/alert-rules/{rule_id}")
-def api_delete_alert_rule(
-    rule_id: int,
-    disable_only: bool = Query(True, description="If true, disable rule; if false, delete"),
-    db=Depends(get_db),
-    ctx: PermissionContext = Depends(require_permission("alerts.manage")),
-):
-    """Disable or delete alert rule. Requires edit role."""
-    user_id = ctx.user_id
-    ok = delete_alert_rule(db=db, rule_id=rule_id, updated_by=user_id, disable_only=disable_only)
-    if not ok:
-        raise HTTPException(status_code=404, detail="Alert rule not found")
-    return {"id": rule_id, "disabled": disable_only}
+)
 
 
 # ==================== Explainability API ====================
@@ -10078,10 +7685,12 @@ def meiro_dry_run(limit: int = 100):
     if not profiles:
         return {"count": 0, "preview": [], "warnings": ["No profiles to process"], "validation": {}}
     try:
+        pull_cfg = get_pull_config()
         result = canonicalize_meiro_profiles(
             profiles,
             mapping=mapping.model_dump(),
             revenue_config=(SETTINGS.revenue_config.model_dump() if hasattr(SETTINGS.revenue_config, "model_dump") else SETTINGS.revenue_config),
+            dedup_config=pull_cfg,
         )
         journeys = result["valid_journeys"]
     except Exception as e:

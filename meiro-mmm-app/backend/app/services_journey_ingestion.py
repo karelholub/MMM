@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from app.services_revenue_config import extract_revenue_entries, normalize_revenue_config
 from app.utils.taxonomy import load_taxonomy, normalize_touchpoint
@@ -130,6 +130,144 @@ def _candidate_timestamp(*values: Any) -> Optional[str]:
     return None
 
 
+def _normalize_meiro_dedup_config(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    cfg = raw if isinstance(raw, dict) else {}
+    dedup_mode = str(cfg.get("dedup_mode") or "balanced").strip().lower()
+    if dedup_mode not in {"strict", "balanced", "aggressive"}:
+        dedup_mode = "balanced"
+    primary_dedup_key = str(cfg.get("primary_dedup_key") or "auto").strip().lower()
+    if primary_dedup_key not in {"auto", "conversion_id", "order_id", "event_id"}:
+        primary_dedup_key = "auto"
+    fallback_raw = cfg.get("fallback_dedup_keys")
+    fallback_keys: List[str] = []
+    if isinstance(fallback_raw, list):
+        values = fallback_raw
+    elif isinstance(fallback_raw, str):
+        values = [part.strip() for part in fallback_raw.split(",")]
+    else:
+        values = []
+    for item in values:
+        key = str(item or "").strip().lower()
+        if key in {"conversion_id", "order_id", "event_id"} and key != primary_dedup_key and key not in fallback_keys:
+            fallback_keys.append(key)
+    if not fallback_keys:
+        fallback_keys = ["conversion_id", "order_id", "event_id"]
+        if primary_dedup_key in fallback_keys:
+            fallback_keys = [key for key in fallback_keys if key != primary_dedup_key]
+
+    try:
+        dedup_interval_minutes = int(cfg.get("dedup_interval_minutes") or 5)
+    except Exception:
+        dedup_interval_minutes = 5
+    dedup_interval_minutes = max(0, min(1440, dedup_interval_minutes))
+    return {
+        "dedup_mode": dedup_mode,
+        "primary_dedup_key": primary_dedup_key,
+        "fallback_dedup_keys": fallback_keys,
+        "dedup_interval_minutes": dedup_interval_minutes,
+    }
+
+
+def _conversion_identity(
+    conversion: Dict[str, Any],
+    dedup_cfg: Dict[str, Any],
+) -> Optional[str]:
+    candidates = []
+    primary = str(dedup_cfg.get("primary_dedup_key") or "auto")
+    if primary == "auto":
+        candidates.extend(["conversion_id", "order_id", "event_id"])
+    else:
+        candidates.append(primary)
+    for key in dedup_cfg.get("fallback_dedup_keys") or []:
+        key_norm = str(key or "").strip().lower()
+        if key_norm in {"conversion_id", "order_id", "event_id"} and key_norm not in candidates:
+            candidates.append(key_norm)
+    for key in candidates:
+        if key == "conversion_id":
+            value = conversion.get("id")
+        else:
+            value = conversion.get(key)
+        if value not in (None, "", []):
+            return f"{key}:{value}"
+    return None
+
+
+def _deduplicate_touchpoints(
+    touchpoints: List[Dict[str, Any]],
+    dedup_cfg: Dict[str, Any],
+) -> Tuple[List[Dict[str, Any]], int]:
+    dedup_mode = str(dedup_cfg.get("dedup_mode") or "balanced")
+    dedup_window_seconds = int(dedup_cfg.get("dedup_interval_minutes") or 0) * 60
+    if dedup_window_seconds <= 0 or len(touchpoints) < 2:
+        return touchpoints, 0
+
+    filtered: List[Dict[str, Any]] = []
+    removed = 0
+    last_ts: Optional[datetime] = None
+    last_identity: Optional[Tuple[str, str, str, str]] = None
+    last_channel: Optional[str] = None
+
+    for touchpoint in touchpoints:
+        ts = _parse_timestamp(touchpoint.get("ts") or touchpoint.get("timestamp"))
+        if ts is None:
+            filtered.append(touchpoint)
+            last_ts = None
+            last_identity = None
+            last_channel = str(touchpoint.get("channel") or "")
+            continue
+
+        campaign = touchpoint.get("campaign")
+        if isinstance(campaign, dict):
+            campaign = campaign.get("name")
+        identity = (
+            str(touchpoint.get("source") or ((touchpoint.get("utm") or {}).get("source") or "")).strip().lower(),
+            str(touchpoint.get("medium") or ((touchpoint.get("utm") or {}).get("medium") or "")).strip().lower(),
+            str(campaign or ((touchpoint.get("utm") or {}).get("campaign") or "")).strip().lower(),
+            str((((touchpoint.get("meta") or {}).get("parser") or {}).get("field_sources") or {}).get("channel") or "").strip().lower(),
+        )
+        should_skip = False
+        if last_ts is not None and (ts - last_ts).total_seconds() < dedup_window_seconds:
+            same_channel = last_channel == str(touchpoint.get("channel") or "")
+            if dedup_mode == "strict":
+                should_skip = same_channel and last_identity == identity
+            elif dedup_mode == "aggressive":
+                should_skip = same_channel or (
+                    last_identity is not None
+                    and identity[:3] == last_identity[:3]
+                    and any(identity[:3])
+                )
+            else:
+                should_skip = same_channel
+        if should_skip:
+            removed += 1
+            continue
+
+        filtered.append(touchpoint)
+        last_ts = ts
+        last_identity = identity
+        last_channel = str(touchpoint.get("channel") or "")
+    return filtered, removed
+
+
+def _deduplicate_conversions(
+    conversions: List[Dict[str, Any]],
+    dedup_cfg: Dict[str, Any],
+    *,
+    seen_conversion_keys: Set[str],
+) -> Tuple[List[Dict[str, Any]], int]:
+    filtered: List[Dict[str, Any]] = []
+    removed = 0
+    for conversion in conversions:
+        dedup_key = _conversion_identity(conversion, dedup_cfg)
+        if dedup_key and dedup_key in seen_conversion_keys:
+            removed += 1
+            continue
+        if dedup_key:
+            seen_conversion_keys.add(dedup_key)
+        filtered.append(conversion)
+    return filtered, removed
+
+
 def _touchpoint_list_from_profile(profile: Dict[str, Any], mapping: Dict[str, Any]) -> List[Any]:
     raw = _extract_path(profile, str(mapping.get("touchpoint_attr") or "touchpoints"))
     if isinstance(raw, list):
@@ -162,6 +300,28 @@ def _touchpoint_list_from_profile(profile: Dict[str, Any], mapping: Dict[str, An
                 }
             )
     return fallback
+
+
+def _looks_like_canonical_v2_journey(raw: Dict[str, Any]) -> bool:
+    if "journey_id" in raw or "customer" in raw:
+        return True
+    touchpoints = raw.get("touchpoints")
+    conversions = raw.get("conversions")
+    if not isinstance(touchpoints, list) or not isinstance(conversions, list):
+        return False
+    if touchpoints:
+        first_touchpoint = touchpoints[0]
+        if not isinstance(first_touchpoint, dict):
+            return False
+        if "ts" not in first_touchpoint or "channel" not in first_touchpoint:
+            return False
+    if conversions:
+        first_conversion = conversions[0]
+        if not isinstance(first_conversion, dict):
+            return False
+        if "ts" not in first_conversion or "name" not in first_conversion:
+            return False
+    return True
 
 
 def _build_v2_touchpoints(
@@ -412,6 +572,7 @@ def canonicalize_meiro_profiles(
     raw_input: Any,
     mapping: Optional[Dict[str, Any]] = None,
     revenue_config: Optional[Dict[str, Any]] = None,
+    dedup_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Normalize mixed Meiro payloads into internal v2 journeys and attach revenue entries."""
     mapping_cfg = {
@@ -428,19 +589,47 @@ def canonicalize_meiro_profiles(
     if isinstance(mapping, dict):
         mapping_cfg.update({k: v for k, v in mapping.items() if v not in (None, "")})
     revenue_cfg = normalize_revenue_config(revenue_config)
+    dedup_cfg = _normalize_meiro_dedup_config(dedup_config)
     _, journeys_list, defaults = detect_schema(raw_input)
+    seen_conversion_keys: Set[str] = set()
 
     prepared: List[Dict[str, Any]] = []
     for idx, raw in enumerate(journeys_list):
         if not isinstance(raw, dict):
             prepared.append(raw)
             continue
-        if "journey_id" in raw or "customer" in raw or ("touchpoints" in raw and "conversions" in raw):
+        if _looks_like_canonical_v2_journey(raw):
+            raw_touchpoints = raw.get("touchpoints")
+            if isinstance(raw_touchpoints, list):
+                deduped_touchpoints, removed_touchpoints = _deduplicate_touchpoints(raw_touchpoints, dedup_cfg)
+                if removed_touchpoints:
+                    raw = dict(raw)
+                    raw["touchpoints"] = deduped_touchpoints
+                    raw_meta = dict(raw.get("meta") or {})
+                    parser_meta = dict(raw_meta.get("parser") or {})
+                    parser_meta["dedup_removed_touchpoints"] = removed_touchpoints
+                    parser_meta["dedup_mode"] = dedup_cfg.get("dedup_mode")
+                    raw_meta["parser"] = parser_meta
+                    raw["meta"] = raw_meta
+            raw_conversions = raw.get("conversions")
+            if isinstance(raw_conversions, list):
+                deduped_conversions, removed_conversions = _deduplicate_conversions(raw_conversions, dedup_cfg, seen_conversion_keys=seen_conversion_keys)
+                if removed_conversions:
+                    raw = dict(raw)
+                    raw["conversions"] = deduped_conversions
+                    raw_meta = dict(raw.get("meta") or {})
+                    parser_meta = dict(raw_meta.get("parser") or {})
+                    parser_meta["dedup_removed_conversions"] = removed_conversions
+                    parser_meta["dedup_primary_key"] = dedup_cfg.get("primary_dedup_key")
+                    raw_meta["parser"] = parser_meta
+                    raw["meta"] = raw_meta
             prepared.append(raw)
             continue
         touchpoints = _build_v2_touchpoints(raw, mapping_cfg, idx=idx)
+        touchpoints, removed_touchpoints = _deduplicate_touchpoints(touchpoints, dedup_cfg)
         last_touch_ts = touchpoints[-1]["ts"] if touchpoints else None
         conversions = _build_v2_conversions(raw, mapping_cfg, revenue_cfg, idx=idx, last_touch_ts=last_touch_ts)
+        conversions, removed_conversions = _deduplicate_conversions(conversions, dedup_cfg, seen_conversion_keys=seen_conversion_keys)
         customer_id = _first_present(
             _extract_path(raw, str(mapping_cfg.get("id_attr") or "customer_id")),
             raw.get("customer_id"),
@@ -473,6 +662,10 @@ def canonicalize_meiro_profiles(
                     "parser": {
                         "used_inferred_mapping": customer_id_source != f"configured:{str(mapping_cfg.get('id_attr') or 'customer_id')}",
                         "field_sources": {"customer_id": customer_id_source},
+                        "dedup_removed_touchpoints": removed_touchpoints,
+                        "dedup_removed_conversions": removed_conversions,
+                        "dedup_mode": dedup_cfg.get("dedup_mode"),
+                        "dedup_primary_key": dedup_cfg.get("primary_dedup_key"),
                     }
                 },
                 "_schema": "2.0",

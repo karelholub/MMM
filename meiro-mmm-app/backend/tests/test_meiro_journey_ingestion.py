@@ -44,7 +44,7 @@ def test_canonicalize_meiro_profiles_builds_v2_journey_from_flat_profile():
     journey = result["valid_journeys"][0]
     assert journey["customer"]["id"] == "cust-1"
     assert journey["touchpoints"][0]["channel"]
-    assert journey["touchpoints"][0]["source"] == "fb"
+    assert journey["touchpoints"][0]["source"] == "facebook"
     assert journey["touchpoints"][0]["campaign"]["name"] == "Spring Launch"
     assert journey["conversions"][0]["name"] == "form_submit"
     assert journey["conversions"][0]["currency"] == "USD"
@@ -93,3 +93,75 @@ def test_canonicalize_meiro_profiles_handles_mixed_flat_and_v2_items():
     assert journey_revenue_value(journeys[0]) == 99.0
     assert journeys[1]["journey_id"] == "j-existing"
     assert journey_revenue_value(journeys[1]) == 50.0
+
+
+def test_canonicalize_meiro_profiles_applies_webhook_dedup_settings():
+    result = canonicalize_meiro_profiles(
+        [
+            {
+                "customer_id": "dup-1",
+                "touchpoints": [
+                    {
+                        "timestamp": "2026-03-02T08:00:00Z",
+                        "source": "google",
+                        "medium": "cpc",
+                        "campaign": "Brand",
+                    },
+                    {
+                        "timestamp": "2026-03-02T08:02:00Z",
+                        "source": "google",
+                        "medium": "cpc",
+                        "campaign": "Brand",
+                    },
+                ],
+                "conversions": [
+                    {
+                        "conversion_id": "ord-1",
+                        "order_id": "ord-1",
+                        "event_id": "evt-1",
+                        "timestamp": "2026-03-02T09:00:00Z",
+                        "name": "purchase",
+                        "value": 50,
+                        "currency": "EUR",
+                    }
+                ],
+            },
+            {
+                "customer_id": "dup-2",
+                "touchpoints": [
+                    {
+                        "timestamp": "2026-03-02T10:00:00Z",
+                        "source": "google",
+                        "medium": "cpc",
+                        "campaign": "Brand",
+                    }
+                ],
+                "conversions": [
+                    {
+                        "conversion_id": "ord-1",
+                        "order_id": "ord-1",
+                        "event_id": "evt-2",
+                        "timestamp": "2026-03-02T10:05:00Z",
+                        "name": "purchase",
+                        "value": 50,
+                        "currency": "EUR",
+                    }
+                ],
+            },
+        ],
+        revenue_config={"conversion_names": ["purchase"]},
+        dedup_config={
+            "dedup_mode": "balanced",
+            "dedup_interval_minutes": 5,
+            "primary_dedup_key": "order_id",
+            "fallback_dedup_keys": ["event_id"],
+        },
+    )
+
+    assert result["import_summary"]["valid"] == 2
+    first, second = result["valid_journeys"]
+    assert len(first["touchpoints"]) == 1
+    assert first["meta"]["parser"]["dedup_removed_touchpoints"] == 1
+    assert len(first["conversions"]) == 1
+    assert len(second["conversions"]) == 0
+    assert second["meta"]["parser"]["dedup_removed_conversions"] == 1
