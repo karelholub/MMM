@@ -190,6 +190,7 @@ from app.services_overview import (
     get_overview_drivers,
     get_overview_alerts,
     get_overview_funnels,
+    get_overview_trend_insights,
 )
 from app.services_performance_trends import (
     build_channel_trend_response,
@@ -6759,6 +6760,23 @@ def overview_funnels(
         date_to=date_to,
         conversion_key=conversion_key,
         limit=limit,
+    )
+
+
+@app.get("/api/overview/trends")
+def overview_trends(
+    date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
+    date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
+    conversion_key: Optional[str] = Query(None, description="Optional conversion key filter"),
+    db=Depends(get_db),
+    _ctx: PermissionContext = Depends(require_permission("attribution.view")),
+):
+    """Compact overview trend insights: decomposition, momentum, and channel mix shift."""
+    return get_overview_trend_insights(
+        db=db,
+        date_from=date_from,
+        date_to=date_to,
+        conversion_key=conversion_key,
     )
 
 

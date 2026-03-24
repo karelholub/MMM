@@ -189,7 +189,7 @@ def _series_from_conversion_paths(
     total_revenue = 0.0
     for row in rows:
         payload = row.path_json or {}
-        value = compute_payload_revenue_value(
+        value = _payload_revenue_value(
             payload,
             revenue_config,
             dedupe_seen=dedupe_seen,
@@ -884,6 +884,258 @@ def get_overview_drivers(
     }
 
 
+def _safe_div(numerator: float, denominator: float) -> float:
+    if abs(denominator) <= 1e-9:
+        return 0.0
+    return numerator / denominator
+
+
+def _payload_revenue_value(
+    payload: Dict[str, Any],
+    revenue_config: Dict[str, Any],
+    *,
+    dedupe_seen: Optional[set[str]] = None,
+    fallback_conversion_id: Optional[str] = None,
+) -> float:
+    value = compute_payload_revenue_value(
+        payload,
+        revenue_config,
+        dedupe_seen=dedupe_seen,
+        fallback_conversion_id=fallback_conversion_id,
+    )
+    if abs(value) > 1e-9:
+        return float(value)
+    fallback_raw = payload.get("value")
+    if fallback_raw in (None, "", []):
+        fallback_raw = payload.get("conversion_value")
+    try:
+        return float(fallback_raw or 0.0)
+    except Exception:
+        return 0.0
+
+
+def _aggregate_channel_metrics(
+    db: Session,
+    *,
+    dt_from: datetime,
+    dt_to: datetime,
+    conversion_key: Optional[str] = None,
+) -> Dict[str, Dict[str, float]]:
+    revenue_config = get_revenue_config()
+    dedupe_seen = set()
+    metrics: Dict[str, Dict[str, float]] = {}
+    query_from = dt_from.replace(tzinfo=None) if dt_from.tzinfo is not None else dt_from
+    query_to = dt_to.replace(tzinfo=None) if dt_to.tzinfo is not None else dt_to
+
+    q = db.query(ConversionPath).filter(
+        ConversionPath.conversion_ts >= query_from,
+        ConversionPath.conversion_ts <= query_to,
+    )
+    if conversion_key:
+        q = q.filter(ConversionPath.conversion_key == conversion_key)
+    rows = q.order_by(ConversionPath.conversion_ts.desc()).all()
+    for row in rows:
+        payload = row.path_json or {}
+        if not isinstance(payload, dict):
+            payload = {}
+        touchpoints = payload.get("touchpoints") or []
+        if not isinstance(touchpoints, list):
+            touchpoints = []
+        value = compute_payload_revenue_value(
+            payload,
+            revenue_config,
+            dedupe_seen=dedupe_seen,
+            fallback_conversion_id=str(getattr(row, "conversion_id", "") or ""),
+        )
+        for idx, tp in enumerate(touchpoints):
+            if not isinstance(tp, dict):
+                continue
+            channel = _touchpoint_channel(tp)
+            entry = metrics.setdefault(channel, {"visits": 0.0, "conversions": 0.0, "revenue": 0.0})
+            entry["visits"] += 1.0
+            if idx == len(touchpoints) - 1:
+                entry["conversions"] += 1.0
+                entry["revenue"] += float(value or 0.0)
+    return metrics
+
+
+def _aggregate_daily_channel_revenue(
+    db: Session,
+    *,
+    dt_from: datetime,
+    dt_to: datetime,
+    conversion_key: Optional[str] = None,
+) -> Dict[str, Dict[str, float]]:
+    revenue_config = get_revenue_config()
+    dedupe_seen = set()
+    out: Dict[str, Dict[str, float]] = {}
+    query_from = dt_from.replace(tzinfo=None) if dt_from.tzinfo is not None else dt_from
+    query_to = dt_to.replace(tzinfo=None) if dt_to.tzinfo is not None else dt_to
+    q = db.query(ConversionPath).filter(
+        ConversionPath.conversion_ts >= query_from,
+        ConversionPath.conversion_ts <= query_to,
+    )
+    if conversion_key:
+        q = q.filter(ConversionPath.conversion_key == conversion_key)
+    rows = q.order_by(ConversionPath.conversion_ts.desc()).all()
+    for row in rows:
+        payload = row.path_json or {}
+        if not isinstance(payload, dict):
+            payload = {}
+        touchpoints = payload.get("touchpoints") or []
+        if not isinstance(touchpoints, list) or not touchpoints:
+            continue
+        last_tp = touchpoints[-1] if isinstance(touchpoints[-1], dict) else {}
+        channel = _touchpoint_channel(last_tp if isinstance(last_tp, dict) else {})
+        ts = _as_datetime(getattr(row, "conversion_ts", None))
+        if ts is None:
+            continue
+        day = ts.date().isoformat()
+        entry = out.setdefault(channel, {})
+        entry[day] = entry.get(day, 0.0) + _payload_revenue_value(
+            payload,
+            revenue_config,
+            dedupe_seen=dedupe_seen,
+            fallback_conversion_id=str(getattr(row, "conversion_id", "") or ""),
+        )
+    return out
+
+
+def get_overview_trend_insights(
+    db: Session,
+    *,
+    date_from: str,
+    date_to: str,
+    conversion_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    dt_from, dt_to = _normalize_period_bounds(date_from, date_to)
+    period_span = dt_to - dt_from
+    prev_to = dt_from - timedelta(microseconds=1)
+    prev_from = prev_to - period_span
+
+    current = _aggregate_channel_metrics(db, dt_from=dt_from, dt_to=dt_to, conversion_key=conversion_key)
+    previous = _aggregate_channel_metrics(db, dt_from=prev_from, dt_to=prev_to, conversion_key=conversion_key)
+
+    curr_visits = sum(item["visits"] for item in current.values())
+    prev_visits = sum(item["visits"] for item in previous.values())
+    curr_conversions = sum(item["conversions"] for item in current.values())
+    prev_conversions = sum(item["conversions"] for item in previous.values())
+    curr_revenue = sum(item["revenue"] for item in current.values())
+    prev_revenue = sum(item["revenue"] for item in previous.values())
+
+    prev_cvr = _safe_div(prev_conversions, prev_visits)
+    curr_cvr = _safe_div(curr_conversions, curr_visits)
+    prev_rpc = _safe_div(prev_revenue, prev_conversions)
+    curr_rpc = _safe_div(curr_revenue, curr_conversions)
+    revenue_delta = curr_revenue - prev_revenue
+    traffic_effect = (curr_visits - prev_visits) * prev_cvr * prev_rpc
+    cvr_effect = curr_visits * (curr_cvr - prev_cvr) * prev_rpc
+    value_effect = curr_visits * curr_cvr * (curr_rpc - prev_rpc)
+    mix_effect = revenue_delta - traffic_effect - cvr_effect - value_effect
+
+    decomposition = {
+        "current": {
+            "visits": round(curr_visits, 2),
+            "conversions": round(curr_conversions, 2),
+            "revenue": round(curr_revenue, 2),
+            "cvr": round(curr_cvr, 6),
+            "revenue_per_conversion": round(curr_rpc, 2),
+        },
+        "previous": {
+            "visits": round(prev_visits, 2),
+            "conversions": round(prev_conversions, 2),
+            "revenue": round(prev_revenue, 2),
+            "cvr": round(prev_cvr, 6),
+            "revenue_per_conversion": round(prev_rpc, 2),
+        },
+        "revenue_delta": round(revenue_delta, 2),
+        "factors": [
+            {"key": "traffic", "label": "Traffic effect", "value": round(traffic_effect, 2)},
+            {"key": "cvr", "label": "Conversion-rate effect", "value": round(cvr_effect, 2)},
+            {"key": "value", "label": "Value-per-conversion effect", "value": round(value_effect, 2)},
+            {"key": "mix", "label": "Mix effect", "value": round(mix_effect, 2)},
+        ],
+    }
+
+    momentum_window_days = min(7, max(3, ((dt_to.date() - dt_from.date()).days + 1) // 2 or 3))
+    momentum_current_from = dt_to - timedelta(days=momentum_window_days - 1)
+    momentum_prev_to = momentum_current_from - timedelta(microseconds=1)
+    momentum_prev_from = momentum_prev_to - timedelta(days=momentum_window_days - 1)
+    daily_revenue = _aggregate_daily_channel_revenue(db, dt_from=momentum_prev_from, dt_to=dt_to, conversion_key=conversion_key)
+    spark_days = [(dt_to.date() - timedelta(days=idx)).isoformat() for idx in range(momentum_window_days * 2 - 1, -1, -1)]
+    momentum_rows: List[Dict[str, Any]] = []
+    for channel, series in daily_revenue.items():
+        current_total = 0.0
+        previous_total = 0.0
+        sparkline: List[float] = []
+        for day in spark_days:
+            value = float(series.get(day, 0.0))
+            sparkline.append(round(value, 2))
+            day_dt = _parse_dt(day)
+            if day_dt is None:
+                continue
+            if momentum_current_from.date() <= day_dt.date() <= dt_to.date():
+                current_total += value
+            elif momentum_prev_from.date() <= day_dt.date() <= momentum_prev_to.date():
+                previous_total += value
+        delta_value = current_total - previous_total
+        momentum_rows.append(
+            {
+                "channel": channel,
+                "current_revenue": round(current_total, 2),
+                "previous_revenue": round(previous_total, 2),
+                "delta_revenue": round(delta_value, 2),
+                "delta_revenue_pct": round(delta_pct(current_total, previous_total), 1) if delta_pct(current_total, previous_total) is not None else None,
+                "sparkline": sparkline,
+            }
+        )
+    rising = sorted(momentum_rows, key=lambda row: (row["delta_revenue"], row["current_revenue"]), reverse=True)[:5]
+    falling = sorted(momentum_rows, key=lambda row: (row["delta_revenue"], -row["current_revenue"]))[:5]
+
+    mix_rows: List[Dict[str, Any]] = []
+    all_channels = set(current.keys()) | set(previous.keys())
+    for channel in all_channels:
+        curr_metrics = current.get(channel, {"visits": 0.0, "conversions": 0.0, "revenue": 0.0})
+        prev_metrics = previous.get(channel, {"visits": 0.0, "conversions": 0.0, "revenue": 0.0})
+        curr_rev_share = _safe_div(curr_metrics["revenue"], curr_revenue)
+        prev_rev_share = _safe_div(prev_metrics["revenue"], prev_revenue)
+        curr_visit_share = _safe_div(curr_metrics["visits"], curr_visits)
+        prev_visit_share = _safe_div(prev_metrics["visits"], prev_visits)
+        curr_conv_share = _safe_div(curr_metrics["conversions"], curr_conversions)
+        prev_conv_share = _safe_div(prev_metrics["conversions"], prev_conversions)
+        mix_rows.append(
+            {
+                "channel": channel,
+                "revenue_share_current": round(curr_rev_share, 6),
+                "revenue_share_previous": round(prev_rev_share, 6),
+                "revenue_share_delta_pp": round((curr_rev_share - prev_rev_share) * 100.0, 2),
+                "visit_share_current": round(curr_visit_share, 6),
+                "visit_share_previous": round(prev_visit_share, 6),
+                "visit_share_delta_pp": round((curr_visit_share - prev_visit_share) * 100.0, 2),
+                "conversion_share_current": round(curr_conv_share, 6),
+                "conversion_share_previous": round(prev_conv_share, 6),
+                "conversion_share_delta_pp": round((curr_conv_share - prev_conv_share) * 100.0, 2),
+            }
+        )
+    mix_shift = sorted(
+        mix_rows,
+        key=lambda row: max(abs(row["revenue_share_delta_pp"]), abs(row["visit_share_delta_pp"]), abs(row["conversion_share_delta_pp"])),
+        reverse=True,
+    )[:6]
+
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        "decomposition": decomposition,
+        "momentum": {
+            "window_days": momentum_window_days,
+            "rising": rising,
+            "falling": falling,
+        },
+        "mix_shift": mix_shift,
+    }
+
+
 def get_overview_funnels(
     db: Session,
     *,
@@ -913,7 +1165,7 @@ def get_overview_funnels(
             payload = {}
         steps = _path_steps_from_payload(payload)
         path_key = " > ".join(steps)
-        revenue = compute_payload_revenue_value(
+        revenue = _payload_revenue_value(
             payload,
             revenue_config,
             dedupe_seen=dedupe_seen,

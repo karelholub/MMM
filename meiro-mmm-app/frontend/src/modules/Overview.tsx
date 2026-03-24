@@ -160,6 +160,55 @@ interface OverviewFunnelsResponse {
   }
 }
 
+interface OverviewTrendRow {
+  channel: string
+  current_revenue: number
+  previous_revenue: number
+  delta_revenue: number
+  delta_revenue_pct?: number | null
+  sparkline: number[]
+}
+
+interface OverviewTrendsResponse {
+  date_from: string
+  date_to: string
+  decomposition: {
+    current: {
+      visits: number
+      conversions: number
+      revenue: number
+      cvr: number
+      revenue_per_conversion: number
+    }
+    previous: {
+      visits: number
+      conversions: number
+      revenue: number
+      cvr: number
+      revenue_per_conversion: number
+    }
+    revenue_delta: number
+    factors: Array<{ key: string; label: string; value: number }>
+  }
+  momentum: {
+    window_days: number
+    rising: OverviewTrendRow[]
+    falling: OverviewTrendRow[]
+  }
+  mix_shift: Array<{
+    channel: string
+    revenue_share_current: number
+    revenue_share_previous: number
+    revenue_share_delta_pp: number
+    visit_share_current: number
+    visit_share_previous: number
+    visit_share_delta_pp: number
+    conversion_share_current: number
+    conversion_share_previous: number
+    conversion_share_delta_pp: number
+  }>
+}
+
 interface OverviewAlertItem {
   id: number
   rule_id: number
@@ -277,6 +326,16 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
     },
   })
 
+  const trendsQuery = useQuery<OverviewTrendsResponse>({
+    queryKey: ['overview-trends', dateRange.date_from, dateRange.date_to],
+    queryFn: async () => {
+      return apiGetJson<OverviewTrendsResponse>(withQuery('/api/overview/trends', {
+        date_from: dateRange.date_from,
+        date_to: dateRange.date_to,
+      }), { fallbackMessage: 'Failed to load trend insights' })
+    },
+  })
+
   const journeyFunnelAlertsQuery = useQuery<{ defs: JourneyAlertDefinitionItem[]; events: JourneyAlertEventItem[] }>({
     queryKey: ['overview-journey-funnel-alerts'],
     queryFn: async () => {
@@ -369,6 +428,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
   const funnelRows = funnelsQuery.data?.tabs?.[funnelTab] ?? []
   const selectedFunnel = funnelRows[0] ?? null
   const freshness = summary?.freshness
+  const trendInsights = trendsQuery.data
 
   const hasAnyData =
     kpiTiles.some((k) => typeof k.value === 'number' && Number.isFinite(k.value) && k.value !== 0) ||
@@ -1012,6 +1072,145 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
             </div>
           </div>
         </SectionCard>
+
+        <div style={{ display: 'grid', gap: t.space.xl, gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))' }}>
+          <SectionCard
+            title="Trend decomposition"
+            subtitle="Why revenue moved vs the previous period"
+          >
+            {trendsQuery.isError ? (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>
+                {(trendsQuery.error as Error)?.message ?? 'Failed to load decomposition.'}
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gap: t.space.md }}>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  Revenue delta: <strong style={{ color: t.color.text }}>{formatCurrency(trendInsights?.decomposition.revenue_delta ?? 0)}</strong>
+                </div>
+                {(trendInsights?.decomposition.factors ?? []).map((factor) => (
+                  <div key={factor.key} style={{ display: 'grid', gap: 4 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.md, fontSize: t.font.sizeSm }}>
+                      <span style={{ color: t.color.textSecondary }}>{factor.label}</span>
+                      <strong style={{ color: factor.value >= 0 ? t.color.success : t.color.danger }}>
+                        {factor.value >= 0 ? '+' : '-'}{formatCurrency(Math.abs(factor.value))}
+                      </strong>
+                    </div>
+                    <div style={{ height: 8, borderRadius: t.radius.full, background: t.color.borderLight, overflow: 'hidden' }}>
+                      <div
+                        style={{
+                          width: `${Math.min(100, Math.abs(factor.value) / Math.max(Math.abs(trendInsights?.decomposition.revenue_delta ?? 0), 1) * 100)}%`,
+                          height: '100%',
+                          background: factor.value >= 0 ? t.color.success : t.color.danger,
+                        }}
+                      />
+                    </div>
+                  </div>
+                ))}
+                <div style={{ display: 'grid', gap: 2, paddingTop: t.space.sm, borderTop: `1px solid ${t.color.borderLight}`, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  <span>Visits: {(trendInsights?.decomposition.current.visits ?? 0).toLocaleString()} vs {(trendInsights?.decomposition.previous.visits ?? 0).toLocaleString()}</span>
+                  <span>CVR: {((trendInsights?.decomposition.current.cvr ?? 0) * 100).toFixed(2)}% vs {((trendInsights?.decomposition.previous.cvr ?? 0) * 100).toFixed(2)}%</span>
+                  <span>Revenue / conv: {formatCurrency(trendInsights?.decomposition.current.revenue_per_conversion ?? 0)} vs {formatCurrency(trendInsights?.decomposition.previous.revenue_per_conversion ?? 0)}</span>
+                </div>
+              </div>
+            )}
+          </SectionCard>
+
+          <SectionCard
+            title="Channel momentum"
+            subtitle={trendInsights ? `Recent ${trendInsights.momentum.window_days}-day movement` : 'Recent movement'}
+          >
+            {trendsQuery.isError ? (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>
+                {(trendsQuery.error as Error)?.message ?? 'Failed to load momentum.'}
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gap: t.space.lg }}>
+                {([
+                  ['Rising', trendInsights?.momentum.rising ?? [], t.color.success],
+                  ['Falling', trendInsights?.momentum.falling ?? [], t.color.danger],
+                ] as Array<[string, OverviewTrendRow[], string]>).map(([label, rows, color]) => (
+                  <div key={label as string} style={{ display: 'grid', gap: t.space.sm }}>
+                    <div style={{ fontSize: t.font.sizeXs, color, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label as string}</div>
+                    {(rows as OverviewTrendRow[]).slice(0, 3).map((row) => (
+                      <div key={`${label}-${row.channel}`} style={{ display: 'grid', gap: 4, padding: `${t.space.sm}px ${t.space.md}px`, borderRadius: t.radius.md, background: t.color.bg, border: `1px solid ${t.color.borderLight}` }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.md, fontSize: t.font.sizeSm }}>
+                          <strong style={{ color: t.color.text }}>{row.channel}</strong>
+                          <span style={{ color }}>{row.delta_revenue >= 0 ? '+' : '-'}{formatCurrency(Math.abs(row.delta_revenue))}</span>
+                        </div>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                          {row.delta_revenue_pct != null ? `${row.delta_revenue_pct >= 0 ? '▲' : '▼'} ${Math.abs(row.delta_revenue_pct).toFixed(1)}%` : 'No prior baseline'}
+                        </div>
+                        <div style={{ display: 'flex', gap: 2, alignItems: 'flex-end', height: 24 }}>
+                          {(() => {
+                            const maxVal = Math.max(...row.sparkline, 1)
+                            return row.sparkline.map((value, idx) => (
+                              <span
+                                key={idx}
+                                style={{
+                                  flex: 1,
+                                  height: `${Math.max(12, value / maxVal * 100)}%`,
+                                  borderRadius: 2,
+                                  background: color as string,
+                                  opacity: 0.75,
+                                }}
+                              />
+                            ))
+                          })()}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+          </SectionCard>
+
+          <SectionCard
+            title="Channel mix shift"
+            subtitle="Share movement in visits, conversions, and revenue"
+            overflow="auto"
+          >
+            {trendsQuery.isError ? (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>
+                {(trendsQuery.error as Error)?.message ?? 'Failed to load mix shift.'}
+              </div>
+            ) : (
+              <DashboardTable>
+                <thead>
+                  <tr>
+                    <th>Channel</th>
+                    <th>Revenue share Δ</th>
+                    <th>Visit share Δ</th>
+                    <th>Conv share Δ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(trendInsights?.mix_shift ?? []).map((row) => (
+                    <tr key={row.channel}>
+                      <td style={{ fontWeight: t.font.weightMedium }}>{row.channel}</td>
+                      <td style={{ color: row.revenue_share_delta_pp >= 0 ? t.color.success : t.color.danger }}>
+                        {row.revenue_share_delta_pp >= 0 ? '+' : ''}{row.revenue_share_delta_pp.toFixed(2)} pp
+                      </td>
+                      <td style={{ color: row.visit_share_delta_pp >= 0 ? t.color.success : t.color.danger }}>
+                        {row.visit_share_delta_pp >= 0 ? '+' : ''}{row.visit_share_delta_pp.toFixed(2)} pp
+                      </td>
+                      <td style={{ color: row.conversion_share_delta_pp >= 0 ? t.color.success : t.color.danger }}>
+                        {row.conversion_share_delta_pp >= 0 ? '+' : ''}{row.conversion_share_delta_pp.toFixed(2)} pp
+                      </td>
+                    </tr>
+                  ))}
+                  {(trendInsights?.mix_shift ?? []).length === 0 && (
+                    <tr>
+                      <td colSpan={4} style={{ textAlign: 'center', color: t.color.textSecondary }}>
+                        No mix shift data for this period.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </DashboardTable>
+            )}
+          </SectionCard>
+        </div>
 
         {/* E) Data health + F) Recent alerts side by side */}
         <div style={{ display: 'grid', gap: t.space.xl, gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}>
