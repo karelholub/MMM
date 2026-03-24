@@ -7,7 +7,7 @@
       "enabled": true,
       "source": {
         "operator": "regex",
-        "value": "google|bing|baidu"
+        "value": "google|bing|baidu|seznam"
       },
       "medium": {
         "operator": "regex",
@@ -70,6 +70,60 @@
       "campaign": {
         "operator": "any",
         "value": ""
+      }
+    },
+    {
+      "name": "Paid Search - PRINT-Brand",
+      "channel": "paid_search",
+      "priority": 50,
+      "enabled": true,
+      "source": {
+        "operator": "any",
+        "value": ""
+      },
+      "medium": {
+        "operator": "any",
+        "value": ""
+      },
+      "campaign": {
+        "operator": "equals",
+        "value": "PRINT-Brand"
+      }
+    },
+    {
+      "name": "Paid Social - myTimi+|+PLAN+|+P\u0159\u00edpadov\u00e9+studie",
+      "channel": "paid_social",
+      "priority": 60,
+      "enabled": true,
+      "source": {
+        "operator": "any",
+        "value": ""
+      },
+      "medium": {
+        "operator": "any",
+        "value": ""
+      },
+      "campaign": {
+        "operator": "equals",
+        "value": "myTimi+|+PLAN+|+P\u0159\u00edpadov\u00e9+studie-P\u0159\u00edpadovka+|+Prakab"
+      }
+    },
+    {
+      "name": "Referral - firmy.cz-479497",
+      "channel": "referral",
+      "priority": 70,
+      "enabled": true,
+      "source": {
+        "operator": "any",
+        "value": ""
+      },
+      "medium": {
+        "operator": "any",
+        "value": ""
+      },
+      "campaign": {
+        "operator": "contains",
+        "value": "firmy.cz"
       }
     }
   ],

@@ -227,6 +227,14 @@ def create_router(
             }
         return compute_taxonomy_coverage(journeys)
 
+    @router.get("/api/taxonomy/suggestions")
+    def get_taxonomy_suggestions(limit: int = 12, db=Depends(get_db_dependency)):
+        from app.services_conversions import load_journeys_from_db
+        from app.services_taxonomy_suggestions import generate_taxonomy_suggestions
+
+        journeys = load_journeys_from_db(db, limit=10000)
+        return generate_taxonomy_suggestions(journeys, limit=max(1, min(limit, 30)))
+
     @router.get("/api/taxonomy/channel-confidence")
     def get_channel_confidence(channel: str, db=Depends(get_db_dependency)):
         from app.services_conversions import load_journeys_from_db

@@ -114,6 +114,7 @@ from app.modules.alerts_funnels.router import create_router as create_alerts_fun
 from app.modules.attribution.router import create_router as create_attribution_router
 from app.modules.attribution.schemas import LoadSampleRequest
 from app.modules.ads_connectors.router import create_router as create_ads_connectors_router
+from app.modules.ads_connectors import service as ads_connectors_service
 from app.modules.ads_governance.router import create_router as create_ads_governance_router
 from app.modules.ads_governance.schemas import (
     AdsChangeRequestApplyPayload,
@@ -124,6 +125,7 @@ from app.modules.config_management.router import create_router as create_config_
 from app.modules.data_sources.router import create_router as create_data_sources_router
 from app.modules.meiro_integration.router import create_router as create_meiro_integration_router
 from app.modules.mmm.router import create_router as create_mmm_router
+from app.modules.mmm import service as mmm_service
 from app.modules.mmm.schemas import BuildFromPlatformRequest, ModelConfig, OptimizeRequest, ValidateMappingRequest
 from app.modules.admin_access.schemas import (
     AdminInvitationCreatePayload,
@@ -138,6 +140,7 @@ from app.modules.settings.schemas import (
     AttributionSettings,
     FeatureFlags,
     KpiConfigModel,
+    KpiDefinitionModel,
     MMMSettings,
     NBASettings,
     RevenueConfig,
@@ -3862,246 +3865,65 @@ def auto_assign_experiment(exp_id: int, body: AutoAssignRequest, db=Depends(get_
 # ==================== Ad Platform Connectors ====================
 
 def connectors_status():
-    sources = [(DATA_DIR / "meta_ads.csv", "Meta"), (DATA_DIR / "google_ads.csv", "Google"), (DATA_DIR / "linkedin_ads.csv", "LinkedIn"), (DATA_DIR / "meiro_cdp.csv", "Meiro CDP"), (DATA_DIR / "unified_ads.csv", "Unified")]
-    stats = {}
-    for path, name in sources:
-        if path.exists():
-            try:
-                df = pd.read_csv(path)
-                stats[name] = {"path": str(path), "rows": int(len(df)), "total_spend": float(df.get("spend", pd.Series([], dtype=float)).fillna(0).sum())}
-            except Exception:
-                stats[name] = {"path": str(path), "rows": 0}
-        else:
-            stats[name] = {"path": str(path), "rows": 0}
-    return stats
+    return ads_connectors_service.connectors_status(data_dir=DATA_DIR)
 
 def fetch_meta(ad_account_id: str, since: str, until: str, avg_aov: float = 0.0, access_token: Optional[str] = None):
-    if not access_token:
-        token_data = get_token("meta")
-        if not token_data or not token_data.get("access_token"):
-            db = SessionLocal()
-            try:
-                token_from_conn = get_access_token_for_provider(db, workspace_id="default", provider_key="meta_ads")
-            finally:
-                db.close()
-            if not token_from_conn:
-                raise HTTPException(status_code=401, detail="No Meta access token. Connect your Meta account first.")
-            access_token = token_from_conn
-        else:
-            access_token = token_data["access_token"]
-    out_path = DATA_DIR / "meta_ads.csv"
-    url = f"https://graph.facebook.com/v19.0/{ad_account_id}/ads"
-    params = {"access_token": access_token, "fields": "campaign_name,spend,impressions,clicks,actions,updated_time", "time_range": json.dumps({"since": since, "until": until}), "limit": 500}
-    rows = []
-    try:
-        while True:
-            r = requests.get(url, params=params, timeout=30)
-            r.raise_for_status()
-            data = r.json()
-            for ad in data.get("data", []):
-                actions = ad.get("actions", []) or []
-                purchases = next((a for a in actions if a.get("action_type") == "purchase"), None)
-                conv = float(purchases.get("value", 0)) if purchases else 0.0
-                rows.append({"date": since, "channel": "meta_ads", "campaign": ad.get("campaign_name", "unknown"), "spend": float(ad.get("spend", 0) or 0), "impressions": int(ad.get("impressions", 0) or 0), "clicks": int(ad.get("clicks", 0) or 0), "conversions": float(conv), "revenue": float(conv * float(avg_aov))})
-            next_url = data.get("paging", {}).get("next")
-            if not next_url:
-                break
-            url = next_url
-            params = {}
-    except Exception:
-        pass
-    pd.DataFrame(rows).to_csv(out_path, index=False)
-    total_spend = sum(r.get("spend", 0) for r in rows)
-    if total_spend > 0:
-        expense_id = f"meta_ads_{since[:7]}"
-        EXPENSES[expense_id] = _with_converted_amount(
-            ExpenseEntry(
-                channel="meta_ads",
-                cost_type="Media Spend",
-                amount=total_spend,
-                currency="USD",
-                reporting_currency=_default_reporting_currency(),
-                period=since[:7],
-                service_period_start=since,
-                service_period_end=until,
-                notes="Auto-imported from Meta Ads API",
-                source_type="import",
-                source_name="meta_ads",
-                actor_type="import",
-                created_at=_now_iso(),
-            )
-        )
-    now_iso = _now_iso()
-    IMPORT_SYNC_STATE["meta_ads"] = {
-        "last_success_at": now_iso,
-        "last_attempt_at": now_iso,
-        "status": "Healthy",
-        "records_imported": len(rows),
-        "period_start": since,
-        "period_end": until,
-        "platform_total": total_spend,
-        "last_error": None,
-        "action_hint": None,
-    }
-    return {"rows": len(rows), "path": str(out_path)}
+    return ads_connectors_service.fetch_meta(
+        ad_account_id=ad_account_id,
+        since=since,
+        until=until,
+        avg_aov=avg_aov,
+        access_token=access_token,
+        get_token_fn=get_token,
+        session_local_factory=SessionLocal,
+        get_access_token_for_provider_fn=get_access_token_for_provider,
+        data_dir=DATA_DIR,
+        expenses_obj=EXPENSES,
+        expense_entry_cls=ExpenseEntry,
+        with_converted_amount_fn=_with_converted_amount,
+        default_reporting_currency_fn=_default_reporting_currency,
+        now_iso_fn=_now_iso,
+        import_sync_state_obj=IMPORT_SYNC_STATE,
+    )
 
 def fetch_google(segments_date_from: str, segments_date_to: str):
-    out_path = DATA_DIR / "google_ads.csv"
-    if not out_path.exists():
-        pd.DataFrame([], columns=["date", "channel", "campaign", "spend", "impressions", "clicks", "conversions", "revenue"]).to_csv(out_path, index=False)
-    rows = int(pd.read_csv(out_path).shape[0])
-    now_iso = _now_iso()
-    IMPORT_SYNC_STATE["google_ads"] = {
-        "last_success_at": now_iso,
-        "last_attempt_at": now_iso,
-        "status": "Healthy",
-        "records_imported": rows,
-        "period_start": segments_date_from,
-        "period_end": segments_date_to,
-        "platform_total": None,
-        "last_error": None,
-        "action_hint": None,
-    }
-    return {"rows": rows, "path": str(out_path)}
+    return ads_connectors_service.fetch_google(
+        segments_date_from=segments_date_from,
+        segments_date_to=segments_date_to,
+        data_dir=DATA_DIR,
+        now_iso_fn=_now_iso,
+        import_sync_state_obj=IMPORT_SYNC_STATE,
+    )
 
 def fetch_linkedin(since: str, until: str, access_token: Optional[str] = None):
-    if not access_token:
-        token_data = get_token("linkedin")
-        if not token_data or not token_data.get("access_token"):
-            db = SessionLocal()
-            try:
-                token_from_conn = get_access_token_for_provider(db, workspace_id="default", provider_key="linkedin_ads")
-            finally:
-                db.close()
-            if not token_from_conn:
-                raise HTTPException(status_code=401, detail="No LinkedIn access token. Connect your LinkedIn account first.")
-            access_token = token_from_conn
-        else:
-            access_token = token_data["access_token"]
-    out_path = DATA_DIR / "linkedin_ads.csv"
-    headers = {"Authorization": f"Bearer {access_token}"}
-    rows = []
-    try:
-        r = requests.get("https://api.linkedin.com/v2/adAnalyticsV2", headers=headers, params={"q": "analytics", "pivot": "CAMPAIGN", "timeGranularity": "DAILY"}, timeout=30)
-        if r.ok:
-            for el in r.json().get("elements", []):
-                rows.append({"date": since, "channel": "linkedin_ads", "campaign": (el.get("campaign", {}) or {}).get("name", "unknown"), "spend": float(el.get("costInLocalCurrency", 0) or 0), "impressions": int(el.get("impressions", 0) or 0), "clicks": int(el.get("clicks", 0) or 0), "conversions": float(el.get("conversions", 0) or 0), "revenue": float(el.get("revenueValue", 0) or 0)})
-    except Exception:
-        pass
-    pd.DataFrame(rows).to_csv(out_path, index=False)
-    total_spend = sum(r.get("spend", 0) for r in rows)
-    if total_spend > 0:
-        expense_id = f"linkedin_ads_{since[:7]}"
-        EXPENSES[expense_id] = _with_converted_amount(
-            ExpenseEntry(
-                channel="linkedin_ads",
-                cost_type="Media Spend",
-                amount=total_spend,
-                currency="USD",
-                reporting_currency=_default_reporting_currency(),
-                period=since[:7],
-                service_period_start=since,
-                service_period_end=until,
-                notes="Auto-imported from LinkedIn Ads API",
-                source_type="import",
-                source_name="linkedin_ads",
-                actor_type="import",
-                created_at=_now_iso(),
-            )
-        )
-    now_iso = _now_iso()
-    IMPORT_SYNC_STATE["linkedin_ads"] = {
-        "last_success_at": now_iso,
-        "last_attempt_at": now_iso,
-        "status": "Healthy",
-        "records_imported": len(rows),
-        "period_start": since,
-        "period_end": until,
-        "platform_total": total_spend,
-        "last_error": None,
-        "action_hint": None,
-    }
-    return {"rows": len(rows), "path": str(out_path)}
+    return ads_connectors_service.fetch_linkedin(
+        since=since,
+        until=until,
+        access_token=access_token,
+        get_token_fn=get_token,
+        session_local_factory=SessionLocal,
+        get_access_token_for_provider_fn=get_access_token_for_provider,
+        data_dir=DATA_DIR,
+        expenses_obj=EXPENSES,
+        expense_entry_cls=ExpenseEntry,
+        with_converted_amount_fn=_with_converted_amount,
+        default_reporting_currency_fn=_default_reporting_currency,
+        now_iso_fn=_now_iso,
+        import_sync_state_obj=IMPORT_SYNC_STATE,
+    )
 
 def merge_ads():
-    sources = [DATA_DIR / "meta_ads.csv", DATA_DIR / "google_ads.csv", DATA_DIR / "linkedin_ads.csv", DATA_DIR / "meiro_cdp.csv"]
-    frames = [pd.read_csv(p) for p in sources if p.exists()]
-    unified = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame([], columns=["date", "channel", "campaign", "spend", "impressions", "clicks", "conversions", "revenue"])
-    for col in ["spend", "impressions", "clicks", "conversions", "revenue"]:
-        unified[col] = pd.to_numeric(unified.get(col, 0), errors='coerce').fillna(0)
-    unified["date"] = pd.to_datetime(unified.get("date", pd.to_datetime([])), errors='coerce').dt.date.astype(str)
-    unified.drop_duplicates(subset=["date", "channel", "campaign"], keep='last', inplace=True)
-    out_path = DATA_DIR / "unified_ads.csv"
-    unified.to_csv(out_path, index=False)
-    return {"rows": int(len(unified)), "path": str(out_path)}
+    return ads_connectors_service.merge_ads(data_dir=DATA_DIR)
 
 # ==================== Model Fitting Background Task ====================
 
 def _fit_model(run_id: str, cfg: ModelConfig):
-    now_ts = _now_iso()
-    dataset_info = DATASETS.get(cfg.dataset_id)
-    if not dataset_info:
-        RUNS[run_id] = {**RUNS.get(run_id, {}), "status": "error", "detail": "Dataset not found", "updated_at": now_ts}
-        _save_runs()
-        return
-    csv_path = dataset_info.get("path")
-    p = Path(csv_path) if isinstance(csv_path, str) else csv_path
-    df = pd.read_csv(p, parse_dates=["date"])
-    if cfg.kpi not in df.columns:
-        RUNS[run_id] = {**RUNS.get(run_id, {}), "status": "error", "detail": f"Column '{cfg.kpi}' missing", "updated_at": now_ts}
-        _save_runs()
-        return
-    is_tall = {"channel", "campaign", "spend"}.issubset(set(df.columns))
-    if not is_tall:
-        for c in cfg.spend_channels:
-            if c not in df.columns:
-                RUNS[run_id] = {**RUNS.get(run_id, {}), "status": "error", "detail": f"Column '{c}' missing", "updated_at": now_ts}
-                _save_runs()
-                return
-    priors = cfg.priors or {}
-    adstock_cfg = {"l_max": 8, "alpha_mean": priors.get("adstock", {}).get("alpha_mean", 0.5), "alpha_sd": priors.get("adstock", {}).get("alpha_sd", 0.2)}
-    saturation_cfg = {"lam_mean": priors.get("saturation", {}).get("lam_mean", 0.001), "lam_sd": priors.get("saturation", {}).get("lam_sd", 0.0005)}
-    mcmc_cfg = cfg.mcmc or {"draws": 1000, "tune": 1000, "chains": 4, "target_accept": 0.9}
-    use_adstock = getattr(cfg, "use_adstock", True)
-    use_saturation = getattr(cfg, "use_saturation", True)
-    force_engine = "ridge" if (not use_adstock and not use_saturation) else None
-    random_seed = getattr(cfg, "random_seed", None)
-    try:
-        RUNS[run_id]["status"] = "running"
-        RUNS[run_id]["updated_at"] = _now_iso()
-        _save_runs()
-        result = mmm_fit_model(
-            df=df,
-            target_column=cfg.kpi,
-            channel_columns=cfg.spend_channels,
-            control_columns=cfg.covariates or [],
-            date_column="date",
-            adstock_cfg=adstock_cfg,
-            saturation_cfg=saturation_cfg,
-            mcmc_cfg=mcmc_cfg,
-            force_engine=force_engine,
-            random_seed=random_seed,
-        )
-        RUNS[run_id] = {
-            **RUNS[run_id],
-            "status": "finished",
-            "r2": result["r2"],
-            "contrib": result["contrib"],
-            "roi": result["roi"],
-            "engine": result.get("engine", "unknown"),
-            "updated_at": _now_iso(),
-        }
-        for key in ("campaigns", "channel_summary", "adstock_params", "saturation_params", "diagnostics"):
-            if key in result:
-                RUNS[run_id][key] = result[key]
-        _save_runs()
-    except Exception as exc:
-        RUNS[run_id] = {
-            **RUNS.get(run_id, {}),
-            "status": "error",
-            "detail": str(exc),
-            "config": RUNS[run_id].get("config", {}),
-            "kpi_mode": getattr(cfg, "kpi_mode", "conversions"),
-            "updated_at": _now_iso(),
-        }
-        _save_runs()
+    mmm_service.fit_model(
+        run_id=run_id,
+        cfg=cfg,
+        runs_obj=RUNS,
+        datasets_obj=DATASETS,
+        now_iso_fn=_now_iso,
+        save_runs_fn=_save_runs,
+        mmm_fit_model_fn=mmm_fit_model,
+    )

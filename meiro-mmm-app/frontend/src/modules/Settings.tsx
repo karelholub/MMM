@@ -15,6 +15,7 @@ import AccessControlUsersSection from './AccessControlUsersSection'
 import AccessControlRolesSection from './AccessControlRolesSection'
 import AccessControlAuditLogSection from './AccessControlAuditLogSection'
 import RevenueKpiDefinitionCard from './RevenueKpiDefinitionCard'
+import TaxonomyInsightsPanel from '../features/taxonomy/TaxonomyInsightsPanel'
 import { usePermissions } from '../hooks/usePermissions'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
 
@@ -246,6 +247,54 @@ interface Taxonomy {
   channel_rules: ChannelRule[]
   source_aliases: Record<string, string>
   medium_aliases: Record<string, string>
+}
+
+interface TaxonomyUnknownShare {
+  total_touchpoints: number
+  unknown_count: number
+  unknown_share: number
+  top_unmapped_patterns: Array<{ source: string; medium: string; campaign?: string | null; count: number }>
+}
+
+interface TaxonomyCoverage {
+  channel_distribution: Record<string, number>
+  source_coverage: number
+  medium_coverage: number
+  rule_usage: Record<string, number>
+  top_unmapped_patterns: Array<{ source: string; medium: string; campaign?: string | null; count: number }>
+}
+
+interface TaxonomySuggestionItem {
+  id: string
+  type: 'source_alias' | 'medium_alias' | 'channel_rule'
+  title: string
+  description: string
+  confidence: number
+  impact_count: number
+  sample?: { source?: string; medium?: string; campaign?: string | null }
+  payload: {
+    source_alias?: { raw: string; canonical: string }
+    medium_alias?: { raw: string; canonical: string }
+    channel_rule?: Omit<ChannelRule, 'priority' | 'enabled'> & {
+      source: MatchExpression
+      medium: MatchExpression
+      campaign: MatchExpression
+    }
+  }
+}
+
+interface TaxonomySuggestionsResponse {
+  summary: {
+    unknown_share: number
+    unknown_count: number
+    total_touchpoints: number
+    source_coverage: number
+    medium_coverage: number
+    active_rules: number
+    source_aliases: number
+    medium_aliases: number
+  }
+  suggestions: TaxonomySuggestionItem[]
 }
 
 interface KpiDefinition {
@@ -816,6 +865,21 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
     const taxonomyQuery = useQuery<Taxonomy>({
       queryKey: ['taxonomy'],
       queryFn: async () => apiGetJson<Taxonomy>('/api/taxonomy', { fallbackMessage: 'Failed to load taxonomy' }),
+    })
+    const taxonomyUnknownShareQuery = useQuery<TaxonomyUnknownShare>({
+      queryKey: ['taxonomy', 'unknown-share'],
+      queryFn: async () => apiGetJson<TaxonomyUnknownShare>('/api/taxonomy/unknown-share?limit=5', { fallbackMessage: 'Failed to load taxonomy overview' }),
+      enabled: activeSection === 'taxonomy',
+    })
+    const taxonomyCoverageQuery = useQuery<TaxonomyCoverage>({
+      queryKey: ['taxonomy', 'coverage'],
+      queryFn: async () => apiGetJson<TaxonomyCoverage>('/api/taxonomy/coverage', { fallbackMessage: 'Failed to load taxonomy coverage' }),
+      enabled: activeSection === 'taxonomy',
+    })
+    const taxonomySuggestionsQuery = useQuery<TaxonomySuggestionsResponse>({
+      queryKey: ['taxonomy', 'suggestions'],
+      queryFn: async () => apiGetJson<TaxonomySuggestionsResponse>('/api/taxonomy/suggestions?limit=8', { fallbackMessage: 'Failed to load taxonomy suggestions' }),
+      enabled: activeSection === 'taxonomy',
     })
     const kpiQuery = useQuery<KpiConfig>({
       queryKey: ['kpis'],
@@ -1701,6 +1765,70 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         setIsTestingDataset(false)
       }
     }, [])
+
+    const handleApplyTaxonomySuggestion = useCallback((suggestionId: string) => {
+      const suggestion = taxonomySuggestionsQuery.data?.suggestions.find((item) => item.id === suggestionId)
+      if (!suggestion) return
+
+      if (suggestion.payload.source_alias) {
+        const { raw, canonical } = suggestion.payload.source_alias
+        updateSourceAliases((prev) => {
+          const existing = prev.find((row) => row.alias.trim().toLowerCase() === raw.trim().toLowerCase())
+          if (existing) {
+            return prev.map((row) => row.id === existing.id ? { ...row, canonical } : row)
+          }
+          return [...prev, { id: generateRowId(), alias: raw, canonical }]
+        })
+      }
+
+      if (suggestion.payload.medium_alias) {
+        const { raw, canonical } = suggestion.payload.medium_alias
+        updateMediumAliases((prev) => {
+          const existing = prev.find((row) => row.alias.trim().toLowerCase() === raw.trim().toLowerCase())
+          if (existing) {
+            return prev.map((row) => row.id === existing.id ? { ...row, canonical } : row)
+          }
+          return [...prev, { id: generateRowId(), alias: raw, canonical }]
+        })
+      }
+
+      if (suggestion.payload.channel_rule) {
+        setTaxonomyDraft((prev) => {
+          const exists = prev.channel_rules.some((rule) =>
+            rule.channel === suggestion.payload.channel_rule?.channel &&
+            ensureMatchExpression(rule.source).operator === ensureMatchExpression(suggestion.payload.channel_rule?.source).operator &&
+            ensureMatchExpression(rule.source).value === ensureMatchExpression(suggestion.payload.channel_rule?.source).value &&
+            ensureMatchExpression(rule.medium).operator === ensureMatchExpression(suggestion.payload.channel_rule?.medium).operator &&
+            ensureMatchExpression(rule.medium).value === ensureMatchExpression(suggestion.payload.channel_rule?.medium).value
+          )
+          if (exists) return prev
+          const nextPriority = prev.channel_rules.length === 0
+            ? 10
+            : Math.max(...prev.channel_rules.map((rule) => Number.isFinite(rule.priority) ? rule.priority : 0)) + 10
+          return {
+            ...prev,
+            channel_rules: [
+              ...prev.channel_rules,
+              normalizeChannelRule(
+                {
+                  ...suggestion.payload.channel_rule!,
+                  enabled: true,
+                  priority: nextPriority,
+                },
+                nextPriority,
+              ),
+            ],
+          }
+        })
+      }
+
+      toastIdRef.current += 1
+      setToast({
+        id: toastIdRef.current,
+        type: 'success',
+        message: 'Applied taxonomy suggestion to draft',
+      })
+    }, [taxonomySuggestionsQuery.data?.suggestions, updateMediumAliases, updateSourceAliases])
 
     const handleImportSourceAliases = useCallback(() => {
       try {
@@ -5935,6 +6063,24 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
 
       return (
         <div style={{ display: 'grid', gap: t.space.xl }}>
+          <TaxonomyInsightsPanel
+            unknownShare={taxonomyUnknownShareQuery.data}
+            coverage={taxonomyCoverageQuery.data}
+            suggestions={taxonomySuggestionsQuery.data}
+            loading={
+              taxonomyUnknownShareQuery.isLoading ||
+              taxonomyCoverageQuery.isLoading ||
+              taxonomySuggestionsQuery.isLoading
+            }
+            error={
+              (taxonomyUnknownShareQuery.error as Error | undefined)?.message ||
+              (taxonomyCoverageQuery.error as Error | undefined)?.message ||
+              (taxonomySuggestionsQuery.error as Error | undefined)?.message ||
+              null
+            }
+            onApplySuggestion={handleApplyTaxonomySuggestion}
+          />
+
           {taxonomyQuery.isError && !taxonomyBaseline && (
             <div
               style={{
