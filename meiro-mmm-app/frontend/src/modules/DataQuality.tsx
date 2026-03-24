@@ -879,10 +879,10 @@ export default function DataQuality() {
         >
           <div>
             <h2 style={{ margin: '0 0 4px', fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-              Meiro webhook event log
+              Meiro Pipes diagnostics
             </h2>
             <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-              Last 100 webhook requests with payload excerpts for ingestion debugging.
+              Advanced payload debugging for Meiro Pipes. Day-to-day source setup now lives in Data Sources {'>'} Meiro.
             </p>
           </div>
           <button
@@ -1060,10 +1060,10 @@ export default function DataQuality() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: t.space.md, flexWrap: 'wrap' }}>
           <div>
             <h2 style={{ margin: '0 0 4px', fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-              Auto-setup suggestions from Meiro payloads
+              Advanced setup suggestions from Meiro payloads
             </h2>
             <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-              Suggested KPI/conversion and taxonomy defaults based on recent webhook events.
+              Suggested KPI/conversion and taxonomy defaults from recent Meiro Pipes payloads. Use Data Sources {'>'} Meiro for the primary integration workflow.
             </p>
           </div>
           <button

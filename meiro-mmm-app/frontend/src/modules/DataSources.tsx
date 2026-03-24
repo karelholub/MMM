@@ -8,11 +8,12 @@ import {
   connectMeiroCDP,
   disconnectMeiroCDP,
   getMeiroConfig,
-  getMeiroWebhookSuggestions,
   getMeiroWebhookEvents,
+  getMeiroWebhookSuggestions,
   meiroRotateWebhookSecret,
   getMeiroMapping,
   getMeiroPullConfig,
+  meiroDryRun,
   meiroPull,
   saveMeiroMapping,
   saveMeiroPullConfig,
@@ -42,6 +43,14 @@ import {
 } from '../connectors/oauthConnectionsConnector'
 import { apiGetJson, apiRequest, apiSendJson } from '../lib/apiClient'
 import { usePermissions } from '../hooks/usePermissions'
+import MeiroIntegrationPanel from '../features/meiro/MeiroIntegrationPanel'
+import {
+  DEFAULT_MEIRO_PULL_CONFIG,
+  normalizeMeiroPullConfig,
+  type MeiroTab,
+  type MeiroWebhookArchiveStatus,
+  type MeiroWebhookReprocessResult,
+} from '../features/meiro/shared'
 
 interface DataSourcesProps {
   onJourneysImported: () => void
@@ -94,50 +103,6 @@ const JSON_FORMAT_V2 = `{
   ]
 }`
 
-const DEFAULT_MEIRO_PULL_CONFIG: MeiroPullConfig = {
-  lookback_days: 30,
-  session_gap_minutes: 30,
-  conversion_selector: 'purchase',
-  output_mode: 'single',
-  dedup_interval_minutes: 5,
-  dedup_mode: 'balanced',
-  primary_dedup_key: 'auto',
-  fallback_dedup_keys: ['conversion_id', 'order_id', 'event_id'],
-}
-
-function normalizeMeiroPullConfig(raw?: Partial<MeiroPullConfig> | Record<string, unknown> | null): MeiroPullConfig {
-  const cfg = raw || {}
-  const asInt = (value: unknown, fallback: number, min: number, max: number) => {
-    const parsed = Number(value)
-    if (!Number.isFinite(parsed)) return fallback
-    return Math.max(min, Math.min(max, Math.round(parsed)))
-  }
-  const dedupMode = typeof cfg.dedup_mode === 'string' && ['strict', 'balanced', 'aggressive'].includes(cfg.dedup_mode)
-    ? cfg.dedup_mode as MeiroPullConfig['dedup_mode']
-    : DEFAULT_MEIRO_PULL_CONFIG.dedup_mode
-  const primaryDedupKey = typeof cfg.primary_dedup_key === 'string' && ['auto', 'conversion_id', 'order_id', 'event_id'].includes(cfg.primary_dedup_key)
-    ? cfg.primary_dedup_key as MeiroPullConfig['primary_dedup_key']
-    : DEFAULT_MEIRO_PULL_CONFIG.primary_dedup_key
-  const rawFallback = Array.isArray(cfg.fallback_dedup_keys)
-    ? cfg.fallback_dedup_keys
-    : typeof cfg.fallback_dedup_keys === 'string'
-      ? cfg.fallback_dedup_keys.split(',')
-      : []
-  const fallback = rawFallback
-    .map((value) => String(value || '').trim())
-    .filter((value): value is 'conversion_id' | 'order_id' | 'event_id' => ['conversion_id', 'order_id', 'event_id'].includes(value))
-    .filter((value) => value !== primaryDedupKey)
-  return {
-    lookback_days: asInt(cfg.lookback_days, DEFAULT_MEIRO_PULL_CONFIG.lookback_days, 1, 365),
-    session_gap_minutes: asInt(cfg.session_gap_minutes, DEFAULT_MEIRO_PULL_CONFIG.session_gap_minutes, 1, 720),
-    conversion_selector: String(cfg.conversion_selector || DEFAULT_MEIRO_PULL_CONFIG.conversion_selector).trim() || DEFAULT_MEIRO_PULL_CONFIG.conversion_selector,
-    output_mode: 'single',
-    dedup_interval_minutes: asInt(cfg.dedup_interval_minutes, DEFAULT_MEIRO_PULL_CONFIG.dedup_interval_minutes, 0, 1440),
-    dedup_mode: dedupMode,
-    primary_dedup_key: primaryDedupKey,
-    fallback_dedup_keys: fallback.length ? fallback : DEFAULT_MEIRO_PULL_CONFIG.fallback_dedup_keys,
-  }
-}
 
 function statusBadge(status: string) {
   const s = (status || '').toLowerCase()
@@ -273,7 +238,7 @@ export default function DataSources({ onJourneysImported }: DataSourcesProps) {
 
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [drawerConnector, setDrawerConnector] = useState<{ id: string; name: string; type: string; category: string } | null>(null)
-  const [meiroTab, setMeiroTab] = useState<'connection' | 'pull' | 'mapping'>('connection')
+  const [meiroTab, setMeiroTab] = useState<MeiroTab>('overview')
   const [meiroUrl, setMeiroUrl] = useState('')
   const [meiroKey, setMeiroKey] = useState('')
   const [webhookSecretValue, setWebhookSecretValue] = useState<string | null>(null)
@@ -357,18 +322,27 @@ export default function DataSources({ onJourneysImported }: DataSourcesProps) {
     enabled: !!providerModal?.provider,
   })
 
+  const meiroDrawerOpen = drawerOpen && drawerConnector?.type === 'meiro'
   const meiroConfigQuery = useQuery({ queryKey: ['meiro-config'], queryFn: getMeiroConfig })
-  const meiroMappingQuery = useQuery({ queryKey: ['meiro-mapping'], queryFn: getMeiroMapping, enabled: drawerOpen && meiroTab === 'mapping' && drawerConnector?.type === 'meiro' })
-  const meiroPullConfigQuery = useQuery({ queryKey: ['meiro-pull-config'], queryFn: getMeiroPullConfig, enabled: drawerOpen && meiroTab === 'pull' && drawerConnector?.type === 'meiro' })
+  const meiroMappingQuery = useQuery({ queryKey: ['meiro-mapping'], queryFn: getMeiroMapping, enabled: meiroDrawerOpen })
+  const meiroPullConfigQuery = useQuery({ queryKey: ['meiro-pull-config'], queryFn: getMeiroPullConfig, enabled: meiroDrawerOpen })
   const meiroWebhookSuggestionsQuery = useQuery({
     queryKey: ['meiro-webhook-suggestions-datasources'],
     queryFn: () => getMeiroWebhookSuggestions(100),
-    enabled: drawerOpen && meiroTab === 'pull' && drawerConnector?.type === 'meiro',
+    enabled: meiroDrawerOpen,
   })
   const meiroWebhookEventsQuery = useQuery({
     queryKey: ['meiro-webhook-events'],
     queryFn: () => getMeiroWebhookEvents(100),
-    enabled: drawerOpen && meiroTab === 'connection' && drawerConnector?.type === 'meiro',
+    enabled: meiroDrawerOpen,
+  })
+  const meiroWebhookArchiveStatusQuery = useQuery<MeiroWebhookArchiveStatus>({
+    queryKey: ['meiro-webhook-archive-status-datasources'],
+    queryFn: async () =>
+      apiGetJson<MeiroWebhookArchiveStatus>('/api/connectors/meiro/webhook/archive-status', {
+        fallbackMessage: 'Failed to load webhook archive status',
+      }),
+    enabled: meiroDrawerOpen,
   })
 
   const uploadMutation = useMutation({
@@ -439,6 +413,44 @@ export default function DataSources({ onJourneysImported }: DataSourcesProps) {
   const saveMeiroPullMutation = useMutation({ mutationFn: saveMeiroPullConfig, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['meiro-pull-config'] }) })
   const runMeiroPullMutation = useMutation({ mutationFn: () => meiroPull(), onSuccess: () => onJourneysImported() })
   const saveMeiroMappingMutation = useMutation({ mutationFn: saveMeiroMapping, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['meiro-mapping'] }) })
+  const applyMeiroMappingSuggestionMutation = useMutation({
+    mutationFn: async (payload: Record<string, unknown>) =>
+      apiSendJson('/api/connectors/meiro/mapping', 'POST', payload, { fallbackMessage: 'Failed to apply Meiro mapping suggestions' }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['meiro-mapping'] })
+    },
+  })
+  const updateMeiroMappingApprovalMutation = useMutation({
+    mutationFn: async (payload: { status: string; note?: string }) =>
+      apiSendJson('/api/connectors/meiro/mapping/approval', 'POST', payload, {
+        fallbackMessage: 'Failed to update Meiro mapping approval',
+      }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['meiro-mapping'] })
+    },
+  })
+  const meiroDryRunMutation = useMutation({
+    mutationFn: async () => meiroDryRun(100),
+  })
+  const reprocessWebhookArchiveMutation = useMutation({
+    mutationFn: async () =>
+      apiSendJson<MeiroWebhookReprocessResult>('/api/connectors/meiro/webhook/reprocess', 'POST', {
+        archive_limit: 5000,
+        persist_to_attribution: true,
+        import_note: 'Reprocessed from webhook archive using current approved mapping',
+      }, {
+        fallbackMessage: 'Failed to reprocess Meiro webhook archive',
+      }),
+    onSuccess: async () => {
+      onJourneysImported()
+      await queryClient.invalidateQueries({ queryKey: ['meiro-webhook-events'] })
+      await queryClient.invalidateQueries({ queryKey: ['meiro-webhook-archive-status-datasources'] })
+      await queryClient.invalidateQueries({ queryKey: ['journeys-summary'] })
+      await queryClient.invalidateQueries({ queryKey: ['journeys-validation-summary'] })
+      await queryClient.invalidateQueries({ queryKey: ['journeys-preview-20'] })
+      await queryClient.invalidateQueries({ queryKey: ['import-log-recent'] })
+    },
+  })
   const rotateWebhookSecretMutation = useMutation({
     mutationFn: meiroRotateWebhookSecret,
     onSuccess: async (res) => {
@@ -706,12 +718,12 @@ export default function DataSources({ onJourneysImported }: DataSourcesProps) {
   const cdpItems = [
     {
       id: 'meiro',
-      name: 'Meiro CDP',
+      name: 'Meiro',
       type: 'meiro',
       category: 'cdp',
       status: meiroConfigQuery.data?.connected ? 'connected' : 'not_connected',
       last_tested_at: meiroConfigQuery.data?.last_test_at || null,
-      note: meiroConfigQuery.data?.api_base_url || 'Configure endpoint and key',
+      note: meiroConfigQuery.data?.api_base_url || 'Configure CDP pull and Pipes webhook',
     },
   ]
 
@@ -1077,6 +1089,7 @@ export default function DataSources({ onJourneysImported }: DataSourcesProps) {
                           type="button"
                           onClick={() => {
                             setDrawerConnector({ id: item.id, name: item.name, type: item.type, category: item.category })
+                            if (item.type === 'meiro') setMeiroTab('overview')
                             setDrawerOpen(true)
                           }}
                           style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '4px 8px', cursor: 'pointer', fontSize: t.font.sizeXs }}
@@ -1533,389 +1546,50 @@ export default function DataSources({ onJourneysImported }: DataSourcesProps) {
 
             <div style={{ overflowY: 'auto', padding: t.space.lg, display: 'grid', gap: t.space.md }}>
               {drawerConnector.type === 'meiro' ? (
-                <>
-                  <div
-                    style={{
-                      display: 'inline-flex',
-                      gap: t.space.xs,
-                      flexWrap: 'wrap',
-                      padding: t.space.xs,
-                      border: `1px solid ${t.color.borderLight}`,
-                      borderRadius: t.radius.md,
-                      background: t.color.bgSubtle,
-                    }}
-                  >
-                    {(
-                      [
-                        { id: 'connection', label: 'Connection' },
-                        { id: 'pull', label: 'Pull' },
-                        { id: 'mapping', label: 'Mapping' },
-                      ] as const
-                    ).map((tab) => (
-                      <button
-                        key={tab.id}
-                        type="button"
-                        onClick={() => setMeiroTab(tab.id)}
-                        style={{
-                          border: `1px solid ${meiroTab === tab.id ? t.color.accent : 'transparent'}`,
-                          background: meiroTab === tab.id ? t.color.accentMuted : 'transparent',
-                          color: meiroTab === tab.id ? t.color.accent : t.color.textSecondary,
-                          borderRadius: t.radius.sm,
-                          padding: '6px 12px',
-                          cursor: 'pointer',
-                          fontSize: t.font.sizeSm,
-                          fontWeight: meiroTab === tab.id ? t.font.weightSemibold : t.font.weightMedium,
-                        }}
-                      >
-                        {tab.label}
-                      </button>
-                    ))}
-                  </div>
-
-                  {meiroTab === 'connection' && (
-                    <div style={{ display: 'grid', gap: t.space.md }}>
-                      <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.bg, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
-                        <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Connection</div>
-                        <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
-                          API base URL
-                          <input value={meiroUrl || meiroConfigQuery.data?.api_base_url || ''} onChange={(e) => setMeiroUrl(e.target.value)} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
-                        </label>
-                        <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
-                          API key
-                          <input type="password" value={meiroKey} onChange={(e) => setMeiroKey(e.target.value)} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
-                        </label>
-                        <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
-                          <button type="button" onClick={() => testMeiroMutation.mutate()} style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '8px 10px', cursor: 'pointer' }}>Test</button>
-                          <button type="button" onClick={() => connectMeiroMutation.mutate()} style={{ border: `1px solid ${t.color.accent}`, background: t.color.accent, color: '#fff', borderRadius: t.radius.sm, padding: '8px 10px', cursor: 'pointer' }}>Save</button>
-                          <button type="button" onClick={() => disconnectMeiroMutation.mutate()} style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '8px 10px', cursor: 'pointer' }}>Disconnect</button>
-                        </div>
-                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
-                          Status: {meiroConfigQuery.data?.connected ? 'Connected' : 'Not connected'} · Last test: {relativeTime(meiroConfigQuery.data?.last_test_at)}
-                        </div>
-                        {testMeiroMutation.data && <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{testMeiroMutation.data.message || 'Test completed'}</div>}
-                      </div>
-
-                      <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.bg, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
-                        <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Webhook ingestion</div>
-                        <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                          Send Meiro profile/conversion events to this endpoint:
-                        </div>
-                        <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap', alignItems: 'center' }}>
-                          <code style={{ display: 'block', padding: '6px 8px', borderRadius: t.radius.sm, background: t.color.surface, border: `1px solid ${t.color.border}`, fontSize: t.font.sizeXs }}>
-                            {meiroConfigQuery.data?.webhook_url || 'http://localhost:8000/api/connectors/meiro/profiles'}
-                          </code>
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              const val = meiroConfigQuery.data?.webhook_url || 'http://localhost:8000/api/connectors/meiro/profiles'
-                              try {
-                                await navigator.clipboard.writeText(val)
-                                setOauthToast('Webhook URL copied.')
-                              } catch {
-                                setOauthToast(val)
-                              }
-                            }}
-                            style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '6px 10px', cursor: 'pointer', fontSize: t.font.sizeXs }}
-                          >
-                            Copy URL
-                          </button>
-                        </div>
-                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
-                          Received: {meiroConfigQuery.data?.webhook_received_count ?? 0} · Last received: {relativeTime(meiroConfigQuery.data?.webhook_last_received_at)}
-                        </div>
-                        <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
-                          <button
-                            type="button"
-                            onClick={() => rotateWebhookSecretMutation.mutate()}
-                            disabled={rotateWebhookSecretMutation.isPending}
-                            style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '8px 10px', cursor: rotateWebhookSecretMutation.isPending ? 'wait' : 'pointer' }}
-                          >
-                            {rotateWebhookSecretMutation.isPending ? 'Rotating…' : 'Rotate webhook secret'}
-                          </button>
-                        </div>
-                        {webhookSecretValue && (
-                          <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>
-                            New secret (shown once): <code>{webhookSecretValue}</code>
-                          </div>
-                        )}
-                        <div style={{ marginTop: t.space.sm }}>
-                          <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, marginBottom: 6 }}>
-                            Last webhook events (max 100)
-                          </div>
-                          {meiroWebhookEventsQuery.isLoading ? (
-                            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading events…</div>
-                          ) : meiroWebhookEventsQuery.isError ? (
-                            <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>
-                              {(meiroWebhookEventsQuery.error as Error)?.message || 'Failed to load webhook events'}
-                            </div>
-                          ) : (
-                            <DashboardTable density="compact">
-                              <thead>
-                                <tr>
-                                  <th>Received</th>
-                                  <th>Profiles</th>
-                                  <th>Mode</th>
-                                  <th>Stored total</th>
-                                  <th>Source IP</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {(meiroWebhookEventsQuery.data?.items || []).map((event: any, idx: number) => (
-                                  <tr key={`${event.received_at || 'event'}-${idx}`}>
-                                    <td>{relativeTime(event.received_at)}</td>
-                                    <td>{Number(event.received_count || 0).toLocaleString()}</td>
-                                    <td>{event.replace ? 'replace' : 'append'}</td>
-                                    <td>{Number(event.stored_total || 0).toLocaleString()}</td>
-                                    <td>{event.ip || '—'}</td>
-                                  </tr>
-                                ))}
-                                {!(meiroWebhookEventsQuery.data?.items || []).length && (
-                                  <tr>
-                                    <td colSpan={5} style={{ textAlign: 'center', color: t.color.textSecondary }}>
-                                      No webhook events received yet.
-                                    </td>
-                                  </tr>
-                                )}
-                              </tbody>
-                            </DashboardTable>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {meiroTab === 'pull' && (
-                    <div style={{ display: 'grid', gap: t.space.sm }}>
-                      <div style={{ display: 'grid', gap: 6 }}>
-                        <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-                          Pull window
-                        </div>
-                        <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                          These settings control how raw Meiro event exports are grouped into journeys before import.
-                        </div>
-                      </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: t.space.sm }}>
-                        <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
-                          Lookback days
-                          <input
-                            type="number"
-                            min={1}
-                            max={365}
-                            value={meiroPullDraft.lookback_days}
-                            onChange={(e) => setMeiroPullDraft((prev) => ({ ...prev, lookback_days: Number(e.target.value || 30) }))}
-                            style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
-                          />
-                        </label>
-                        <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
-                          Session gap (minutes)
-                          <input
-                            type="number"
-                            min={1}
-                            max={720}
-                            value={meiroPullDraft.session_gap_minutes}
-                            onChange={(e) => setMeiroPullDraft((prev) => ({ ...prev, session_gap_minutes: Number(e.target.value || 30) }))}
-                            style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
-                          />
-                        </label>
-                        <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
-                          Conversion event
-                          <input
-                            value={meiroPullDraft.conversion_selector}
-                            onChange={(e) => setMeiroPullDraft((prev) => ({ ...prev, conversion_selector: e.target.value }))}
-                            placeholder="purchase"
-                            style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
-                          />
-                        </label>
-                      </div>
-
-                      <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.sm, background: t.color.bg }}>
-                        <div style={{ display: 'grid', gap: 6 }}>
-                          <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-                            Deduplication & identity
-                          </div>
-                          <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                            Use observed webhook payloads to choose the best conversion identifier, then tune how aggressively repeated touches are collapsed in the pull path.
-                          </div>
-                        </div>
-
-                        <div style={{ marginTop: t.space.sm, display: 'grid', gap: t.space.sm }}>
-                          {meiroWebhookSuggestionsQuery.isLoading ? (
-                            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading dedup hints…</div>
-                          ) : meiroWebhookSuggestionsQuery.isError ? (
-                            <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>
-                              {(meiroWebhookSuggestionsQuery.error as Error)?.message || 'Failed to load dedup hints'}
-                            </div>
-                          ) : (
-                            <>
-                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: t.space.sm, flexWrap: 'wrap' }}>
-                                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                                  Recommended dedup key:{' '}
-                                  <strong style={{ color: t.color.text }}>
-                                    {meiroWebhookSuggestionsQuery.data?.dedup_key_suggestion || 'auto'}
-                                  </strong>
-                                  {' '}from {Number(meiroWebhookSuggestionsQuery.data?.total_conversions_observed || 0).toLocaleString()} observed conversions
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const suggestion = meiroWebhookSuggestionsQuery.data?.dedup_key_suggestion
-                                    const nextPrimary = suggestion && ['conversion_id', 'order_id', 'event_id'].includes(suggestion)
-                                      ? suggestion as MeiroPullConfig['primary_dedup_key']
-                                      : 'auto'
-                                    const fallback = ['conversion_id', 'order_id', 'event_id'].filter((key) => key !== nextPrimary) as MeiroPullConfig['fallback_dedup_keys']
-                                    setMeiroPullDraft((prev) => ({
-                                      ...prev,
-                                      primary_dedup_key: nextPrimary,
-                                      fallback_dedup_keys: fallback.length ? fallback : DEFAULT_MEIRO_PULL_CONFIG.fallback_dedup_keys,
-                                    }))
-                                  }}
-                                  style={{ border: `1px solid ${t.color.accent}`, background: '#fff', color: t.color.accent, borderRadius: t.radius.sm, padding: '8px 10px', cursor: 'pointer' }}
-                                >
-                                  Apply recommendation
-                                </button>
-                              </div>
-
-                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: t.space.sm }}>
-                                {(meiroWebhookSuggestionsQuery.data?.dedup_key_candidates || []).map((candidate) => (
-                                  <div
-                                    key={candidate.key}
-                                    style={{
-                                      border: `1px solid ${candidate.recommended ? t.color.accent : t.color.borderLight}`,
-                                      background: candidate.recommended ? t.color.accentMuted : '#fff',
-                                      borderRadius: t.radius.sm,
-                                      padding: t.space.sm,
-                                      display: 'grid',
-                                      gap: 4,
-                                    }}
-                                  >
-                                    <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-                                      {candidate.key}
-                                    </div>
-                                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-                                      Coverage {candidate.coverage_pct.toFixed(1)}%
-                                    </div>
-                                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-                                      Seen {Number(candidate.count || 0).toLocaleString()} times
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            </>
-                          )}
-
-                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: t.space.sm }}>
-                            <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
-                              Primary dedup key
-                              <select
-                                value={meiroPullDraft.primary_dedup_key}
-                                onChange={(e) => setMeiroPullDraft((prev) => ({ ...prev, primary_dedup_key: e.target.value as MeiroPullConfig['primary_dedup_key'] }))}
-                                style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, background: '#fff' }}
-                              >
-                                <option value="auto">Auto (recommended)</option>
-                                <option value="conversion_id">conversion_id</option>
-                                <option value="order_id">order_id</option>
-                                <option value="event_id">event_id</option>
-                              </select>
-                            </label>
-                            <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
-                              Dedup mode
-                              <select
-                                value={meiroPullDraft.dedup_mode}
-                                onChange={(e) => setMeiroPullDraft((prev) => ({ ...prev, dedup_mode: e.target.value as MeiroPullConfig['dedup_mode'] }))}
-                                style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, background: '#fff' }}
-                              >
-                                <option value="strict">Strict: same channel and same raw event fingerprint</option>
-                                <option value="balanced">Balanced: same channel within the dedup window</option>
-                                <option value="aggressive">Aggressive: same channel or same source/medium/campaign cluster</option>
-                              </select>
-                            </label>
-                            <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
-                              Duplicate collapse window (minutes)
-                              <input
-                                type="number"
-                                min={0}
-                                max={1440}
-                                value={meiroPullDraft.dedup_interval_minutes}
-                                onChange={(e) => setMeiroPullDraft((prev) => ({ ...prev, dedup_interval_minutes: Number(e.target.value || 0) }))}
-                                style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
-                              />
-                            </label>
-                          </div>
-
-                          <div style={{ display: 'grid', gap: 6 }}>
-                            <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightMedium, color: t.color.text }}>
-                              Fallback keys
-                            </div>
-                            <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
-                              {(['conversion_id', 'order_id', 'event_id'] as const).map((key) => {
-                                const checked = meiroPullDraft.fallback_dedup_keys.includes(key)
-                                const disabled = meiroPullDraft.primary_dedup_key === key
-                                return (
-                                  <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: t.font.sizeSm, color: disabled ? t.color.textMuted : t.color.text }}>
-                                    <input
-                                      type="checkbox"
-                                      checked={checked || disabled}
-                                      disabled={disabled}
-                                      onChange={(e) => {
-                                        setMeiroPullDraft((prev) => ({
-                                          ...prev,
-                                          fallback_dedup_keys: e.target.checked
-                                            ? [...prev.fallback_dedup_keys, key].filter((value, index, values) => values.indexOf(value) === index)
-                                            : prev.fallback_dedup_keys.filter((value) => value !== key),
-                                        }))
-                                      }}
-                                    />
-                                    {key}
-                                  </label>
-                                )
-                              })}
-                            </div>
-                            <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-                              Duplicate-ID alerts in Data Quality still reflect repeated journey/profile identifiers. These settings control Meiro import grouping and store the preferred conversion key for replay and normalization.
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
-                        <button
-                          type="button"
-                          onClick={() => saveMeiroPullMutation.mutate(normalizeMeiroPullConfig(meiroPullDraft))}
-                          disabled={saveMeiroPullMutation.isPending}
-                          style={{ border: `1px solid ${t.color.accent}`, background: t.color.accent, color: '#fff', borderRadius: t.radius.sm, padding: '8px 10px', cursor: 'pointer', opacity: saveMeiroPullMutation.isPending ? 0.7 : 1 }}
-                        >
-                          {saveMeiroPullMutation.isPending ? 'Saving…' : 'Save pull settings'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => runMeiroPullMutation.mutate()}
-                          style={{ border: `1px solid ${t.color.accent}`, background: '#fff', color: t.color.accent, borderRadius: t.radius.sm, padding: '8px 10px', cursor: 'pointer' }}
-                        >
-                          {runMeiroPullMutation.isPending ? 'Running…' : 'Run pull now'}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {meiroTab === 'mapping' && (
-                    <div style={{ display: 'grid', gap: t.space.sm }}>
-                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Field mapping editor (JSON).</div>
-                      <textarea
-                        defaultValue={JSON.stringify(meiroMappingQuery.data?.mapping || {}, null, 2)}
-                        rows={10}
-                        onBlur={(e) => {
-                          try {
-                            const parsed = JSON.parse(e.target.value)
-                            saveMeiroMappingMutation.mutate(parsed)
-                          } catch {
-                            // ignore parse error in blur
-                          }
-                        }}
-                        style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, fontFamily: 'monospace' }}
-                      />
-                    </div>
-                  )}
-                </>
+                <MeiroIntegrationPanel
+                  meiroTab={meiroTab}
+                  setMeiroTab={setMeiroTab}
+                  meiroUrl={meiroUrl}
+                  setMeiroUrl={setMeiroUrl}
+                  meiroKey={meiroKey}
+                  setMeiroKey={setMeiroKey}
+                  webhookSecretValue={webhookSecretValue}
+                  meiroPullDraft={meiroPullDraft}
+                  setMeiroPullDraft={setMeiroPullDraft}
+                  meiroConfig={meiroConfigQuery.data}
+                  meiroMappingState={meiroMappingQuery.data}
+                  meiroWebhookSuggestions={meiroWebhookSuggestionsQuery.data}
+                  meiroWebhookEvents={meiroWebhookEventsQuery.data}
+                  meiroWebhookArchiveStatus={meiroWebhookArchiveStatusQuery.data}
+                  meiroWebhookEventsLoading={meiroWebhookEventsQuery.isLoading}
+                  meiroWebhookEventsError={(meiroWebhookEventsQuery.error as Error | undefined)?.message || null}
+                  meiroWebhookSuggestionsLoading={meiroWebhookSuggestionsQuery.isLoading}
+                  meiroWebhookSuggestionsError={(meiroWebhookSuggestionsQuery.error as Error | undefined)?.message || null}
+                  testMeiroResult={testMeiroMutation.data}
+                  saveMeiroPullPending={saveMeiroPullMutation.isPending}
+                  runMeiroPullPending={runMeiroPullMutation.isPending}
+                  applyMeiroMappingSuggestionPending={applyMeiroMappingSuggestionMutation.isPending}
+                  updateMeiroMappingApprovalPending={updateMeiroMappingApprovalMutation.isPending}
+                  meiroDryRunPending={meiroDryRunMutation.isPending}
+                  meiroDryRunData={meiroDryRunMutation.data}
+                  importFromMeiroPending={importFromMeiroMutation.isPending}
+                  reprocessWebhookArchivePending={reprocessWebhookArchiveMutation.isPending}
+                  relativeTime={relativeTime}
+                  setOauthToast={setOauthToast}
+                  onTestMeiro={() => testMeiroMutation.mutate()}
+                  onConnectMeiro={() => connectMeiroMutation.mutate()}
+                  onDisconnectMeiro={() => disconnectMeiroMutation.mutate()}
+                  onRotateWebhookSecret={() => rotateWebhookSecretMutation.mutate()}
+                  onSaveMeiroPull={() => saveMeiroPullMutation.mutate(normalizeMeiroPullConfig(meiroPullDraft))}
+                  onRunMeiroPull={() => runMeiroPullMutation.mutate()}
+                  onSaveMeiroMapping={(payload) => saveMeiroMappingMutation.mutate(payload)}
+                  onApplyMeiroMappingSuggestion={() => applyMeiroMappingSuggestionMutation.mutate((meiroWebhookSuggestionsQuery.data as any)?.apply_payloads?.mapping || {})}
+                  onApproveMeiroMapping={() => updateMeiroMappingApprovalMutation.mutate({ status: 'approved', note: 'Approved from normalization review' })}
+                  onRejectMeiroMapping={() => updateMeiroMappingApprovalMutation.mutate({ status: 'rejected', note: 'Rejected from normalization review' })}
+                  onDryRun={() => meiroDryRunMutation.mutate()}
+                  onImportFromMeiro={() => importFromMeiroMutation.mutate()}
+                  onReplayArchive={() => reprocessWebhookArchiveMutation.mutate()}
+                />
               ) : drawerConnector.category === 'warehouse' && activeDrawerWarehouse ? (
                 <>
                   <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
