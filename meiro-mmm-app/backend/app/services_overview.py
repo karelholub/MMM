@@ -37,6 +37,19 @@ def _parse_dt(s: Optional[str]):
         return None
 
 
+def _conversion_path_is_converted(row: Any) -> bool:
+    conversion_key = getattr(row, "conversion_key", None)
+    if isinstance(conversion_key, str) and conversion_key.strip():
+        return True
+    payload = getattr(row, "path_json", None) or {}
+    if not isinstance(payload, dict):
+        return False
+    conversions = payload.get("conversions")
+    if isinstance(conversions, list) and conversions:
+        return True
+    return bool(payload.get("converted"))
+
+
 def _expense_by_channel(
     expenses: Any,
     date_from: Optional[str],
@@ -86,6 +99,8 @@ def _conversions_and_revenue_from_paths(
     total_value = 0.0
     daily: Dict[str, Dict[str, Any]] = {}
     for r in rows:
+        if not _conversion_path_is_converted(r):
+            continue
         payload = r.path_json or {}
         val = compute_payload_revenue_value(
             payload,
@@ -100,7 +115,7 @@ def _conversions_and_revenue_from_paths(
         daily[d]["conversions"] += 1
         daily[d]["revenue"] += val
     series = sorted(daily.values(), key=lambda x: x["date"])
-    return len(rows), total_value, series
+    return sum(int(item.get("conversions", 0)) for item in series), total_value, series
 
 
 def _sparkline_from_series(series: List[Dict[str, Any]], key: str, num_points: int = 14) -> List[float]:
@@ -187,7 +202,10 @@ def _series_from_conversion_paths(
     conv_map: Dict[str, float] = {}
     rev_map: Dict[str, float] = {}
     total_revenue = 0.0
+    conversion_count = 0
     for row in rows:
+        if not _conversion_path_is_converted(row):
+            continue
         payload = row.path_json or {}
         value = _payload_revenue_value(
             payload,
@@ -196,15 +214,16 @@ def _series_from_conversion_paths(
             fallback_conversion_id=str(getattr(row, "conversion_id", "") or ""),
         )
         total_revenue += value
+        conversion_count += 1
         key = _bucket_key(row.conversion_ts, grain)
         conv_map[key] = conv_map.get(key, 0.0) + 1.0
         rev_map[key] = rev_map.get(key, 0.0) + value
     return {
-        "conversions_total": len(rows),
+        "conversions_total": conversion_count,
         "revenue_total": round(total_revenue, 2),
         "conversions_map": conv_map,
         "revenue_map": rev_map,
-        "observed_points": len(rows),
+        "observed_points": conversion_count,
     }
 
 
@@ -786,6 +805,8 @@ def get_overview_drivers(
     camp_rev: Dict[str, float] = {}
     camp_conv: Dict[str, int] = {}
     for r in rows:
+        if not _conversion_path_is_converted(r):
+            continue
         payload = r.path_json or {}
         val = compute_payload_revenue_value(
             payload,
@@ -817,6 +838,8 @@ def get_overview_drivers(
     prev_ch_conv: Dict[str, int] = {}
     prev_camp_rev: Dict[str, float] = {}
     for r in prev_rows:
+        if not _conversion_path_is_converted(r):
+            continue
         payload = r.path_json or {}
         val = compute_payload_revenue_value(
             payload,
@@ -989,7 +1012,7 @@ def _aggregate_channel_metrics(
             channel = _touchpoint_channel(tp)
             entry = metrics.setdefault(channel, {"visits": 0.0, "conversions": 0.0, "revenue": 0.0})
             entry["visits"] += 1.0
-            if idx == len(touchpoints) - 1:
+            if idx == len(touchpoints) - 1 and _conversion_path_is_converted(row):
                 entry["conversions"] += 1.0
                 entry["revenue"] += float(value or 0.0)
     return metrics
@@ -1015,6 +1038,8 @@ def _aggregate_daily_channel_revenue(
         q = q.filter(ConversionPath.conversion_key == conversion_key)
     rows = q.order_by(ConversionPath.conversion_ts.desc()).all()
     for row in rows:
+        if not _conversion_path_is_converted(row):
+            continue
         payload = row.path_json or {}
         if not isinstance(payload, dict):
             payload = {}
@@ -1196,6 +1221,8 @@ def get_overview_funnels(
     total_conversions = 0
     path_length_counts: Dict[int, int] = defaultdict(int)
     for row in rows:
+        if not _conversion_path_is_converted(row):
+            continue
         payload = row.path_json or {}
         if not isinstance(payload, dict):
             payload = {}

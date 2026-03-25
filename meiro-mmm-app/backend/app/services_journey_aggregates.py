@@ -90,6 +90,17 @@ def _payload_dict(path_json: Any) -> Dict[str, Any]:
     return {}
 
 
+def _conversion_path_is_converted(row: ConversionPath) -> bool:
+    conversion_key = getattr(row, "conversion_key", None)
+    if isinstance(conversion_key, str) and conversion_key.strip():
+        return True
+    payload = _payload_dict(getattr(row, "path_json", None))
+    conversions = payload.get("conversions")
+    if isinstance(conversions, list) and conversions:
+        return True
+    return bool(payload.get("converted"))
+
+
 def _touchpoint_ts(tp: Dict[str, Any]) -> Optional[datetime]:
     for key in ("ts", "timestamp", "event_ts", "occurred_at", "time"):
         out = _to_utc_dt(tp.get(key))
@@ -260,6 +271,8 @@ def _aggregate_for_day_definition(
     trans_aggs: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
     for row in rows:
+        if not _conversion_path_is_converted(row):
+            continue
         conversion_ts = _to_utc_dt(row.conversion_ts)
         if conversion_ts is None:
             continue
@@ -403,8 +416,6 @@ def run_daily_journey_aggregates(
 
     for definition in defs:
         source_days = _get_source_days(db, definition=definition, end_day=latest_complete_day)
-        if not source_days:
-            continue
         existing_path_days = {
             d
             for (d,) in db.query(JourneyPathDaily.date)
@@ -423,6 +434,22 @@ def run_daily_journey_aggregates(
             )
             .all()
         }
+        obsolete_path_days = sorted(d for d in existing_path_days if d not in source_days)
+        obsolete_transition_days = sorted(d for d in existing_transition_days if d not in source_days)
+        if obsolete_path_days:
+            db.query(JourneyPathDaily).filter(
+                JourneyPathDaily.journey_definition_id == definition.id,
+                JourneyPathDaily.date.in_(obsolete_path_days),
+            ).delete(synchronize_session=False)
+        if obsolete_transition_days:
+            db.query(JourneyTransitionDaily).filter(
+                JourneyTransitionDaily.journey_definition_id == definition.id,
+                JourneyTransitionDaily.date.in_(obsolete_transition_days),
+            ).delete(synchronize_session=False)
+        if obsolete_path_days or obsolete_transition_days:
+            db.commit()
+        if not source_days:
+            continue
         missing_days = {
             d for d in source_days if d not in existing_path_days or d not in existing_transition_days
         }

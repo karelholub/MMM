@@ -106,6 +106,18 @@ export interface MeiroQuarantineRecord {
   quality?: { score?: number; band?: string }
   original?: Record<string, unknown> | null
   normalized?: Record<string, unknown> | null
+  remediation?: {
+    status?: string
+    updated_at?: string | null
+    note?: string | null
+    metadata?: Record<string, unknown>
+    history?: Array<{
+      at?: string
+      status?: string
+      note?: string | null
+      metadata?: Record<string, unknown>
+    }>
+  } | null
 }
 
 export interface MeiroQuarantineRun {
@@ -116,6 +128,26 @@ export interface MeiroQuarantineRun {
   parser_version?: string | null
   summary?: Record<string, unknown>
   records?: MeiroQuarantineRecord[]
+}
+
+export interface MeiroImportResult {
+  import_summary?: Record<string, unknown>
+  quarantine_count?: number
+  count?: number
+  quarantine_run_id?: string | null
+}
+
+export interface MeiroQuarantineReprocessResult {
+  source_quarantine_run_id: string
+  selected_record_count: number
+  reprocessed_count: number
+  quarantine_count: number
+  quarantine_run_id?: string | null
+  persisted_to_attribution: boolean
+  replace_existing: boolean
+  existing_count: number
+  persisted_count: number
+  import_summary?: Record<string, unknown>
 }
 
 export async function connectMeiroCDP(params: { api_base_url: string; api_key: string }) {

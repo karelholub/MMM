@@ -42,6 +42,21 @@ def create_quarantine_run(
     records: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     now = datetime.utcnow().isoformat() + "Z"
+    normalized_records: List[Dict[str, Any]] = []
+    for record in (records or [])[:MAX_RECORDS_PER_RUN]:
+        if isinstance(record, dict):
+            normalized_records.append(
+                {
+                    **record,
+                    "remediation": record.get("remediation")
+                    if isinstance(record.get("remediation"), dict)
+                    else {
+                        "status": "open",
+                        "updated_at": now,
+                        "history": [],
+                    },
+                }
+            )
     run = {
         "id": str(uuid.uuid4())[:12],
         "source": source,
@@ -49,7 +64,7 @@ def create_quarantine_run(
         "import_note": import_note,
         "parser_version": parser_version,
         "summary": summary or {},
-        "records": (records or [])[:MAX_RECORDS_PER_RUN],
+        "records": normalized_records,
     }
     runs = _load_runs()
     runs.insert(0, run)
@@ -68,4 +83,54 @@ def get_quarantine_run(run_id: str) -> Optional[Dict[str, Any]]:
     for run in _load_runs():
         if run.get("id") == run_id:
             return run
+    return None
+
+
+def update_quarantine_records(
+    run_id: str,
+    *,
+    record_indices: List[int],
+    status: str,
+    note: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    runs = _load_runs()
+    now = datetime.utcnow().isoformat() + "Z"
+    normalized_indices = sorted({idx for idx in record_indices if isinstance(idx, int) and idx >= 0})
+    for run in runs:
+        if run.get("id") != run_id:
+            continue
+        records = run.get("records")
+        if not isinstance(records, list):
+            return run
+        for idx in normalized_indices:
+            if idx >= len(records):
+                continue
+            record = records[idx]
+            if not isinstance(record, dict):
+                continue
+            remediation = record.get("remediation")
+            if not isinstance(remediation, dict):
+                remediation = {"status": "open", "updated_at": now, "history": []}
+            history = remediation.get("history")
+            if not isinstance(history, list):
+                history = []
+            history.append(
+                {
+                    "at": now,
+                    "status": status,
+                    "note": note,
+                    "metadata": metadata or {},
+                }
+            )
+            record["remediation"] = {
+                **remediation,
+                "status": status,
+                "updated_at": now,
+                "note": note,
+                "metadata": metadata or {},
+                "history": history[-20:],
+            }
+        _save_runs(runs)
+        return run
     return None

@@ -1,4 +1,6 @@
-import type { MeiroConfig, MeiroMappingState, MeiroPullConfig, MeiroQuarantineRun } from '../../connectors/meiroConnector'
+import { useEffect, useState } from 'react'
+
+import type { MeiroConfig, MeiroImportResult, MeiroMappingState, MeiroPullConfig, MeiroQuarantineReprocessResult, MeiroQuarantineRun } from '../../connectors/meiroConnector'
 import { tokens as t } from '../../theme/tokens'
 import { DEFAULT_MEIRO_PULL_CONFIG, type DryRunResult, type MeiroWebhookArchiveStatus } from './shared'
 
@@ -10,9 +12,11 @@ interface MeiroImportReplayProps {
   meiroDryRunPending: boolean
   meiroDryRunData?: DryRunResult
   importFromMeiroPending: boolean
-  importFromMeiroResult?: { import_summary?: any; quarantine_count?: number; count?: number } | null
+  importFromMeiroResult?: MeiroImportResult | null
   reprocessWebhookArchivePending: boolean
-  reprocessWebhookArchiveResult?: { import_result?: { import_summary?: any; quarantine_count?: number; count?: number } } | null
+  reprocessWebhookArchiveResult?: { import_result?: MeiroImportResult } | null
+  reprocessQuarantinePending: boolean
+  reprocessQuarantineResult?: MeiroQuarantineReprocessResult | null
   quarantineRuns?: { items: MeiroQuarantineRun[]; total: number }
   quarantineRunsLoading: boolean
   quarantineRunsError?: string | null
@@ -23,6 +27,7 @@ interface MeiroImportReplayProps {
   onDryRun: () => void
   onImportFromMeiro: () => void
   onReplayArchive: () => void
+  onReprocessSelectedQuarantine: (recordIndices?: number[]) => void
   onSelectQuarantineRun: (runId: string) => void
 }
 
@@ -37,6 +42,8 @@ export default function MeiroImportReplay({
   importFromMeiroResult,
   reprocessWebhookArchivePending,
   reprocessWebhookArchiveResult,
+  reprocessQuarantinePending,
+  reprocessQuarantineResult,
   quarantineRuns,
   quarantineRunsLoading,
   quarantineRunsError,
@@ -47,8 +54,11 @@ export default function MeiroImportReplay({
   onDryRun,
   onImportFromMeiro,
   onReplayArchive,
+  onReprocessSelectedQuarantine,
   onSelectQuarantineRun,
 }: MeiroImportReplayProps) {
+  const [selectedRecordIndices, setSelectedRecordIndices] = useState<number[]>([])
+  const [showResolvedRecords, setShowResolvedRecords] = useState(false)
   const latestImportSummary =
     importFromMeiroResult?.import_summary ||
     reprocessWebhookArchiveResult?.import_result?.import_summary ||
@@ -61,6 +71,30 @@ export default function MeiroImportReplay({
       : replayMode === 'date_range'
         ? `Date range${meiroPullDraft.replay_date_from ? ` from ${meiroPullDraft.replay_date_from}` : ''}${meiroPullDraft.replay_date_to ? ` to ${meiroPullDraft.replay_date_to}` : ''}`
         : `Last ${Number(meiroPullDraft.replay_archive_limit || DEFAULT_MEIRO_PULL_CONFIG.replay_archive_limit || 5000).toLocaleString()} archived batches`
+  const indexedRecords = (selectedQuarantineRun?.records || []).map((record, index) => ({ record, index }))
+  const recordsForDisplay = indexedRecords.filter(({ record }) => {
+    if (showResolvedRecords) return true
+    return String(record.remediation?.status || 'open') === 'open'
+  })
+  const visibleRecords = recordsForDisplay.slice(0, 10)
+  const visibleRecordIndices = visibleRecords.map(({ index }) => index)
+  const openRecordCount = indexedRecords.filter(({ record }) => String(record.remediation?.status || 'open') === 'open').length
+  const remediatedRecordCount = Math.max(0, indexedRecords.length - openRecordCount)
+
+  useEffect(() => {
+    setSelectedRecordIndices([])
+    setShowResolvedRecords(false)
+  }, [selectedQuarantineRun?.id])
+
+  useEffect(() => {
+    setSelectedRecordIndices((prev) => (
+      prev.filter((index) => (
+        showResolvedRecords
+          ? index >= 0 && index < indexedRecords.length
+          : String(indexedRecords[index]?.record?.remediation?.status || 'open') === 'open'
+      ))
+    ))
+  }, [indexedRecords, showResolvedRecords])
 
   return (
     <div style={{ display: 'grid', gap: t.space.md }}>
@@ -172,14 +206,91 @@ export default function MeiroImportReplay({
             ) : selectedQuarantineRun ? (
               <div style={{ display: 'grid', gap: t.space.sm }}>
                 <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                  {selectedQuarantineRun.source} · {relativeTime(selectedQuarantineRun.created_at)} · {(selectedQuarantineRun.records || []).length} quarantined records
+                  {selectedQuarantineRun.source} · {relativeTime(selectedQuarantineRun.created_at)} · {openRecordCount} open · {remediatedRecordCount} remediated · {indexedRecords.length} total quarantined records
                 </div>
-                {(selectedQuarantineRun.records || []).slice(0, 5).map((record, index) => (
-                  <details key={`${record.journey_id || record.customer_id || 'record'}-${index}`} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.surface }}>
-                    <summary style={{ cursor: 'pointer', fontSize: t.font.sizeSm, color: t.color.text }}>
-                      {(record.customer_id || record.journey_id || 'Record')} · {(record.reason_codes || []).join(', ')} · quality {record.quality?.score ?? '—'} ({record.quality?.band || 'n/a'})
+                <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={() => onReprocessSelectedQuarantine()}
+                    disabled={reprocessQuarantinePending || !(selectedQuarantineRun.records || []).length}
+                    style={{ border: `1px solid ${t.color.accent}`, background: '#fff', color: t.color.accent, borderRadius: t.radius.sm, padding: '8px 10px', cursor: reprocessQuarantinePending ? 'wait' : 'pointer', opacity: reprocessQuarantinePending || !(selectedQuarantineRun.records || []).length ? 0.7 : 1 }}
+                  >
+                    {reprocessQuarantinePending ? 'Reprocessing run…' : 'Reprocess run into attribution'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onReprocessSelectedQuarantine(selectedRecordIndices)}
+                    disabled={reprocessQuarantinePending || selectedRecordIndices.length === 0}
+                    style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, color: t.color.text, borderRadius: t.radius.sm, padding: '8px 10px', cursor: reprocessQuarantinePending ? 'wait' : 'pointer', opacity: reprocessQuarantinePending || selectedRecordIndices.length === 0 ? 0.7 : 1 }}
+                  >
+                    {reprocessQuarantinePending ? 'Reprocessing selected…' : `Reprocess selected (${selectedRecordIndices.length})`}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedRecordIndices(visibleRecordIndices)}
+                    disabled={visibleRecordIndices.length === 0}
+                    style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '8px 10px', cursor: 'pointer' }}
+                  >
+                    Select shown
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedRecordIndices([])}
+                    disabled={selectedRecordIndices.length === 0}
+                    style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '8px 10px', cursor: 'pointer' }}
+                  >
+                    Clear selection
+                  </button>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary, alignSelf: 'center' }}>
+                    Re-runs quarantined originals through the current mapping and sanitation rules, then appends recovered journeys to attribution.
+                  </div>
+                </div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: t.font.sizeSm, color: t.color.text }}>
+                  <input type="checkbox" checked={showResolvedRecords} onChange={(e) => setShowResolvedRecords(e.target.checked)} />
+                  Show remediated records
+                </label>
+                {reprocessQuarantineResult?.source_quarantine_run_id === selectedQuarantineRun.id ? (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    Reprocessed <strong>{reprocessQuarantineResult.reprocessed_count}</strong> records and persisted <strong>{reprocessQuarantineResult.persisted_count}</strong> total journeys.
+                    {reprocessQuarantineResult.quarantine_run_id ? <> Remaining failures were written to quarantine run <strong>{reprocessQuarantineResult.quarantine_run_id}</strong>.</> : null}
+                  </div>
+                ) : null}
+                {!recordsForDisplay.length ? (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    {showResolvedRecords ? 'No quarantined records in this run.' : 'No open quarantined records remain in this run.'}
+                  </div>
+                ) : null}
+                {visibleRecords.map(({ record, index }) => (
+                  <details key={`${record.journey_id || record.customer_id || 'record'}-${index}`} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.surface, opacity: String(record.remediation?.status || 'open') === 'open' ? 1 : 0.75 }}>
+                    <summary style={{ cursor: 'pointer', fontSize: t.font.sizeSm, color: t.color.text, display: 'flex', gap: t.space.sm, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <input
+                        type="checkbox"
+                        checked={selectedRecordIndices.includes(index)}
+                        disabled={String(record.remediation?.status || 'open') !== 'open'}
+                        onChange={(e) => {
+                          const checked = e.target.checked
+                          setSelectedRecordIndices((prev) => (
+                            checked
+                              ? (prev.includes(index) ? prev : [...prev, index].sort((a, b) => a - b))
+                              : prev.filter((value) => value !== index)
+                          ))
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                      <span>{(record.customer_id || record.journey_id || 'Record')} · {(record.reason_codes || []).join(', ')} · quality {record.quality?.score ?? '—'} ({record.quality?.band || 'n/a'}) · status {String(record.remediation?.status || 'open')}</span>
                     </summary>
                     <div style={{ display: 'grid', gap: t.space.sm, marginTop: t.space.sm }}>
+                      {record.remediation?.updated_at ? (
+                        <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                          Remediation: {String(record.remediation.status || 'open')} · {relativeTime(record.remediation.updated_at)}
+                          {record.remediation.note ? <> · {record.remediation.note}</> : null}
+                        </div>
+                      ) : null}
+                      {!!record.remediation?.history?.length ? (
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                          History: {record.remediation.history.map((entry) => `${entry.status || 'open'}${entry.at ? ` at ${relativeTime(entry.at)}` : ''}${entry.note ? ` (${entry.note})` : ''}`).join(' · ')}
+                        </div>
+                      ) : null}
                       {!!record.reasons?.length && (
                         <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
                           {record.reasons.map((reason) => `${reason.code}: ${reason.message}`).join(' · ')}
@@ -198,6 +309,11 @@ export default function MeiroImportReplay({
                     </div>
                   </details>
                 ))}
+                {recordsForDisplay.length > 10 ? (
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                    Showing first 10 records. Use selection on the visible slice, or reprocess the full run.
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </div>

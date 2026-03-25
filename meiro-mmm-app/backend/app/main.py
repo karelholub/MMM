@@ -31,6 +31,7 @@ from app.models_config_dq import (
     ModelConfig as ORMModelConfig,
     ModelConfigAudit,
     ModelConfigStatus,
+    ConversionPath,
     JourneySettingsVersion as ORMJourneySettingsVersion,
     JourneySettingsStatus,
     AuthSession as ORMAuthSession,
@@ -603,7 +604,16 @@ def _refresh_journey_aggregates_after_import(db, *, reprocess_days: Optional[int
                 3,
             )
         )
-        effective_reprocess = max(1, int(reprocess_days or default_reprocess or 3))
+        history_bounds = db.query(
+            func.min(ConversionPath.conversion_ts),
+            func.max(ConversionPath.conversion_ts),
+        ).one_or_none()
+        history_reprocess = 1
+        if history_bounds:
+            history_start, history_end = history_bounds
+            if history_start and history_end:
+                history_reprocess = max(1, (history_end.date() - history_start.date()).days + 1)
+        effective_reprocess = max(1, int(reprocess_days or default_reprocess or 3), history_reprocess)
         metrics = run_daily_journey_aggregates(db, reprocess_days=effective_reprocess)
         logger.info(
             "Post-import journey aggregates refreshed: definitions=%s days_processed=%s source_rows=%s reprocess_days=%s",

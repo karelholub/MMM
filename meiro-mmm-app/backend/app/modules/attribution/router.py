@@ -11,7 +11,7 @@ from app.modules.attribution.schemas import (
     LoadSampleRequest,
 )
 from app.services_conversions import filter_journeys_by_quality
-from app.services_meiro_quarantine import create_quarantine_run
+from app.services_meiro_quarantine import create_quarantine_run, get_quarantine_run, update_quarantine_records
 
 
 def create_router(
@@ -281,6 +281,134 @@ def create_router(
         out["at"] = run.get("finished_at") or run.get("started_at")
         out["count"] = run.get("valid") if run.get("status") == "success" else 0
         return out
+
+    @router.post("/api/attribution/meiro/quarantine/{run_id}/reprocess")
+    def reprocess_meiro_quarantine_run(
+        run_id: str,
+        payload: Dict[str, Any] = Body(default={}),
+        db=Depends(get_db_dependency),
+    ):
+        run = get_quarantine_run(run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Quarantine run not found")
+
+        records = run.get("records") or []
+        requested_indices = payload.get("record_indices")
+        if isinstance(requested_indices, list) and requested_indices:
+            picked_indices = []
+            for item in requested_indices:
+                try:
+                    idx = int(item)
+                except Exception:
+                    continue
+                if 0 <= idx < len(records) and idx not in picked_indices:
+                    picked_indices.append(idx)
+        else:
+            picked_indices = list(range(len(records)))
+
+        originals: List[Dict[str, Any]] = []
+        for idx in picked_indices:
+            record = records[idx] if 0 <= idx < len(records) else None
+            original = record.get("original") if isinstance(record, dict) else None
+            if isinstance(original, dict):
+                originals.append(original)
+
+        if not originals:
+            raise HTTPException(status_code=400, detail="No original quarantined records available for reprocessing.")
+
+        mapping = attribution_mapping_config_cls(**(get_mapping_fn() or {}))
+        pull_cfg = get_pull_config_fn()
+        settings = get_settings_obj()
+        result = canonicalize_meiro_profiles_fn(
+            originals,
+            mapping=mapping.model_dump(),
+            revenue_config=(settings.revenue_config.model_dump() if hasattr(settings.revenue_config, "model_dump") else settings.revenue_config),
+            dedup_config=pull_cfg,
+        )
+        journeys = result.get("valid_journeys") or []
+
+        effective_config_id = payload.get("config_id") or get_default_config_id_fn()
+        if effective_config_id:
+            cfg = get_model_config_fn(db, effective_config_id)
+            if cfg:
+                journeys = apply_model_config_fn(journeys, cfg.config_json or {})
+
+        retry_quarantine_records = result.get("quarantine_records") or []
+        retry_cleaning_report = ((result.get("import_summary") or {}).get("cleaning_report") or {})
+        retry_quarantine_run = None
+        if retry_quarantine_records:
+            retry_quarantine_run = create_quarantine_run(
+                source="meiro_quarantine_reprocess",
+                import_note=payload.get("import_note") or f"Reprocessed from quarantine run {run_id}",
+                parser_version=result.get("schema_version"),
+                summary=retry_cleaning_report,
+                records=retry_quarantine_records,
+            )
+
+        persist_to_attribution = bool(payload.get("persist_to_attribution", True))
+        replace_existing = bool(payload.get("replace_existing", False))
+        existing_journeys = [] if replace_existing else get_journeys_fn(db)
+        persisted_count = len(existing_journeys)
+        if persist_to_attribution:
+            merged_journeys = [*existing_journeys, *journeys]
+            persist_journeys_fn(db, merged_journeys, replace=True)
+            refresh_journey_aggregates_fn(db)
+            persisted_count = len(merged_journeys)
+            update_quarantine_records(
+                run_id,
+                record_indices=picked_indices,
+                status="reprocessed",
+                note=payload.get("import_note") or f"Reprocessed from quarantine run {run_id}",
+                metadata={
+                    "reprocessed_count": len(journeys),
+                    "retry_quarantine_run_id": retry_quarantine_run.get("id") if retry_quarantine_run else None,
+                    "persisted_count": persisted_count,
+                    "replace_existing": replace_existing,
+                },
+            )
+            append_import_run_fn(
+                "meiro_quarantine_reprocess",
+                len(journeys),
+                "success",
+                total=int((result.get("import_summary") or {}).get("total", len(originals)) or len(originals)),
+                valid=len(journeys),
+                invalid=len(retry_quarantine_records),
+                converted=sum(1 for j in journeys if j.get("converted", True)),
+                channels_detected=sorted({tp.get("channel", "unknown") for j in journeys for tp in j.get("touchpoints", [])}),
+                validation_summary={
+                    "cleaning_report": retry_cleaning_report,
+                    "top_quarantine_reasons": retry_cleaning_report.get("top_unresolved_patterns") or [],
+                    "quarantine_run_id": retry_quarantine_run.get("id") if retry_quarantine_run else None,
+                    "source_quarantine_run_id": run_id,
+                },
+                config_snapshot={
+                    "source_quarantine_run_id": run_id,
+                    "selected_record_count": len(picked_indices),
+                    "replace_existing": replace_existing,
+                },
+                preview_rows=[
+                    {
+                        "customer_id": j.get("customer_id") or ((j.get("customer") or {}).get("id")) or "?",
+                        "touchpoints": len(j.get("touchpoints", [])),
+                        "value": journey_revenue_value_fn(j),
+                    }
+                    for j in journeys[:20]
+                ],
+                import_note=payload.get("import_note") or f"Reprocessed from quarantine run {run_id}",
+            )
+
+        return {
+            "source_quarantine_run_id": run_id,
+            "selected_record_count": len(picked_indices),
+            "reprocessed_count": len(journeys),
+            "quarantine_count": len(retry_quarantine_records),
+            "quarantine_run_id": retry_quarantine_run.get("id") if retry_quarantine_run else None,
+            "persisted_to_attribution": persist_to_attribution,
+            "replace_existing": replace_existing,
+            "existing_count": len(existing_journeys),
+            "persisted_count": persisted_count,
+            "import_summary": result.get("import_summary") or {},
+        }
 
     @router.get("/api/attribution/import-precheck")
     def import_precheck(source: str = Query(...), db=Depends(get_db_dependency)):

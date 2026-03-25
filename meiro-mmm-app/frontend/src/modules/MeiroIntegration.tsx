@@ -10,6 +10,7 @@ import {
   connectMeiroCDP,
   disconnectMeiroCDP,
   getMeiroConfig,
+  type MeiroQuarantineReprocessResult,
   getMeiroMapping,
   getMeiroPullConfig,
   getMeiroQuarantineRun,
@@ -217,6 +218,32 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
       await queryClient.invalidateQueries({ queryKey: ['meiro-webhook-archive-status-page'] })
     },
   })
+  const reprocessSelectedQuarantineMutation = useMutation({
+    mutationFn: async (recordIndices?: number[]) => {
+      if (!selectedQuarantineRunId) {
+        throw new Error('No quarantine run selected')
+      }
+      return apiSendJson<MeiroQuarantineReprocessResult>(
+        `/api/attribution/meiro/quarantine/${selectedQuarantineRunId}/reprocess`,
+        'POST',
+        {
+          record_indices: recordIndices && recordIndices.length ? recordIndices : undefined,
+          persist_to_attribution: true,
+          replace_existing: false,
+          import_note: `Reprocessed from quarantine run ${selectedQuarantineRunId}`,
+        },
+        { fallbackMessage: 'Failed to reprocess Meiro quarantine run' },
+      )
+    },
+    onSuccess: async (data) => {
+      await invalidateJourneyState()
+      await queryClient.invalidateQueries({ queryKey: ['meiro-quarantine-runs'] })
+      await queryClient.invalidateQueries({ queryKey: ['meiro-quarantine-run', data.source_quarantine_run_id] })
+      if (data.quarantine_run_id) {
+        await queryClient.invalidateQueries({ queryKey: ['meiro-quarantine-run', data.quarantine_run_id] })
+      }
+    },
+  })
   const rotateWebhookSecretMutation = useMutation({
     mutationFn: meiroRotateWebhookSecret,
     onSuccess: async (res) => {
@@ -391,6 +418,8 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
               importFromMeiroResult={importFromMeiroMutation.data ?? null}
               reprocessWebhookArchivePending={reprocessWebhookArchiveMutation.isPending}
               reprocessWebhookArchiveResult={reprocessWebhookArchiveMutation.data ?? null}
+              reprocessQuarantinePending={reprocessSelectedQuarantineMutation.isPending}
+              reprocessQuarantineResult={reprocessSelectedQuarantineMutation.data ?? null}
               quarantineRuns={meiroQuarantineRunsQuery.data}
               quarantineRunsLoading={meiroQuarantineRunsQuery.isLoading}
               quarantineRunsError={(meiroQuarantineRunsQuery.error as Error | undefined)?.message || null}
@@ -412,6 +441,7 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
               onDryRun={() => meiroDryRunMutation.mutate()}
               onImportFromMeiro={() => importFromMeiroMutation.mutate()}
               onReplayArchive={() => reprocessWebhookArchiveMutation.mutate()}
+              onReprocessSelectedQuarantine={(recordIndices) => reprocessSelectedQuarantineMutation.mutate(recordIndices)}
               onSelectQuarantineRun={(runId) => setSelectedQuarantineRunId(runId)}
             />
           </div>

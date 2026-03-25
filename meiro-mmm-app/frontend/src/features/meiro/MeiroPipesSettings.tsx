@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction } from 'react'
+import { useEffect, useState, type Dispatch, type SetStateAction } from 'react'
 
 import DashboardTable from '../../components/dashboard/DashboardTable'
 import type { MeiroConfig, MeiroPullConfig, MeiroWebhookEvent } from '../../connectors/meiroConnector'
@@ -39,6 +39,11 @@ export default function MeiroPipesSettings({
   const aliasText = Object.entries(meiroPullDraft.conversion_event_aliases || {})
     .map(([raw, canonical]) => `${raw}=${canonical}`)
     .join('\n')
+  const [aliasDraft, setAliasDraft] = useState(aliasText)
+
+  useEffect(() => {
+    setAliasDraft(aliasText)
+  }, [aliasText])
 
   return (
     <div style={{ display: 'grid', gap: t.space.md }}>
@@ -128,10 +133,12 @@ export default function MeiroPipesSettings({
           <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
             Conversion aliases
             <textarea
-              value={aliasText}
+              value={aliasDraft}
               onChange={(e) => {
+                const nextDraft = e.target.value
+                setAliasDraft(nextDraft)
                 const next = Object.fromEntries(
-                  e.target.value
+                  nextDraft
                     .split('\n')
                     .map((line) => line.trim())
                     .filter(Boolean)
