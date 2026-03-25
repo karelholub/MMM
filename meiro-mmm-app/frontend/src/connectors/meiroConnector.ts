@@ -56,6 +56,13 @@ export interface MeiroPullConfig {
   dedup_mode: 'strict' | 'balanced' | 'aggressive'
   primary_dedup_key: 'auto' | 'conversion_id' | 'order_id' | 'event_id'
   fallback_dedup_keys: Array<'conversion_id' | 'order_id' | 'event_id'>
+  strict_ingest: boolean
+  quarantine_unknown_channels: boolean
+  quarantine_missing_utm: boolean
+  timestamp_fallback_policy: 'profile' | 'conversion' | 'quarantine'
+  value_fallback_policy: 'default' | 'zero' | 'quarantine'
+  currency_fallback_policy: 'default' | 'quarantine'
+  conversion_event_aliases?: Record<string, string>
 }
 
 export interface MeiroWebhookSuggestions {

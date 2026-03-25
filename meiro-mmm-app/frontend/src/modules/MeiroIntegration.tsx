@@ -356,7 +356,9 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
               meiroDryRunPending={meiroDryRunMutation.isPending}
               meiroDryRunData={meiroDryRunMutation.data}
               importFromMeiroPending={importFromMeiroMutation.isPending}
+              importFromMeiroResult={importFromMeiroMutation.data ?? null}
               reprocessWebhookArchivePending={reprocessWebhookArchiveMutation.isPending}
+              reprocessWebhookArchiveResult={reprocessWebhookArchiveMutation.data ?? null}
               relativeTime={relativeTime}
               setOauthToast={setOauthToast}
               onTestMeiro={() => testMeiroMutation.mutate()}

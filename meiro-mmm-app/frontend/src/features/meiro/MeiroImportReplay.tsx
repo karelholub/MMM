@@ -9,7 +9,9 @@ interface MeiroImportReplayProps {
   meiroDryRunPending: boolean
   meiroDryRunData?: DryRunResult
   importFromMeiroPending: boolean
+  importFromMeiroResult?: { import_summary?: any; quarantine_count?: number; count?: number } | null
   reprocessWebhookArchivePending: boolean
+  reprocessWebhookArchiveResult?: { import_result?: { import_summary?: any; quarantine_count?: number; count?: number } } | null
   relativeTime: (iso?: string | null) => string
   onDryRun: () => void
   onImportFromMeiro: () => void
@@ -23,12 +25,20 @@ export default function MeiroImportReplay({
   meiroDryRunPending,
   meiroDryRunData,
   importFromMeiroPending,
+  importFromMeiroResult,
   reprocessWebhookArchivePending,
+  reprocessWebhookArchiveResult,
   relativeTime,
   onDryRun,
   onImportFromMeiro,
   onReplayArchive,
 }: MeiroImportReplayProps) {
+  const latestImportSummary =
+    importFromMeiroResult?.import_summary ||
+    reprocessWebhookArchiveResult?.import_result?.import_summary ||
+    meiroDryRunData?.import_summary
+  const cleaningReport = latestImportSummary?.cleaning_report || meiroDryRunData?.cleaning_report
+
   return (
     <div style={{ display: 'grid', gap: t.space.md }}>
       <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.bg, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
@@ -45,9 +55,40 @@ export default function MeiroImportReplay({
           </button>
         </div>
         {meiroDryRunData ? (
-          <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-            Dry run found <strong>{meiroDryRunData.count}</strong> journeys.
-            {meiroDryRunData.warnings?.length ? <> Warnings: {meiroDryRunData.warnings.join(' · ')}</> : <> Validation looks clean.</>}
+          <div style={{ display: 'grid', gap: 8 }}>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Dry run found <strong>{meiroDryRunData.count}</strong> journeys.
+              {meiroDryRunData.warnings?.length ? <> Warnings: {meiroDryRunData.warnings.join(' · ')}</> : <> Validation looks clean.</>}
+            </div>
+            {cleaningReport ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: t.space.sm }}>
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Fixed</div>
+                  <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold }}>{Number(cleaningReport.fixed || 0).toLocaleString()}</div>
+                </div>
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Dropped / quarantined</div>
+                  <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold }}>{Number(cleaningReport.dropped || latestImportSummary?.quarantined || 0).toLocaleString()}</div>
+                </div>
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Ambiguous</div>
+                  <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold }}>{Number(cleaningReport.ambiguous || 0).toLocaleString()}</div>
+                </div>
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Duplicate profiles</div>
+                  <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold }}>{Number(cleaningReport.duplicate_profiles || 0).toLocaleString()}</div>
+                </div>
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Avg quality</div>
+                  <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold }}>{Number(cleaningReport.quality?.average_score || 0).toFixed(1)}</div>
+                </div>
+              </div>
+            ) : null}
+            {!!cleaningReport?.top_unresolved_patterns?.length && (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                Top unresolved: {cleaningReport.top_unresolved_patterns.map((item: any) => `${item.code} (${item.count})`).join(' · ')}
+              </div>
+            )}
           </div>
         ) : null}
       </div>

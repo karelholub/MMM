@@ -42,7 +42,9 @@ interface MeiroIntegrationPanelProps {
   meiroDryRunPending: boolean
   meiroDryRunData?: DryRunResult
   importFromMeiroPending: boolean
+  importFromMeiroResult?: { import_summary?: any; quarantine_count?: number; count?: number } | null
   reprocessWebhookArchivePending: boolean
+  reprocessWebhookArchiveResult?: { import_result?: { import_summary?: any; quarantine_count?: number; count?: number } } | null
   relativeTime: (iso?: string | null) => string
   setOauthToast: Dispatch<SetStateAction<string | null>>
   onTestMeiro: () => void
@@ -147,6 +149,8 @@ export default function MeiroIntegrationPanel(props: MeiroIntegrationPanelProps)
       {meiroTab === 'pipes' && (
         <MeiroPipesSettings
           meiroConfig={props.meiroConfig}
+          meiroPullDraft={props.meiroPullDraft}
+          setMeiroPullDraft={props.setMeiroPullDraft}
           webhookSecretValue={props.webhookSecretValue}
           meiroWebhookEvents={props.meiroWebhookEvents}
           meiroWebhookArchiveStatus={props.meiroWebhookArchiveStatus}
@@ -155,6 +159,8 @@ export default function MeiroIntegrationPanel(props: MeiroIntegrationPanelProps)
           relativeTime={props.relativeTime}
           setOauthToast={props.setOauthToast}
           onRotateWebhookSecret={props.onRotateWebhookSecret}
+          onSaveMeiroPull={props.onSaveMeiroPull}
+          saveMeiroPullPending={props.saveMeiroPullPending}
         />
       )}
 
@@ -180,7 +186,9 @@ export default function MeiroIntegrationPanel(props: MeiroIntegrationPanelProps)
           meiroDryRunPending={props.meiroDryRunPending}
           meiroDryRunData={props.meiroDryRunData}
           importFromMeiroPending={props.importFromMeiroPending}
+          importFromMeiroResult={props.importFromMeiroResult}
           reprocessWebhookArchivePending={props.reprocessWebhookArchivePending}
+          reprocessWebhookArchiveResult={props.reprocessWebhookArchiveResult}
           relativeTime={props.relativeTime}
           onDryRun={props.onDryRun}
           onImportFromMeiro={props.onImportFromMeiro}

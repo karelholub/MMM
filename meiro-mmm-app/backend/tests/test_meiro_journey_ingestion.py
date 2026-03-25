@@ -165,3 +165,123 @@ def test_canonicalize_meiro_profiles_applies_webhook_dedup_settings():
     assert len(first["conversions"]) == 1
     assert len(second["conversions"]) == 0
     assert second["meta"]["parser"]["dedup_removed_conversions"] == 1
+
+
+def test_canonicalize_meiro_profiles_quarantines_missing_timestamp_when_strict():
+    result = canonicalize_meiro_profiles(
+        [
+            {
+                "customer_id": "strict-1",
+                "touchpoints": [
+                    {
+                        "source": "google",
+                        "medium": "cpc",
+                        "campaign": "Brand",
+                    }
+                ],
+                "conversions": [
+                    {
+                        "conversion_id": "conv-1",
+                        "timestamp": "2026-03-02T09:00:00Z",
+                        "name": "purchase",
+                        "value": 50,
+                        "currency": "EUR",
+                    }
+                ],
+            }
+        ],
+        revenue_config={"conversion_names": ["purchase"]},
+        dedup_config={"timestamp_fallback_policy": "quarantine"},
+    )
+
+    assert result["import_summary"]["valid"] == 0
+    assert result["import_summary"]["quarantined"] == 1
+    assert result["quarantine_records"][0]["reason_codes"] == ["missing_touchpoint_timestamp"]
+
+
+def test_canonicalize_meiro_profiles_applies_conversion_aliases_and_currency_quarantine():
+    result = canonicalize_meiro_profiles(
+        [
+            {
+                "customer_id": "alias-1",
+                "touchpoints": [
+                    {
+                        "timestamp": "2026-03-02T08:00:00Z",
+                        "source": "fb",
+                        "medium": "paid_social",
+                        "campaign": "Launch",
+                    }
+                ],
+                "conversions": [
+                    {
+                        "conversion_id": "conv-2",
+                        "timestamp": "2026-03-02T09:00:00Z",
+                        "event_name": "Order Completed",
+                        "value": 80,
+                    }
+                ],
+            }
+        ],
+        revenue_config={"conversion_names": ["purchase"], "base_currency": "EUR"},
+        dedup_config={
+            "conversion_event_aliases": {"order completed": "purchase"},
+            "currency_fallback_policy": "quarantine",
+        },
+    )
+
+    assert result["import_summary"]["valid"] == 0
+    assert result["quarantine_records"][0]["reason_codes"] == ["missing_conversion_currency"]
+
+
+def test_canonicalize_meiro_profiles_quarantines_duplicate_profile_ids():
+    result = canonicalize_meiro_profiles(
+        [
+            {
+                "customer_id": "dup-profile",
+                "touchpoints": [
+                    {"timestamp": "2026-03-02T08:00:00Z", "source": "google", "medium": "cpc", "campaign": "Brand"}
+                ],
+                "conversions": [
+                    {"conversion_id": "conv-a", "timestamp": "2026-03-02T09:00:00Z", "name": "purchase", "value": 50, "currency": "EUR"}
+                ],
+            },
+            {
+                "customer_id": "dup-profile",
+                "touchpoints": [
+                    {"timestamp": "2026-03-03T08:00:00Z", "source": "google", "medium": "cpc", "campaign": "Brand"}
+                ],
+                "conversions": [
+                    {"conversion_id": "conv-b", "timestamp": "2026-03-03T09:00:00Z", "name": "purchase", "value": 60, "currency": "EUR"}
+                ],
+            },
+        ],
+        revenue_config={"conversion_names": ["purchase"]},
+        dedup_config={"quarantine_duplicate_profiles": True},
+    )
+
+    assert result["import_summary"]["valid"] == 0
+    assert result["import_summary"]["quarantined"] == 2
+    assert result["import_summary"]["cleaning_report"]["duplicate_profiles"] == 1
+    assert "duplicate_profile_id" in result["quarantine_records"][0]["reason_codes"]
+
+
+def test_canonicalize_meiro_profiles_attaches_quality_score():
+    result = canonicalize_meiro_profiles(
+        [
+            {
+                "customer_id": "quality-1",
+                "touchpoints": [
+                    {"timestamp": "2026-03-02T08:00:00Z", "source": "newsletter", "medium": "email", "campaign": "Welcome"}
+                ],
+                "conversions": [
+                    {"conversion_id": "conv-q", "timestamp": "2026-03-02T09:00:00Z", "name": "purchase", "value": 10, "currency": "EUR"}
+                ],
+            }
+        ],
+        revenue_config={"conversion_names": ["purchase"]},
+    )
+
+    journey = result["valid_journeys"][0]
+    quality = journey["meta"]["quality"]
+    assert isinstance(quality["score"], int)
+    assert quality["band"] in {"high", "medium", "low"}

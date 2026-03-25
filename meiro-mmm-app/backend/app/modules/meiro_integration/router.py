@@ -986,6 +986,8 @@ def create_router(
         except Exception as exc:
             return {"count": 0, "preview": [], "warnings": [str(exc)], "validation": {"error": str(exc)}}
         warnings = []
+        summary = result.get("import_summary") or {}
+        cleaning_report = summary.get("cleaning_report") or {}
         if journeys:
             sample_channels = {
                 touchpoint.get("channel")
@@ -1000,9 +1002,19 @@ def create_router(
                 "id": journey.get("customer_id", journey.get("id", "?")),
                 "touchpoints": len(journey.get("touchpoints", [])),
                 "value": get_journeys_revenue_value_fn(journey),
+                "quality_score": (((journey.get("meta") or {}).get("quality") or {}).get("score")),
+                "quality_band": (((journey.get("meta") or {}).get("quality") or {}).get("band")),
             }
             for journey in journeys[:20]
         ]
-        return {"count": len(journeys), "preview": preview, "warnings": warnings, "validation": {"ok": len(warnings) == 0}}
+        return {
+            "count": len(journeys),
+            "preview": preview,
+            "warnings": warnings,
+            "validation": {"ok": len(warnings) == 0},
+            "import_summary": summary,
+            "cleaning_report": cleaning_report,
+            "quarantine_count": int(summary.get("quarantined", 0) or 0),
+        }
 
     return router

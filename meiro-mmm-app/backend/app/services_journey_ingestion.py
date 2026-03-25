@@ -10,7 +10,9 @@ Safe ingestion pipeline for attribution journey JSON.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -106,6 +108,47 @@ def _canonicalize_channel(raw: str) -> str:
     return CHANNEL_ALIASES.get(lower, raw)
 
 
+def _normalize_text(value: Any) -> Optional[str]:
+    if value in (None, "", []):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _normalize_token(value: Any) -> Optional[str]:
+    text = _normalize_text(value)
+    if text is None:
+        return None
+    token = re.sub(r"[\s\-]+", "_", text.lower())
+    token = re.sub(r"[^a-z0-9_./]+", "", token)
+    return token.strip("_") or None
+
+
+def _normalize_currency_code(value: Any) -> Optional[str]:
+    text = _normalize_text(value)
+    if text is None:
+        return None
+    cleaned = re.sub(r"[^A-Za-z]", "", text).upper()
+    if len(cleaned) == 3:
+        return cleaned
+    return None
+
+
+def _normalize_campaign_name(value: Any) -> Optional[str]:
+    text = _normalize_text(value)
+    if text is None:
+        return None
+    collapsed = re.sub(r"\s+", " ", text)
+    return collapsed[:255]
+
+
+def _normalize_conversion_name(value: Any, aliases: Dict[str, str], default_name: str) -> str:
+    token = _normalize_token(value)
+    if token is None:
+        return default_name
+    return aliases.get(token, token)
+
+
 def _first_present(*values: Any) -> Any:
     for value in values:
         if value not in (None, "", []):
@@ -132,6 +175,18 @@ def _candidate_timestamp(*values: Any) -> Optional[str]:
 
 def _normalize_meiro_dedup_config(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     cfg = raw if isinstance(raw, dict) else {}
+
+    def _as_bool(value: Any, default: bool) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"1", "true", "yes", "on"}:
+                return True
+            if lowered in {"0", "false", "no", "off"}:
+                return False
+        return default
+
     dedup_mode = str(cfg.get("dedup_mode") or "balanced").strip().lower()
     if dedup_mode not in {"strict", "balanced", "aggressive"}:
         dedup_mode = "balanced"
@@ -160,11 +215,41 @@ def _normalize_meiro_dedup_config(raw: Optional[Dict[str, Any]]) -> Dict[str, An
     except Exception:
         dedup_interval_minutes = 5
     dedup_interval_minutes = max(0, min(1440, dedup_interval_minutes))
+
+    event_aliases_raw = cfg.get("conversion_event_aliases")
+    event_aliases: Dict[str, str] = {}
+    if isinstance(event_aliases_raw, dict):
+        for key, value in event_aliases_raw.items():
+            src = _normalize_token(key)
+            dst = _normalize_token(value)
+            if src and dst:
+                event_aliases[src] = dst
+
+    value_fallback_policy = str(cfg.get("value_fallback_policy") or "default").strip().lower()
+    if value_fallback_policy not in {"default", "zero", "quarantine"}:
+        value_fallback_policy = "default"
+
+    currency_fallback_policy = str(cfg.get("currency_fallback_policy") or "default").strip().lower()
+    if currency_fallback_policy not in {"default", "quarantine"}:
+        currency_fallback_policy = "default"
+
+    timestamp_fallback_policy = str(cfg.get("timestamp_fallback_policy") or "profile").strip().lower()
+    if timestamp_fallback_policy not in {"profile", "conversion", "quarantine"}:
+        timestamp_fallback_policy = "profile"
+
     return {
         "dedup_mode": dedup_mode,
         "primary_dedup_key": primary_dedup_key,
         "fallback_dedup_keys": fallback_keys,
         "dedup_interval_minutes": dedup_interval_minutes,
+        "strict_ingest": _as_bool(cfg.get("strict_ingest"), True),
+        "quarantine_unknown_channels": _as_bool(cfg.get("quarantine_unknown_channels"), True),
+        "quarantine_missing_utm": _as_bool(cfg.get("quarantine_missing_utm"), False),
+        "quarantine_duplicate_profiles": _as_bool(cfg.get("quarantine_duplicate_profiles"), True),
+        "timestamp_fallback_policy": timestamp_fallback_policy,
+        "value_fallback_policy": value_fallback_policy,
+        "currency_fallback_policy": currency_fallback_policy,
+        "conversion_event_aliases": event_aliases,
     }
 
 
@@ -327,6 +412,7 @@ def _looks_like_canonical_v2_journey(raw: Dict[str, Any]) -> bool:
 def _build_v2_touchpoints(
     profile: Dict[str, Any],
     mapping: Dict[str, Any],
+    ingest_cfg: Dict[str, Any],
     *,
     idx: int,
 ) -> List[Dict[str, Any]]:
@@ -398,13 +484,13 @@ def _build_v2_touchpoints(
         normalized = normalize_touchpoint(
             {
                 "channel": channel_value,
-                "source": source_value,
-                "medium": medium_value,
+                "source": _normalize_token(source_value),
+                "medium": _normalize_token(medium_value),
                 "utm_source": raw_tp.get("utm_source"),
                 "utm_medium": raw_tp.get("utm_medium"),
                 "utm_campaign": raw_tp.get("utm_campaign"),
                 "utm_content": raw_tp.get("utm_content"),
-                "campaign": campaign_value,
+                "campaign": _normalize_campaign_name(campaign_value),
                 "adset": raw_tp.get("adset"),
                 "ad": raw_tp.get("ad"),
                 "creative": _first_present(raw_tp.get("creative"), raw_tp.get("utm_content")),
@@ -412,27 +498,35 @@ def _build_v2_touchpoints(
             },
             taxonomy,
         )
+        if raw_timestamp is None and str(ingest_cfg.get("timestamp_fallback_policy") or "profile") == "quarantine":
+            timestamp_source = "quarantine:missing_timestamp"
+            raw_timestamp = _iso_datetime(datetime.now(timezone.utc))
+        elif raw_timestamp is None:
+            raw_timestamp = _iso_datetime(datetime.now(timezone.utc))
         tp: Dict[str, Any] = {
             "id": str(raw_tp.get("id") or f"tp_{idx}_{ti}"),
-            "ts": raw_timestamp or _iso_datetime(datetime.now(timezone.utc)),
+            "ts": raw_timestamp,
             "channel": str(normalized.get("channel") or "unknown"),
         }
         if normalized.get("source") not in (None, "", []):
-            tp["source"] = normalized.get("source")
+            tp["source"] = _normalize_token(normalized.get("source")) or normalized.get("source")
         if normalized.get("medium") not in (None, "", []):
-            tp["medium"] = normalized.get("medium")
+            tp["medium"] = _normalize_token(normalized.get("medium")) or normalized.get("medium")
         campaign = normalized.get("campaign")
         if campaign not in (None, "", []):
-            tp["campaign"] = campaign if isinstance(campaign, dict) else {"name": str(campaign)}
+            if isinstance(campaign, dict):
+                tp["campaign"] = {"name": _normalize_campaign_name(campaign.get("name")) or str(campaign.get("name") or "")}
+            else:
+                tp["campaign"] = {"name": _normalize_campaign_name(campaign) or str(campaign)}
         utm: Dict[str, Any] = {}
         if raw_tp.get("utm_source") not in (None, "", []):
-            utm["source"] = raw_tp.get("utm_source")
+            utm["source"] = _normalize_token(raw_tp.get("utm_source")) or str(raw_tp.get("utm_source"))
         if raw_tp.get("utm_medium") not in (None, "", []):
-            utm["medium"] = raw_tp.get("utm_medium")
+            utm["medium"] = _normalize_token(raw_tp.get("utm_medium")) or str(raw_tp.get("utm_medium"))
         if raw_tp.get("utm_campaign") not in (None, "", []):
-            utm["campaign"] = raw_tp.get("utm_campaign")
+            utm["campaign"] = _normalize_campaign_name(raw_tp.get("utm_campaign")) or str(raw_tp.get("utm_campaign"))
         if raw_tp.get("utm_content") not in (None, "", []):
-            utm["content"] = raw_tp.get("utm_content")
+            utm["content"] = _normalize_text(raw_tp.get("utm_content")) or str(raw_tp.get("utm_content"))
         if utm:
             tp["utm"] = utm
         tp["meta"] = {
@@ -445,7 +539,7 @@ def _build_v2_touchpoints(
                     or campaign_inferred
                 ),
                 "field_sources": {
-                    "timestamp": timestamp_source or ("fallback:generated_now" if not raw_timestamp else None),
+                    "timestamp": timestamp_source or ("fallback:generated_now" if raw_timestamp else None),
                     "channel": channel_source,
                     "source": source_source,
                     "medium": medium_source,
@@ -461,6 +555,7 @@ def _build_v2_conversions(
     profile: Dict[str, Any],
     mapping: Dict[str, Any],
     revenue_config: Dict[str, Any],
+    ingest_cfg: Dict[str, Any],
     *,
     idx: int,
     last_touch_ts: Optional[str],
@@ -503,16 +598,20 @@ def _build_v2_conversions(
                 ("fallback:conversion.conversion_value", raw_conv.get("conversion_value"), True),
             ]
         )
-        currency, currency_source, currency_inferred = _resolve_candidate(
-            [
-                (f"configured:{currency_field}", _extract_path(raw_conv, currency_field), False),
-                ("fallback:conversion.currency", raw_conv.get("currency"), True),
-                (f"fallback:profile.{currency_field}", _extract_path(profile, currency_field), True),
-                ("fallback:profile.currency", profile.get("currency"), True),
-                ("fallback:revenue_base_currency", revenue_config.get("base_currency"), True),
-                ("fallback:literal_eur", "EUR", True),
-            ]
-        )
+        currency_candidates = [
+            (f"configured:{currency_field}", _extract_path(raw_conv, currency_field), False),
+            ("fallback:conversion.currency", raw_conv.get("currency"), True),
+            (f"fallback:profile.{currency_field}", _extract_path(profile, currency_field), True),
+            ("fallback:profile.currency", profile.get("currency"), True),
+        ]
+        if str(ingest_cfg.get("currency_fallback_policy") or "default") != "quarantine":
+            currency_candidates.extend(
+                [
+                    ("fallback:revenue_base_currency", revenue_config.get("base_currency"), True),
+                    ("fallback:literal_eur", "EUR", True),
+                ]
+            )
+        currency, currency_source, currency_inferred = _resolve_candidate(currency_candidates)
         ts_value, ts_source, ts_inferred = _resolve_candidate(
             [
                 ("fallback:conversion.ts", raw_conv.get("ts"), True),
@@ -535,6 +634,15 @@ def _build_v2_conversions(
                 ("fallback:default_name", default_name, True),
             ]
         )
+        normalized_name = _normalize_conversion_name(
+            name_value,
+            ingest_cfg.get("conversion_event_aliases") or {},
+            _normalize_conversion_name(default_name, {}, "conversion"),
+        )
+        normalized_currency = _normalize_currency_code(currency)
+        if normalized_currency is None and str(ingest_cfg.get("currency_fallback_policy") or "default") != "quarantine":
+            normalized_currency = _normalize_currency_code(revenue_config.get("base_currency")) or "EUR"
+        fallback_currency_marker = "__missing_currency__" if str(ingest_cfg.get("currency_fallback_policy") or "default") == "quarantine" else ""
         conversion = {
             "id": str(
                 raw_conv.get("id")
@@ -544,11 +652,17 @@ def _build_v2_conversions(
                 or f"cv_{idx}_{ci}"
             ),
             "ts": _candidate_timestamp(ts_value),
-            "name": str(name_value).strip() or default_name,
-            "currency": str(currency or "EUR"),
+            "name": normalized_name,
+            "currency": normalized_currency or (_normalize_text(currency) or fallback_currency_marker),
         }
         if value not in (None, "", []):
-            conversion["value"] = value
+            try:
+                conversion["value"] = float(value)
+            except (TypeError, ValueError):
+                if str(ingest_cfg.get("value_fallback_policy") or "default") == "zero":
+                    conversion["value"] = 0.0
+        elif str(ingest_cfg.get("value_fallback_policy") or "default") == "zero":
+            conversion["value"] = 0.0
         if raw_conv.get("order_id") not in (None, "", []):
             conversion["order_id"] = raw_conv.get("order_id")
         if raw_conv.get("event_id") not in (None, "", []):
@@ -625,10 +739,10 @@ def canonicalize_meiro_profiles(
                     raw["meta"] = raw_meta
             prepared.append(raw)
             continue
-        touchpoints = _build_v2_touchpoints(raw, mapping_cfg, idx=idx)
+        touchpoints = _build_v2_touchpoints(raw, mapping_cfg, dedup_cfg, idx=idx)
         touchpoints, removed_touchpoints = _deduplicate_touchpoints(touchpoints, dedup_cfg)
         last_touch_ts = touchpoints[-1]["ts"] if touchpoints else None
-        conversions = _build_v2_conversions(raw, mapping_cfg, revenue_cfg, idx=idx, last_touch_ts=last_touch_ts)
+        conversions = _build_v2_conversions(raw, mapping_cfg, revenue_cfg, dedup_cfg, idx=idx, last_touch_ts=last_touch_ts)
         conversions, removed_conversions = _deduplicate_conversions(conversions, dedup_cfg, seen_conversion_keys=seen_conversion_keys)
         customer_id = _first_present(
             _extract_path(raw, str(mapping_cfg.get("id_attr") or "customer_id")),
@@ -695,7 +809,238 @@ def canonicalize_meiro_profiles(
         parser_meta["confidence"] = round((1.0 - (inferred_items / float(len(parser_items) or 1))), 4)
         parser_meta["used_inferred_mapping"] = inferred_items > 0
         journey.setdefault("meta", {})["parser"] = parser_meta
+    quarantine_result = _quarantine_journeys(
+        valid_journeys=result.get("valid_journeys", []),
+        items_detail=result.get("items_detail", []),
+        ingest_cfg=dedup_cfg,
+    )
+    result["valid_journeys"] = quarantine_result["valid_journeys"]
+    result["quarantined_journeys"] = quarantine_result["quarantined_journeys"]
+    result["quarantine_records"] = quarantine_result["quarantine_records"]
+    result["import_summary"]["quarantined"] = len(quarantine_result["quarantined_journeys"])
+    result["import_summary"]["valid"] = len(quarantine_result["valid_journeys"])
+    result["import_summary"]["invalid"] = int(result["import_summary"].get("invalid", 0) or 0) + len(quarantine_result["quarantined_journeys"])
+    result["import_summary"]["cleaning_report"] = quarantine_result["cleaning_report"]
     return result
+
+
+def _journey_reason_counts(records: List[Dict[str, Any]]) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for record in records:
+        for reason in record.get("reason_codes") or []:
+            counts[reason] = counts.get(reason, 0) + 1
+    return counts
+
+
+def _journey_fingerprint(journey: Dict[str, Any]) -> str:
+    payload = json.dumps(journey, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _reason_code(
+    *,
+    code: str,
+    severity: str,
+    message: str,
+) -> Dict[str, str]:
+    return {"code": code, "severity": severity, "message": message}
+
+
+def _compute_quarantine_reasons(journey: Dict[str, Any], ingest_cfg: Dict[str, Any]) -> List[Dict[str, str]]:
+    reasons: List[Dict[str, str]] = []
+    touchpoints = journey.get("touchpoints") or []
+    conversions = journey.get("conversions") or []
+    parser_meta = ((journey.get("meta") or {}).get("parser") or {}) if isinstance(journey, dict) else {}
+
+    if not touchpoints:
+        reasons.append(_reason_code(code="missing_touchpoints", severity="error", message="Journey has no touchpoints"))
+    if not conversions:
+        reasons.append(_reason_code(code="missing_conversions", severity="warning", message="Journey has no conversions"))
+
+    for tp in touchpoints:
+        tp_parser = ((tp.get("meta") or {}).get("parser") or {}) if isinstance(tp, dict) else {}
+        ts_source = str((tp_parser.get("field_sources") or {}).get("timestamp") or "")
+        if "generated_now" in ts_source or "quarantine:missing_timestamp" in ts_source:
+            reasons.append(_reason_code(code="missing_touchpoint_timestamp", severity="error", message="Touchpoint timestamp was missing"))
+            break
+    if ingest_cfg.get("quarantine_unknown_channels"):
+        for tp in touchpoints:
+            if str(tp.get("channel") or "").strip().lower() == "unknown":
+                reasons.append(_reason_code(code="unknown_channel", severity="error", message="Unknown channel remained after normalization"))
+                break
+    if ingest_cfg.get("quarantine_missing_utm"):
+        for tp in touchpoints:
+            source = str(((tp.get("utm") or {}).get("source") or tp.get("source") or "")).strip()
+            medium = str(((tp.get("utm") or {}).get("medium") or tp.get("medium") or "")).strip()
+            if not source or not medium:
+                reasons.append(_reason_code(code="missing_source_medium", severity="error", message="Touchpoint is missing source or medium"))
+                break
+
+    for conv in conversions:
+        conv_parser = ((conv.get("meta") or {}).get("parser") or {}) if isinstance(conv, dict) else {}
+        value_source = str((conv_parser.get("field_sources") or {}).get("value") or "")
+        currency_source = str((conv_parser.get("field_sources") or {}).get("currency") or "")
+        value_missing = conv.get("value") in (None, "", [])
+        currency_missing = _normalize_currency_code(conv.get("currency")) is None
+        if value_missing and str(ingest_cfg.get("value_fallback_policy") or "default") == "quarantine":
+            reasons.append(_reason_code(code="missing_conversion_value", severity="error", message="Conversion value missing under quarantine policy"))
+            break
+        if currency_missing and str(ingest_cfg.get("currency_fallback_policy") or "default") == "quarantine":
+            reasons.append(_reason_code(code="missing_conversion_currency", severity="error", message="Conversion currency missing under quarantine policy"))
+            break
+        if "default_name" in str((conv_parser.get("field_sources") or {}).get("name") or ""):
+            reasons.append(_reason_code(code="inferred_conversion_name", severity="warning", message="Conversion name relied on default mapping"))
+            break
+        if "literal_eur" in currency_source:
+            reasons.append(_reason_code(code="default_currency_applied", severity="warning", message="Conversion currency fell back to default"))
+            break
+        if "conversion_value" in value_source or "conversion.value" in value_source:
+            continue
+
+    unique: Dict[str, Dict[str, str]] = {}
+    for reason in reasons:
+        unique.setdefault(reason["code"], reason)
+    return list(unique.values())
+
+
+def _quality_band(score: int) -> str:
+    if score >= 80:
+        return "high"
+    if score >= 55:
+        return "medium"
+    return "low"
+
+
+def _compute_journey_quality(
+    journey: Dict[str, Any],
+    reasons: List[Dict[str, str]],
+) -> Dict[str, Any]:
+    touchpoints = journey.get("touchpoints") or []
+    conversions = journey.get("conversions") or []
+    parser_meta = ((journey.get("meta") or {}).get("parser") or {}) if isinstance(journey, dict) else {}
+    score = 100
+    drivers: List[Dict[str, Any]] = []
+
+    confidence = float(parser_meta.get("confidence") or 1.0)
+    inferred_items = int(parser_meta.get("inferred_items") or 0)
+    if confidence < 1.0:
+        penalty = min(35, int(round((1.0 - confidence) * 30)))
+        score -= penalty
+        drivers.append({"code": "parser_confidence", "penalty": penalty, "detail": f"Parser confidence {confidence:.2f}"})
+    if inferred_items > 0:
+        penalty = min(15, inferred_items * 2)
+        score -= penalty
+        drivers.append({"code": "inferred_mappings", "penalty": penalty, "detail": f"{inferred_items} inferred items"})
+
+    for reason in reasons:
+        penalty = 18 if reason.get("severity") == "error" else 6
+        score -= penalty
+        drivers.append({"code": reason.get("code"), "penalty": penalty, "detail": reason.get("message")})
+
+    if len(touchpoints) <= 1:
+        score -= 5
+        drivers.append({"code": "short_journey", "penalty": 5, "detail": "Single-touch journey"})
+    if not conversions:
+        score -= 8
+        drivers.append({"code": "no_conversions", "penalty": 8, "detail": "Journey has no conversions"})
+
+    score = max(0, min(100, score))
+    return {
+        "score": score,
+        "band": _quality_band(score),
+        "drivers": drivers[:8],
+    }
+
+
+def _quarantine_journeys(
+    *,
+    valid_journeys: List[Dict[str, Any]],
+    items_detail: List[Dict[str, Any]],
+    ingest_cfg: Dict[str, Any],
+) -> Dict[str, Any]:
+    retained: List[Dict[str, Any]] = []
+    quarantined: List[Dict[str, Any]] = []
+    quarantine_records: List[Dict[str, Any]] = []
+    ambiguous_count = 0
+    fixed_count = 0
+
+    original_by_fingerprint: Dict[str, Any] = {}
+    for item in items_detail:
+        normalized = item.get("normalized")
+        if isinstance(normalized, dict):
+            original_by_fingerprint[_journey_fingerprint(normalized)] = item.get("original")
+
+    profile_counts: Dict[str, int] = {}
+    for journey in valid_journeys:
+        profile_id = str(((journey.get("customer") or {}).get("id") or journey.get("customer_id") or "")).strip()
+        if profile_id:
+            profile_counts[profile_id] = profile_counts.get(profile_id, 0) + 1
+
+    duplicate_profile_ids = {profile_id for profile_id, count in profile_counts.items() if count > 1}
+    quality_counts: Dict[str, int] = {"high": 0, "medium": 0, "low": 0}
+    total_quality = 0
+
+    for journey in valid_journeys:
+        reasons = _compute_quarantine_reasons(journey, ingest_cfg)
+        profile_id = str(((journey.get("customer") or {}).get("id") or journey.get("customer_id") or "")).strip()
+        if ingest_cfg.get("quarantine_duplicate_profiles") and profile_id and profile_id in duplicate_profile_ids:
+            reasons.append(
+                _reason_code(
+                    code="duplicate_profile_id",
+                    severity="error",
+                    message=f"Profile id '{profile_id}' appeared multiple times in the import batch",
+                )
+            )
+        quality = _compute_journey_quality(journey, reasons)
+        journey.setdefault("meta", {})["quality"] = quality
+        quality_counts[quality["band"]] = quality_counts.get(quality["band"], 0) + 1
+        total_quality += int(quality.get("score") or 0)
+        error_reasons = [reason for reason in reasons if reason.get("severity") == "error"]
+        if error_reasons:
+            quarantined.append(journey)
+            quarantine_records.append(
+                {
+                    "journey_id": journey.get("journey_id"),
+                    "customer_id": ((journey.get("customer") or {}).get("id") or journey.get("customer_id")),
+                    "reason_codes": [reason["code"] for reason in reasons],
+                    "reasons": reasons,
+                    "quality": quality,
+                    "normalized": journey,
+                    "original": original_by_fingerprint.get(_journey_fingerprint(journey)),
+                }
+            )
+        else:
+            retained.append(journey)
+            parser_meta = ((journey.get("meta") or {}).get("parser") or {}) if isinstance(journey, dict) else {}
+            if bool(parser_meta.get("used_inferred_mapping")):
+                fixed_count += 1
+            if reasons:
+                ambiguous_count += 1
+
+    reason_counts = _journey_reason_counts(quarantine_records)
+    top_unresolved = [
+        {"code": code, "count": count}
+        for code, count in sorted(reason_counts.items(), key=lambda kv: (-kv[1], kv[0]))[:10]
+    ]
+    cleaning_report = {
+        "fixed": fixed_count,
+        "dropped": len(quarantined),
+        "ambiguous": ambiguous_count,
+        "duplicate_profiles": len(duplicate_profile_ids),
+        "top_unresolved_patterns": top_unresolved,
+        "quality": {
+            "average_score": round(total_quality / float(len(valid_journeys) or 1), 1),
+            "high": quality_counts.get("high", 0),
+            "medium": quality_counts.get("medium", 0),
+            "low": quality_counts.get("low", 0),
+        },
+    }
+    return {
+        "valid_journeys": retained,
+        "quarantined_journeys": quarantined,
+        "quarantine_records": quarantine_records,
+        "cleaning_report": cleaning_report,
+    }
 
 
 def _add_validation(

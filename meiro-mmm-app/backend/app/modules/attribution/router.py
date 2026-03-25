@@ -10,6 +10,7 @@ from app.modules.attribution.schemas import (
     JourneySourceActivatePayload,
     LoadSampleRequest,
 )
+from app.services_meiro_quarantine import create_quarantine_run
 
 
 def create_router(
@@ -451,19 +452,36 @@ def create_router(
             if cfg:
                 journeys = apply_model_config_fn(journeys, cfg.config_json or {})
 
+        quarantine_records = result.get("quarantine_records") or []
+        cleaning_report = ((result.get("import_summary") or {}).get("cleaning_report") or {})
+        if quarantine_records:
+            create_quarantine_run(
+                source=source_label,
+                import_note=getattr(req, "import_note", None),
+                parser_version=result.get("schema_version"),
+                summary=cleaning_report,
+                records=quarantine_records,
+            )
+
         persist_journeys_fn(db, journeys, replace=True)
         refresh_journey_aggregates_fn(db)
         converted = sum(1 for j in journeys if j.get("converted", True))
         ch_set = {tp.get("channel", "unknown") for j in journeys for tp in j.get("touchpoints", [])}
+        summary = result.get("import_summary") or {}
         pull_cfg = get_pull_config_fn()
         append_import_run_fn(
             source_label,
             len(journeys),
             "success",
-            total=len(journeys),
+            total=int(summary.get("total", len(journeys)) or len(journeys)),
             valid=len(journeys),
+            invalid=len(quarantine_records),
             converted=converted,
             channels_detected=sorted(ch_set),
+            validation_summary={
+                "cleaning_report": cleaning_report,
+                "top_quarantine_reasons": cleaning_report.get("top_unresolved_patterns") or [],
+            },
             config_snapshot={
                 "mapping_preset": "saved",
                 "schema_version": "1.0",
@@ -471,6 +489,10 @@ def create_router(
                 "dedup_mode": pull_cfg.get("dedup_mode"),
                 "primary_dedup_key": pull_cfg.get("primary_dedup_key"),
                 "fallback_dedup_keys": pull_cfg.get("fallback_dedup_keys"),
+                "strict_ingest": pull_cfg.get("strict_ingest"),
+                "timestamp_fallback_policy": pull_cfg.get("timestamp_fallback_policy"),
+                "value_fallback_policy": pull_cfg.get("value_fallback_policy"),
+                "currency_fallback_policy": pull_cfg.get("currency_fallback_policy"),
             },
             preview_rows=[
                 {
@@ -483,7 +505,12 @@ def create_router(
             import_note=getattr(req, "import_note", None),
         )
         set_active_journey_source_fn("meiro")
-        return {"count": len(journeys), "message": f"Parsed {len(journeys)} journeys from CDP data"}
+        return {
+            "count": len(journeys),
+            "message": f"Parsed {len(journeys)} journeys from CDP data",
+            "import_summary": summary,
+            "quarantine_count": len(quarantine_records),
+        }
 
     @router.post("/api/attribution/journeys/load-sample")
     def load_sample_journeys(req: LoadSampleRequest = Body(default=LoadSampleRequest()), db=Depends(get_db_dependency)):

@@ -1,5 +1,151 @@
 [
 {
+"id": "87004636-152",
+"source": "meiro_webhook",
+"started_at": "2026-03-25T11:27:20.134876Z",
+"finished_at": "2026-03-25T11:27:20.134876Z",
+"status": "success",
+"total": 8278,
+"valid": 8278,
+"invalid": 0,
+"converted": 8278,
+"channels_detected": [
+"115358-print non-i\u010d centr\u00e1la",
+"chatgpt.com",
+"copilot.com",
+"direct",
+"firmy.cz",
+"home page",
+"home_page",
+"ig",
+"interaktivni_rozcestnik",
+"mapy.com",
+"meta_ads",
+"pinterest",
+"search.seznam.cz",
+"seznam",
+"unknown",
+"volna_mista"
+],
+"validation_summary": {},
+"config_snapshot": {
+"mapping_preset": "saved",
+"schema_version": "1.0",
+"dedup_interval_minutes": 5,
+"dedup_mode": "balanced",
+"primary_dedup_key": "conversion_id",
+"fallback_dedup_keys": [
+"order_id",
+"event_id"
+]
+},
+"initiated_by": null,
+"import_note": "Reprocessed from webhook archive using current approved mapping",
+"error": null,
+"preview_rows": [
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+}
+]
+},
+{
 "id": "8216a371-386",
 "source": "meiro_webhook",
 "started_at": "2026-03-25T10:15:53.300066Z",

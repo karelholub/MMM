@@ -292,6 +292,9 @@ def _normalize_pull_config(raw: Any) -> Dict[str, Any]:
         raw = {}
     allowed_dedup_modes = {"strict", "balanced", "aggressive"}
     allowed_dedup_keys = {"auto", "conversion_id", "order_id", "event_id"}
+    allowed_value_fallback = {"default", "zero", "quarantine"}
+    allowed_currency_fallback = {"default", "quarantine"}
+    allowed_timestamp_fallback = {"profile", "conversion", "quarantine"}
 
     def _as_int(value: Any, default: int, minimum: int, maximum: int) -> int:
         try:
@@ -299,6 +302,17 @@ def _normalize_pull_config(raw: Any) -> Dict[str, Any]:
         except Exception:
             parsed = default
         return max(minimum, min(maximum, parsed))
+
+    def _as_bool(value: Any, default: bool) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"1", "true", "yes", "on"}:
+                return True
+            if lowered in {"0", "false", "no", "off"}:
+                return False
+        return default
 
     dedup_mode = str(raw.get("dedup_mode") or "balanced").strip().lower()
     if dedup_mode not in allowed_dedup_modes:
@@ -323,6 +337,27 @@ def _normalize_pull_config(raw: Any) -> Dict[str, Any]:
     if not fallback_keys:
         fallback_keys = ["conversion_id", "order_id", "event_id"]
 
+    event_aliases_raw = raw.get("conversion_event_aliases")
+    event_aliases: dict[str, str] = {}
+    if isinstance(event_aliases_raw, dict):
+        for key, value in event_aliases_raw.items():
+            src = str(key or "").strip().lower()
+            dst = str(value or "").strip().lower()
+            if src and dst:
+                event_aliases[src] = dst
+
+    value_fallback_policy = str(raw.get("value_fallback_policy") or "default").strip().lower()
+    if value_fallback_policy not in allowed_value_fallback:
+        value_fallback_policy = "default"
+
+    currency_fallback_policy = str(raw.get("currency_fallback_policy") or "default").strip().lower()
+    if currency_fallback_policy not in allowed_currency_fallback:
+        currency_fallback_policy = "default"
+
+    timestamp_fallback_policy = str(raw.get("timestamp_fallback_policy") or "profile").strip().lower()
+    if timestamp_fallback_policy not in allowed_timestamp_fallback:
+        timestamp_fallback_policy = "profile"
+
     return {
         "lookback_days": _as_int(raw.get("lookback_days"), 30, 1, 365),
         "session_gap_minutes": _as_int(raw.get("session_gap_minutes"), 30, 1, 720),
@@ -332,6 +367,14 @@ def _normalize_pull_config(raw: Any) -> Dict[str, Any]:
         "dedup_mode": dedup_mode,
         "primary_dedup_key": primary_dedup_key,
         "fallback_dedup_keys": fallback_keys,
+        "strict_ingest": _as_bool(raw.get("strict_ingest"), True),
+        "quarantine_unknown_channels": _as_bool(raw.get("quarantine_unknown_channels"), True),
+        "quarantine_missing_utm": _as_bool(raw.get("quarantine_missing_utm"), False),
+        "quarantine_duplicate_profiles": _as_bool(raw.get("quarantine_duplicate_profiles"), True),
+        "timestamp_fallback_policy": timestamp_fallback_policy,
+        "value_fallback_policy": value_fallback_policy,
+        "currency_fallback_policy": currency_fallback_policy,
+        "conversion_event_aliases": event_aliases,
     }
 
 
