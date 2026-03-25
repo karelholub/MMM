@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 from datetime import datetime, timedelta
@@ -7,6 +8,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 
 from app.connectors import meiro_cdp
 from app.modules.meiro_integration.schemas import (
@@ -40,6 +42,8 @@ from app.utils.meiro_config import (
 from app.services_meiro_readiness import build_meiro_readiness
 from app.services_meiro_quarantine import get_quarantine_run, get_quarantine_runs
 from app.utils.taxonomy import load_taxonomy
+
+logger = logging.getLogger(__name__)
 
 
 MEIRO_MAPPING_PRESETS = {
@@ -243,6 +247,38 @@ def _analyze_payload(payload_profiles: list[Any]) -> Dict[str, Any]:
     }
 
 
+def _record_webhook_diagnostic_event(
+    *,
+    request: Request,
+    payload_shape: str,
+    status_code: int,
+    outcome: str,
+    error_class: Optional[str] = None,
+    error_detail: Optional[str] = None,
+    received_count: int = 0,
+    stored_total: Optional[int] = None,
+) -> None:
+    now_iso = datetime.utcnow().isoformat() + "Z"
+    append_webhook_event(
+        {
+            "received_at": now_iso,
+            "received_count": int(received_count),
+            "stored_total": int(stored_total or 0),
+            "replace": False,
+            "parser_version": meiro_parser_version,
+            "ip": request.client.host if request.client else None,
+            "user_agent": (request.headers.get("user-agent") or "")[:256] or None,
+            "payload_shape": payload_shape,
+            "payload_json_valid": payload_shape != "invalid_json",
+            "status_code": int(status_code),
+            "outcome": outcome,
+            "error_class": error_class,
+            "error_detail": (error_detail or "")[:500] or None,
+        },
+        max_items=250,
+    )
+
+
 def create_router(
     *,
     get_db_dependency: Callable[..., Any],
@@ -390,99 +426,176 @@ def create_router(
             "webhook_received_count": get_webhook_received_count(),
         }
 
+    @router.get("/api/connectors/meiro/profiles")
+    @router.head("/api/connectors/meiro/profiles")
+    def meiro_profiles_webhook_health():
+        return {
+            "ok": True,
+            "service": "meiro_profiles_webhook",
+            "message": "Webhook endpoint is reachable.",
+            "received_count": get_webhook_received_count(),
+            "last_received_at": get_webhook_last_received_at(),
+        }
+
+    @router.get("/api/connectors/meiro/profiles/health")
+    @router.head("/api/connectors/meiro/profiles/health")
+    def meiro_profiles_webhook_explicit_health():
+        return {
+            "ok": True,
+            "service": "meiro_profiles_webhook",
+            "message": "Explicit webhook health check.",
+            "received_count": get_webhook_received_count(),
+            "last_received_at": get_webhook_last_received_at(),
+        }
+
     @router.post("/api/connectors/meiro/profiles")
     async def meiro_receive_profiles(
         request: Request,
         x_meiro_webhook_secret: Optional[str] = Header(None, alias="X-Meiro-Webhook-Secret"),
     ):
-        webhook_secret = get_webhook_secret() or os.getenv("MEIRO_WEBHOOK_SECRET", "").strip()
-        if webhook_secret and (not x_meiro_webhook_secret or x_meiro_webhook_secret != webhook_secret):
-            raise HTTPException(status_code=401, detail="Invalid or missing X-Meiro-Webhook-Secret")
-
         try:
-            body = await request.json()
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}")
-
-        if isinstance(body, list):
-            profiles = body
-            replace = True
-        elif isinstance(body, dict):
-            profiles = body.get("profiles")
-            if not isinstance(profiles, list):
-                data_payload = body.get("data")
-                if isinstance(data_payload, list):
-                    profiles = data_payload
-                elif isinstance(data_payload, dict):
-                    nested_profiles = data_payload.get("profiles")
-                    profiles = nested_profiles if isinstance(nested_profiles, list) else None
-            if not isinstance(profiles, list):
-                journeys_payload = body.get("journeys")
-                if isinstance(journeys_payload, list):
-                    profiles = journeys_payload
-            if not isinstance(profiles, list):
-                profiles = []
-            replace = body.get("replace", True)
-            if not isinstance(profiles, list):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Body must be an array, { 'profiles': [...] }, { 'data': [...] }, or { 'journeys': [...] }",
-                )
-        else:
-            raise HTTPException(status_code=400, detail="Body must be JSON array or object with 'profiles' key")
-
-        out_path = get_data_dir_obj() / "meiro_cdp_profiles.json"
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        if replace or not out_path.exists():
-            to_store = profiles
-        else:
             try:
-                existing = json.loads(out_path.read_text())
-                to_store = (existing if isinstance(existing, list) else []) + list(profiles)
-            except Exception:
-                to_store = profiles
+                webhook_secret = get_webhook_secret() or os.getenv("MEIRO_WEBHOOK_SECRET", "").strip()
+                if webhook_secret and (not x_meiro_webhook_secret or x_meiro_webhook_secret != webhook_secret):
+                    _record_webhook_diagnostic_event(
+                        request=request,
+                        payload_shape="unknown",
+                        status_code=401,
+                        outcome="error",
+                        error_class="auth",
+                        error_detail="Invalid or missing X-Meiro-Webhook-Secret",
+                    )
+                    raise HTTPException(status_code=401, detail="Invalid or missing X-Meiro-Webhook-Secret")
 
-        out_path.write_text(json.dumps(to_store, indent=2))
-        now_iso = datetime.utcnow().isoformat() + "Z"
-        set_webhook_received(count_delta=len(profiles), last_received_at=now_iso)
-        payload_excerpt, payload_truncated, payload_bytes = _safe_json_excerpt(body)
-        conversion_names, channels_detected = _extract_payload_hints(profiles)
-        payload_analysis = _analyze_payload(profiles)
-        append_webhook_archive_entry(
-            {
-                "received_at": now_iso,
-                "parser_version": meiro_parser_version,
-                "replace": bool(replace),
-                "payload_shape": "array" if isinstance(body, list) else "object",
-                "received_count": int(len(profiles)),
-                "profiles": profiles,
-            }
-        )
-        append_webhook_event(
-            {
-                "received_at": now_iso,
-                "received_count": int(len(profiles)),
-                "stored_total": int(len(to_store)),
-                "replace": bool(replace),
-                "parser_version": meiro_parser_version,
-                "ip": request.client.host if request.client else None,
-                "user_agent": (request.headers.get("user-agent") or "")[:256] or None,
-                "payload_shape": "array" if isinstance(body, list) else "object",
-                "payload_excerpt": payload_excerpt,
-                "payload_truncated": payload_truncated,
-                "payload_bytes": payload_bytes,
-                "payload_json_valid": True,
-                "conversion_event_names": conversion_names,
-                "channels_detected": channels_detected,
-                "payload_analysis": payload_analysis,
-            },
-            max_items=100,
-        )
-        return {
-            "received": len(profiles),
-            "stored_total": len(to_store),
-            "message": "Profiles saved. Use Import from CDP in Data Sources to load into attribution.",
-        }
+                body = await request.json()
+            except HTTPException:
+                raise
+            except Exception as exc:
+                _record_webhook_diagnostic_event(
+                    request=request,
+                    payload_shape="invalid_json",
+                    status_code=400,
+                    outcome="error",
+                    error_class="invalid_json",
+                    error_detail=str(exc),
+                )
+                raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}")
+
+            if isinstance(body, list):
+                profiles = body
+                replace = True
+            elif isinstance(body, dict):
+                profiles = body.get("profiles")
+                if not isinstance(profiles, list):
+                    data_payload = body.get("data")
+                    if isinstance(data_payload, list):
+                        profiles = data_payload
+                    elif isinstance(data_payload, dict):
+                        nested_profiles = data_payload.get("profiles")
+                        profiles = nested_profiles if isinstance(nested_profiles, list) else None
+                if not isinstance(profiles, list):
+                    journeys_payload = body.get("journeys")
+                    if isinstance(journeys_payload, list):
+                        profiles = journeys_payload
+                if not isinstance(profiles, list):
+                    profiles = []
+                replace = body.get("replace", True)
+                if not isinstance(profiles, list):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Body must be an array, { 'profiles': [...] }, { 'data': [...] }, or { 'journeys': [...] }",
+                    )
+            else:
+                _record_webhook_diagnostic_event(
+                    request=request,
+                    payload_shape="unknown",
+                    status_code=400,
+                    outcome="error",
+                    error_class="invalid_payload_shape",
+                    error_detail="Body must be JSON array or object with 'profiles' key",
+                )
+                raise HTTPException(status_code=400, detail="Body must be JSON array or object with 'profiles' key")
+
+            out_path = get_data_dir_obj() / "meiro_cdp_profiles.json"
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            if replace or not out_path.exists():
+                to_store = profiles
+            else:
+                try:
+                    existing = json.loads(out_path.read_text())
+                    to_store = (existing if isinstance(existing, list) else []) + list(profiles)
+                except Exception:
+                    to_store = profiles
+
+            out_path.write_text(json.dumps(to_store, indent=2))
+            now_iso = datetime.utcnow().isoformat() + "Z"
+            set_webhook_received(count_delta=len(profiles), last_received_at=now_iso)
+            payload_excerpt, payload_truncated, payload_bytes = _safe_json_excerpt(body)
+            conversion_names, channels_detected = _extract_payload_hints(profiles)
+            payload_analysis = _analyze_payload(profiles)
+            append_webhook_archive_entry(
+                {
+                    "received_at": now_iso,
+                    "parser_version": meiro_parser_version,
+                    "replace": bool(replace),
+                    "payload_shape": "array" if isinstance(body, list) else "object",
+                    "received_count": int(len(profiles)),
+                    "profiles": profiles,
+                }
+            )
+            append_webhook_event(
+                {
+                    "received_at": now_iso,
+                    "received_count": int(len(profiles)),
+                    "stored_total": int(len(to_store)),
+                    "replace": bool(replace),
+                    "parser_version": meiro_parser_version,
+                    "ip": request.client.host if request.client else None,
+                    "user_agent": (request.headers.get("user-agent") or "")[:256] or None,
+                    "payload_shape": "array" if isinstance(body, list) else "object",
+                    "payload_excerpt": payload_excerpt,
+                    "payload_truncated": payload_truncated,
+                    "payload_bytes": payload_bytes,
+                    "payload_json_valid": True,
+                    "conversion_event_names": conversion_names,
+                    "channels_detected": channels_detected,
+                    "payload_analysis": payload_analysis,
+                    "status_code": 200,
+                    "outcome": "success",
+                    "error_class": None,
+                },
+                max_items=100,
+            )
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "ok": True,
+                    "received": len(profiles),
+                    "stored_total": len(to_store),
+                    "message": "Profiles saved. Use Import from CDP in Data Sources to load into attribution.",
+                },
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.exception("Unhandled Meiro webhook failure")
+            _record_webhook_diagnostic_event(
+                request=request,
+                payload_shape="unknown",
+                status_code=503,
+                outcome="error",
+                error_class="app_error",
+                error_detail=str(exc),
+            )
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "ok": False,
+                    "error_code": "webhook_upstream_unavailable",
+                    "detail": "Webhook processing failed before a complete response could be returned.",
+                    "reason": str(exc),
+                },
+            )
 
     @router.post("/api/connectors/meiro/webhook/rotate-secret")
     def meiro_webhook_rotate():
@@ -498,6 +611,43 @@ def create_router(
         if not include_payload:
             events = [{k: v for k, v in event.items() if k not in {"payload_excerpt"}} for event in events]
         return {"items": events, "total": len(events)}
+
+    @router.get("/api/connectors/meiro/webhook/diagnostics")
+    def meiro_webhook_diagnostics(limit: int = Query(100, ge=10, le=500)):
+        events = get_webhook_events(limit=limit)
+        success_count = 0
+        error_count = 0
+        error_classes: Dict[str, int] = {}
+        latest_success = None
+        latest_error = None
+        for event in events:
+            outcome = str(event.get("outcome") or ("success" if int(event.get("status_code") or 0) < 400 else "error"))
+            if outcome == "success":
+                success_count += 1
+                latest_success = latest_success or event
+            else:
+                error_count += 1
+                error_class = str(event.get("error_class") or "unknown")
+                error_classes[error_class] = error_classes.get(error_class, 0) + 1
+                latest_error = latest_error or event
+        notes: List[str] = []
+        if error_count == 0:
+            notes.append("No server-side webhook errors are recorded in recent events.")
+            notes.append("If Pipes shows an ngrok HTML 503 page, the failure is happening before the request reaches this app.")
+        else:
+            notes.append("Server-side errors shown here only cover requests that reached the webhook route.")
+        return {
+            "ok": True,
+            "health_url": f"{get_base_url_fn()}/api/connectors/meiro/profiles/health",
+            "received_count": get_webhook_received_count(),
+            "last_received_at": get_webhook_last_received_at(),
+            "recent_success_count": success_count,
+            "recent_error_count": error_count,
+            "recent_error_classes": error_classes,
+            "latest_success": latest_success,
+            "latest_error": latest_error,
+            "notes": notes,
+        }
 
     @router.get("/api/connectors/meiro/webhook/archive-status")
     def meiro_webhook_archive_status():

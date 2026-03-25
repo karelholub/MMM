@@ -1,7 +1,7 @@
 import { useEffect, useState, type Dispatch, type SetStateAction } from 'react'
 
 import DashboardTable from '../../components/dashboard/DashboardTable'
-import type { MeiroConfig, MeiroPullConfig, MeiroWebhookEvent } from '../../connectors/meiroConnector'
+import type { MeiroConfig, MeiroPullConfig, MeiroWebhookDiagnostics, MeiroWebhookEvent } from '../../connectors/meiroConnector'
 import { tokens as t } from '../../theme/tokens'
 import { DEFAULT_MEIRO_PULL_CONFIG, type MeiroWebhookArchiveStatus } from './shared'
 
@@ -11,9 +11,11 @@ interface MeiroPipesSettingsProps {
   setMeiroPullDraft: Dispatch<SetStateAction<MeiroPullConfig>>
   webhookSecretValue: string | null
   meiroWebhookEvents?: { items: MeiroWebhookEvent[]; total: number }
+  meiroWebhookDiagnostics?: MeiroWebhookDiagnostics
   meiroWebhookArchiveStatus?: MeiroWebhookArchiveStatus
   meiroWebhookEventsLoading: boolean
   meiroWebhookEventsError?: string | null
+  meiroWebhookDiagnosticsError?: string | null
   relativeTime: (iso?: string | null) => string
   setOauthToast: Dispatch<SetStateAction<string | null>>
   onRotateWebhookSecret: () => void
@@ -27,15 +29,19 @@ export default function MeiroPipesSettings({
   setMeiroPullDraft,
   webhookSecretValue,
   meiroWebhookEvents,
+  meiroWebhookDiagnostics,
   meiroWebhookArchiveStatus,
   meiroWebhookEventsLoading,
   meiroWebhookEventsError,
+  meiroWebhookDiagnosticsError,
   relativeTime,
   setOauthToast,
   onRotateWebhookSecret,
   onSaveMeiroPull,
   saveMeiroPullPending,
 }: MeiroPipesSettingsProps) {
+  const webhookUrl = meiroConfig?.webhook_url || 'http://localhost:8000/api/connectors/meiro/profiles'
+  const webhookHealthUrl = `${webhookUrl.replace(/\/$/, '')}/health`
   const aliasText = Object.entries(meiroPullDraft.conversion_event_aliases || {})
     .map(([raw, canonical]) => `${raw}=${canonical}`)
     .join('\n')
@@ -52,12 +58,12 @@ export default function MeiroPipesSettings({
         <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Use this when Meiro Pipes pushes normalized profiles and conversion payloads into Meiro Measurement.</div>
         <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap', alignItems: 'center' }}>
           <code style={{ display: 'block', padding: '6px 8px', borderRadius: t.radius.sm, background: t.color.surface, border: `1px solid ${t.color.border}`, fontSize: t.font.sizeXs }}>
-            {meiroConfig?.webhook_url || 'http://localhost:8000/api/connectors/meiro/profiles'}
+            {webhookUrl}
           </code>
           <button
             type="button"
             onClick={async () => {
-              const val = meiroConfig?.webhook_url || 'http://localhost:8000/api/connectors/meiro/profiles'
+              const val = webhookUrl
               try {
                 await navigator.clipboard.writeText(val)
                 setOauthToast('Webhook URL copied.')
@@ -75,6 +81,9 @@ export default function MeiroPipesSettings({
         </div>
         <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
           Received: {Number(meiroConfig?.webhook_received_count ?? 0).toLocaleString()} payloads · Last received: {relativeTime(meiroConfig?.webhook_last_received_at)} · Archive: {meiroWebhookArchiveStatus?.available ? `${Number(meiroWebhookArchiveStatus.entries || 0).toLocaleString()} batches / ${Number(meiroWebhookArchiveStatus.profiles_received || 0).toLocaleString()} payloads` : 'empty'}
+        </div>
+        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+          Health check URL: <code>{webhookHealthUrl}</code>
         </div>
         {webhookSecretValue && <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>New secret (shown once): <code>{webhookSecretValue}</code></div>}
       </div>
@@ -164,6 +173,51 @@ export default function MeiroPipesSettings({
             </button>
           </div>
         </div>
+      </div>
+
+      <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.bg, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
+        <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Webhook diagnostics</div>
+        {meiroWebhookDiagnosticsError ? (
+          <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{meiroWebhookDiagnosticsError}</div>
+        ) : meiroWebhookDiagnostics ? (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: t.space.sm }}>
+              <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Recent successes</div>
+                <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold }}>{Number(meiroWebhookDiagnostics.recent_success_count || 0).toLocaleString()}</div>
+              </div>
+              <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Server-side errors</div>
+                <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold }}>{Number(meiroWebhookDiagnostics.recent_error_count || 0).toLocaleString()}</div>
+              </div>
+              <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Last receipt</div>
+                <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>{relativeTime(meiroWebhookDiagnostics.last_received_at)}</div>
+              </div>
+            </div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Health check: <code>{meiroWebhookDiagnostics.health_url}</code>
+            </div>
+            {!!Object.keys(meiroWebhookDiagnostics.recent_error_classes || {}).length && (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                Error classes: {Object.entries(meiroWebhookDiagnostics.recent_error_classes || {}).map(([key, value]) => `${key} (${value})`).join(' · ')}
+              </div>
+            )}
+            {meiroWebhookDiagnostics.latest_error ? (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                Latest server-side error: <strong>{String(meiroWebhookDiagnostics.latest_error.error_class || 'unknown')}</strong>
+                {meiroWebhookDiagnostics.latest_error.error_detail ? <> · {String(meiroWebhookDiagnostics.latest_error.error_detail)}</> : null}
+              </div>
+            ) : null}
+            {(meiroWebhookDiagnostics.notes || []).map((note, index) => (
+              <div key={`${note}-${index}`} style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                {note}
+              </div>
+            ))}
+          </>
+        ) : (
+          <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Diagnostics not available yet.</div>
+        )}
       </div>
 
       <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.bg, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>

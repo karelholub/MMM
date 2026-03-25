@@ -45,6 +45,23 @@ export interface MeiroWebhookEvent {
   ip?: string | null
   user_agent?: string | null
   payload_shape?: string | null
+  status_code?: number
+  outcome?: string | null
+  error_class?: string | null
+  error_detail?: string | null
+}
+
+export interface MeiroWebhookDiagnostics {
+  ok: boolean
+  health_url: string
+  received_count: number
+  last_received_at?: string | null
+  recent_success_count: number
+  recent_error_count: number
+  recent_error_classes?: Record<string, number>
+  latest_success?: Record<string, unknown> | null
+  latest_error?: Record<string, unknown> | null
+  notes?: string[]
 }
 
 export interface MeiroPullConfig {
@@ -263,6 +280,13 @@ export async function getMeiroWebhookEvents(limit = 100): Promise<{ items: Meiro
   return apiGetJson<{ items: MeiroWebhookEvent[]; total: number }>(
     withQuery('/api/connectors/meiro/webhook/events', { limit }),
     { fallbackMessage: 'Failed to fetch webhook event log' },
+  )
+}
+
+export async function getMeiroWebhookDiagnostics(limit = 100): Promise<MeiroWebhookDiagnostics> {
+  return apiGetJson<MeiroWebhookDiagnostics>(
+    withQuery('/api/connectors/meiro/webhook/diagnostics', { limit }),
+    { fallbackMessage: 'Failed to fetch Meiro webhook diagnostics' },
   )
 }
 

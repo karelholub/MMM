@@ -16,6 +16,7 @@ import {
   getMeiroQuarantineRun,
   getMeiroQuarantineRuns,
   getMeiroWebhookEvents,
+  getMeiroWebhookDiagnostics,
   getMeiroWebhookSuggestions,
   meiroDryRun,
   meiroPull,
@@ -25,6 +26,7 @@ import {
   testMeiroConnection,
   type MeiroPullConfig,
   type MeiroQuarantineRun,
+  type MeiroWebhookDiagnostics,
 } from '../connectors/meiroConnector'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
 import {
@@ -104,6 +106,10 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
   const meiroWebhookEventsQuery = useQuery({
     queryKey: ['meiro-webhook-events-page'],
     queryFn: () => getMeiroWebhookEvents(100),
+  })
+  const meiroWebhookDiagnosticsQuery = useQuery<MeiroWebhookDiagnostics>({
+    queryKey: ['meiro-webhook-diagnostics-page'],
+    queryFn: () => getMeiroWebhookDiagnostics(100),
   })
   const meiroWebhookArchiveStatusQuery = useQuery<MeiroWebhookArchiveStatus>({
     queryKey: ['meiro-webhook-archive-status-page'],
@@ -402,9 +408,11 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
               meiroMappingState={meiroMappingQuery.data}
               meiroWebhookSuggestions={meiroWebhookSuggestionsQuery.data}
               meiroWebhookEvents={meiroWebhookEventsQuery.data}
+              meiroWebhookDiagnostics={meiroWebhookDiagnosticsQuery.data}
               meiroWebhookArchiveStatus={meiroWebhookArchiveStatusQuery.data}
               meiroWebhookEventsLoading={meiroWebhookEventsQuery.isLoading}
               meiroWebhookEventsError={(meiroWebhookEventsQuery.error as Error | undefined)?.message || null}
+              meiroWebhookDiagnosticsError={(meiroWebhookDiagnosticsQuery.error as Error | undefined)?.message || null}
               meiroWebhookSuggestionsLoading={meiroWebhookSuggestionsQuery.isLoading}
               meiroWebhookSuggestionsError={(meiroWebhookSuggestionsQuery.error as Error | undefined)?.message || null}
               testMeiroResult={testMeiroMutation.data}

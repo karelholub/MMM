@@ -8,6 +8,7 @@ import type {
   MeiroQuarantineReprocessResult,
   MeiroQuarantineRun,
   MeiroWebhookEvent,
+  MeiroWebhookDiagnostics,
   MeiroWebhookSuggestions,
 } from '../../connectors/meiroConnector'
 import { tokens as t } from '../../theme/tokens'
@@ -32,9 +33,11 @@ interface MeiroIntegrationPanelProps {
   meiroMappingState?: MeiroMappingState
   meiroWebhookSuggestions?: MeiroWebhookSuggestions
   meiroWebhookEvents?: { items: MeiroWebhookEvent[]; total: number }
+  meiroWebhookDiagnostics?: MeiroWebhookDiagnostics
   meiroWebhookArchiveStatus?: MeiroWebhookArchiveStatus
   meiroWebhookEventsLoading: boolean
   meiroWebhookEventsError?: string | null
+  meiroWebhookDiagnosticsError?: string | null
   meiroWebhookSuggestionsLoading: boolean
   meiroWebhookSuggestionsError?: string | null
   testMeiroResult?: { message?: string } | null
@@ -166,9 +169,11 @@ export default function MeiroIntegrationPanel(props: MeiroIntegrationPanelProps)
           setMeiroPullDraft={props.setMeiroPullDraft}
           webhookSecretValue={props.webhookSecretValue}
           meiroWebhookEvents={props.meiroWebhookEvents}
+          meiroWebhookDiagnostics={props.meiroWebhookDiagnostics}
           meiroWebhookArchiveStatus={props.meiroWebhookArchiveStatus}
           meiroWebhookEventsLoading={props.meiroWebhookEventsLoading}
           meiroWebhookEventsError={props.meiroWebhookEventsError}
+          meiroWebhookDiagnosticsError={props.meiroWebhookDiagnosticsError}
           relativeTime={props.relativeTime}
           setOauthToast={props.setOauthToast}
           onRotateWebhookSecret={props.onRotateWebhookSecret}
