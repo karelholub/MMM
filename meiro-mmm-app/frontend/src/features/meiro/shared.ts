@@ -1,4 +1,4 @@
-import type { MeiroPullConfig } from '../../connectors/meiroConnector'
+import type { MeiroCleaningReport, MeiroImportResult, MeiroImportSummary, MeiroPullConfig } from '../../connectors/meiroConnector'
 
 export type MeiroTab = 'overview' | 'cdp' | 'pipes' | 'normalization' | 'import'
 
@@ -7,20 +7,8 @@ export type DryRunResult = {
   preview: Array<{ id: string; touchpoints: number; value: number; quality_score?: number; quality_band?: string }>
   warnings: string[]
   validation: { ok?: boolean; error?: string }
-  import_summary?: {
-    total?: number
-    valid?: number
-    invalid?: number
-    quarantined?: number
-  }
-  cleaning_report?: {
-    fixed?: number
-    dropped?: number
-    ambiguous?: number
-    duplicate_profiles?: number
-    top_unresolved_patterns?: Array<{ code: string; count: number }>
-    quality?: { average_score?: number; high?: number; medium?: number; low?: number }
-  }
+  import_summary?: MeiroImportSummary
+  cleaning_report?: MeiroCleaningReport
   quarantine_count?: number
 }
 
@@ -36,6 +24,7 @@ export interface MeiroWebhookReprocessResult {
   reprocessed_profiles: number
   archive_entries_used: number
   persisted_to_attribution: boolean
+  import_result?: MeiroImportResult
 }
 
 export const DEFAULT_MEIRO_PULL_CONFIG: MeiroPullConfig = {

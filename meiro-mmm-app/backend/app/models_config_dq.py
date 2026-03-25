@@ -514,6 +514,31 @@ class JourneyTransitionDaily(Base):
     )
 
 
+class JourneySavedView(Base):
+    __tablename__ = "journey_saved_views"
+
+    id = Column(String(36), primary_key=True)
+    workspace_id = Column(String(128), nullable=False, default="default", index=True)
+    user_id = Column(String(128), nullable=False, default="default", index=True)
+    journey_definition_id = Column(
+        String(36),
+        ForeignKey("journey_definitions.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    name = Column(String(255), nullable=False)
+    state_json = Column(JSON, nullable=False, default={})
+    created_by = Column(String(255), nullable=False, default="system")
+    updated_by = Column(String(255), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_journey_saved_views_workspace_user", "workspace_id", "user_id"),
+        Index("ix_journey_saved_views_workspace_user_journey", "workspace_id", "user_id", "journey_definition_id"),
+    )
+
+
 class FunnelDefinition(Base):
     __tablename__ = "funnels"
 

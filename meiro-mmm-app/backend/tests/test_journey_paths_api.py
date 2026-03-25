@@ -10,6 +10,11 @@ from app.db import Base, get_db
 from app.main import app
 from app.models_config_dq import JourneyDefinition, JourneyPathDaily
 
+ADMIN_HEADERS = {
+    "X-User-Id": "test-admin",
+    "X-User-Role": "admin",
+}
+
 
 @pytest.fixture
 def client():
@@ -121,7 +126,7 @@ def test_journey_paths_filters_and_mode(client):
     _seed(session_factory)
 
     base_params = {"date_from": "2026-01-01", "date_to": "2026-01-31", "limit": 50}
-    resp = test_client.get("/api/journeys/jd-1/paths", params=base_params)
+    resp = test_client.get("/api/journeys/jd-1/paths", params=base_params, headers=ADMIN_HEADERS)
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["mode"] == "conversion_only"
@@ -132,6 +137,7 @@ def test_journey_paths_filters_and_mode(client):
     all_mode = test_client.get(
         "/api/journeys/jd-1/paths",
         params={**base_params, "mode": "all_journeys"},
+        headers=ADMIN_HEADERS,
     )
     assert all_mode.status_code == 200
     assert all_mode.json()["total"] == 3
@@ -146,6 +152,7 @@ def test_journey_paths_filters_and_mode(client):
             "device": "mobile",
             "country": "US",
         },
+        headers=ADMIN_HEADERS,
     )
     assert filtered.status_code == 200
     out = filtered.json()
@@ -166,6 +173,7 @@ def test_journey_paths_pagination_and_limits(client):
             "limit": 1,
             "page": 1,
         },
+        headers=ADMIN_HEADERS,
     )
     assert resp_page1.status_code == 200
     body1 = resp_page1.json()
@@ -183,6 +191,7 @@ def test_journey_paths_pagination_and_limits(client):
             "limit": 1,
             "page": 2,
         },
+        headers=ADMIN_HEADERS,
     )
     assert resp_page2.status_code == 200
     body2 = resp_page2.json()
@@ -196,5 +205,6 @@ def test_journey_paths_pagination_and_limits(client):
             "date_to": "2026-01-31",
             "limit": 1000,
         },
+        headers=ADMIN_HEADERS,
     )
     assert invalid_limit.status_code == 422

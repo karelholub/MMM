@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
 
@@ -17,3 +17,9 @@ class JourneyDefinitionUpdate(BaseModel):
     conversion_kpi_id: Optional[str] = Field(None, max_length=64)
     lookback_window_days: int = Field(..., ge=1, le=365)
     mode_default: str = Field(..., pattern="^(conversion_only|all_journeys)$")
+
+
+class JourneySavedViewPayload(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    journey_definition_id: Optional[str] = Field(None, max_length=36)
+    state: Dict[str, Any] = Field(default_factory=dict)

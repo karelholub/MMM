@@ -40,6 +40,7 @@ def client():
 
 
 def test_journey_definitions_crud_and_archive_flow(client: TestClient):
+    view_headers = {"X-User-Role": "viewer", "X-User-Id": "qa-viewer"}
     create_resp = client.post(
         "/api/journeys/definitions",
         headers={"X-User-Role": "editor", "X-User-Id": "qa-editor"},
@@ -58,7 +59,7 @@ def test_journey_definitions_crud_and_archive_flow(client: TestClient):
     assert created["created_by"] == "qa-editor"
     definition_id = created["id"]
 
-    list_resp = client.get("/api/journeys/definitions")
+    list_resp = client.get("/api/journeys/definitions", headers=view_headers)
     assert list_resp.status_code == 200
     listed = list_resp.json()
     assert listed["total"] == 1
@@ -88,11 +89,11 @@ def test_journey_definitions_crud_and_archive_flow(client: TestClient):
     assert delete_resp.status_code == 200
     assert delete_resp.json()["status"] == "archived"
 
-    list_active = client.get("/api/journeys/definitions")
+    list_active = client.get("/api/journeys/definitions", headers=view_headers)
     assert list_active.status_code == 200
     assert list_active.json()["total"] == 0
 
-    list_all = client.get("/api/journeys/definitions", params={"include_archived": "true"})
+    list_all = client.get("/api/journeys/definitions", params={"include_archived": "true"}, headers=view_headers)
     assert list_all.status_code == 200
     assert list_all.json()["total"] == 1
     assert list_all.json()["items"][0]["is_archived"] is True
@@ -100,6 +101,7 @@ def test_journey_definitions_crud_and_archive_flow(client: TestClient):
 
 def test_journey_definitions_list_search_and_sort(client: TestClient):
     headers = {"X-User-Role": "editor", "X-User-Id": "qa-editor"}
+    view_headers = {"X-User-Role": "viewer", "X-User-Id": "qa-viewer"}
 
     r1 = client.post(
         "/api/journeys/definitions",
@@ -124,15 +126,15 @@ def test_journey_definitions_list_search_and_sort(client: TestClient):
     )
     assert upd.status_code == 200
 
-    desc = client.get("/api/journeys/definitions", params={"sort": "desc"})
+    desc = client.get("/api/journeys/definitions", params={"sort": "desc"}, headers=view_headers)
     assert desc.status_code == 200
     assert desc.json()["items"][0]["id"] == id1
 
-    asc = client.get("/api/journeys/definitions", params={"sort": "asc"})
+    asc = client.get("/api/journeys/definitions", params={"sort": "asc"}, headers=view_headers)
     assert asc.status_code == 200
     assert asc.json()["items"][0]["id"] == id2
 
-    search = client.get("/api/journeys/definitions", params={"search": "alpha"})
+    search = client.get("/api/journeys/definitions", params={"search": "alpha"}, headers=view_headers)
     assert search.status_code == 200
     assert search.json()["total"] == 1
     assert search.json()["items"][0]["id"] == id1
@@ -197,6 +199,7 @@ def test_journey_definition_validation_and_permissions(client: TestClient):
 
 def test_journey_definitions_list_accepts_aliases_and_clamps_page_size(client: TestClient):
     headers = {"X-User-Role": "editor", "X-User-Id": "qa-editor"}
+    view_headers = {"X-User-Role": "viewer", "X-User-Id": "qa-viewer"}
     for idx in range(3):
         created = client.post(
             "/api/journeys/definitions",
@@ -210,21 +213,21 @@ def test_journey_definitions_list_accepts_aliases_and_clamps_page_size(client: T
         )
         assert created.status_code == 200
 
-    over_limit = client.get("/api/journeys/definitions", params={"per_page": 200, "sort": "desc"})
+    over_limit = client.get("/api/journeys/definitions", params={"per_page": 200, "sort": "desc"}, headers=view_headers)
     assert over_limit.status_code == 200
     assert over_limit.json()["per_page"] == 100
     assert len(over_limit.json()["items"]) == 3
 
-    page_size_alias = client.get("/api/journeys/definitions", params={"page_size": 2})
+    page_size_alias = client.get("/api/journeys/definitions", params={"page_size": 2}, headers=view_headers)
     assert page_size_alias.status_code == 200
     assert page_size_alias.json()["per_page"] == 2
     assert len(page_size_alias.json()["items"]) == 2
 
-    limit_alias = client.get("/api/journeys/definitions", params={"limit": 1})
+    limit_alias = client.get("/api/journeys/definitions", params={"limit": 1}, headers=view_headers)
     assert limit_alias.status_code == 200
     assert limit_alias.json()["per_page"] == 1
     assert len(limit_alias.json()["items"]) == 1
 
-    order_alias = client.get("/api/journeys/definitions", params={"order": "asc"})
+    order_alias = client.get("/api/journeys/definitions", params={"order": "asc"}, headers=view_headers)
     assert order_alias.status_code == 200
     assert order_alias.json()["per_page"] == 20

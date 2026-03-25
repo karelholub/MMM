@@ -108,6 +108,54 @@ interface FunnelDiagnosticItem {
   next_action: string
 }
 
+interface JourneyTransitionsResponse {
+  nodes: Array<{ id: string; label: string; depth: number | null; count_in: number; count_out: number; count_total: number }>
+  edges: Array<{ source: string; target: string; value: number; count_transitions: number; count_profiles: number }>
+  meta: {
+    date_from: string
+    date_to: string
+    mode: string
+    min_count: number
+    max_nodes: number
+    max_depth: number
+    group_other?: boolean
+    grouped_to_other?: boolean
+    dropped_edges?: number
+  }
+}
+
+interface JourneyExampleItem {
+  conversion_id: string
+  profile_id: string
+  conversion_key?: string | null
+  conversion_ts?: string | null
+  path_hash: string
+  steps: string[]
+  touchpoints_count: number
+  conversion_value: number
+  dimensions: {
+    channel_group?: string | null
+    campaign_id?: string | null
+    device?: string | null
+    country?: string | null
+  }
+  touchpoints_preview: Array<{
+    ts?: string | null
+    channel?: string | null
+    event?: string | null
+    campaign?: string | null
+  }>
+}
+
+interface JourneyExamplesResponse {
+  items: JourneyExampleItem[]
+  total: number
+  date_from: string
+  date_to: string
+  path_hash?: string | null
+  contains_step?: string | null
+}
+
 interface KpiDefinition {
   id: string
   label: string
@@ -147,6 +195,53 @@ interface AlertDraft {
 
 type JourneysTab = 'paths' | 'flow' | 'examples' | 'funnels'
 type PathSortBy = 'journeys' | 'conversion_rate' | 'avg_time'
+
+interface SavedJourneyView {
+  id: string
+  name: string
+  selectedJourneyId: string
+  activeTab: JourneysTab
+  filters: GlobalFiltersState
+  pathSortBy: PathSortBy
+  pathSortDir: 'asc' | 'desc'
+  pathsLimit: number
+  examplesPathHash: string
+  examplesStepFilter: string
+  createdAt: string
+}
+
+interface SavedJourneyViewRecord {
+  id: string
+  name: string
+  journey_definition_id?: string | null
+  state?: Partial<{
+    selectedJourneyId: string
+    activeTab: JourneysTab
+    filters: GlobalFiltersState
+    pathSortBy: PathSortBy
+    pathSortDir: 'asc' | 'desc'
+    pathsLimit: number
+    examplesPathHash: string
+    examplesStepFilter: string
+  }>
+  created_at?: string | null
+}
+
+interface SavedJourneyViewsResponse {
+  items: SavedJourneyViewRecord[]
+  total: number
+}
+
+type SavedJourneyViewStatePayload = {
+  selectedJourneyId: string
+  activeTab: JourneysTab
+  filters: GlobalFiltersState
+  pathSortBy: PathSortBy
+  pathSortDir: 'asc' | 'desc'
+  pathsLimit: number
+  examplesPathHash: string
+  examplesStepFilter: string
+}
 
 const ATTR_MODELS = [
   { id: 'last_touch', label: 'Last Touch' },
@@ -264,6 +359,54 @@ function creditOverlay(channels: ChannelCredit[], group?: string | null) {
   )
 }
 
+function formatDateTime(value?: string | null): string {
+  if (!value) return '—'
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleString()
+}
+
+function aggregateBreakdown(
+  rows: JourneyPathRow[],
+  key: 'device' | 'channel_group',
+): Array<{ key: string; journeys: number; conversions: number; conversionRate: number }> {
+  const buckets = new Map<string, { journeys: number; conversions: number }>()
+  rows.forEach((row) => {
+    const bucketKey = String(row[key] || 'unknown')
+    const current = buckets.get(bucketKey) || { journeys: 0, conversions: 0 }
+    current.journeys += row.count_journeys || 0
+    current.conversions += row.count_conversions || 0
+    buckets.set(bucketKey, current)
+  })
+  return [...buckets.entries()]
+    .map(([bucketKey, value]) => ({
+      key: bucketKey,
+      journeys: value.journeys,
+      conversions: value.conversions,
+      conversionRate: value.journeys > 0 ? value.conversions / value.journeys : 0,
+    }))
+    .sort((a, b) => b.journeys - a.journeys)
+}
+
+function normalizeSavedView(record: SavedJourneyViewRecord): SavedJourneyView {
+  return {
+    id: record.id,
+    name: record.name,
+    selectedJourneyId: record.state?.selectedJourneyId || record.journey_definition_id || '',
+    activeTab: record.state?.activeTab || 'paths',
+    filters: {
+      ...buildInitialFilters(null, null),
+      ...(record.state?.filters ?? {}),
+    },
+    pathSortBy: record.state?.pathSortBy || 'journeys',
+    pathSortDir: record.state?.pathSortDir || 'desc',
+    pathsLimit: record.state?.pathsLimit || 50,
+    examplesPathHash: record.state?.examplesPathHash || '',
+    examplesStepFilter: record.state?.examplesStepFilter || '',
+    createdAt: record.created_at || new Date(0).toISOString(),
+  }
+}
+
 export default function Journeys({
   featureEnabled,
   hasPermission,
@@ -289,9 +432,16 @@ export default function Journeys({
   const [pathsPage, setPathsPage] = useState(1)
   const [pathsLimit, setPathsLimit] = useState(50)
   const [selectedPath, setSelectedPath] = useState<JourneyPathRow | null>(null)
+  const [comparePathHash, setComparePathHash] = useState('')
   const [creditExpanded, setCreditExpanded] = useState(false)
   const [selectedFunnelId, setSelectedFunnelId] = useState('')
   const [selectedFunnelStep, setSelectedFunnelStep] = useState<string | null>(null)
+  const [flowMinCount, setFlowMinCount] = useState(5)
+  const [flowMaxNodes, setFlowMaxNodes] = useState(20)
+  const [flowMaxDepth, setFlowMaxDepth] = useState(5)
+  const [examplesPathHash, setExamplesPathHash] = useState('')
+  const [examplesStepFilter, setExamplesStepFilter] = useState('')
+  const [savedViewName, setSavedViewName] = useState('')
   const [showCreateAlertModal, setShowCreateAlertModal] = useState(false)
   const [createAlertError, setCreateAlertError] = useState<string | null>(null)
   const [alertScope, setAlertScope] = useState<Record<string, unknown>>({})
@@ -514,6 +664,83 @@ export default function Journeys({
     enabled: !!selectedFunnelId && !!selectedFunnelStep && activeTab === 'funnels' && funnelBuilderEnabled,
   })
 
+  const transitionsQuery = useQuery<JourneyTransitionsResponse>({
+    queryKey: [
+      'journey-transitions',
+      selectedJourneyId,
+      filters.dateFrom,
+      filters.dateTo,
+      filters.channel,
+      filters.campaign,
+      filters.device,
+      filters.geo,
+      mode,
+      flowMinCount,
+      flowMaxNodes,
+      flowMaxDepth,
+    ],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        date_from: filters.dateFrom,
+        date_to: filters.dateTo,
+        mode,
+        min_count: String(flowMinCount),
+        max_nodes: String(flowMaxNodes),
+        max_depth: String(flowMaxDepth),
+      })
+      if (filters.channel !== 'all') params.set('channel_group', filters.channel)
+      if (filters.campaign !== 'all') params.set('campaign_id', filters.campaign)
+      if (filters.device !== 'all') params.set('device', filters.device)
+      if (filters.geo !== 'all') params.set('country', filters.geo.toUpperCase())
+      return apiGetJson<JourneyTransitionsResponse>(`/api/journeys/${selectedJourneyId}/transitions?${params.toString()}`, {
+        fallbackMessage: 'Failed to load flow transitions',
+      })
+    },
+    enabled: !!selectedJourneyId && activeTab === 'flow' && !featureDisabled,
+  })
+
+  const examplesQuery = useQuery<JourneyExamplesResponse>({
+    queryKey: [
+      'journey-examples',
+      selectedJourneyId,
+      filters.dateFrom,
+      filters.dateTo,
+      filters.channel,
+      filters.campaign,
+      filters.device,
+      filters.geo,
+      examplesPathHash,
+      examplesStepFilter,
+    ],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        date_from: filters.dateFrom,
+        date_to: filters.dateTo,
+        limit: '12',
+      })
+      if (filters.channel !== 'all') params.set('channel_group', filters.channel)
+      if (filters.campaign !== 'all') params.set('campaign_id', filters.campaign)
+      if (filters.device !== 'all') params.set('device', filters.device)
+      if (filters.geo !== 'all') params.set('country', filters.geo.toUpperCase())
+      if (examplesPathHash) params.set('path_hash', examplesPathHash)
+      if (examplesStepFilter.trim()) params.set('contains_step', examplesStepFilter.trim())
+      return apiGetJson<JourneyExamplesResponse>(`/api/journeys/${selectedJourneyId}/examples?${params.toString()}`, {
+        fallbackMessage: 'Failed to load journey examples',
+      })
+    },
+    enabled: !!selectedJourneyId && activeTab === 'examples' && !featureDisabled,
+  })
+
+  const savedViewsQuery = useQuery<SavedJourneyViewsResponse>({
+    queryKey: ['journey-saved-views', user.userId],
+    queryFn: async () => {
+      return apiGetJson<SavedJourneyViewsResponse>('/api/journeys/views', {
+        fallbackMessage: 'Failed to load saved journey views',
+      })
+    },
+    enabled: !featureDisabled,
+  })
+
   const createMutation = useMutation({
     mutationFn: async (payload: CreateJourneyDraft) => {
       return apiSendJson<JourneyDefinition>('/api/journeys/definitions', 'POST', payload, {
@@ -578,9 +805,38 @@ export default function Journeys({
     onError: (err) => setCreateAlertError((err as Error).message || 'Failed to preview alert'),
   })
 
+  const createSavedViewMutation = useMutation({
+    mutationFn: async (payload: { name: string; journey_definition_id: string; state: Record<string, unknown> }) => {
+      return apiSendJson<SavedJourneyViewRecord>('/api/journeys/views', 'POST', payload, {
+        fallbackMessage: 'Failed to save journey view',
+      })
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['journey-saved-views', user.userId] })
+      setSavedViewName('')
+    },
+  })
+
+  const deleteSavedViewMutation = useMutation({
+    mutationFn: async (viewId: string) => {
+      return apiSendJson<{ id: string; status: string }>(`/api/journeys/views/${viewId}`, 'DELETE', undefined, {
+        fallbackMessage: 'Failed to delete journey view',
+      })
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['journey-saved-views', user.userId] })
+    },
+  })
+
   useEffect(() => {
     const params = readParams()
     setSelectedJourneyId(params.get('journey_id') || '')
+    const tabParam = params.get('tab')
+    if (tabParam === 'paths' || tabParam === 'flow' || tabParam === 'examples' || tabParam === 'funnels') {
+      setActiveTab(tabParam)
+    }
+    setExamplesPathHash(params.get('examples_path_hash') || '')
+    setExamplesStepFilter(params.get('examples_step') || '')
     setFilters((prev) => ({
       ...prev,
       dateFrom: params.get('date_from') || prev.dateFrom,
@@ -623,6 +879,7 @@ export default function Journeys({
     const params = readParams()
     if (selectedJourneyId) params.set('journey_id', selectedJourneyId)
     else params.delete('journey_id')
+    params.set('tab', activeTab)
     params.set('date_from', filters.dateFrom)
     params.set('date_to', filters.dateTo)
     params.set('channel', filters.channel)
@@ -630,8 +887,12 @@ export default function Journeys({
     params.set('device', filters.device)
     params.set('geo', filters.geo)
     params.set('segment', filters.segment)
+    if (examplesPathHash) params.set('examples_path_hash', examplesPathHash)
+    else params.delete('examples_path_hash')
+    if (examplesStepFilter.trim()) params.set('examples_step', examplesStepFilter.trim())
+    else params.delete('examples_step')
     window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`)
-  }, [filters, selectedJourneyId])
+  }, [activeTab, examplesPathHash, examplesStepFilter, filters, selectedJourneyId])
 
   useEffect(() => {
     setPathsPage(1)
@@ -650,6 +911,11 @@ export default function Journeys({
     }
   }, [funnelListQuery.data?.items, selectedFunnelId])
 
+  useEffect(() => {
+    setComparePathHash('')
+    setCreditExpanded(false)
+  }, [selectedPath?.path_hash])
+
   const definitions = definitionsQuery.data?.items ?? []
   const kpiOptions = kpisQuery.data?.definitions ?? []
   const journeyOptions = definitions.map((item) => ({ value: item.id, label: item.name }))
@@ -658,8 +924,8 @@ export default function Journeys({
     () =>
       [
         { key: 'paths' as JourneysTab, label: 'Paths', visible: true, disabled: false },
-        { key: 'flow' as JourneysTab, label: 'Flow', visible: true, disabled: true },
-        { key: 'examples' as JourneysTab, label: 'Examples', visible: journeyExamplesEnabled, disabled: true },
+        { key: 'flow' as JourneysTab, label: 'Flow', visible: true, disabled: false },
+        { key: 'examples' as JourneysTab, label: 'Examples', visible: journeyExamplesEnabled, disabled: false },
         { key: 'funnels' as JourneysTab, label: 'Funnels', visible: funnelBuilderEnabled, disabled: false },
       ].filter((tab) => tab.visible),
     [journeyExamplesEnabled, funnelBuilderEnabled],
@@ -713,6 +979,74 @@ export default function Journeys({
   const globalCredits = attributionSummaryQuery.data?.by_channel ?? []
   const drawerCredits = (pathAttributionQuery.data?.by_channel ?? globalCredits).sort((a, b) => b.attributed_share - a.attributed_share)
   const drawerTop = creditExpanded ? drawerCredits : drawerCredits.slice(0, 3)
+  const samePathRows = useMemo(
+    () => (selectedPath ? (pathsQuery.data?.items ?? []).filter((row) => row.path_hash === selectedPath.path_hash) : []),
+    [pathsQuery.data?.items, selectedPath],
+  )
+  const pathBreakdownByDevice = useMemo(() => aggregateBreakdown(samePathRows, 'device'), [samePathRows])
+  const pathBreakdownByChannelGroup = useMemo(() => aggregateBreakdown(samePathRows, 'channel_group'), [samePathRows])
+  const compareCandidateOptions = useMemo(
+    () => {
+      const seen = new Set<string>()
+      return filteredPaths.filter((row) => {
+        if (row.path_hash === selectedPath?.path_hash) return false
+        if (seen.has(row.path_hash)) return false
+        seen.add(row.path_hash)
+        return true
+      })
+    },
+    [filteredPaths, selectedPath?.path_hash],
+  )
+  const comparedPath = useMemo(
+    () => compareCandidateOptions.find((row) => row.path_hash === comparePathHash) || null,
+    [compareCandidateOptions, comparePathHash],
+  )
+  const savedViews = useMemo(
+    () => (savedViewsQuery.data?.items ?? []).map((item) => normalizeSavedView(item)),
+    [savedViewsQuery.data?.items],
+  )
+  const flowTopEdges = useMemo(
+    () => (transitionsQuery.data?.edges ?? []).slice(0, 12),
+    [transitionsQuery.data?.edges],
+  )
+
+  const buildCurrentSavedViewState = (): SavedJourneyViewStatePayload => ({
+    selectedJourneyId,
+    activeTab,
+    filters,
+    pathSortBy,
+    pathSortDir,
+    pathsLimit,
+    examplesPathHash,
+    examplesStepFilter,
+  })
+
+  const saveCurrentView = () => {
+    const trimmed = savedViewName.trim()
+    if (!trimmed) return
+    createSavedViewMutation.mutate({
+      name: trimmed,
+      journey_definition_id: selectedJourneyId,
+      state: buildCurrentSavedViewState(),
+    })
+  }
+
+  const applySavedView = (view: SavedJourneyView) => {
+    setSelectedJourneyId(view.selectedJourneyId)
+    setActiveTab(view.activeTab)
+    setFilters(view.filters)
+    setPathSortBy(view.pathSortBy)
+    setPathSortDir(view.pathSortDir)
+    setPathsLimit(view.pathsLimit)
+    setExamplesPathHash(view.examplesPathHash || '')
+    setExamplesStepFilter(view.examplesStepFilter || '')
+    setSelectedPath(null)
+    setComparePathHash('')
+  }
+
+  const deleteSavedView = (viewId: string) => {
+    deleteSavedViewMutation.mutate(viewId)
+  }
 
   const openCreateAlertModal = (
     draft: Pick<AlertDraft, 'name' | 'type' | 'domain' | 'metric'>,
@@ -1159,21 +1493,188 @@ export default function Journeys({
             </div>
           )}
 
-          {(activeTab === 'flow' || activeTab === 'examples') && (
-            <div style={{ border: `1px dashed ${t.color.border}`, borderRadius: t.radius.md, padding: t.space.lg, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-              This tab is scaffolded and will be enabled in a later increment.
+          {activeTab === 'flow' && (
+            <div style={{ display: 'grid', gap: t.space.md }}>
+              <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', alignItems: 'end' }}>
+                <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                  Min transitions
+                  <input type="number" min={1} max={1000} value={flowMinCount} onChange={(e) => setFlowMinCount(Math.max(1, Number(e.target.value) || 1))} style={{ width: 120, padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+                </label>
+                <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                  Max nodes
+                  <input type="number" min={2} max={200} value={flowMaxNodes} onChange={(e) => setFlowMaxNodes(Math.max(2, Math.min(200, Number(e.target.value) || 2)))} style={{ width: 120, padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+                </label>
+                <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                  Max depth
+                  <input type="number" min={1} max={20} value={flowMaxDepth} onChange={(e) => setFlowMaxDepth(Math.max(1, Math.min(20, Number(e.target.value) || 1)))} style={{ width: 120, padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+                </label>
+              </div>
+
+              {transitionsQuery.isLoading && <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading flow transitions…</div>}
+              {transitionsQuery.isError && <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{(transitionsQuery.error as Error).message}</div>}
+              {!transitionsQuery.isLoading && !transitionsQuery.isError && !(transitionsQuery.data?.edges ?? []).length && (
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>No transition flow available for the selected date range and filters.</div>
+              )}
+              {!!transitionsQuery.data?.edges?.length && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(240px, 320px) 1fr', gap: t.space.md }}>
+                  <SectionCard title="Nodes" subtitle={`${transitionsQuery.data.nodes.length} visible nodes`}>
+                    <div style={{ display: 'grid', gap: 8 }}>
+                      {transitionsQuery.data.nodes.map((node) => (
+                        <div key={node.id} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.bg }}>
+                          <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>{node.label}</div>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                            In {node.count_in.toLocaleString()} · Out {node.count_out.toLocaleString()} · Total {node.count_total.toLocaleString()}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </SectionCard>
+                  <SectionCard title="Top transitions" subtitle={`Dropped ${transitionsQuery.data.meta.dropped_edges || 0} low-volume edges`}>
+                    <div style={{ display: 'grid', gap: 10 }}>
+                      {flowTopEdges.map((edge) => {
+                        const maxValue = flowTopEdges[0]?.value || 1
+                        return (
+                          <button
+                            key={`${edge.source}-${edge.target}`}
+                            type="button"
+                            onClick={() => {
+                              setExamplesStepFilter(edge.target)
+                              setExamplesPathHash('')
+                              setActiveTab('examples')
+                            }}
+                            style={{ border: `1px solid ${t.color.borderLight}`, background: t.color.surface, borderRadius: t.radius.sm, padding: t.space.sm, textAlign: 'left', cursor: 'pointer' }}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, fontSize: t.font.sizeSm, color: t.color.text }}>
+                              <span>{edge.source} → {edge.target}</span>
+                              <span>{edge.value.toLocaleString()}</span>
+                            </div>
+                            <div style={{ marginTop: 6, height: 8, borderRadius: t.radius.full, background: t.color.bgSubtle, overflow: 'hidden' }}>
+                              <div style={{ width: `${Math.max(8, (edge.value / maxValue) * 100)}%`, height: '100%', background: t.color.accent }} />
+                            </div>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </SectionCard>
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'examples' && (
+            <div style={{ display: 'grid', gap: t.space.md }}>
+              <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', alignItems: 'end' }}>
+                <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, flex: '1 1 240px' }}>
+                  Step contains
+                  <input value={examplesStepFilter} onChange={(e) => setExamplesStepFilter(e.target.value)} placeholder="Checkout / Form Submit" style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+                </label>
+                <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+                  <button type="button" onClick={() => { setExamplesPathHash(''); setExamplesStepFilter('') }} style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, color: t.color.text, borderRadius: t.radius.sm, padding: '8px 12px', cursor: 'pointer' }}>
+                    Clear filters
+                  </button>
+                </div>
+              </div>
+
+              {(examplesPathHash || examplesStepFilter.trim()) && (
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  Scoped to {examplesPathHash ? `path ${examplesPathHash.slice(0, 8)}` : 'all paths'}{examplesStepFilter.trim() ? ` · step match "${examplesStepFilter.trim()}"` : ''}.
+                </div>
+              )}
+
+              {examplesQuery.isLoading && <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading example journeys…</div>}
+              {examplesQuery.isError && <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{(examplesQuery.error as Error).message}</div>}
+              {!examplesQuery.isLoading && !examplesQuery.isError && !(examplesQuery.data?.items ?? []).length && (
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>No matching journey examples for the selected filters.</div>
+              )}
+              {!!examplesQuery.data?.items?.length && (
+                <div style={{ display: 'grid', gap: t.space.md }}>
+                  {examplesQuery.data.items.map((item) => (
+                    <SectionCard
+                      key={`${item.conversion_id}-${item.profile_id}`}
+                      title={item.steps.join(' → ')}
+                      subtitle={`Profile ${item.profile_id} · Converted ${formatDateTime(item.conversion_ts)}`}
+                      actions={<span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.touchpoints_count} touchpoints</span>}
+                    >
+                      <div style={{ display: 'grid', gap: t.space.sm }}>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          {item.steps.map((step) => pathChip(step))}
+                        </div>
+                        <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                          Value {item.conversion_value.toLocaleString(undefined, { maximumFractionDigits: 2 })} · {item.dimensions.channel_group || 'unknown'} · {item.dimensions.device || 'unknown'} · {item.dimensions.country || '—'}
+                        </div>
+                        <div style={{ display: 'grid', gap: 6 }}>
+                          {item.touchpoints_preview.map((tp, idx) => (
+                            <div key={`${item.conversion_id}-${idx}`} style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                              {formatDateTime(tp.ts)} · {tp.channel || 'unknown'}{tp.campaign ? ` / ${tp.campaign}` : ''}{tp.event ? ` · ${tp.event}` : ''}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </SectionCard>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </SectionCard>
 
-        <SectionCard title="Saved views" subtitle="Scaffolding for named Journey views and shared links.">
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: t.space.md, flexWrap: 'wrap' }}>
-            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-              No saved views yet. Current journey and filters are URL-shareable.
+        <SectionCard title="Saved views" subtitle="Save the current journey, tab, filters, and examples scope to your account.">
+          <div style={{ display: 'grid', gap: t.space.md }}>
+            <div style={{ display: 'flex', alignItems: 'end', justifyContent: 'space-between', gap: t.space.md, flexWrap: 'wrap' }}>
+              <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, flex: '1 1 260px' }}>
+                View name
+                <input value={savedViewName} onChange={(e) => setSavedViewName(e.target.value)} placeholder="Weekly checkout investigation" style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+              </label>
+              <button type="button" onClick={saveCurrentView} disabled={!savedViewName.trim() || !selectedJourneyId || createSavedViewMutation.isPending} style={{ border: `1px solid ${t.color.accent}`, background: t.color.accent, color: '#fff', borderRadius: t.radius.sm, fontSize: t.font.sizeSm, padding: '8px 12px', cursor: !savedViewName.trim() || !selectedJourneyId || createSavedViewMutation.isPending ? 'not-allowed' : 'pointer', opacity: !savedViewName.trim() || !selectedJourneyId || createSavedViewMutation.isPending ? 0.7 : 1 }}>
+                {createSavedViewMutation.isPending ? 'Saving…' : 'Save current view'}
+              </button>
             </div>
-            <button type="button" disabled style={{ border: `1px solid ${t.color.border}`, background: t.color.bgSubtle, color: t.color.textMuted, borderRadius: t.radius.sm, fontSize: t.font.sizeSm, padding: '8px 12px', cursor: 'not-allowed' }}>
-              Save current view (coming soon)
-            </button>
+            {savedViewsQuery.isError && (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>
+                {(savedViewsQuery.error as Error).message}
+              </div>
+            )}
+            {createSavedViewMutation.isError && (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>
+                {(createSavedViewMutation.error as Error).message}
+              </div>
+            )}
+            {deleteSavedViewMutation.isError && (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>
+                {(deleteSavedViewMutation.error as Error).message}
+              </div>
+            )}
+            {savedViewsQuery.isLoading ? (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                Loading saved views…
+              </div>
+            ) : null}
+            {!savedViewsQuery.isLoading && !savedViews.length ? (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                No saved views yet. Current state is still URL-shareable.
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gap: t.space.sm }}>
+                {savedViews.map((view) => (
+                  <div key={view.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: t.space.md, border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                    <div style={{ display: 'grid', gap: 2 }}>
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>{view.name}</div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                        {view.activeTab} · {view.filters.dateFrom} → {view.filters.dateTo} · {formatDateTime(view.createdAt)}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+                      <button type="button" onClick={() => applySavedView(view)} style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, color: t.color.text, borderRadius: t.radius.sm, padding: '6px 10px', cursor: 'pointer' }}>
+                        Apply
+                      </button>
+                      <button type="button" onClick={() => deleteSavedView(view.id)} disabled={deleteSavedViewMutation.isPending} style={{ border: `1px solid ${t.color.border}`, background: t.color.bgSubtle, color: t.color.textSecondary, borderRadius: t.radius.sm, padding: '6px 10px', cursor: deleteSavedViewMutation.isPending ? 'not-allowed' : 'pointer', opacity: deleteSavedViewMutation.isPending ? 0.7 : 1 }}>
+                        {deleteSavedViewMutation.isPending ? 'Deleting…' : 'Delete'}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </SectionCard>
       </DashboardPage>
@@ -1235,21 +1736,74 @@ export default function Journeys({
                 </div>
               </SectionCard>
 
-              <SectionCard title="Breakdown by device" subtitle="Placeholder: dimension-level decomposition will be added later.">
-                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                  Current row device: {selectedPath.device || 'n/a'}
+              <SectionCard title="Breakdown by device" subtitle="Conversion outcomes for this path across device slices in the current filter set.">
+                <div style={{ display: 'grid', gap: 8 }}>
+                  {!pathBreakdownByDevice.length && <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>No device breakdown available.</div>}
+                  {pathBreakdownByDevice.map((row) => (
+                    <div key={row.key} style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 1fr) repeat(3, minmax(90px, auto))', gap: t.space.sm, fontSize: t.font.sizeSm, alignItems: 'center' }}>
+                      <span style={{ color: t.color.text }}>{row.key}</span>
+                      <span style={{ color: t.color.textSecondary }}>{row.journeys.toLocaleString()} journeys</span>
+                      <span style={{ color: t.color.textSecondary }}>{row.conversions.toLocaleString()} conv.</span>
+                      <span style={{ color: t.color.textSecondary }}>{formatPercent(row.conversionRate)}</span>
+                    </div>
+                  ))}
                 </div>
               </SectionCard>
-              <SectionCard title="Breakdown by channel_group" subtitle="Placeholder: detailed split will be available in a later release.">
-                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                  Current row channel group: {selectedPath.channel_group || 'n/a'}
+              <SectionCard title="Breakdown by channel group" subtitle="Path performance split by channel group across matching path rows.">
+                <div style={{ display: 'grid', gap: 8 }}>
+                  {!pathBreakdownByChannelGroup.length && <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>No channel-group breakdown available.</div>}
+                  {pathBreakdownByChannelGroup.map((row) => (
+                    <div key={row.key} style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 1fr) repeat(3, minmax(90px, auto))', gap: t.space.sm, fontSize: t.font.sizeSm, alignItems: 'center' }}>
+                      <span style={{ color: t.color.text }}>{row.key}</span>
+                      <span style={{ color: t.color.textSecondary }}>{row.journeys.toLocaleString()} journeys</span>
+                      <span style={{ color: t.color.textSecondary }}>{row.conversions.toLocaleString()} conv.</span>
+                      <span style={{ color: t.color.textSecondary }}>{formatPercent(row.conversionRate)}</span>
+                    </div>
+                  ))}
                 </div>
               </SectionCard>
 
+              <div style={{ display: 'grid', gap: t.space.sm }}>
+                <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <select
+                    value={comparePathHash}
+                    onChange={(e) => setComparePathHash(e.target.value)}
+                    style={{ minWidth: 260, padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, fontSize: t.font.sizeSm }}
+                  >
+                    <option value="">Compare against another path…</option>
+                    {compareCandidateOptions.map((row) => (
+                      <option key={row.path_hash} value={row.path_hash}>
+                        {normalizeSteps(row.path_steps).join(' → ')}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setExamplesPathHash(selectedPath.path_hash)
+                      setExamplesStepFilter('')
+                      setActiveTab('examples')
+                      setSelectedPath(null)
+                    }}
+                    style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, color: t.color.text, borderRadius: t.radius.sm, padding: '8px 12px', fontSize: t.font.sizeSm, cursor: 'pointer' }}
+                  >
+                    Open examples
+                  </button>
+                </div>
+                {comparedPath && (
+                  <SectionCard title="Path comparison" subtitle="Delta versus another path in the current result set.">
+                    <div style={{ display: 'grid', gap: 8, fontSize: t.font.sizeSm }}>
+                      <div style={{ color: t.color.textSecondary }}>{normalizeSteps(comparedPath.path_steps).join(' → ')}</div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: t.space.sm }}>
+                        <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>Journeys Δ {((selectedPath.count_journeys || 0) - (comparedPath.count_journeys || 0)).toLocaleString()}</div>
+                        <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>CR Δ {formatPercent((selectedPath.conversion_rate || 0) - (comparedPath.conversion_rate || 0))}</div>
+                        <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>Avg time Δ {formatSeconds((selectedPath.avg_time_to_convert_sec || 0) - (comparedPath.avg_time_to_convert_sec || 0))}</div>
+                      </div>
+                    </div>
+                  </SectionCard>
+                )}
+              </div>
               <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
-                <button type="button" disabled style={{ border: `1px solid ${t.color.border}`, background: t.color.bgSubtle, color: t.color.textMuted, borderRadius: t.radius.sm, padding: '8px 12px', fontSize: t.font.sizeSm, cursor: 'not-allowed' }}>
-                  Compare (coming soon)
-                </button>
                 <button
                   type="button"
                   onClick={() =>
@@ -1423,19 +1977,23 @@ export default function Journeys({
             >
               <button
                 type="button"
-                disabled
+                onClick={() => {
+                  setExamplesPathHash('')
+                  setExamplesStepFilter(selectedFunnelStep || '')
+                  setActiveTab('examples')
+                  setSelectedFunnelStep(null)
+                }}
                 style={{
                   border: `1px solid ${t.color.border}`,
-                  background: t.color.bgSubtle,
-                  color: t.color.textMuted,
+                  background: t.color.surface,
+                  color: t.color.text,
                   borderRadius: t.radius.sm,
                   padding: '8px 12px',
                   fontSize: t.font.sizeSm,
-                  cursor: 'not-allowed',
+                  cursor: 'pointer',
                 }}
-                title="Placeholder action"
               >
-                Open related segments
+                Open related examples
               </button>
               <button
                 type="button"

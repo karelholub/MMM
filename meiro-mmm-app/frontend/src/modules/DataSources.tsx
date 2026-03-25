@@ -1135,6 +1135,15 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
                         </div>
                       )}
 
+                      {importRunDetailQuery.data.validation_summary?.quarantine_run_id ? (
+                        <div style={{ display: 'grid', gap: 4 }}>
+                          <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Linked quarantine run</div>
+                          <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                            {String(importRunDetailQuery.data.validation_summary.quarantine_run_id)}
+                          </div>
+                        </div>
+                      ) : null}
+
                       {!!importRunDetailQuery.data.preview_rows?.length && (
                         <div style={{ display: 'grid', gap: 4 }}>
                           <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Preview rows</div>
@@ -1814,7 +1823,15 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
                   meiroDryRunPending={meiroDryRunMutation.isPending}
                   meiroDryRunData={meiroDryRunMutation.data}
                   importFromMeiroPending={importFromMeiroMutation.isPending}
+                  importFromMeiroResult={importFromMeiroMutation.data ?? null}
                   reprocessWebhookArchivePending={reprocessWebhookArchiveMutation.isPending}
+                  reprocessWebhookArchiveResult={reprocessWebhookArchiveMutation.data ?? null}
+                  quarantineRuns={undefined}
+                  quarantineRunsLoading={false}
+                  quarantineRunsError={null}
+                  selectedQuarantineRun={null}
+                  selectedQuarantineRunLoading={false}
+                  selectedQuarantineRunError={null}
                   relativeTime={relativeTime}
                   setOauthToast={setOauthToast}
                   onTestMeiro={() => testMeiroMutation.mutate()}
@@ -1830,6 +1847,7 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
                   onDryRun={() => meiroDryRunMutation.mutate()}
                   onImportFromMeiro={() => importFromMeiroMutation.mutate()}
                   onReplayArchive={() => reprocessWebhookArchiveMutation.mutate()}
+                  onSelectQuarantineRun={() => {}}
                 />
               ) : drawerConnector.category === 'warehouse' && activeDrawerWarehouse ? (
                 <>

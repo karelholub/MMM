@@ -4,7 +4,7 @@ from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.modules.journeys.schemas import JourneyDefinitionCreate, JourneyDefinitionUpdate
+from app.modules.journeys.schemas import JourneyDefinitionCreate, JourneyDefinitionUpdate, JourneySavedViewPayload
 from app.services_journey_attribution import build_journey_attribution_summary
 from app.services_journey_definitions import (
     archive_journey_definition,
@@ -14,7 +14,15 @@ from app.services_journey_definitions import (
     serialize_journey_definition,
     update_journey_definition,
 )
+from app.services_journey_examples import list_examples_for_journey_definition
 from app.services_journey_paths import list_paths_for_journey_definition
+from app.services_journey_saved_views import (
+    create_journey_saved_view,
+    delete_journey_saved_view,
+    list_journey_saved_views,
+    serialize_journey_saved_view,
+    update_journey_saved_view,
+)
 from app.services_journey_transitions import list_transitions_for_journey_definition
 
 logger = logging.getLogger(__name__)
@@ -66,6 +74,83 @@ def create_router(
         except Exception as exc:
             logger.warning("List journey definitions failed: %s", exc, exc_info=True)
             return {"items": [], "total": 0, "page": resolved_page, "per_page": resolved_per_page}
+
+    @router.get("/api/journeys/views")
+    def api_list_journey_saved_views(
+        journey_definition_id: Optional[str] = Query(None),
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        return list_journey_saved_views(
+            db,
+            workspace_id=ctx.workspace_id,
+            user_id=ctx.user_id,
+            journey_definition_id=journey_definition_id,
+        )
+
+    @router.post("/api/journeys/views")
+    def api_create_journey_saved_view(
+        body: JourneySavedViewPayload,
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        if not body.name.strip():
+            raise HTTPException(status_code=400, detail="name is required")
+        try:
+            item = create_journey_saved_view(
+                db,
+                workspace_id=ctx.workspace_id,
+                user_id=ctx.user_id,
+                journey_definition_id=body.journey_definition_id,
+                name=body.name,
+                state=body.state,
+                actor_user_id=ctx.user_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        return serialize_journey_saved_view(item)
+
+    @router.put("/api/journeys/views/{view_id}")
+    def api_update_journey_saved_view(
+        view_id: str,
+        body: JourneySavedViewPayload,
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        if not body.name.strip():
+            raise HTTPException(status_code=400, detail="name is required")
+        try:
+            item = update_journey_saved_view(
+                db,
+                view_id=view_id,
+                workspace_id=ctx.workspace_id,
+                user_id=ctx.user_id,
+                name=body.name,
+                state=body.state,
+                journey_definition_id=body.journey_definition_id,
+                actor_user_id=ctx.user_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        if not item:
+            raise HTTPException(status_code=404, detail="Journey saved view not found")
+        return serialize_journey_saved_view(item)
+
+    @router.delete("/api/journeys/views/{view_id}")
+    def api_delete_journey_saved_view(
+        view_id: str,
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        ok = delete_journey_saved_view(
+            db,
+            view_id=view_id,
+            workspace_id=ctx.workspace_id,
+            user_id=ctx.user_id,
+        )
+        if not ok:
+            raise HTTPException(status_code=404, detail="Journey saved view not found")
+        return {"id": view_id, "status": "deleted"}
 
     @router.post("/api/journeys/definitions")
     def api_create_journey_definition(
@@ -251,5 +336,45 @@ def create_router(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+
+    @router.get("/api/journeys/{definition_id}/examples")
+    def api_get_journey_examples(
+        definition_id: str,
+        date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
+        date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
+        channel_group: Optional[str] = Query(None),
+        campaign_id: Optional[str] = Query(None),
+        device: Optional[str] = Query(None),
+        country: Optional[str] = Query(None),
+        path_hash: Optional[str] = Query(None),
+        contains_step: Optional[str] = Query(None),
+        limit: int = Query(12, ge=1, le=50),
+        db=Depends(get_db_dependency),
+        _ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        jd = get_journey_definition(db, definition_id)
+        if not jd or jd.is_archived:
+            raise HTTPException(status_code=404, detail="Journey definition not found")
+        try:
+            d_from = datetime.fromisoformat(date_from).date()
+            d_to = datetime.fromisoformat(date_to).date()
+        except Exception:
+            raise HTTPException(status_code=400, detail="date_from/date_to must be YYYY-MM-DD")
+        if d_from > d_to:
+            raise HTTPException(status_code=400, detail="date_from must be <= date_to")
+
+        return list_examples_for_journey_definition(
+            db,
+            definition=jd,
+            date_from=d_from,
+            date_to=d_to,
+            channel_group=channel_group,
+            campaign_id=campaign_id,
+            device=device,
+            country=country,
+            path_hash=path_hash,
+            contains_step=contains_step,
+            limit=limit,
+        )
 
     return router
