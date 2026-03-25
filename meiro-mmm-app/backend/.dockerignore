@@ -21,6 +21,17 @@ env
 tests
 *.db
 meiro_mmm.db
+*.db-wal
+*.db-shm
+
+# Runtime/generated data; mounted in dev and persisted outside image in prod
+app/data
+app/data/**
+
+# Logs and coverage
+*.log
+.coverage
+htmlcov
 
 # Docs / examples (optional: remove if you need in image)
 crontab.example

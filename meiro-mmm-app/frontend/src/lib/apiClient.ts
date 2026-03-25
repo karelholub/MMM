@@ -10,6 +10,20 @@ type CsrfRefreshPayload = {
   csrf_token?: string | null
 }
 
+export class ApiError extends Error {
+  status: number
+  detail?: unknown
+  code?: string
+
+  constructor(message: string, status: number, detail?: unknown, code?: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.detail = detail
+    this.code = code
+  }
+}
+
 function isBrowser(): boolean {
   return typeof window !== 'undefined'
 }
@@ -55,25 +69,41 @@ function mergeHeaders(
 }
 
 export async function parseApiError(res: Response, fallbackMessage: string): Promise<Error> {
+  let detailPayload: unknown = undefined
+  let message = fallbackMessage
+  let code: string | undefined
   try {
     const contentType = res.headers.get('content-type') || ''
     if (contentType.includes('application/json')) {
       const body = await res.json()
+      detailPayload = body?.detail ?? body
       const detail = body?.detail
-      if (typeof detail === 'string' && detail.trim()) return new Error(detail)
-      if (detail && typeof detail === 'object') {
-        if (typeof detail.message === 'string' && detail.message.trim()) return new Error(detail.message)
-        if (typeof detail.code === 'string' && detail.code.trim()) return new Error(detail.code)
+      if (typeof detail === 'string' && detail.trim()) {
+        message = detail
+      } else if (detail && typeof detail === 'object') {
+        if (typeof detail.message === 'string' && detail.message.trim()) {
+          message = detail.message
+        } else if (typeof detail.code === 'string' && detail.code.trim()) {
+          message = detail.code
+        }
+        if (typeof detail.code === 'string' && detail.code.trim()) {
+          code = detail.code
+        }
+      } else if (typeof body?.message === 'string' && body.message.trim()) {
+        message = body.message
       }
-      if (typeof body?.message === 'string' && body.message.trim()) return new Error(body.message)
+      if (!code && typeof body?.code === 'string' && body.code.trim()) {
+        code = body.code
+      }
     } else {
       const text = (await res.text()).trim()
-      if (text) return new Error(text)
+      detailPayload = text || undefined
+      if (text) message = text
     }
   } catch {
     // ignore parse errors and return fallback below
   }
-  return new Error(fallbackMessage)
+  return new ApiError(message, res.status, detailPayload, code)
 }
 
 async function tryRefreshCsrfToken(): Promise<boolean> {

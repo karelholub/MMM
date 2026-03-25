@@ -179,6 +179,24 @@
         "operator": "equals",
         "value": "letaky"
       }
+    },
+    {
+      "name": "Paid Social - myTimi PRINT",
+      "channel": "paid_social",
+      "priority": 110,
+      "enabled": true,
+      "source": {
+        "operator": "any",
+        "value": ""
+      },
+      "medium": {
+        "operator": "any",
+        "value": ""
+      },
+      "campaign": {
+        "operator": "contains",
+        "value": "myTimi|PRINT"
+      }
     }
   ],
   "source_aliases": {

@@ -2,3 +2,10 @@ node_modules
 dist
 tsconfig.tsbuildinfo
 .DS_Store
+.git
+.gitignore
+coverage
+cypress/videos
+cypress/screenshots
+test-results
+playwright-report

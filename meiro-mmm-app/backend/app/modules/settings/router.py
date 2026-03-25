@@ -1,6 +1,6 @@
 from typing import Any, Callable, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.modules.settings.schemas import KpiConfigModel, KpiTestPayload, RevenueConfig, Settings
 from app.modules.settings.schemas import (
@@ -22,6 +22,8 @@ from app.services_notifications import (
     upsert_pref as upsert_notification_pref,
 )
 from app.services_revenue_config import normalize_revenue_config
+from app.services_attribution_defaults import build_attribution_defaults_overview
+from app.services_nba_defaults import build_nba_preview_summary
 from app.utils.taxonomy import (
     ChannelRule,
     MatchExpression,
@@ -116,8 +118,86 @@ def create_router(
     @router.post("/api/settings")
     def update_settings(
         new_settings: Settings,
+        db=Depends(get_db_dependency),
+        confirm_attribution_warnings: bool = Query(False),
+        confirm_nba_warnings: bool = Query(False),
         _ctx=Depends(require_permission_dependency("settings.manage")),
     ):
+        current_settings = get_settings_obj()
+        current_attr = (
+            current_settings.attribution.model_dump()
+            if hasattr(current_settings.attribution, "model_dump")
+            else dict(current_settings.attribution or {})
+        )
+        proposed_attr = (
+            new_settings.attribution.model_dump()
+            if hasattr(new_settings.attribution, "model_dump")
+            else dict(new_settings.attribution or {})
+        )
+        attribution_changed = current_attr != proposed_attr
+        current_nba = (
+            current_settings.nba.model_dump()
+            if hasattr(current_settings.nba, "model_dump")
+            else dict(current_settings.nba or {})
+        )
+        proposed_nba = (
+            new_settings.nba.model_dump()
+            if hasattr(new_settings.nba, "model_dump")
+            else dict(new_settings.nba or {})
+        )
+        nba_changed = current_nba != proposed_nba
+
+        if attribution_changed:
+            journeys = ensure_journeys_loaded_fn(db)
+            overview = build_attribution_defaults_overview(
+                db=db,
+                journeys=journeys,
+                attribution_defaults=new_settings.attribution,
+                kpi_config=get_kpi_config_model_fn(),
+            )
+            decision = overview.get("decision") or {}
+            if decision.get("status") == "blocked":
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "Attribution defaults cannot be saved while dependencies are blocked.",
+                        "decision": decision,
+                    },
+                )
+            if decision.get("status") == "warning" and not confirm_attribution_warnings:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "Attribution defaults require warning acknowledgment before save.",
+                        "decision": decision,
+                    },
+                )
+
+        if nba_changed:
+            journeys = ensure_journeys_loaded_fn(db)
+            nba_preview = build_nba_preview_summary(
+                journeys=journeys,
+                settings=new_settings.nba,
+                level="channel",
+            )
+            decision = (nba_preview.get("decision") or {}) if isinstance(nba_preview, dict) else {}
+            if decision.get("status") == "blocked":
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "NBA defaults cannot be saved while preview dependencies are blocked.",
+                        "decision": decision,
+                    },
+                )
+            if decision.get("status") == "warning" and not confirm_nba_warnings:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "NBA defaults require warning acknowledgment before save.",
+                        "decision": decision,
+                    },
+                )
+
         return replace_settings_fn(new_settings)
 
     @router.get("/api/settings/revenue-config")

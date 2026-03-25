@@ -25,7 +25,7 @@ import DecisionStatusCard from '../components/DecisionStatusCard'
 import type { RecommendedActionItem } from '../components/RecommendedActionsList'
 import { usePermissions } from '../hooks/usePermissions'
 import { navigateForRecommendedAction } from '../lib/recommendedActions'
-import { apiGetJson, apiSendJson } from '../lib/apiClient'
+import { ApiError, apiGetJson, apiSendJson } from '../lib/apiClient'
 
 export type SectionKey =
   | 'attribution'
@@ -464,6 +464,86 @@ interface AttributionPreviewSummary {
     reasons?: string[]
     recommended_actions?: RecommendedActionItem[]
   } | null
+}
+
+interface AttributionDefaultsOverview {
+  dependencies: {
+    kpi: {
+      status: string
+      primary_kpi_id?: string | null
+      primary_kpi_label?: string | null
+      primary_coverage?: number | null
+      definitions_count?: number | null
+    }
+    taxonomy: {
+      status: string
+      unknown_share?: number | null
+      low_confidence_share?: number | null
+      active_rules?: number | null
+    }
+    measurement_model: {
+      status: string
+      id?: string | null
+      name?: string | null
+      version?: number | null
+      model_status?: string | null
+      is_default_selected?: boolean
+      validation_ok?: boolean
+      validation_message?: string | null
+    }
+  }
+  resolved_inputs: {
+    journeys_loaded: number
+    primary_kpi_id?: string | null
+    primary_kpi_label?: string | null
+    primary_kpi_coverage?: number | null
+    taxonomy_unknown_share?: number | null
+    taxonomy_low_confidence_share?: number | null
+    measurement_model_id?: string | null
+    measurement_model_name?: string | null
+    measurement_model_version?: number | null
+    measurement_model_status?: string | null
+  }
+  decision: {
+    status: string
+    confidence?: { score: number; band: string } | null
+    blockers?: string[]
+    warnings?: string[]
+    reasons?: string[]
+    recommended_actions?: RecommendedActionItem[]
+  }
+}
+
+type AttributionDecisionSummary = AttributionDefaultsOverview['decision']
+
+function extractDecisionFromConflictError(
+  error: unknown,
+): {
+  status: string
+  confidence?: { score: number; band: string } | null
+  blockers?: string[]
+  warnings?: string[]
+  reasons?: string[]
+  recommended_actions?: RecommendedActionItem[]
+} | null {
+  if (!(error instanceof ApiError)) return null
+  if (error.status !== 409) return null
+  const detail =
+    error.detail && typeof error.detail === 'object'
+      ? (error.detail as { decision?: unknown; detail?: { decision?: unknown } })
+      : null
+  const decision = detail?.decision ?? detail?.detail?.decision
+  if (!decision || typeof decision !== 'object') return null
+  const typed = decision as {
+    status: string
+    confidence?: { score: number; band: string } | null
+    blockers?: string[]
+    warnings?: string[]
+    reasons?: string[]
+    recommended_actions?: RecommendedActionItem[]
+  }
+  if (!typed.status) return null
+  return typed
 }
 
 interface NBAPreviewSummary {
@@ -1118,6 +1198,14 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       queryFn: async () => apiGetJson<KpiSuggestionsResponse>('/api/kpis/suggestions?limit=6', { fallbackMessage: 'Failed to load KPI suggestions' }),
       enabled: activeSection === 'kpi',
     })
+    const attributionDefaultsOverviewQuery = useQuery<AttributionDefaultsOverview>({
+      queryKey: ['attribution-defaults', 'overview'],
+      queryFn: async () =>
+        apiGetJson<AttributionDefaultsOverview>('/api/attribution/defaults/overview', {
+          fallbackMessage: 'Failed to load attribution dependency overview',
+        }),
+      enabled: activeSection === 'attribution',
+    })
     const currentFlags =
       settingsQuery.data?.feature_flags ??
       DEFAULT_SETTINGS.feature_flags
@@ -1245,8 +1333,28 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
     })
 
     const saveSettingsMutation = useMutation({
-      mutationFn: async (payload: Settings) =>
-        apiSendJson<Settings>('/api/settings', 'POST', payload, { fallbackMessage: 'Failed to save settings' }),
+      mutationFn: async (payload: {
+        settings: Settings
+        confirmAttributionWarnings?: boolean
+        confirmNbaWarnings?: boolean
+      }) =>
+        apiSendJson<Settings>((
+          () => {
+            const params = new URLSearchParams()
+            if (payload.confirmAttributionWarnings) {
+              params.set('confirm_attribution_warnings', 'true')
+            }
+            if (payload.confirmNbaWarnings) {
+              params.set('confirm_nba_warnings', 'true')
+            }
+            const query = params.toString()
+            return query ? `/api/settings?${query}` : '/api/settings'
+          }
+        )(),
+          'POST',
+          payload.settings,
+          { fallbackMessage: 'Failed to save settings' },
+        ),
     })
 
     const saveTaxonomyMutation = useMutation({
@@ -1484,6 +1592,12 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       string | null
     >(null)
     const previewAbortRef = useRef<AbortController | null>(null)
+    const [attributionDependencyAcknowledged, setAttributionDependencyAcknowledged] = useState(false)
+    const [attributionSaveGuardDecision, setAttributionSaveGuardDecision] =
+      useState<AttributionDecisionSummary | null>(null)
+    const [nbaDependencyAcknowledged, setNbaDependencyAcknowledged] = useState(false)
+    const [nbaSaveGuardDecision, setNbaSaveGuardDecision] =
+      useState<NBAPreviewSummary['decision'] | null>(null)
 
     const toastIdRef = useRef(0)
     const [toast, setToast] = useState<{
@@ -2150,6 +2264,28 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       const timer = setTimeout(() => setToast(null), 4000)
       return () => clearTimeout(timer)
     }, [toast])
+
+    useEffect(() => {
+      if (activeSection !== 'attribution') return
+      setAttributionDependencyAcknowledged(false)
+      setAttributionSaveGuardDecision(null)
+    }, [
+      activeSection,
+      attributionDraft,
+      settingsBaseline?.attribution,
+      attributionDefaultsOverviewQuery.data?.decision?.status,
+    ])
+
+    useEffect(() => {
+      if (activeSection !== 'nba') return
+      setNbaDependencyAcknowledged(false)
+      setNbaSaveGuardDecision(null)
+    }, [
+      activeSection,
+      nbaDraft,
+      settingsBaseline?.nba,
+      nbaPreview?.decision?.status,
+    ])
 
     const attributionPreviewKey = useMemo(() => {
       if (activeSection !== 'attribution') return null
@@ -3551,6 +3687,86 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
 
         try {
           if (settingsSections.length > 0) {
+            if (settingsSections.includes('attribution')) {
+              const baselineAttribution =
+                settingsBaseline?.attribution ?? DEFAULT_SETTINGS.attribution
+              const attributionSettingsChanged = !deepEqual(
+                attributionDraft,
+                baselineAttribution,
+              )
+              if (attributionSettingsChanged) {
+                const overviewData =
+                  attributionDefaultsOverviewQuery.data ??
+                  (await attributionDefaultsOverviewQuery.refetch()).data
+                const status = overviewData?.decision?.status
+                if (status === 'blocked') {
+                  toastIdRef.current += 1
+                  setToast({
+                    id: toastIdRef.current,
+                    type: 'error',
+                    message:
+                      'Attribution defaults are blocked by KPI, taxonomy, or measurement model dependencies.',
+                  })
+                  return false
+                }
+                if (status === 'warning' && !attributionDependencyAcknowledged) {
+                  toastIdRef.current += 1
+                  setToast({
+                    id: toastIdRef.current,
+                    type: 'error',
+                    message:
+                      'Acknowledge dependency warnings before saving attribution defaults.',
+                  })
+                  return false
+                }
+              }
+            }
+            if (settingsSections.includes('nba')) {
+              const baselineNba = settingsBaseline?.nba ?? DEFAULT_SETTINGS.nba
+              const nbaSettingsChanged = !deepEqual(nbaDraft, baselineNba)
+              if (nbaSettingsChanged) {
+                const nbaOverview = await apiSendJson<NBAPreviewSummary>(
+                  '/api/nba/preview',
+                  'POST',
+                  {
+                    settings: {
+                      ...nbaDraft,
+                      excluded_channels: Array.from(
+                        new Set(
+                          (nbaDraft.excluded_channels ?? [])
+                            .map((channel) => channel.trim())
+                            .filter(Boolean),
+                        ),
+                      ),
+                    },
+                    level: 'channel',
+                  },
+                  { fallbackMessage: 'Failed to calculate NBA preview' },
+                )
+                const status = nbaOverview?.decision?.status
+                if (status === 'blocked') {
+                  toastIdRef.current += 1
+                  setToast({
+                    id: toastIdRef.current,
+                    type: 'error',
+                    message:
+                      'NBA defaults are blocked by current preview dependencies.',
+                  })
+                  return false
+                }
+                if (status === 'warning' && !nbaDependencyAcknowledged) {
+                  toastIdRef.current += 1
+                  setToast({
+                    id: toastIdRef.current,
+                    type: 'error',
+                    message:
+                      'Acknowledge preview warnings before saving NBA defaults.',
+                  })
+                  return false
+                }
+              }
+            }
+
             const payload = settingsPayload({})
             if (settingsSections.includes('attribution')) {
               payload.attribution = deepClone(attributionDraft)
@@ -3562,7 +3778,54 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
             if (settingsSections.includes('mmm')) {
               payload.mmm = deepClone(mmmDraft)
             }
-            const response = await saveSettingsMutation.mutateAsync(payload)
+            let response: Settings
+            try {
+              response = await saveSettingsMutation.mutateAsync({
+                settings: payload,
+                confirmAttributionWarnings: settingsSections.includes('attribution')
+                  ? attributionDependencyAcknowledged
+                  : false,
+                confirmNbaWarnings: settingsSections.includes('nba')
+                  ? nbaDependencyAcknowledged
+                  : false,
+              })
+              setAttributionSaveGuardDecision(null)
+              setNbaSaveGuardDecision(null)
+            } catch (error) {
+              if (settingsSections.includes('attribution')) {
+                const saveDecision = extractDecisionFromConflictError(error)
+                if (saveDecision) {
+                  setAttributionSaveGuardDecision(saveDecision)
+                  toastIdRef.current += 1
+                  setToast({
+                    id: toastIdRef.current,
+                    type: 'error',
+                    message:
+                      saveDecision.status === 'blocked'
+                        ? 'Attribution defaults are blocked by current dependency state.'
+                        : 'Attribution defaults require warning acknowledgment before saving.',
+                  })
+                  return false
+                }
+              }
+              if (settingsSections.includes('nba')) {
+                const saveDecision = extractDecisionFromConflictError(error)
+                if (saveDecision) {
+                  setNbaSaveGuardDecision(saveDecision)
+                  toastIdRef.current += 1
+                  setToast({
+                    id: toastIdRef.current,
+                    type: 'error',
+                    message:
+                      saveDecision.status === 'blocked'
+                        ? 'NBA defaults are blocked by current preview dependencies.'
+                        : 'NBA defaults require warning acknowledgment before saving.',
+                  })
+                  return false
+                }
+              }
+              throw error
+            }
             const merged = response ?? payload
             setSettingsBaseline((prev) => ({
               attribution: settingsSections.includes('attribution')
@@ -3804,6 +4067,10 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         notificationsSlackWebhookInput,
         modelConfigParseError,
         currentConfigObject,
+        attributionDefaultsOverviewQuery,
+        attributionDependencyAcknowledged,
+        nbaDependencyAcknowledged,
+        settingsBaseline,
       ],
     )
 
@@ -4178,9 +4445,227 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
 
       const previewErrorMessage =
         attributionPreviewStatus === 'error' ? attributionPreviewError : null
+      const attributionOverview = attributionDefaultsOverviewQuery.data
+      const attributionOverviewError =
+        (attributionDefaultsOverviewQuery.error as Error | undefined)?.message || null
+      const needsDependencyAck =
+        attributionDirty &&
+        attributionOverview?.decision?.status === 'warning'
 
       return (
         <div style={{ display: 'grid', gap: t.space.xl }}>
+          <div style={cardStyle}>
+            <div style={{ display: 'grid', gap: t.space.xs }}>
+              <h3
+                style={{
+                  margin: 0,
+                  fontSize: t.font.sizeMd,
+                  fontWeight: t.font.weightSemibold,
+                  color: t.color.text,
+                }}
+              >
+                Readiness
+              </h3>
+              <p style={helperTextStyle}>
+                Attribution defaults depend on KPI, taxonomy, and measurement model readiness.
+              </p>
+            </div>
+
+            {attributionDefaultsOverviewQuery.isLoading && (
+              <span style={helperTextStyle}>Loading dependency overview…</span>
+            )}
+
+            {attributionOverviewError && (
+              <DecisionStatusCard
+                title="Dependency overview unavailable"
+                status="blocked"
+                compact
+                blockers={[attributionOverviewError]}
+              />
+            )}
+
+            {attributionOverview && (
+              <div style={{ display: 'grid', gap: t.space.md }}>
+                <DecisionStatusCard
+                  title="Dependency assessment"
+                  status={attributionOverview.decision.status}
+                  compact
+                  subtitle={
+                    attributionOverview.decision.confidence?.score != null
+                      ? `Confidence ${attributionOverview.decision.confidence.band} (${attributionOverview.decision.confidence.score}/100)`
+                      : undefined
+                  }
+                  blockers={attributionOverview.decision.blockers}
+                  warnings={attributionOverview.decision.warnings}
+                  actions={attributionOverview.decision.recommended_actions}
+                  onActionClick={(action) =>
+                    navigateForRecommendedAction(action, { defaultPage: 'settings' })
+                  }
+                />
+                {attributionSaveGuardDecision ? (
+                  <DecisionStatusCard
+                    title="Last save attempt"
+                    status={attributionSaveGuardDecision.status}
+                    compact
+                    blockers={attributionSaveGuardDecision.blockers}
+                    warnings={attributionSaveGuardDecision.warnings}
+                    actions={attributionSaveGuardDecision.recommended_actions}
+                    onActionClick={(action) =>
+                      navigateForRecommendedAction(action, { defaultPage: 'settings' })
+                    }
+                  />
+                ) : null}
+                {needsDependencyAck ? (
+                  <label
+                    style={{
+                      display: 'flex',
+                      gap: t.space.sm,
+                      alignItems: 'flex-start',
+                      border: `1px solid ${t.color.warning}`,
+                      borderRadius: t.radius.sm,
+                      background: t.color.warningSubtle,
+                      padding: t.space.sm,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={attributionDependencyAcknowledged}
+                      onChange={(e) =>
+                        setAttributionDependencyAcknowledged(e.target.checked)
+                      }
+                      style={{ marginTop: 3 }}
+                    />
+                    <span style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+                      I reviewed dependency warnings and still want to save attribution defaults.
+                    </span>
+                  </label>
+                ) : null}
+
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: t.space.sm,
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                  }}
+                >
+                  <div
+                    style={{
+                      border: `1px solid ${t.color.borderLight}`,
+                      borderRadius: t.radius.sm,
+                      background: t.color.bgSubtle,
+                      padding: t.space.sm,
+                      display: 'grid',
+                      gap: 4,
+                    }}
+                  >
+                    <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>KPI</span>
+                    <span style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+                      {attributionOverview.dependencies.kpi.primary_kpi_label || attributionOverview.dependencies.kpi.primary_kpi_id || 'Not set'}
+                    </span>
+                    <span style={helperTextStyle}>
+                      Coverage {(Number(attributionOverview.dependencies.kpi.primary_coverage || 0) * 100).toFixed(1)}% · {attributionOverview.dependencies.kpi.status}
+                    </span>
+                  </div>
+
+                  <div
+                    style={{
+                      border: `1px solid ${t.color.borderLight}`,
+                      borderRadius: t.radius.sm,
+                      background: t.color.bgSubtle,
+                      padding: t.space.sm,
+                      display: 'grid',
+                      gap: 4,
+                    }}
+                  >
+                    <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Taxonomy</span>
+                    <span style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+                      Unknown share {(Number(attributionOverview.dependencies.taxonomy.unknown_share || 0) * 100).toFixed(1)}%
+                    </span>
+                    <span style={helperTextStyle}>
+                      Low-confidence {(Number(attributionOverview.dependencies.taxonomy.low_confidence_share || 0) * 100).toFixed(1)}% · {attributionOverview.dependencies.taxonomy.status}
+                    </span>
+                  </div>
+
+                  <div
+                    style={{
+                      border: `1px solid ${t.color.borderLight}`,
+                      borderRadius: t.radius.sm,
+                      background: t.color.bgSubtle,
+                      padding: t.space.sm,
+                      display: 'grid',
+                      gap: 4,
+                    }}
+                  >
+                    <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Measurement model</span>
+                    <span style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+                      {attributionOverview.dependencies.measurement_model.name || attributionOverview.dependencies.measurement_model.id || 'Not selected'}
+                    </span>
+                    <span style={helperTextStyle}>
+                      {attributionOverview.dependencies.measurement_model.status}
+                      {attributionOverview.dependencies.measurement_model.version != null
+                        ? ` · v${attributionOverview.dependencies.measurement_model.version}`
+                        : ''}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div style={cardStyle}>
+            <div style={{ display: 'grid', gap: t.space.xs }}>
+              <h3
+                style={{
+                  margin: 0,
+                  fontSize: t.font.sizeMd,
+                  fontWeight: t.font.weightSemibold,
+                  color: t.color.text,
+                }}
+              >
+                Resolved inputs
+              </h3>
+              <p style={helperTextStyle}>
+                Attribution defaults are currently evaluated with these dependency inputs.
+              </p>
+            </div>
+            {attributionOverview ? (
+              <div
+                style={{
+                  display: 'grid',
+                  gap: t.space.sm,
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                }}
+              >
+                <div style={{ ...cardStyle, padding: t.space.md, gap: 4, boxShadow: 'none' }}>
+                  <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Journeys loaded</span>
+                  <span style={{ fontSize: t.font.sizeMd, color: t.color.text }}>
+                    {Number(attributionOverview.resolved_inputs.journeys_loaded || 0).toLocaleString()}
+                  </span>
+                </div>
+                <div style={{ ...cardStyle, padding: t.space.md, gap: 4, boxShadow: 'none' }}>
+                  <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Primary KPI</span>
+                  <span style={{ fontSize: t.font.sizeMd, color: t.color.text }}>
+                    {attributionOverview.resolved_inputs.primary_kpi_label || attributionOverview.resolved_inputs.primary_kpi_id || 'Not set'}
+                  </span>
+                </div>
+                <div style={{ ...cardStyle, padding: t.space.md, gap: 4, boxShadow: 'none' }}>
+                  <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Taxonomy unknown share</span>
+                  <span style={{ fontSize: t.font.sizeMd, color: t.color.text }}>
+                    {(Number(attributionOverview.resolved_inputs.taxonomy_unknown_share || 0) * 100).toFixed(1)}%
+                  </span>
+                </div>
+                <div style={{ ...cardStyle, padding: t.space.md, gap: 4, boxShadow: 'none' }}>
+                  <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Model config</span>
+                  <span style={{ fontSize: t.font.sizeMd, color: t.color.text }}>
+                    {attributionOverview.resolved_inputs.measurement_model_name || attributionOverview.resolved_inputs.measurement_model_id || 'Not selected'}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <span style={helperTextStyle}>Dependency inputs will appear when overview data loads.</span>
+            )}
+          </div>
+
           <div style={{ display: 'grid', gap: t.space.lg }}>
             <div style={cardStyle}>
               <div style={{ display: 'grid', gap: t.space.xs }}>
@@ -4806,6 +5291,12 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
           : null
       const previewErrorMessage =
         nbaPreviewStatus === 'error' ? nbaPreviewError : null
+      const nbaPreviewDecision =
+        (nbaSaveGuardDecision ?? nbaPreview?.decision) ?? null
+      const needsNbaDependencyAck =
+        nbaDirty &&
+        nbaPreviewDecision?.status === 'warning'
+      const nbaRequiresAck = needsNbaDependencyAck && !nbaDependencyAcknowledged
       const baselineRate = nbaTestResult?.baselineConversionRate ?? 0
       const testRecommendations = nbaTestResult?.recommendations ?? []
 
@@ -5345,23 +5836,46 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                   color: t.color.textSecondary,
                 }}
               >
-                {nbaPreview.decision ? (
+                {nbaPreviewDecision ? (
                   <DecisionStatusCard
                     title="Preview assessment"
-                    status={nbaPreview.decision.status}
+                    status={nbaPreviewDecision.status}
                     compact
                     subtitle={
-                      nbaPreview.decision.confidence?.score != null
-                        ? `Confidence ${nbaPreview.decision.confidence.band} (${nbaPreview.decision.confidence.score}/100)`
+                      nbaPreviewDecision.confidence?.score != null
+                        ? `Confidence ${nbaPreviewDecision.confidence.band} (${nbaPreviewDecision.confidence.score}/100)`
                         : undefined
                     }
-                    blockers={nbaPreview.decision.blockers}
-                    warnings={nbaPreview.decision.warnings}
-                    actions={nbaPreview.decision.recommended_actions}
+                    blockers={nbaPreviewDecision.blockers}
+                    warnings={nbaPreviewDecision.warnings}
+                    actions={nbaPreviewDecision.recommended_actions}
                     onActionClick={(action) =>
                       navigateForRecommendedAction(action, { defaultPage: 'settings' })
                     }
                   />
+                ) : null}
+                {needsNbaDependencyAck ? (
+                  <label
+                    style={{
+                      display: 'flex',
+                      gap: t.space.sm,
+                      alignItems: 'flex-start',
+                      border: `1px solid ${t.color.warning}`,
+                      borderRadius: t.radius.sm,
+                      background: t.color.warningSubtle,
+                      padding: t.space.sm,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={nbaDependencyAcknowledged}
+                      onChange={(e) => setNbaDependencyAcknowledged(e.target.checked)}
+                      style={{ marginTop: 3 }}
+                    />
+                    <span style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+                      I reviewed NBA preview warnings and still want to save these defaults.
+                    </span>
+                  </label>
                 ) : null}
                 <ul
                   style={{
@@ -5707,20 +6221,20 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
               <button
                 type="button"
                 onClick={() => void handleSave('nba')}
-                disabled={!nbaDirty || nbaSaving || nbaHasErrors}
+                disabled={!nbaDirty || nbaSaving || nbaHasErrors || nbaRequiresAck}
                 style={{
                   padding: `${t.space.sm}px ${t.space.lg}px`,
                   borderRadius: t.radius.sm,
                   border: 'none',
                   background:
-                    !nbaDirty || nbaSaving || nbaHasErrors
+                    !nbaDirty || nbaSaving || nbaHasErrors || nbaRequiresAck
                       ? t.color.borderLight
                       : t.color.accent,
                   color: t.color.surface,
                   fontSize: t.font.sizeSm,
                   fontWeight: t.font.weightSemibold,
                   cursor:
-                    !nbaDirty || nbaSaving || nbaHasErrors
+                    !nbaDirty || nbaSaving || nbaHasErrors || nbaRequiresAck
                       ? 'not-allowed'
                       : 'pointer',
                   opacity: nbaSaving ? 0.7 : 1,
@@ -5734,6 +6248,11 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
           {nbaHasErrors && (
             <span style={{ fontSize: t.font.sizeXs, color: t.color.danger }}>
               Resolve validation issues above before saving.
+            </span>
+          )}
+          {!nbaHasErrors && nbaRequiresAck && (
+            <span style={{ fontSize: t.font.sizeXs, color: t.color.warning }}>
+              Acknowledge NBA preview warnings before saving defaults.
             </span>
           )}
         </div>

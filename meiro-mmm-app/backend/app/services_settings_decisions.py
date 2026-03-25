@@ -245,3 +245,133 @@ def build_nba_test_decision(
         "reasons": reasons,
         "recommended_actions": actions,
     }
+
+
+def build_attribution_defaults_overview_decision(
+    *,
+    kpi_status: str,
+    taxonomy_status: str,
+    model_ready: bool,
+    model_validation_ok: bool,
+    journeys_loaded: int,
+    taxonomy_unknown_share: float,
+    kpi_primary_coverage: float,
+) -> Dict[str, Any]:
+    blockers: List[str] = []
+    warnings: List[str] = []
+    reasons: List[str] = []
+    actions: List[Dict[str, Any]] = []
+
+    if journeys_loaded <= 0:
+        blockers.append("No journeys are loaded for attribution defaults validation.")
+        actions.append(
+            _action(
+                "load_journeys_for_attribution_defaults",
+                "Load journeys before tuning attribution defaults",
+                benefit="Enable reliable dependency checks and impact preview",
+                target_page="datasources",
+            )
+        )
+    else:
+        reasons.append(f"Dependency checks are based on {journeys_loaded} loaded journeys.")
+
+    if kpi_status == "blocked":
+        blockers.append("KPI configuration is blocked.")
+        actions.append(
+            _action(
+                "fix_kpi_config_for_attribution_defaults",
+                "Fix KPI configuration before changing attribution defaults",
+                benefit="Keep attribution reporting aligned with a stable primary KPI",
+                target_section="kpi",
+            )
+        )
+    elif kpi_status == "warning":
+        warnings.append("KPI configuration has warnings that may affect attribution confidence.")
+        actions.append(
+            _action(
+                "review_kpi_config_for_attribution_defaults",
+                "Review KPI warnings before applying attribution defaults",
+                benefit="Reduce attribution drift from weak KPI coverage",
+                target_section="kpi",
+            )
+        )
+    else:
+        reasons.append("KPI dependency is ready.")
+
+    if taxonomy_status == "blocked":
+        blockers.append("Taxonomy coverage is blocked for attribution reliability.")
+        actions.append(
+            _action(
+                "fix_taxonomy_for_attribution_defaults",
+                "Resolve taxonomy blockers before changing attribution defaults",
+                benefit="Prevent unresolved source/medium traffic from skewing attribution",
+                target_section="taxonomy",
+            )
+        )
+    elif taxonomy_status == "warning":
+        warnings.append("Taxonomy has warnings that may reduce attribution quality.")
+        actions.append(
+            _action(
+                "review_taxonomy_for_attribution_defaults",
+                "Review taxonomy warnings before applying attribution defaults",
+                benefit="Improve channel assignment consistency in attribution outputs",
+                target_section="taxonomy",
+            )
+        )
+    else:
+        reasons.append("Taxonomy dependency is ready.")
+
+    if not model_ready:
+        blockers.append("No active measurement model config is available.")
+        actions.append(
+            _action(
+                "activate_measurement_model_for_attribution_defaults",
+                "Activate a measurement model config",
+                benefit="Ensure attribution defaults are evaluated against an active model",
+                target_section="measurement-models",
+            )
+        )
+    elif not model_validation_ok:
+        blockers.append("Active measurement model config fails validation.")
+        actions.append(
+            _action(
+                "validate_measurement_model_for_attribution_defaults",
+                "Fix measurement model validation issues",
+                benefit="Avoid inconsistent attribution defaults behavior",
+                target_section="measurement-models",
+            )
+        )
+    else:
+        reasons.append("Measurement model dependency is ready.")
+
+    if taxonomy_unknown_share >= 0.2 and taxonomy_status != "blocked":
+        warnings.append("Unknown taxonomy share remains high for attribution confidence.")
+    if kpi_primary_coverage < 0.2 and kpi_status != "blocked":
+        warnings.append("Primary KPI coverage is low for attribution-led analysis.")
+
+    score = 86.0
+    status = "ready"
+    if blockers:
+        status = "blocked"
+        score = 30.0
+    elif warnings:
+        status = "warning"
+        score = 62.0
+
+    deduped_actions: List[Dict[str, Any]] = []
+    seen = set()
+    for action in actions:
+        action_id = action.get("id")
+        if not action_id or action_id in seen:
+            continue
+        seen.add(action_id)
+        deduped_actions.append(action)
+
+    return {
+        "status": status,
+        "confidence": _confidence(score),
+        "blockers": blockers,
+        "warnings": warnings,
+        "reasons": reasons,
+        "recommended_actions": deduped_actions,
+    }

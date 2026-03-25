@@ -62,8 +62,12 @@ from app.services_model_config import (
 )
 from app.services_settings_decisions import (
     build_attribution_preview_decision,
-    build_nba_preview_decision,
     build_nba_test_decision,
+)
+from app.services_attribution_defaults import build_attribution_defaults_overview
+from app.services_nba_defaults import (
+    build_nba_preview_summary,
+    filter_nba_recommendations,
 )
 from app.services_attention_queue import build_attention_queue
 from app.services_data_sources import list_data_sources
@@ -736,6 +740,12 @@ class AttributionPreviewResponse(BaseModel):
     decision: Optional[Dict[str, Any]] = None
 
 
+class AttributionDefaultsOverviewResponse(BaseModel):
+    dependencies: Dict[str, Any]
+    resolved_inputs: Dict[str, Any]
+    decision: Dict[str, Any]
+
+
 class NBAPreviewPayload(BaseModel):
     settings: NBASettings
     level: Optional[str] = "channel"
@@ -843,94 +853,6 @@ def _replace_kpi_config(cfg: KpiConfigModel) -> KpiConfigModel:
     KPI_CONFIG = KpiConfig(definitions=defs, primary_kpi_id=cfg.primary_kpi_id)
     save_kpi_config(KPI_CONFIG)
     return _get_kpi_config_model()
-
-
-def _filter_nba_recommendations(
-    nba_raw: Dict[str, List[Dict[str, Any]]],
-    settings: NBASettings,
-) -> Tuple[Dict[str, List[Dict[str, Any]]], Dict[str, Any]]:
-    """Apply NBA settings thresholds to raw recommendations and collect stats."""
-
-    stats: Dict[str, Any] = {
-        "total_before": 0,
-        "total_after": 0,
-        "filtered_support": 0,
-        "filtered_conversion": 0,
-        "filtered_uplift": 0,
-        "filtered_excluded": 0,
-        "filtered_depth": 0,
-        "trimmed_cap": 0,
-        "prefixes_considered": 0,
-        "prefixes_retained": 0,
-    }
-
-    min_prefix_support = max(1, settings.min_prefix_support)
-    min_conversion_rate = max(0.0, settings.min_conversion_rate)
-    max_prefix_depth = max(0, settings.max_prefix_depth)
-    min_next_support = max(1, settings.min_next_support or settings.min_prefix_support)
-    max_suggestions = max(1, settings.max_suggestions_per_prefix)
-    min_uplift_pct = settings.min_uplift_pct
-    excluded_channels = {
-        ch.strip().lower() for ch in (settings.excluded_channels or []) if ch
-    }
-
-    filtered: Dict[str, List[Dict[str, Any]]] = {}
-
-    for prefix, recs in nba_raw.items():
-        stats["prefixes_considered"] += 1
-        stats["total_before"] += len(recs)
-
-        depth = len([step for step in prefix.split(" > ") if step])
-        if depth > max_prefix_depth:
-            stats["filtered_depth"] += len(recs)
-            continue
-
-        prefix_support = sum(int(r.get("count", 0)) for r in recs)
-        if prefix_support < min_prefix_support:
-            stats["filtered_support"] += len(recs)
-            continue
-
-        total_conversions = sum(int(r.get("conversions", 0)) for r in recs)
-        baseline_rate = (
-            total_conversions / prefix_support if prefix_support > 0 else 0.0
-        )
-
-        kept: List[Dict[str, Any]] = []
-        for rec in recs:
-            count = int(rec.get("count", 0))
-            conv_rate = float(rec.get("conversion_rate", 0.0))
-            channel = str(rec.get("channel", "")).lower()
-
-            if count < min_next_support:
-                stats["filtered_support"] += 1
-                continue
-            if conv_rate < min_conversion_rate:
-                stats["filtered_conversion"] += 1
-                continue
-            if excluded_channels and channel in excluded_channels:
-                stats["filtered_excluded"] += 1
-                continue
-            if (
-                min_uplift_pct is not None
-                and min_uplift_pct > 0
-                and baseline_rate > 0
-            ):
-                uplift = (conv_rate - baseline_rate) / baseline_rate
-                if uplift < min_uplift_pct:
-                    stats["filtered_uplift"] += 1
-                    continue
-
-            kept.append(rec)
-
-        if kept:
-            if len(kept) > max_suggestions:
-                stats["trimmed_cap"] += len(kept) - max_suggestions
-                kept = kept[:max_suggestions]
-            filtered[prefix] = kept
-            stats["prefixes_retained"] += 1
-            stats["total_after"] += len(kept)
-
-    return filtered, stats
 
 
 # KPI configuration (separate JSON file)
@@ -1446,6 +1368,32 @@ def attribution_preview(
     )
 
 
+@app.get(
+    "/api/attribution/defaults/overview",
+    response_model=AttributionDefaultsOverviewResponse,
+)
+def attribution_defaults_overview(
+    db=Depends(get_db),
+) -> AttributionDefaultsOverviewResponse:
+    """Return dependency readiness and resolved inputs for attribution defaults."""
+    global JOURNEYS
+    if not JOURNEYS:
+        JOURNEYS = load_journeys_from_db(db, limit=50000)
+    journeys = JOURNEYS or []
+    overview = build_attribution_defaults_overview(
+        db=db,
+        journeys=journeys,
+        attribution_defaults=SETTINGS.attribution,
+        kpi_config=load_kpi_config(),
+    )
+
+    return AttributionDefaultsOverviewResponse(
+        dependencies=overview["dependencies"],
+        resolved_inputs=overview["resolved_inputs"],
+        decision=overview["decision"],
+    )
+
+
 @app.post(
     "/api/nba/preview",
     response_model=NBAPreviewResponse,
@@ -1459,82 +1407,22 @@ def nba_preview(
     if not JOURNEYS:
         JOURNEYS = load_journeys_from_db(db, limit=50000)
 
-    if not JOURNEYS:
-        reason = "Preview unavailable (no journeys loaded)"
-        return NBAPreviewResponse(
-            previewAvailable=False,
-            datasetJourneys=0,
-            totalPrefixes=0,
-            prefixesEligible=0,
-            totalRecommendations=0,
-            averageRecommendationsPerPrefix=0.0,
-            filteredBySupportPct=0.0,
-            filteredByConversionPct=0.0,
-            reason=reason,
-            decision=build_nba_preview_decision(
-                preview_available=False,
-                reason=reason,
-                dataset_journeys=0,
-                prefixes_eligible=0,
-                total_prefixes=0,
-                total_recommendations=0,
-                filtered_by_support_pct=0.0,
-                filtered_by_conversion_pct=0.0,
-            ),
-        )
-
-    requested_level = (payload.level or "channel").lower()
-    use_level = (
-        "campaign"
-        if requested_level == "campaign" and has_any_campaign(JOURNEYS)
-        else "channel"
+    summary = build_nba_preview_summary(
+        journeys=JOURNEYS or [],
+        settings=payload.settings,
+        level=payload.level or "channel",
     )
-    if requested_level == "campaign" and use_level != "campaign":
-        reason = "Campaign-level preview unavailable (journeys lack campaign data)"
-    else:
-        reason = None
-
-    nba_raw = compute_next_best_action(JOURNEYS, level=use_level)
-    filtered, stats = _filter_nba_recommendations(nba_raw, payload.settings)
-
-    total_before = stats.get("total_before", 0) or 0
-    support_filtered = (
-        stats.get("filtered_support", 0) + stats.get("filtered_depth", 0)
-    )
-    conversion_filtered = stats.get("filtered_conversion", 0)
-    prefixes_eligible = stats.get("prefixes_retained", 0)
-    total_after = stats.get("total_after", 0)
-    avg_per_prefix = (
-        total_after / prefixes_eligible if prefixes_eligible else 0.0
-    )
-
-    filtered_support_pct = (
-        (support_filtered / total_before) * 100 if total_before else 0.0
-    )
-    filtered_conversion_pct = (
-        (conversion_filtered / total_before) * 100 if total_before else 0.0
-    )
-
     return NBAPreviewResponse(
-        previewAvailable=True,
-        datasetJourneys=len(JOURNEYS),
-        totalPrefixes=stats.get("prefixes_considered", 0),
-        prefixesEligible=prefixes_eligible,
-        totalRecommendations=total_after,
-        averageRecommendationsPerPrefix=round(avg_per_prefix, 2),
-        filteredBySupportPct=round(filtered_support_pct, 2),
-        filteredByConversionPct=round(filtered_conversion_pct, 2),
-        reason=reason,
-        decision=build_nba_preview_decision(
-            preview_available=True,
-            reason=reason,
-            dataset_journeys=len(JOURNEYS),
-            prefixes_eligible=prefixes_eligible,
-            total_prefixes=stats.get("prefixes_considered", 0),
-            total_recommendations=total_after,
-            filtered_by_support_pct=round(filtered_support_pct, 2),
-            filtered_by_conversion_pct=round(filtered_conversion_pct, 2),
-        ),
+        previewAvailable=bool(summary.get("previewAvailable")),
+        datasetJourneys=int(summary.get("datasetJourneys") or 0),
+        totalPrefixes=int(summary.get("totalPrefixes") or 0),
+        prefixesEligible=int(summary.get("prefixesEligible") or 0),
+        totalRecommendations=int(summary.get("totalRecommendations") or 0),
+        averageRecommendationsPerPrefix=float(summary.get("averageRecommendationsPerPrefix") or 0.0),
+        filteredBySupportPct=float(summary.get("filteredBySupportPct") or 0.0),
+        filteredByConversionPct=float(summary.get("filteredByConversionPct") or 0.0),
+        reason=summary.get("reason"),
+        decision=summary.get("decision"),
     )
 
 
@@ -1588,7 +1476,7 @@ def nba_test(
         normalized_prefix = " > ".join(prefix_steps)
 
     prefix_recs = {normalized_prefix: nba_raw.get(normalized_prefix, [])}
-    filtered, stats = _filter_nba_recommendations(prefix_recs, payload.settings)
+    filtered, stats = filter_nba_recommendations(prefix_recs, payload.settings)
     kept = filtered.get(normalized_prefix, [])
 
     prefix_support = sum(int(r.get("count", 0)) for r in nba_raw.get(normalized_prefix, []))
@@ -2566,7 +2454,7 @@ app.include_router(
         analyze_paths_fn=analyze_paths,
         compute_next_best_action_fn=compute_next_best_action,
         has_any_campaign_fn=has_any_campaign,
-        filter_nba_recommendations_fn=_filter_nba_recommendations,
+        filter_nba_recommendations_fn=filter_nba_recommendations,
         step_string_fn=_step_string,
         get_latest_quality_for_scope_fn=get_latest_quality_for_scope,
         build_conversion_paths_analysis_from_daily_fn=build_conversion_paths_analysis_from_daily,
