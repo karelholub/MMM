@@ -465,7 +465,10 @@ export default function DataQuality() {
 
   // Derive tile data from snapshots (filter by scope)
   const snapshots = snapshotsQuery.data ?? []
-  const activeSources = SCOPE_SOURCE_MAP[scope] ?? [scope]
+  const activeSources =
+    Object.prototype.hasOwnProperty.call(SCOPE_SOURCE_MAP, scope)
+      ? SCOPE_SOURCE_MAP[scope]
+      : [scope]
   const latest = snapshots.filter((s) => {
     if (activeSources == null) return true
     return activeSources.includes(s.source)

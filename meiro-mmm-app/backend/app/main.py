@@ -172,6 +172,7 @@ from app.services_data_sources import (
 )
 from app.services_oauth_connections import (
     get_access_token_for_provider,
+    list_oauth_connections,
 )
 from app.services_ads_ops import (
     ENTITY_TYPES as ADS_ENTITY_TYPES,
