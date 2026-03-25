@@ -12,6 +12,8 @@ import {
   getMeiroConfig,
   getMeiroMapping,
   getMeiroPullConfig,
+  getMeiroQuarantineRun,
+  getMeiroQuarantineRuns,
   getMeiroWebhookEvents,
   getMeiroWebhookSuggestions,
   meiroDryRun,
@@ -21,6 +23,7 @@ import {
   saveMeiroPullConfig,
   testMeiroConnection,
   type MeiroPullConfig,
+  type MeiroQuarantineRun,
 } from '../connectors/meiroConnector'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
 import {
@@ -81,6 +84,7 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
   const [webhookSecretValue, setWebhookSecretValue] = useState<string | null>(null)
   const [meiroPullDraft, setMeiroPullDraft] = useState<MeiroPullConfig>(DEFAULT_MEIRO_PULL_CONFIG)
   const [oauthToast, setOauthToast] = useState<string | null>(null)
+  const [selectedQuarantineRunId, setSelectedQuarantineRunId] = useState<string | null>(null)
 
   const meiroConfigQuery = useQuery({ queryKey: ['meiro-config'], queryFn: getMeiroConfig })
   const meiroReadinessQuery = useQuery<MeiroReadinessResponse>({
@@ -106,6 +110,15 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
       apiGetJson<MeiroWebhookArchiveStatus>('/api/connectors/meiro/webhook/archive-status', {
         fallbackMessage: 'Failed to load webhook archive status',
       }),
+  })
+  const meiroQuarantineRunsQuery = useQuery({
+    queryKey: ['meiro-quarantine-runs'],
+    queryFn: () => getMeiroQuarantineRuns(10),
+  })
+  const meiroQuarantineRunQuery = useQuery<MeiroQuarantineRun>({
+    queryKey: ['meiro-quarantine-run', selectedQuarantineRunId],
+    queryFn: () => getMeiroQuarantineRun(String(selectedQuarantineRunId)),
+    enabled: Boolean(selectedQuarantineRunId),
   })
 
   const invalidateJourneyState = async () => {
@@ -177,13 +190,25 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
       await invalidateJourneyState()
     },
   })
+  const buildReplayPayload = () => {
+    const replayMode = meiroPullDraft.replay_mode || 'last_n'
+    const toIso = (value?: string | null) => {
+      if (!value) return undefined
+      const parsed = new Date(value)
+      return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString()
+    }
+    return {
+      replay_mode: replayMode,
+      archive_limit: replayMode === 'last_n' ? (meiroPullDraft.replay_archive_limit || 5000) : undefined,
+      date_from: replayMode === 'date_range' ? toIso(meiroPullDraft.replay_date_from) : undefined,
+      date_to: replayMode === 'date_range' ? toIso(meiroPullDraft.replay_date_to) : undefined,
+      persist_to_attribution: true,
+      import_note: 'Reprocessed from webhook archive using current approved mapping',
+    }
+  }
   const reprocessWebhookArchiveMutation = useMutation({
     mutationFn: async () =>
-      apiSendJson<MeiroWebhookReprocessResult>('/api/connectors/meiro/webhook/reprocess', 'POST', {
-        archive_limit: 5000,
-        persist_to_attribution: true,
-        import_note: 'Reprocessed from webhook archive using current approved mapping',
-      }, {
+      apiSendJson<MeiroWebhookReprocessResult>('/api/connectors/meiro/webhook/reprocess', 'POST', buildReplayPayload(), {
         fallbackMessage: 'Failed to reprocess Meiro webhook archive',
       }),
     onSuccess: async () => {
@@ -206,6 +231,13 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
       setMeiroPullDraft(normalizeMeiroPullConfig(meiroPullConfigQuery.data))
     }
   }, [meiroPullConfigQuery.data])
+
+  useEffect(() => {
+    const firstId = meiroQuarantineRunsQuery.data?.items?.[0]?.id
+    if (!selectedQuarantineRunId && firstId) {
+      setSelectedQuarantineRunId(firstId)
+    }
+  }, [meiroQuarantineRunsQuery.data, selectedQuarantineRunId])
 
   const readiness = meiroReadinessQuery.data
   const mappingStatus = (readiness?.summary.mapping_status || meiroMappingQuery.data?.approval?.status || '').toLowerCase()
@@ -359,6 +391,12 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
               importFromMeiroResult={importFromMeiroMutation.data ?? null}
               reprocessWebhookArchivePending={reprocessWebhookArchiveMutation.isPending}
               reprocessWebhookArchiveResult={reprocessWebhookArchiveMutation.data ?? null}
+              quarantineRuns={meiroQuarantineRunsQuery.data}
+              quarantineRunsLoading={meiroQuarantineRunsQuery.isLoading}
+              quarantineRunsError={(meiroQuarantineRunsQuery.error as Error | undefined)?.message || null}
+              selectedQuarantineRun={meiroQuarantineRunQuery.data ?? null}
+              selectedQuarantineRunLoading={meiroQuarantineRunQuery.isLoading}
+              selectedQuarantineRunError={(meiroQuarantineRunQuery.error as Error | undefined)?.message || null}
               relativeTime={relativeTime}
               setOauthToast={setOauthToast}
               onTestMeiro={() => testMeiroMutation.mutate()}
@@ -374,6 +412,7 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
               onDryRun={() => meiroDryRunMutation.mutate()}
               onImportFromMeiro={() => importFromMeiroMutation.mutate()}
               onReplayArchive={() => reprocessWebhookArchiveMutation.mutate()}
+              onSelectQuarantineRun={(runId) => setSelectedQuarantineRunId(runId)}
             />
           </div>
         </SectionCard>

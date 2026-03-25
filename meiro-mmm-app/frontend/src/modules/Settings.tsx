@@ -131,6 +131,7 @@ const SECTION_META: Record<SectionKey, SectionMeta> = {
 interface AttributionSettings {
   lookback_window_days: number
   use_converted_flag: boolean
+  min_journey_quality_score: number
   min_conversion_value: number
   time_decay_half_life_days: number
   position_first_pct: number
@@ -453,8 +454,11 @@ type ConvertedFlagDirection = 'more_included' | 'fewer_included' | 'none'
 interface AttributionPreviewSummary {
   previewAvailable: boolean
   totalJourneys: number
+  eligibleJourneys: number
   windowImpactCount: number
   windowDirection: WindowDirection
+  qualityImpactCount: number
+  qualityDirection: WindowDirection
   useConvertedFlagImpact: number
   useConvertedFlagDirection: ConvertedFlagDirection
   reason?: string | null
@@ -808,6 +812,7 @@ const DEFAULT_SETTINGS: Settings = {
   attribution: {
     lookback_window_days: 30,
     use_converted_flag: true,
+    min_journey_quality_score: 0,
     min_conversion_value: 0,
     time_decay_half_life_days: 7,
     position_first_pct: 0.4,
@@ -1726,6 +1731,11 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       }
       if (attributionDraft.min_conversion_value < 0) {
         errors.min_conversion_value = 'Cannot be negative'
+      }
+      if (attributionDraft.min_journey_quality_score < 0) {
+        errors.min_journey_quality_score = 'Minimum 0'
+      } else if (attributionDraft.min_journey_quality_score > 100) {
+        errors.min_journey_quality_score = 'Maximum 100'
       }
       if (attributionDraft.time_decay_half_life_days < 1) {
         errors.time_decay_half_life_days = 'Must be positive'
@@ -4651,6 +4661,31 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
             })()
           : null
 
+      const qualityImpactText =
+        attributionPreviewStatus === 'ready' && attributionPreview
+          ? (() => {
+              const from = baselineAttribution.min_journey_quality_score
+              const to = attributionDraft.min_journey_quality_score
+              const impact = attributionPreview.qualityImpactCount
+              if (impact === 0) {
+                if (attributionPreview.qualityDirection === 'tighten') {
+                  return `Raising the minimum quality score from ${from} → ${to} keeps all currently eligible journeys in scope.`
+                }
+                if (attributionPreview.qualityDirection === 'loosen') {
+                  return `Lowering the minimum quality score from ${from} → ${to} does not add additional journeys.`
+                }
+                return `Quality threshold remains ${to}. Journey eligibility does not change.`
+              }
+              if (attributionPreview.qualityDirection === 'tighten') {
+                return `${impact} journey${impact === 1 ? '' : 's'} would be excluded by the higher quality threshold (${to}+).`
+              }
+              if (attributionPreview.qualityDirection === 'loosen') {
+                return `${impact} journey${impact === 1 ? '' : 's'} would become eligible after lowering the quality threshold to ${to}.`
+              }
+              return `${impact} journey${impact === 1 ? '' : 's'} change eligibility under the proposed quality threshold.`
+            })()
+          : null
+
       const previewUnavailableMessage =
         attributionPreviewStatus === 'unavailable'
           ? attributionPreview?.reason ?? 'Preview unavailable'
@@ -4933,6 +4968,37 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                   {attributionErrors.lookback_window_days && (
                     <span style={{ fontSize: t.font.sizeXs, color: t.color.danger }}>
                       {attributionErrors.lookback_window_days}
+                    </span>
+                  )}
+                </label>
+                <label style={{ display: 'grid', gap: 6 }}>
+                  <span style={labelStyle}>Minimum journey quality score</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={attributionDraft.min_journey_quality_score}
+                    onChange={(e) =>
+                      setAttributionDraft((prev) => ({
+                        ...prev,
+                        min_journey_quality_score: Number(e.target.value),
+                      }))
+                    }
+                    style={{
+                      ...inputBaseStyle,
+                      border: `1px solid ${
+                        attributionErrors.min_journey_quality_score
+                          ? t.color.danger
+                          : t.color.border
+                      }`,
+                    }}
+                  />
+                  <span style={helperTextStyle}>
+                    Excludes journeys below this ingest quality score from attribution runs and previews.
+                  </span>
+                  {attributionErrors.min_journey_quality_score && (
+                    <span style={{ fontSize: t.font.sizeXs, color: t.color.danger }}>
+                      {attributionErrors.min_journey_quality_score}
                     </span>
                   )}
                 </label>
@@ -5352,9 +5418,10 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                   }}
                 >
                   {windowImpactText && <li>{windowImpactText}</li>}
+                  {qualityImpactText && <li>{qualityImpactText}</li>}
                   {convertedImpactText && <li>{convertedImpactText}</li>}
                   <li>
-                    Total journeys analysed: {attributionPreview.totalJourneys.toLocaleString()}
+                    Journeys analysed: {attributionPreview.totalJourneys.toLocaleString()} total, {attributionPreview.eligibleJourneys.toLocaleString()} eligible under current draft.
                   </li>
                 </ul>
               </div>

@@ -28,6 +28,18 @@ from .utils.taxonomy import Taxonomy, ChannelRule, load_taxonomy, save_taxonomy
 logger = logging.getLogger(__name__)
 
 
+def _normalized_text(value: Any) -> str:
+    if isinstance(value, dict):
+        for key in ("source", "medium", "campaign", "name", "id", "value", "label"):
+            candidate = value.get(key)
+            if candidate:
+                return str(candidate).lower().strip()
+        return ""
+    if value is None:
+        return ""
+    return str(value).lower().strip()
+
+
 # ---------------------------------------------------------------------------
 # UTM validation
 # ---------------------------------------------------------------------------
@@ -223,14 +235,14 @@ def map_to_channel(
         else:
             confidence = 0.6
 
-            return ChannelMapping(
-                channel=rule.channel,
-                matched_rule=rule.name,
-                confidence=confidence,
-                source=source_normalized,
-                medium=medium_normalized,
+        return ChannelMapping(
+            channel=rule.channel,
+            matched_rule=rule.name,
+            confidence=confidence,
+            source=source_normalized,
+            medium=medium_normalized,
             fallback_reason=None,
-            )
+        )
     
     # No rule matched - fallback to default
     return ChannelMapping(
@@ -345,17 +357,6 @@ def compute_unknown_share(
     if taxonomy is None:
         taxonomy = load_taxonomy()
 
-    def _normalized_text(value: Any) -> str:
-        if isinstance(value, dict):
-            for key in ("name", "id", "value", "label"):
-                candidate = value.get(key)
-                if candidate:
-                    return str(candidate).lower().strip()
-            return ""
-        if value is None:
-            return ""
-        return str(value).lower().strip()
-    
     total_touchpoints = 0
     unknown_count = 0
     by_source = defaultdict(int)
@@ -369,9 +370,10 @@ def compute_unknown_share(
             total_touchpoints += 1
             
             # Normalize and check channel
-            source = _normalized_text(tp.get("utm_source") or tp.get("source"))
-            medium = _normalized_text(tp.get("utm_medium") or tp.get("medium"))
-            campaign = _normalized_text(tp.get("utm_campaign") or tp.get("campaign"))
+            utm = tp.get("utm") or {}
+            source = _normalized_text(tp.get("utm_source") or (utm.get("source") if isinstance(utm, dict) else None) or tp.get("source"))
+            medium = _normalized_text(tp.get("utm_medium") or (utm.get("medium") if isinstance(utm, dict) else None) or tp.get("medium"))
+            campaign = _normalized_text(tp.get("utm_campaign") or (utm.get("campaign") if isinstance(utm, dict) else None) or tp.get("campaign"))
             
             mapping = map_to_channel(source, medium, campaign, taxonomy)
             
@@ -523,9 +525,10 @@ def compute_taxonomy_coverage(
     for journey in journeys:
         touchpoints = journey.get("touchpoints", [])
         for tp in touchpoints:
-            source = (tp.get("utm_source") or tp.get("source") or "").lower().strip()
-            medium = (tp.get("utm_medium") or tp.get("medium") or "").lower().strip()
-            campaign = (tp.get("utm_campaign") or tp.get("campaign") or "").lower().strip()
+            utm = tp.get("utm") or {}
+            source = _normalized_text(tp.get("utm_source") or (utm.get("source") if isinstance(utm, dict) else None) or tp.get("source"))
+            medium = _normalized_text(tp.get("utm_medium") or (utm.get("medium") if isinstance(utm, dict) else None) or tp.get("medium"))
+            campaign = _normalized_text(tp.get("utm_campaign") or (utm.get("campaign") if isinstance(utm, dict) else None) or tp.get("campaign"))
             
             mapping = map_to_channel(source, medium, campaign, taxonomy)
             

@@ -8,15 +8,6 @@
       "value_field": "value",
       "weight": 1.0,
       "lookback_days": 30
-    },
-    {
-      "id": "checkout_start",
-      "label": "Checkout Start",
-      "type": "micro",
-      "event_name": "checkout_start",
-      "value_field": null,
-      "weight": 0.5,
-      "lookback_days": 14
     }
   ],
   "primary_kpi_id": "form_submit"

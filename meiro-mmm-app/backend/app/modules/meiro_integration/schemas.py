@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class MeiroCDPConnectRequest(BaseModel):
@@ -24,6 +24,9 @@ class MeiroCDPExportRequest(BaseModel):
 
 class MeiroWebhookReprocessRequest(BaseModel):
     archive_limit: Optional[int] = None
+    replay_mode: Optional[str] = "last_n"
+    date_from: Optional[str] = None
+    date_to: Optional[str] = None
     persist_to_attribution: bool = False
     config_id: Optional[str] = None
     import_note: Optional[str] = None

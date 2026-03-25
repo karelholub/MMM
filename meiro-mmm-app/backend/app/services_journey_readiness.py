@@ -62,6 +62,11 @@ def build_journey_readiness(
         warnings.append(f"Journey data is {journeys_summary['data_freshness_hours']} hours old.")
     if validation.get("warn_count", 0) > 0:
         warnings.append(f"{validation.get('warn_count', 0)} journey validation warnings detected.")
+    quality_summary = journeys_summary.get("quality", {})
+    if quality_summary.get("low_share") is not None and quality_summary.get("low_share", 0) >= 0.2:
+        warnings.append(
+            f"Low-quality journey share is {quality_summary['low_share'] * 100:.1f}%."
+        )
     if taxonomy_overview.get("summary", {}).get("unknown_share", 0) > 0:
         warnings.append(
             f"Unknown taxonomy share is {taxonomy_overview['summary']['unknown_share'] * 100:.1f}%."
@@ -112,6 +117,8 @@ def build_journey_readiness(
             "taxonomy_unknown_share": taxonomy_overview.get("summary", {}).get("unknown_share", 0.0),
             "journey_validation_errors": validation.get("error_count", 0),
             "journey_validation_warnings": validation.get("warn_count", 0),
+            "journey_quality_average": quality_summary.get("average_score"),
+            "journey_quality_low_share": quality_summary.get("low_share"),
             "active_settings_version": getattr(active_settings, "version_label", None),
         },
         "blockers": blockers,

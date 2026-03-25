@@ -94,6 +94,15 @@ def append_webhook_archive_entry(entry: Dict[str, Any]) -> None:
 
 
 def get_webhook_archive_entries(limit: int = 100) -> list[Dict[str, Any]]:
+    return query_webhook_archive_entries(limit=limit)
+
+
+def query_webhook_archive_entries(
+    *,
+    limit: Optional[int] = 100,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+) -> list[Dict[str, Any]]:
     if not WEBHOOK_ARCHIVE_PATH.exists():
         return []
     rows: list[Dict[str, Any]] = []
@@ -111,14 +120,21 @@ def get_webhook_archive_entries(limit: int = 100) -> list[Dict[str, Any]]:
                     rows.append(parsed)
     except Exception:
         return []
-    keep = max(1, min(5000, int(limit)))
-    return list(reversed(rows[-keep:]))
+    if since:
+        rows = [row for row in rows if str(row.get("received_at") or "") >= since]
+    if until:
+        rows = [row for row in rows if str(row.get("received_at") or "") <= until]
+    if limit is not None:
+        keep = max(1, min(50000, int(limit)))
+        rows = rows[-keep:]
+    return list(reversed(rows))
 
 
 def get_webhook_archive_status() -> Dict[str, Any]:
     if not WEBHOOK_ARCHIVE_PATH.exists():
-        return {"available": False, "entries": 0, "last_received_at": None, "parser_versions": []}
+        return {"available": False, "entries": 0, "profiles_received": 0, "last_received_at": None, "parser_versions": []}
     entries = 0
+    profiles_received = 0
     last_received_at: Optional[str] = None
     parser_versions: set[str] = set()
     try:
@@ -134,6 +150,10 @@ def get_webhook_archive_status() -> Dict[str, Any]:
                 if not isinstance(parsed, dict):
                     continue
                 entries += 1
+                try:
+                    profiles_received += int(parsed.get("received_count") or len(parsed.get("profiles") or []))
+                except Exception:
+                    pass
                 received_at = parsed.get("received_at")
                 if isinstance(received_at, str) and received_at:
                     last_received_at = received_at
@@ -141,34 +161,23 @@ def get_webhook_archive_status() -> Dict[str, Any]:
                 if isinstance(parser_version, str) and parser_version:
                     parser_versions.add(parser_version)
     except Exception:
-        return {"available": False, "entries": 0, "last_received_at": None, "parser_versions": []}
+        return {"available": False, "entries": 0, "profiles_received": 0, "last_received_at": None, "parser_versions": []}
     return {
         "available": entries > 0,
         "entries": entries,
+        "profiles_received": profiles_received,
         "last_received_at": last_received_at,
         "parser_versions": sorted(parser_versions),
     }
 
 
-def rebuild_profiles_from_webhook_archive(limit: Optional[int] = None) -> list[Any]:
-    if not WEBHOOK_ARCHIVE_PATH.exists():
-        return []
-    rows: list[Dict[str, Any]] = []
-    with WEBHOOK_ARCHIVE_PATH.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                parsed = json.loads(line)
-            except Exception:
-                continue
-            if isinstance(parsed, dict):
-                rows.append(parsed)
-    if limit is not None:
-        keep = max(1, int(limit))
-        rows = rows[-keep:]
-
+def rebuild_profiles_from_webhook_archive(
+    limit: Optional[int] = None,
+    *,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+) -> list[Any]:
+    rows = list(reversed(query_webhook_archive_entries(limit=limit, since=since, until=until)))
     rebuilt: list[Any] = []
     for row in rows:
         profiles = row.get("profiles")
@@ -295,6 +304,7 @@ def _normalize_pull_config(raw: Any) -> Dict[str, Any]:
     allowed_value_fallback = {"default", "zero", "quarantine"}
     allowed_currency_fallback = {"default", "quarantine"}
     allowed_timestamp_fallback = {"profile", "conversion", "quarantine"}
+    allowed_replay_modes = {"all", "last_n", "date_range"}
 
     def _as_int(value: Any, default: int, minimum: int, maximum: int) -> int:
         try:
@@ -358,6 +368,10 @@ def _normalize_pull_config(raw: Any) -> Dict[str, Any]:
     if timestamp_fallback_policy not in allowed_timestamp_fallback:
         timestamp_fallback_policy = "profile"
 
+    replay_mode = str(raw.get("replay_mode") or "last_n").strip().lower()
+    if replay_mode not in allowed_replay_modes:
+        replay_mode = "last_n"
+
     return {
         "lookback_days": _as_int(raw.get("lookback_days"), 30, 1, 365),
         "session_gap_minutes": _as_int(raw.get("session_gap_minutes"), 30, 1, 720),
@@ -374,6 +388,10 @@ def _normalize_pull_config(raw: Any) -> Dict[str, Any]:
         "timestamp_fallback_policy": timestamp_fallback_policy,
         "value_fallback_policy": value_fallback_policy,
         "currency_fallback_policy": currency_fallback_policy,
+        "replay_mode": replay_mode,
+        "replay_archive_limit": _as_int(raw.get("replay_archive_limit"), 5000, 1, 50000),
+        "replay_date_from": str(raw.get("replay_date_from") or "").strip() or None,
+        "replay_date_to": str(raw.get("replay_date_to") or "").strip() or None,
         "conversion_event_aliases": event_aliases,
     }
 

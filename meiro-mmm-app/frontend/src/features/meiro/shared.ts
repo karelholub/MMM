@@ -27,6 +27,7 @@ export type DryRunResult = {
 export interface MeiroWebhookArchiveStatus {
   available: boolean
   entries: number
+  profiles_received?: number
   last_received_at?: string | null
   parser_versions?: string[]
 }
@@ -49,9 +50,14 @@ export const DEFAULT_MEIRO_PULL_CONFIG: MeiroPullConfig = {
   strict_ingest: true,
   quarantine_unknown_channels: true,
   quarantine_missing_utm: false,
+  quarantine_duplicate_profiles: true,
   timestamp_fallback_policy: 'profile',
   value_fallback_policy: 'default',
   currency_fallback_policy: 'default',
+  replay_mode: 'last_n',
+  replay_archive_limit: 5000,
+  replay_date_from: null,
+  replay_date_to: null,
   conversion_event_aliases: {},
 }
 
@@ -86,6 +92,9 @@ export function normalizeMeiroPullConfig(raw?: Partial<MeiroPullConfig> | Record
   const currencyFallbackPolicy = typeof cfg.currency_fallback_policy === 'string' && ['default', 'quarantine'].includes(cfg.currency_fallback_policy)
     ? cfg.currency_fallback_policy as MeiroPullConfig['currency_fallback_policy']
     : DEFAULT_MEIRO_PULL_CONFIG.currency_fallback_policy
+  const replayMode = typeof cfg.replay_mode === 'string' && ['all', 'last_n', 'date_range'].includes(cfg.replay_mode)
+    ? cfg.replay_mode as MeiroPullConfig['replay_mode']
+    : DEFAULT_MEIRO_PULL_CONFIG.replay_mode
   return {
     lookback_days: asInt(cfg.lookback_days, DEFAULT_MEIRO_PULL_CONFIG.lookback_days, 1, 365),
     session_gap_minutes: asInt(cfg.session_gap_minutes, DEFAULT_MEIRO_PULL_CONFIG.session_gap_minutes, 1, 720),
@@ -98,9 +107,14 @@ export function normalizeMeiroPullConfig(raw?: Partial<MeiroPullConfig> | Record
     strict_ingest: Boolean(cfg.strict_ingest ?? DEFAULT_MEIRO_PULL_CONFIG.strict_ingest),
     quarantine_unknown_channels: Boolean(cfg.quarantine_unknown_channels ?? DEFAULT_MEIRO_PULL_CONFIG.quarantine_unknown_channels),
     quarantine_missing_utm: Boolean(cfg.quarantine_missing_utm ?? DEFAULT_MEIRO_PULL_CONFIG.quarantine_missing_utm),
+    quarantine_duplicate_profiles: Boolean(cfg.quarantine_duplicate_profiles ?? DEFAULT_MEIRO_PULL_CONFIG.quarantine_duplicate_profiles),
     timestamp_fallback_policy: timestampFallbackPolicy,
     value_fallback_policy: valueFallbackPolicy,
     currency_fallback_policy: currencyFallbackPolicy,
+    replay_mode: replayMode,
+    replay_archive_limit: asInt(cfg.replay_archive_limit, DEFAULT_MEIRO_PULL_CONFIG.replay_archive_limit || 5000, 1, 50000),
+    replay_date_from: typeof cfg.replay_date_from === 'string' && cfg.replay_date_from.trim() ? cfg.replay_date_from.trim() : null,
+    replay_date_to: typeof cfg.replay_date_to === 'string' && cfg.replay_date_to.trim() ? cfg.replay_date_to.trim() : null,
     conversion_event_aliases: typeof cfg.conversion_event_aliases === 'object' && cfg.conversion_event_aliases && !Array.isArray(cfg.conversion_event_aliases)
       ? Object.fromEntries(Object.entries(cfg.conversion_event_aliases).map(([key, value]) => [String(key).trim(), String(value ?? '').trim()]).filter(([key, value]) => key && value))
       : DEFAULT_MEIRO_PULL_CONFIG.conversion_event_aliases,

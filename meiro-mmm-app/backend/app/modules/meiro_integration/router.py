@@ -23,6 +23,7 @@ from app.utils.meiro_config import (
     get_mapping,
     get_mapping_state,
     get_pull_config,
+    query_webhook_archive_entries,
     get_webhook_archive_entries,
     get_webhook_archive_status,
     get_webhook_events,
@@ -37,6 +38,7 @@ from app.utils.meiro_config import (
     update_mapping_approval,
 )
 from app.services_meiro_readiness import build_meiro_readiness
+from app.services_meiro_quarantine import get_quarantine_run, get_quarantine_runs
 from app.utils.taxonomy import load_taxonomy
 
 
@@ -506,13 +508,42 @@ def create_router(
         items = get_webhook_archive_entries(limit=limit)
         return {"items": items, "total": len(items)}
 
+    @router.get("/api/connectors/meiro/quarantine")
+    def meiro_quarantine_runs(
+        limit: int = Query(10, ge=1, le=100),
+        source: Optional[str] = Query(None),
+    ):
+        items = get_quarantine_runs(limit=limit, source=source)
+        return {"items": items, "total": len(items)}
+
+    @router.get("/api/connectors/meiro/quarantine/{run_id}")
+    def meiro_quarantine_run_detail(run_id: str):
+        item = get_quarantine_run(run_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="Quarantine run not found")
+        return item
+
     @router.post("/api/connectors/meiro/webhook/reprocess")
     def meiro_webhook_reprocess(
         payload: MeiroWebhookReprocessRequest = Body(default=MeiroWebhookReprocessRequest()),
         db=Depends(get_db_dependency),
     ):
-        archive_entries = get_webhook_archive_entries(limit=payload.archive_limit or 5000)
-        archived_profiles = rebuild_profiles_from_webhook_archive(limit=payload.archive_limit)
+        replay_mode = str(payload.replay_mode or "last_n").strip().lower()
+        if replay_mode not in {"all", "last_n", "date_range"}:
+            replay_mode = "last_n"
+        archive_limit = payload.archive_limit or 5000
+        date_from = payload.date_from if replay_mode == "date_range" else None
+        date_to = payload.date_to if replay_mode == "date_range" else None
+
+        if replay_mode == "all":
+            archive_entries = query_webhook_archive_entries(limit=None)
+            archived_profiles = rebuild_profiles_from_webhook_archive(limit=None)
+        elif replay_mode == "date_range":
+            archive_entries = query_webhook_archive_entries(limit=None, since=date_from, until=date_to)
+            archived_profiles = rebuild_profiles_from_webhook_archive(limit=None, since=date_from, until=date_to)
+        else:
+            archive_entries = get_webhook_archive_entries(limit=archive_limit)
+            archived_profiles = rebuild_profiles_from_webhook_archive(limit=archive_limit)
         if not archived_profiles:
             raise HTTPException(status_code=404, detail="No archived webhook payloads found to reprocess.")
         mapping_state = get_mapping_state()
@@ -524,6 +555,9 @@ def create_router(
         result: Dict[str, Any] = {
             "reprocessed_profiles": len(archived_profiles),
             "archive_entries_used": len(archive_entries),
+            "replay_mode": replay_mode,
+            "date_from": date_from,
+            "date_to": date_to,
             "parser_version": meiro_parser_version,
             "mapping_version": mapping_state.get("version") or 0,
             "mapping_approval_status": ((mapping_state.get("approval") or {}).get("status") or "unreviewed"),
@@ -544,6 +578,7 @@ def create_router(
     @router.get("/api/connectors/meiro/webhook/suggestions")
     def meiro_webhook_suggestions(limit: int = Query(100, ge=1, le=500)):
         events = get_webhook_events(limit=limit)
+        current_pull_config = get_pull_config()
         conversion_event_counts: Dict[str, int] = {}
         channel_counts: Dict[str, int] = {}
         source_counts: Dict[str, int] = {}
@@ -595,6 +630,21 @@ def create_router(
         def _top_items(values: Dict[str, int], n: int = 10) -> List[Tuple[str, int]]:
             return sorted(values.items(), key=lambda kv: kv[1], reverse=True)[:n]
 
+        def _normalize_token(value: Optional[str]) -> str:
+            return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+
+        def _canonical_conversion_name(event_name: str) -> Optional[str]:
+            token = _normalize_token(event_name)
+            if not token:
+                return None
+            if token in {"purchase", "purchased", "order_completed", "order_complete", "order_paid", "checkout_completed"}:
+                return "purchase"
+            if token in {"lead", "lead_submitted", "form_submit", "form_submitted", "qualified_lead"}:
+                return "lead"
+            if token in {"signup", "sign_up", "registered", "register", "registration_completed"}:
+                return "signup"
+            return None
+
         top_conversion_names = _top_items(conversion_event_counts, n=10)
         top_value_fields = _top_items(value_field_counts, n=5)
         top_currency_fields = _top_items(currency_field_counts, n=5)
@@ -621,6 +671,16 @@ def create_router(
                 }
             )
 
+        sanitation_suggestions: List[Dict[str, Any]] = []
+        sanitation_seen: set[str] = set()
+
+        def _push_sanitation_suggestion(item: Dict[str, Any]) -> None:
+            suggestion_id = str(item.get("id") or "")
+            if not suggestion_id or suggestion_id in sanitation_seen:
+                return
+            sanitation_seen.add(suggestion_id)
+            sanitation_suggestions.append(item)
+
         kpi_suggestions = []
         for idx, (event_name, count) in enumerate(top_conversion_names):
             if not event_name:
@@ -638,6 +698,39 @@ def create_router(
                     "weight": 1.0 if idx == 0 else 0.5,
                     "lookback_days": 30 if idx == 0 else 14,
                     "coverage_pct": round(coverage * 100, 2),
+                }
+            )
+
+        current_aliases = {
+            str(key or "").strip().lower(): str(value or "").strip().lower()
+            for key, value in (current_pull_config.get("conversion_event_aliases") or {}).items()
+            if key and value
+        }
+        conversion_alias_suggestions: List[Dict[str, Any]] = []
+        for event_name, count in top_conversion_names:
+            canonical = _canonical_conversion_name(event_name)
+            normalized_event = _normalize_token(event_name)
+            if not canonical or not normalized_event or canonical == normalized_event:
+                continue
+            if current_aliases.get(normalized_event) == canonical:
+                continue
+            conversion_alias_suggestions.append(
+                {
+                    "raw_event": normalized_event,
+                    "canonical_event": canonical,
+                    "count": count,
+                }
+            )
+            _push_sanitation_suggestion(
+                {
+                    "id": f"conversion_alias:{normalized_event}:{canonical}",
+                    "type": "conversion_alias",
+                    "title": f"Alias conversion '{normalized_event}' to '{canonical}'",
+                    "description": "Observed webhook conversion event looks like a naming variant of a more stable canonical conversion.",
+                    "impact_count": count,
+                    "confidence": {"score": 0.78, "band": "medium"},
+                    "recommended_action": "Add the alias before deterministic conversion mapping to reduce conversion drift.",
+                    "payload": {"conversion_event_aliases": {normalized_event: canonical}},
                 }
             )
 
@@ -768,6 +861,86 @@ def create_router(
             if len(taxonomy_rules) >= 12:
                 break
 
+        missing_pair_count = sum(
+            count
+            for pair_key, count in top_source_medium_pairs
+            if not (pair_key.split("||", 1) + [""])[:2][0] or not (pair_key.split("||", 1) + [""])[:2][1]
+        )
+        unresolved_pair_count = sum(int(item.get("count") or 0) for item in unresolved_pairs)
+        unresolved_share = (unresolved_pair_count / total_touchpoints) if total_touchpoints > 0 else 0.0
+        missing_pair_share = (missing_pair_count / total_touchpoints) if total_touchpoints > 0 else 0.0
+        best_dedup_coverage = (dedup_key_candidates[0]["coverage_pct"] / 100.0) if dedup_key_candidates else 0.0
+
+        if unresolved_share >= 0.08 and not bool(current_pull_config.get("quarantine_unknown_channels", True)):
+            _push_sanitation_suggestion(
+                {
+                    "id": "policy:quarantine_unknown_channels",
+                    "type": "quarantine_policy",
+                    "title": "Enable quarantine for unresolved channels",
+                    "description": "A meaningful share of observed touchpoints still resolves to unknown taxonomy patterns.",
+                    "impact_count": unresolved_pair_count,
+                    "confidence": {"score": 0.84, "band": "high"},
+                    "recommended_action": "Turn on unknown-channel quarantine until taxonomy aliases and rules catch up.",
+                    "payload": {"quarantine_unknown_channels": True},
+                }
+            )
+
+        if missing_pair_share >= 0.05 and not bool(current_pull_config.get("quarantine_missing_utm", False)):
+            _push_sanitation_suggestion(
+                {
+                    "id": "policy:quarantine_missing_utm",
+                    "type": "quarantine_policy",
+                    "title": "Quarantine touchpoints missing source or medium",
+                    "description": "Webhook drift is producing a material share of touchpoints without usable source/medium context.",
+                    "impact_count": missing_pair_count,
+                    "confidence": {"score": 0.81, "band": "high"},
+                    "recommended_action": "Enable missing-UTM quarantine to keep incomplete records out of production journeys.",
+                    "payload": {"quarantine_missing_utm": True},
+                }
+            )
+
+        if total_conversions > 0 and not top_value_fields and current_pull_config.get("value_fallback_policy") != "quarantine":
+            _push_sanitation_suggestion(
+                {
+                    "id": "policy:value_fallback_quarantine",
+                    "type": "fallback_policy",
+                    "title": "Quarantine conversions with missing values",
+                    "description": "No stable numeric value field was observed in recent webhook conversions.",
+                    "impact_count": total_conversions,
+                    "confidence": {"score": 0.72, "band": "medium"},
+                    "recommended_action": "Switch value fallback to quarantine until a reliable value field is mapped.",
+                    "payload": {"value_fallback_policy": "quarantine"},
+                }
+            )
+
+        if total_conversions > 0 and not top_currency_fields and current_pull_config.get("currency_fallback_policy") != "quarantine":
+            _push_sanitation_suggestion(
+                {
+                    "id": "policy:currency_fallback_quarantine",
+                    "type": "fallback_policy",
+                    "title": "Quarantine conversions with missing currencies",
+                    "description": "No stable currency field was observed in recent webhook conversions.",
+                    "impact_count": total_conversions,
+                    "confidence": {"score": 0.72, "band": "medium"},
+                    "recommended_action": "Switch currency fallback to quarantine until currency mapping is explicit.",
+                    "payload": {"currency_fallback_policy": "quarantine"},
+                }
+            )
+
+        if best_dedup_coverage < 0.7 and current_pull_config.get("quarantine_duplicate_profiles") is not True:
+            _push_sanitation_suggestion(
+                {
+                    "id": "policy:quarantine_duplicate_profiles",
+                    "type": "dedupe_policy",
+                    "title": "Quarantine duplicate profiles while dedupe coverage is weak",
+                    "description": "Observed dedupe keys have weak coverage across recent conversion payloads.",
+                    "impact_count": total_conversions,
+                    "confidence": {"score": 0.7, "band": "medium"},
+                    "recommended_action": "Enable duplicate-profile quarantine until a stronger dedupe key is consistently present.",
+                    "payload": {"quarantine_duplicate_profiles": True},
+                }
+            )
+
         kpi_apply_payload = {
             "definitions": [
                 {
@@ -811,6 +984,21 @@ def create_router(
             "campaign_field": top_campaign_field_paths[0][0] if top_campaign_field_paths else "campaign",
             "currency_field": top_currency_fields[0][0] if top_currency_fields else "currency",
         }
+        sanitation_apply_payload = {
+            **current_pull_config,
+            "conversion_event_aliases": {
+                **current_aliases,
+                **{
+                    item["raw_event"]: item["canonical_event"]
+                    for item in conversion_alias_suggestions
+                    if item.get("raw_event") and item.get("canonical_event")
+                },
+            },
+        }
+        for suggestion in sanitation_suggestions:
+            payload = suggestion.get("payload") or {}
+            if isinstance(payload, dict):
+                sanitation_apply_payload.update(payload)
 
         return {
             "generated_at": datetime.utcnow().isoformat() + "Z",
@@ -821,6 +1009,7 @@ def create_router(
             "dedup_key_candidates": dedup_key_candidates,
             "kpi_suggestions": kpi_suggestions,
             "conversion_event_suggestions": [{"event_name": name, "count": count} for name, count in top_conversion_names],
+            "sanitation_suggestions": sanitation_suggestions[:8],
             "taxonomy_suggestions": {
                 "channel_rules": taxonomy_rules,
                 "source_aliases": suggested_source_aliases,
@@ -851,6 +1040,7 @@ def create_router(
                 "kpis": kpi_apply_payload,
                 "taxonomy": taxonomy_apply_payload,
                 "mapping": mapping_apply_payload,
+                "sanitation": sanitation_apply_payload,
             },
         }
 

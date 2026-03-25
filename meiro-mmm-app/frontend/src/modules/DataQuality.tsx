@@ -77,6 +77,15 @@ interface MeiroWebhookSuggestions {
   total_conversions_observed: number
   total_touchpoints_observed: number
   dedup_key_suggestion: string
+  sanitation_suggestions?: Array<{
+    id: string
+    type: string
+    title: string
+    description: string
+    impact_count?: number
+    confidence?: { score?: number; band?: string }
+    recommended_action?: string
+  }>
   kpi_suggestions: Array<{
     id: string
     label: string
@@ -123,6 +132,7 @@ interface MeiroWebhookSuggestions {
       medium_aliases: Record<string, string>
     }
     mapping: Record<string, unknown>
+    sanitation?: Record<string, unknown>
   }
 }
 
@@ -141,6 +151,7 @@ interface MeiroMappingState {
 interface MeiroWebhookArchiveStatus {
   available: boolean
   entries: number
+  profiles_received?: number
   last_received_at?: string | null
   parser_versions: string[]
 }
@@ -378,6 +389,16 @@ export default function DataQuality() {
       showToast('Meiro mapping suggestions applied.', 'success')
     },
     onError: (err: Error) => showToast(err.message || 'Failed to apply Meiro mapping suggestions', 'error'),
+  })
+
+  const applySanitationSuggestionsMutation = useMutation({
+    mutationFn: async (payload: Record<string, unknown> | undefined) =>
+      apiSendJson('/api/connectors/meiro/pull-config', 'POST', payload || {}, { fallbackMessage: 'Failed to apply sanitation suggestions' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['meiro-webhook-suggestions'] })
+      showToast('Webhook sanitation suggestions applied.', 'success')
+    },
+    onError: (err: Error) => showToast(err.message || 'Failed to apply sanitation suggestions', 'error'),
   })
 
   const updateMappingApprovalMutation = useMutation({
@@ -1274,6 +1295,45 @@ export default function DataQuality() {
                   Reject mapping
                 </button>
               </div>
+              <div style={{ marginTop: t.space.md, paddingTop: t.space.md, borderTop: `1px solid ${t.color.borderLight}` }}>
+                <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, marginBottom: t.space.xs }}>
+                  Sanitation policy suggestions
+                </div>
+                {(meiroWebhookSuggestionsQuery.data.sanitation_suggestions || []).length ? (
+                  <div style={{ display: 'grid', gap: 6 }}>
+                    {(meiroWebhookSuggestionsQuery.data.sanitation_suggestions || []).slice(0, 6).map((item) => (
+                      <div key={item.id} style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                        <strong>{item.title}</strong>
+                        {item.impact_count != null ? <> · observed: {item.impact_count}</> : null}
+                        {item.confidence?.band ? <> · confidence: {item.confidence.band}</> : null}
+                        <div style={{ marginTop: 2 }}>{item.description}</div>
+                        {item.recommended_action ? <div style={{ marginTop: 2 }}>Action: {item.recommended_action}</div> : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>No sanitation policy updates are suggested from recent webhook drift.</div>
+                )}
+                <div style={{ marginTop: t.space.sm }}>
+                  <button
+                    type="button"
+                    onClick={() => applySanitationSuggestionsMutation.mutate(meiroWebhookSuggestionsQuery.data.apply_payloads.sanitation)}
+                    disabled={applySanitationSuggestionsMutation.isPending || !(meiroWebhookSuggestionsQuery.data.sanitation_suggestions || []).length}
+                    style={{
+                      padding: `${t.space.xs}px ${t.space.md}px`,
+                      fontSize: t.font.sizeSm,
+                      color: '#fff',
+                      background: t.color.accent,
+                      border: 'none',
+                      borderRadius: t.radius.sm,
+                      cursor: applySanitationSuggestionsMutation.isPending ? 'wait' : 'pointer',
+                      opacity: applySanitationSuggestionsMutation.isPending ? 0.75 : 1,
+                    }}
+                  >
+                    {applySanitationSuggestionsMutation.isPending ? 'Applying…' : 'Apply sanitation suggestions'}
+                  </button>
+                </div>
+              </div>
               {(meiroMappingStateQuery.data?.history || []).length ? (
                 <div style={{ marginTop: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
                   Recent mapping history:
@@ -1320,6 +1380,7 @@ export default function DataQuality() {
                 <>
                   <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
                     Archived batches: <strong>{meiroWebhookArchiveStatusQuery.data.entries}</strong>
+                    {' '}· archived payloads: <strong>{Number(meiroWebhookArchiveStatusQuery.data.profiles_received || 0).toLocaleString()}</strong>
                     {' '}· last received: <strong>{meiroWebhookArchiveStatusQuery.data.last_received_at ? new Date(meiroWebhookArchiveStatusQuery.data.last_received_at).toLocaleString() : '—'}</strong>
                   </div>
                   <div style={{ marginTop: 4, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>

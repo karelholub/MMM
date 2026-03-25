@@ -8,6 +8,16 @@ import pandas as pd
 from app.services_metrics import journey_revenue_value
 
 
+def _journey_quality_score(journey: Dict[str, Any]) -> Optional[int]:
+    score = journey.get("quality_score")
+    if score is None:
+        score = (((journey.get("meta") or {}).get("quality") or {}).get("score"))
+    try:
+        return max(0, min(100, int(float(score))))
+    except Exception:
+        return None
+
+
 def compute_journey_validation(journeys: List[Dict[str, Any]]) -> Dict[str, Any]:
     seen_ids: Dict[str, int] = {}
     error_list: List[str] = []
@@ -103,10 +113,14 @@ def build_journeys_summary(
                 last_ts = dt
 
     kpi_counts: Dict[str, int] = {}
+    quality_scores: List[int] = []
     for journey in journeys:
         ktype = journey.get("kpi_type")
         if isinstance(ktype, str):
             kpi_counts[ktype] = kpi_counts.get(ktype, 0) + 1
+        q_score = _journey_quality_score(journey)
+        if q_score is not None:
+            quality_scores.append(q_score)
 
     primary_kpi_id = kpi_config.primary_kpi_id
     primary_kpi_label = None
@@ -150,6 +164,13 @@ def build_journeys_summary(
         "data_freshness_hours": round(freshness_hours, 1) if freshness_hours is not None else None,
         "system_state": system_state,
         "validation": validation,
+        "quality": {
+            "scored_journeys": len(quality_scores),
+            "average_score": round(sum(quality_scores) / float(len(quality_scores) or 1), 1) if quality_scores else None,
+            "low_share": round(sum(1 for score in quality_scores if score < 50) / float(len(quality_scores) or 1), 4)
+            if quality_scores
+            else None,
+        },
     }
 
 

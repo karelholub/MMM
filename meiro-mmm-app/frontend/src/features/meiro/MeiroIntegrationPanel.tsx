@@ -4,6 +4,7 @@ import type {
   MeiroConfig,
   MeiroMappingState,
   MeiroPullConfig,
+  MeiroQuarantineRun,
   MeiroWebhookEvent,
   MeiroWebhookSuggestions,
 } from '../../connectors/meiroConnector'
@@ -45,6 +46,12 @@ interface MeiroIntegrationPanelProps {
   importFromMeiroResult?: { import_summary?: any; quarantine_count?: number; count?: number } | null
   reprocessWebhookArchivePending: boolean
   reprocessWebhookArchiveResult?: { import_result?: { import_summary?: any; quarantine_count?: number; count?: number } } | null
+  quarantineRuns?: { items: MeiroQuarantineRun[]; total: number }
+  quarantineRunsLoading: boolean
+  quarantineRunsError?: string | null
+  selectedQuarantineRun?: MeiroQuarantineRun | null
+  selectedQuarantineRunLoading: boolean
+  selectedQuarantineRunError?: string | null
   relativeTime: (iso?: string | null) => string
   setOauthToast: Dispatch<SetStateAction<string | null>>
   onTestMeiro: () => void
@@ -60,6 +67,7 @@ interface MeiroIntegrationPanelProps {
   onDryRun: () => void
   onImportFromMeiro: () => void
   onReplayArchive: () => void
+  onSelectQuarantineRun: (runId: string) => void
 }
 
 export default function MeiroIntegrationPanel(props: MeiroIntegrationPanelProps) {
@@ -181,6 +189,7 @@ export default function MeiroIntegrationPanel(props: MeiroIntegrationPanelProps)
       {meiroTab === 'import' && (
         <MeiroImportReplay
           meiroConfig={props.meiroConfig}
+          meiroPullDraft={props.meiroPullDraft}
           meiroMappingState={props.meiroMappingState}
           meiroWebhookArchiveStatus={props.meiroWebhookArchiveStatus}
           meiroDryRunPending={props.meiroDryRunPending}
@@ -189,10 +198,17 @@ export default function MeiroIntegrationPanel(props: MeiroIntegrationPanelProps)
           importFromMeiroResult={props.importFromMeiroResult}
           reprocessWebhookArchivePending={props.reprocessWebhookArchivePending}
           reprocessWebhookArchiveResult={props.reprocessWebhookArchiveResult}
+          quarantineRuns={props.quarantineRuns}
+          quarantineRunsLoading={props.quarantineRunsLoading}
+          quarantineRunsError={props.quarantineRunsError}
+          selectedQuarantineRun={props.selectedQuarantineRun}
+          selectedQuarantineRunLoading={props.selectedQuarantineRunLoading}
+          selectedQuarantineRunError={props.selectedQuarantineRunError}
           relativeTime={props.relativeTime}
           onDryRun={props.onDryRun}
           onImportFromMeiro={props.onImportFromMeiro}
           onReplayArchive={props.onReplayArchive}
+          onSelectQuarantineRun={props.onSelectQuarantineRun}
         />
       )}
     </>

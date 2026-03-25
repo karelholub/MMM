@@ -268,6 +268,7 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
   const [showJsonHelp, setShowJsonHelp] = useState(false)
   const [showPreviewValidation, setShowPreviewValidation] = useState(false)
   const [showImportLog, setShowImportLog] = useState(false)
+  const [selectedImportRunId, setSelectedImportRunId] = useState<string | null>(null)
 
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [drawerConnector, setDrawerConnector] = useState<{ id: string; name: string; type: string; category: string } | null>(null)
@@ -311,6 +312,14 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
       apiGetJson<any>('/api/attribution/import-log', { fallbackMessage: 'Failed to load import log' })
         .catch(() => ({ runs: [] })),
     enabled: showImportLog,
+  })
+  const importRunDetailQuery = useQuery({
+    queryKey: ['import-log-run-detail', selectedImportRunId],
+    queryFn: async () =>
+      apiGetJson<any>(`/api/attribution/import-log/${selectedImportRunId}`, {
+        fallbackMessage: 'Failed to load import run details',
+      }),
+    enabled: showImportLog && !!selectedImportRunId,
   })
 
   const inventoryQuery = useQuery({
@@ -458,13 +467,25 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
   const meiroDryRunMutation = useMutation({
     mutationFn: async () => meiroDryRun(100),
   })
+  const buildReplayPayload = () => {
+    const replayMode = meiroPullDraft.replay_mode || 'last_n'
+    const toIso = (value?: string | null) => {
+      if (!value) return undefined
+      const parsed = new Date(value)
+      return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString()
+    }
+    return {
+      replay_mode: replayMode,
+      archive_limit: replayMode === 'last_n' ? (meiroPullDraft.replay_archive_limit || 5000) : undefined,
+      date_from: replayMode === 'date_range' ? toIso(meiroPullDraft.replay_date_from) : undefined,
+      date_to: replayMode === 'date_range' ? toIso(meiroPullDraft.replay_date_to) : undefined,
+      persist_to_attribution: true,
+      import_note: 'Reprocessed from webhook archive using current approved mapping',
+    }
+  }
   const reprocessWebhookArchiveMutation = useMutation({
     mutationFn: async () =>
-      apiSendJson<MeiroWebhookReprocessResult>('/api/connectors/meiro/webhook/reprocess', 'POST', {
-        archive_limit: 5000,
-        persist_to_attribution: true,
-        import_note: 'Reprocessed from webhook archive using current approved mapping',
-      }, {
+      apiSendJson<MeiroWebhookReprocessResult>('/api/connectors/meiro/webhook/reprocess', 'POST', buildReplayPayload(), {
         fallbackMessage: 'Failed to reprocess Meiro webhook archive',
       }),
     onSuccess: async () => {
@@ -491,6 +512,18 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
       setMeiroPullDraft(normalizeMeiroPullConfig(meiroPullConfigQuery.data))
     }
   }, [meiroPullConfigQuery.data])
+
+  useEffect(() => {
+    const firstRunId = importLogQuery.data?.runs?.[0]?.id
+    if (!showImportLog) return
+    if (!selectedImportRunId && firstRunId) {
+      setSelectedImportRunId(firstRunId)
+      return
+    }
+    if (selectedImportRunId && !(importLogQuery.data?.runs || []).some((run: any) => run.id === selectedImportRunId)) {
+      setSelectedImportRunId(firstRunId || null)
+    }
+  }, [showImportLog, importLogQuery.data, selectedImportRunId])
 
   const testWarehouseMutation = useMutation({
     mutationFn: async () => {
@@ -951,26 +984,179 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
                       <th>Source</th>
                       <th>Status</th>
                       <th>Rows</th>
+                      <th>Cleaning</th>
                       <th>Note</th>
                     </tr>
                   </thead>
                   <tbody>
                     {(importLogQuery.data?.runs ?? []).slice(0, 10).map((run: any) => (
-                      <tr key={run.id}>
+                      <tr
+                        key={run.id}
+                        onClick={() => setSelectedImportRunId(run.id)}
+                        style={{ cursor: 'pointer', background: selectedImportRunId === run.id ? t.color.bgSubtle : undefined }}
+                      >
                         <td>{relativeTime(run.started_at || run.created_at)}</td>
                         <td>{run.source || '—'}</td>
                         <td>{statusBadge(run.status || 'not_connected')}</td>
                         <td>{run.valid ?? run.count ?? 0}</td>
+                        <td style={{ color: t.color.textSecondary, fontSize: t.font.sizeXs }}>
+                          {run.validation_summary?.cleaning_report ? (
+                            <>
+                              fixed {Number(run.validation_summary.cleaning_report.fixed || 0).toLocaleString()}
+                              {' '}· quarantined {Number(run.validation_summary.cleaning_report.dropped || 0).toLocaleString()}
+                              {' '}· ambiguous {Number(run.validation_summary.cleaning_report.ambiguous || 0).toLocaleString()}
+                            </>
+                          ) : (
+                            '—'
+                          )}
+                        </td>
                         <td style={{ color: t.color.textSecondary }}>{run.error || '—'}</td>
                       </tr>
                     ))}
                     {(importLogQuery.data?.runs ?? []).length === 0 && (
                       <tr>
-                        <td colSpan={5} style={{ color: t.color.textSecondary, textAlign: 'center' }}>No import runs yet.</td>
+                        <td colSpan={6} style={{ color: t.color.textSecondary, textAlign: 'center' }}>No import runs yet.</td>
                       </tr>
                     )}
                   </tbody>
                 </DashboardTable>
+
+                <div style={{ marginTop: t.space.md, border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.surface, padding: t.space.md, display: 'grid', gap: t.space.sm }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <div>
+                      <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Selected import run</div>
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                        {selectedImportRunId ? `Run ${selectedImportRunId}` : 'Select a run from the import log'}
+                      </div>
+                    </div>
+                    {selectedImportRunId ? (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedImportRunId(null)}
+                        style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '8px 10px', cursor: 'pointer' }}
+                      >
+                        Clear selection
+                      </button>
+                    ) : null}
+                  </div>
+
+                  {!selectedImportRunId ? (
+                    <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Choose a recent run to inspect cleaning details, quarantine patterns, config snapshot, and preview rows.</div>
+                  ) : importRunDetailQuery.isLoading ? (
+                    <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading import run details…</div>
+                  ) : importRunDetailQuery.isError ? (
+                    <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{(importRunDetailQuery.error as Error)?.message || 'Failed to load import run details'}</div>
+                  ) : importRunDetailQuery.data ? (
+                    <>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: t.space.sm }}>
+                        <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Source</div>
+                          <div style={{ fontSize: t.font.sizeBase, fontWeight: t.font.weightSemibold }}>{importRunDetailQuery.data.source || '—'}</div>
+                        </div>
+                        <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Status</div>
+                          <div style={{ fontSize: t.font.sizeBase, fontWeight: t.font.weightSemibold }}>{String(importRunDetailQuery.data.status || '—')}</div>
+                        </div>
+                        <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Valid rows</div>
+                          <div style={{ fontSize: t.font.sizeBase, fontWeight: t.font.weightSemibold }}>{Number(importRunDetailQuery.data.valid ?? importRunDetailQuery.data.count ?? 0).toLocaleString()}</div>
+                        </div>
+                        <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Invalid / quarantined</div>
+                          <div style={{ fontSize: t.font.sizeBase, fontWeight: t.font.weightSemibold }}>{Number(importRunDetailQuery.data.invalid || 0).toLocaleString()}</div>
+                        </div>
+                        <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Started</div>
+                          <div style={{ fontSize: t.font.sizeBase, fontWeight: t.font.weightSemibold }}>{relativeTime(importRunDetailQuery.data.started_at || importRunDetailQuery.data.at)}</div>
+                        </div>
+                        <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Imported note</div>
+                          <div style={{ fontSize: t.font.sizeBase, fontWeight: t.font.weightSemibold }}>{importRunDetailQuery.data.import_note || '—'}</div>
+                        </div>
+                      </div>
+
+                      {importRunDetailQuery.data.validation_summary?.cleaning_report ? (
+                        <div style={{ display: 'grid', gap: t.space.sm }}>
+                          <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Cleaning report</div>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: t.space.sm }}>
+                            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Fixed</div>
+                              <div style={{ fontSize: t.font.sizeBase, fontWeight: t.font.weightSemibold }}>{Number(importRunDetailQuery.data.validation_summary.cleaning_report.fixed || 0).toLocaleString()}</div>
+                            </div>
+                            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Dropped / quarantined</div>
+                              <div style={{ fontSize: t.font.sizeBase, fontWeight: t.font.weightSemibold }}>{Number(importRunDetailQuery.data.validation_summary.cleaning_report.dropped || 0).toLocaleString()}</div>
+                            </div>
+                            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Ambiguous</div>
+                              <div style={{ fontSize: t.font.sizeBase, fontWeight: t.font.weightSemibold }}>{Number(importRunDetailQuery.data.validation_summary.cleaning_report.ambiguous || 0).toLocaleString()}</div>
+                            </div>
+                            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Duplicate profiles</div>
+                              <div style={{ fontSize: t.font.sizeBase, fontWeight: t.font.weightSemibold }}>{Number(importRunDetailQuery.data.validation_summary.cleaning_report.duplicate_profiles || 0).toLocaleString()}</div>
+                            </div>
+                            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Average quality</div>
+                              <div style={{ fontSize: t.font.sizeBase, fontWeight: t.font.weightSemibold }}>{Number(importRunDetailQuery.data.validation_summary.cleaning_report.quality?.average_score || 0).toFixed(1)}</div>
+                            </div>
+                          </div>
+                          {!!importRunDetailQuery.data.validation_summary.cleaning_report.top_unresolved_patterns?.length && (
+                            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                              Top unresolved patterns: {importRunDetailQuery.data.validation_summary.cleaning_report.top_unresolved_patterns.map((item: any) => `${item.code} (${item.count})`).join(' · ')}
+                            </div>
+                          )}
+                        </div>
+                      ) : null}
+
+                      {!!importRunDetailQuery.data.validation_summary?.top_warnings?.length && (
+                        <div style={{ display: 'grid', gap: 4 }}>
+                          <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Warnings</div>
+                          <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                            {importRunDetailQuery.data.validation_summary.top_warnings.map((item: any) => item.message || item.code || JSON.stringify(item)).join(' · ')}
+                          </div>
+                        </div>
+                      )}
+
+                      {!!importRunDetailQuery.data.validation_summary?.top_errors?.length && (
+                        <div style={{ display: 'grid', gap: 4 }}>
+                          <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Errors</div>
+                          <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>
+                            {importRunDetailQuery.data.validation_summary.top_errors.map((item: any) => item.message || item.code || JSON.stringify(item)).join(' · ')}
+                          </div>
+                        </div>
+                      )}
+
+                      {!!importRunDetailQuery.data.validation_summary?.top_quarantine_reasons?.length && (
+                        <div style={{ display: 'grid', gap: 4 }}>
+                          <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Top quarantine reasons</div>
+                          <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                            {importRunDetailQuery.data.validation_summary.top_quarantine_reasons.map((item: any) => `${item.code || 'reason'} (${item.count || 0})`).join(' · ')}
+                          </div>
+                        </div>
+                      )}
+
+                      {!!importRunDetailQuery.data.preview_rows?.length && (
+                        <div style={{ display: 'grid', gap: 4 }}>
+                          <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Preview rows</div>
+                          <pre style={{ margin: 0, overflowX: 'auto', background: t.color.bg, border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, fontSize: t.font.sizeXs }}>
+                            {JSON.stringify(importRunDetailQuery.data.preview_rows, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+
+                      {!!Object.keys(importRunDetailQuery.data.config_snapshot || {}).length && (
+                        <div style={{ display: 'grid', gap: 4 }}>
+                          <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Config snapshot</div>
+                          <pre style={{ margin: 0, overflowX: 'auto', background: t.color.bg, border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, fontSize: t.font.sizeXs }}>
+                            {JSON.stringify(importRunDetailQuery.data.config_snapshot, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>No details available for this run.</div>
+                  )}
+                </div>
               </div>
             )}
 

@@ -27,6 +27,7 @@ def test_build_journeys_summary_uses_kpi_config_and_import_runs():
             "kpi_type": "purchase",
             "touchpoints": [{"channel": "email", "timestamp": "2026-01-01T00:00:00+00:00"}],
             "_revenue_entries": [{"dedup_key": "cv:1", "value_in_base": 100.0}],
+            "quality_score": 72,
         }
     ]
     kpi_config = SimpleNamespace(
@@ -42,3 +43,5 @@ def test_build_journeys_summary_uses_kpi_config_and_import_runs():
     assert out["primary_kpi_id"] == "purchase"
     assert out["primary_kpi_label"] == "Purchase"
     assert out["total_value"] == 100.0
+    assert out["quality"]["average_score"] == 72.0
+    assert out["quality"]["low_share"] == 0.0

@@ -69,7 +69,7 @@ export default function MeiroPipesSettings({
           </button>
         </div>
         <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
-          Received: {meiroConfig?.webhook_received_count ?? 0} · Last received: {relativeTime(meiroConfig?.webhook_last_received_at)} · Archive: {meiroWebhookArchiveStatus?.available ? `${meiroWebhookArchiveStatus.entries} batches` : 'empty'}
+          Received: {Number(meiroConfig?.webhook_received_count ?? 0).toLocaleString()} payloads · Last received: {relativeTime(meiroConfig?.webhook_last_received_at)} · Archive: {meiroWebhookArchiveStatus?.available ? `${Number(meiroWebhookArchiveStatus.entries || 0).toLocaleString()} batches / ${Number(meiroWebhookArchiveStatus.profiles_received || 0).toLocaleString()} payloads` : 'empty'}
         </div>
         {webhookSecretValue && <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>New secret (shown once): <code>{webhookSecretValue}</code></div>}
       </div>
@@ -92,6 +92,10 @@ export default function MeiroPipesSettings({
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: t.font.sizeSm, color: t.color.text }}>
               <input type="checkbox" checked={meiroPullDraft.quarantine_missing_utm} onChange={(e) => setMeiroPullDraft((prev) => ({ ...prev, quarantine_missing_utm: e.target.checked }))} />
               Quarantine missing source / medium
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: t.font.sizeSm, color: t.color.text }}>
+              <input type="checkbox" checked={Boolean(meiroPullDraft.quarantine_duplicate_profiles)} onChange={(e) => setMeiroPullDraft((prev) => ({ ...prev, quarantine_duplicate_profiles: e.target.checked }))} />
+              Quarantine duplicate profile IDs
             </label>
           </div>
 
@@ -152,6 +156,65 @@ export default function MeiroPipesSettings({
               Reset to defaults
             </button>
           </div>
+        </div>
+      </div>
+
+      <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.bg, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
+        <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Replay archived Pipes payloads</div>
+        <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+          Controls how replay rebuilds journeys from the webhook archive. Use <strong>all</strong> only when you want to rebuild the full archive, because it can be much larger than the recent replay subset.
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: t.space.sm }}>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+            Replay scope
+            <select
+              value={meiroPullDraft.replay_mode || DEFAULT_MEIRO_PULL_CONFIG.replay_mode}
+              onChange={(e) => setMeiroPullDraft((prev) => ({ ...prev, replay_mode: e.target.value as MeiroPullConfig['replay_mode'] }))}
+              style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, background: '#fff' }}
+            >
+              <option value="last_n">Last N archived batches</option>
+              <option value="all">Entire archive</option>
+              <option value="date_range">Date range</option>
+            </select>
+          </label>
+          {(meiroPullDraft.replay_mode || DEFAULT_MEIRO_PULL_CONFIG.replay_mode) === 'last_n' ? (
+            <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+              Archived batches to replay
+              <input
+                type="number"
+                min={1}
+                max={50000}
+                value={meiroPullDraft.replay_archive_limit || DEFAULT_MEIRO_PULL_CONFIG.replay_archive_limit}
+                onChange={(e) => setMeiroPullDraft((prev) => ({ ...prev, replay_archive_limit: Math.max(1, Math.min(50000, Number(e.target.value) || DEFAULT_MEIRO_PULL_CONFIG.replay_archive_limit || 5000)) }))}
+                style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, background: '#fff' }}
+              />
+            </label>
+          ) : null}
+          {(meiroPullDraft.replay_mode || DEFAULT_MEIRO_PULL_CONFIG.replay_mode) === 'date_range' ? (
+            <>
+              <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                From
+                <input
+                  type="datetime-local"
+                  value={meiroPullDraft.replay_date_from || ''}
+                  onChange={(e) => setMeiroPullDraft((prev) => ({ ...prev, replay_date_from: e.target.value || null }))}
+                  style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, background: '#fff' }}
+                />
+              </label>
+              <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                To
+                <input
+                  type="datetime-local"
+                  value={meiroPullDraft.replay_date_to || ''}
+                  onChange={(e) => setMeiroPullDraft((prev) => ({ ...prev, replay_date_to: e.target.value || null }))}
+                  style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, background: '#fff' }}
+                />
+              </label>
+            </>
+          ) : null}
+        </div>
+        <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+          Archive status: {meiroWebhookArchiveStatus?.available ? `${Number(meiroWebhookArchiveStatus.entries || 0).toLocaleString()} archived batches containing ${Number(meiroWebhookArchiveStatus.profiles_received || 0).toLocaleString()} payloads.` : 'No archived batches yet.'}
         </div>
       </div>
 

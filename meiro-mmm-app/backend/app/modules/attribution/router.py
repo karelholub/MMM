@@ -10,6 +10,7 @@ from app.modules.attribution.schemas import (
     JourneySourceActivatePayload,
     LoadSampleRequest,
 )
+from app.services_conversions import filter_journeys_by_quality
 from app.services_meiro_quarantine import create_quarantine_run
 
 
@@ -74,6 +75,11 @@ def create_router(
 
     def _results_store() -> Dict[str, Any]:
         return get_attribution_results_obj()
+
+    def _apply_attribution_filters(journeys: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        settings = get_settings_obj()
+        threshold = int(getattr(settings.attribution, "min_journey_quality_score", 0) or 0)
+        return filter_journeys_by_quality(journeys, threshold)
 
     def _build_consistency_payload(db: Any, journeys: List[Dict[str, Any]]) -> tuple[Dict[str, Any] | None, List[str]]:
         try:
@@ -525,6 +531,7 @@ def create_router(
             raise HTTPException(status_code=400, detail=f"Unknown model: {model}. Available: {attribution_models_obj}")
         resolved_cfg, meta = load_config_and_meta_fn(db, config_id)
         journeys_for_model = apply_model_config_fn(journeys, resolved_cfg.config_json or {}) if resolved_cfg else journeys
+        journeys_for_model = _apply_attribution_filters(journeys_for_model)
         settings = get_settings_obj()
         kwargs: Dict[str, Any] = {}
         if model == "time_decay":
@@ -545,6 +552,7 @@ def create_router(
             raise HTTPException(status_code=400, detail="No journeys loaded. Upload, import, or persist data first.")
         resolved_cfg, meta = load_config_and_meta_fn(db, config_id)
         journeys_for_model = apply_model_config_fn(journeys, resolved_cfg.config_json or {}) if resolved_cfg else journeys
+        journeys_for_model = _apply_attribution_filters(journeys_for_model)
         settings = get_settings_obj()
         results = []
         for model in attribution_models_obj:
@@ -607,6 +615,7 @@ def create_router(
 
         resolved_cfg, _meta = load_config_and_meta_fn(db, config_id) if db else (None, None)
         journeys_for_model = apply_model_config_fn(journeys, resolved_cfg.config_json or {}) if resolved_cfg else journeys
+        journeys_for_model = _apply_attribution_filters(journeys_for_model)
         settings = get_settings_obj()
         kwargs: Dict[str, Any] = {}
         if model == "time_decay" and settings.attribution.time_decay_half_life_days:
@@ -1046,6 +1055,7 @@ def create_router(
         resolved_cfg, meta = load_config_and_meta_fn(db, config_id)
         journeys = get_journeys_fn(db)
         journeys_for_model = apply_model_config_fn(journeys, resolved_cfg.config_json or {}) if resolved_cfg else journeys
+        journeys_for_model = _apply_attribution_filters(journeys_for_model)
         result = _results_store().get(model)
         if not result:
             if not journeys:
@@ -1101,6 +1111,7 @@ def create_router(
             }
         resolved_cfg, meta = load_config_and_meta_fn(db, config_id)
         journeys_for_model = apply_model_config_fn(journeys, resolved_cfg.config_json or {}) if resolved_cfg else journeys
+        journeys_for_model = _apply_attribution_filters(journeys_for_model)
         effective_conv = conversion_key or (meta.get("conversion_key") if meta else None)
         if effective_conv:
             journeys_for_model = [j for j in journeys_for_model if j.get("kpi_type") == effective_conv]

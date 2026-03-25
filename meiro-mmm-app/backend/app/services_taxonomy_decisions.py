@@ -8,6 +8,7 @@ from app.services_taxonomy import (
     compute_unknown_share,
     compute_touchpoint_confidence,
     map_to_channel,
+    _normalized_text,
 )
 from app.utils.taxonomy import Taxonomy, load_taxonomy
 
@@ -72,9 +73,10 @@ def _compute_low_confidence_patterns(
     for journey in journeys:
         for tp in journey.get("touchpoints", []):
             total_touchpoints += 1
-            source = str(tp.get("utm_source") or tp.get("source") or "").strip().lower()
-            medium = str(tp.get("utm_medium") or tp.get("medium") or "").strip().lower()
-            campaign = str(tp.get("utm_campaign") or tp.get("campaign") or "").strip().lower()
+            utm = tp.get("utm") or {}
+            source = _normalized_text(tp.get("utm_source") or (utm.get("source") if isinstance(utm, dict) else None) or tp.get("source"))
+            medium = _normalized_text(tp.get("utm_medium") or (utm.get("medium") if isinstance(utm, dict) else None) or tp.get("medium"))
+            campaign = _normalized_text(tp.get("utm_campaign") or (utm.get("campaign") if isinstance(utm, dict) else None) or tp.get("campaign"))
             confidence = compute_touchpoint_confidence(tp, taxonomy)
             if confidence < 0.5:
                 low_confidence_count += 1

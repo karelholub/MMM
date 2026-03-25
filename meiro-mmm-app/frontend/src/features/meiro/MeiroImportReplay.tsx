@@ -1,9 +1,10 @@
-import type { MeiroConfig, MeiroMappingState } from '../../connectors/meiroConnector'
+import type { MeiroConfig, MeiroMappingState, MeiroPullConfig, MeiroQuarantineRun } from '../../connectors/meiroConnector'
 import { tokens as t } from '../../theme/tokens'
-import type { DryRunResult, MeiroWebhookArchiveStatus } from './shared'
+import { DEFAULT_MEIRO_PULL_CONFIG, type DryRunResult, type MeiroWebhookArchiveStatus } from './shared'
 
 interface MeiroImportReplayProps {
   meiroConfig?: MeiroConfig
+  meiroPullDraft: MeiroPullConfig
   meiroMappingState?: MeiroMappingState
   meiroWebhookArchiveStatus?: MeiroWebhookArchiveStatus
   meiroDryRunPending: boolean
@@ -12,14 +13,22 @@ interface MeiroImportReplayProps {
   importFromMeiroResult?: { import_summary?: any; quarantine_count?: number; count?: number } | null
   reprocessWebhookArchivePending: boolean
   reprocessWebhookArchiveResult?: { import_result?: { import_summary?: any; quarantine_count?: number; count?: number } } | null
+  quarantineRuns?: { items: MeiroQuarantineRun[]; total: number }
+  quarantineRunsLoading: boolean
+  quarantineRunsError?: string | null
+  selectedQuarantineRun?: MeiroQuarantineRun | null
+  selectedQuarantineRunLoading: boolean
+  selectedQuarantineRunError?: string | null
   relativeTime: (iso?: string | null) => string
   onDryRun: () => void
   onImportFromMeiro: () => void
   onReplayArchive: () => void
+  onSelectQuarantineRun: (runId: string) => void
 }
 
 export default function MeiroImportReplay({
   meiroConfig,
+  meiroPullDraft,
   meiroMappingState,
   meiroWebhookArchiveStatus,
   meiroDryRunPending,
@@ -28,16 +37,30 @@ export default function MeiroImportReplay({
   importFromMeiroResult,
   reprocessWebhookArchivePending,
   reprocessWebhookArchiveResult,
+  quarantineRuns,
+  quarantineRunsLoading,
+  quarantineRunsError,
+  selectedQuarantineRun,
+  selectedQuarantineRunLoading,
+  selectedQuarantineRunError,
   relativeTime,
   onDryRun,
   onImportFromMeiro,
   onReplayArchive,
+  onSelectQuarantineRun,
 }: MeiroImportReplayProps) {
   const latestImportSummary =
     importFromMeiroResult?.import_summary ||
     reprocessWebhookArchiveResult?.import_result?.import_summary ||
     meiroDryRunData?.import_summary
   const cleaningReport = latestImportSummary?.cleaning_report || meiroDryRunData?.cleaning_report
+  const replayMode = meiroPullDraft.replay_mode || DEFAULT_MEIRO_PULL_CONFIG.replay_mode
+  const replayScopeLabel =
+    replayMode === 'all'
+      ? 'Entire archive'
+      : replayMode === 'date_range'
+        ? `Date range${meiroPullDraft.replay_date_from ? ` from ${meiroPullDraft.replay_date_from}` : ''}${meiroPullDraft.replay_date_to ? ` to ${meiroPullDraft.replay_date_to}` : ''}`
+        : `Last ${Number(meiroPullDraft.replay_archive_limit || DEFAULT_MEIRO_PULL_CONFIG.replay_archive_limit || 5000).toLocaleString()} archived batches`
 
   return (
     <div style={{ display: 'grid', gap: t.space.md }}>
@@ -98,7 +121,10 @@ export default function MeiroImportReplay({
         {meiroWebhookArchiveStatus?.available ? (
           <>
             <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-              Archived batches: <strong>{meiroWebhookArchiveStatus.entries}</strong> · last received {relativeTime(meiroWebhookArchiveStatus.last_received_at)}
+              Received payloads: <strong>{Number(meiroConfig?.webhook_received_count || 0).toLocaleString()}</strong> · archived batches: <strong>{Number(meiroWebhookArchiveStatus.entries || 0).toLocaleString()}</strong> · archived payloads: <strong>{Number(meiroWebhookArchiveStatus.profiles_received || 0).toLocaleString()}</strong>
+            </div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Replay scope: <strong>{replayScopeLabel}</strong> · last received {relativeTime(meiroWebhookArchiveStatus.last_received_at)}
             </div>
             <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
               Parser versions: <strong>{(meiroWebhookArchiveStatus.parser_versions || []).join(', ') || '—'}</strong>
@@ -112,6 +138,69 @@ export default function MeiroImportReplay({
           </>
         ) : (
           <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>No archived Pipes payloads available yet.</div>
+        )}
+      </div>
+
+      <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.bg, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
+        <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Quarantine review</div>
+        {quarantineRunsLoading ? (
+          <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading quarantine runs…</div>
+        ) : quarantineRunsError ? (
+          <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{quarantineRunsError}</div>
+        ) : !(quarantineRuns?.items || []).length ? (
+          <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>No quarantine runs recorded yet.</div>
+        ) : (
+          <div style={{ display: 'grid', gap: t.space.sm }}>
+            <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+              {(quarantineRuns?.items || []).map((run) => (
+                <button
+                  key={run.id}
+                  type="button"
+                  onClick={() => onSelectQuarantineRun(run.id)}
+                  style={{ border: `1px solid ${t.color.border}`, background: selectedQuarantineRun?.id === run.id ? t.color.accentMuted : t.color.surface, borderRadius: t.radius.sm, padding: '8px 10px', cursor: 'pointer', textAlign: 'left' }}
+                >
+                  <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>{run.source}</div>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>{relativeTime(run.created_at)} · {Number((run.records || []).length).toLocaleString()} records</div>
+                </button>
+              ))}
+            </div>
+
+            {selectedQuarantineRunLoading ? (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading selected quarantine run…</div>
+            ) : selectedQuarantineRunError ? (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{selectedQuarantineRunError}</div>
+            ) : selectedQuarantineRun ? (
+              <div style={{ display: 'grid', gap: t.space.sm }}>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  {selectedQuarantineRun.source} · {relativeTime(selectedQuarantineRun.created_at)} · {(selectedQuarantineRun.records || []).length} quarantined records
+                </div>
+                {(selectedQuarantineRun.records || []).slice(0, 5).map((record, index) => (
+                  <details key={`${record.journey_id || record.customer_id || 'record'}-${index}`} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.surface }}>
+                    <summary style={{ cursor: 'pointer', fontSize: t.font.sizeSm, color: t.color.text }}>
+                      {(record.customer_id || record.journey_id || 'Record')} · {(record.reason_codes || []).join(', ')} · quality {record.quality?.score ?? '—'} ({record.quality?.band || 'n/a'})
+                    </summary>
+                    <div style={{ display: 'grid', gap: t.space.sm, marginTop: t.space.sm }}>
+                      {!!record.reasons?.length && (
+                        <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                          {record.reasons.map((reason) => `${reason.code}: ${reason.message}`).join(' · ')}
+                        </div>
+                      )}
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: t.space.sm }}>
+                        <div>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, marginBottom: 4 }}>Original</div>
+                          <pre style={{ margin: 0, padding: t.space.sm, borderRadius: t.radius.sm, background: t.color.bgSubtle, overflowX: 'auto', fontSize: 11 }}>{JSON.stringify(record.original || {}, null, 2)}</pre>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, marginBottom: 4 }}>Normalized</div>
+                          <pre style={{ margin: 0, padding: t.space.sm, borderRadius: t.radius.sm, background: t.color.bgSubtle, overflowX: 'auto', fontSize: 11 }}>{JSON.stringify(record.normalized || {}, null, 2)}</pre>
+                        </div>
+                      </div>
+                    </div>
+                  </details>
+                ))}
+              </div>
+            ) : null}
+          </div>
         )}
       </div>
     </div>

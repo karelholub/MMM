@@ -103,6 +103,8 @@ from app.core.permissions import (
 from app.services_data_quality import compute_dq_snapshots, evaluate_alert_rules
 from app.services_conversions import (
     apply_model_config_to_journeys,
+    filter_journeys_by_quality,
+    journey_quality_score,
     load_journeys_from_db,
     persist_journeys_as_conversion_paths,
 )
@@ -733,8 +735,11 @@ class AttributionPreviewPayload(BaseModel):
 class AttributionPreviewResponse(BaseModel):
     previewAvailable: bool
     totalJourneys: int
+    eligibleJourneys: int
     windowImpactCount: int
     windowDirection: str
+    qualityImpactCount: int
+    qualityDirection: str
     useConvertedFlagImpact: int
     useConvertedFlagDirection: str
     reason: Optional[str] = None
@@ -1189,14 +1194,9 @@ EXPENSES = {
     ),
 }
 
-# Load sample journeys at startup
-_sample_paths_file = SAMPLE_DIR / "sample-conversion-paths.json"
-if _sample_paths_file.exists():
-    try:
-        with open(_sample_paths_file) as f:
-            JOURNEYS = json.load(f)
-    except Exception:
-        JOURNEYS = []
+# Do not preload sample journeys into the shared in-memory cache.
+# Runtime views should resolve from the persisted active dataset instead.
+JOURNEYS = []
 
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
@@ -1294,8 +1294,11 @@ def attribution_preview(
         return AttributionPreviewResponse(
             previewAvailable=False,
             totalJourneys=0,
+            eligibleJourneys=0,
             windowImpactCount=0,
             windowDirection="none",
+            qualityImpactCount=0,
+            qualityDirection="none",
             useConvertedFlagImpact=0,
             useConvertedFlagDirection="none",
             reason=reason,
@@ -1303,8 +1306,11 @@ def attribution_preview(
                 preview_available=False,
                 reason=reason,
                 total_journeys=0,
+                eligible_journeys=0,
                 window_impact_count=0,
                 window_direction="none",
+                quality_impact_count=0,
+                quality_direction="none",
                 converted_impact_count=0,
                 converted_direction="none",
             ),
@@ -1339,8 +1345,25 @@ def attribution_preview(
         window_direction = "loosen"
 
     window_impact = 0
+    baseline_quality = max(0, min(100, int(getattr(baseline, "min_journey_quality_score", 0) or 0)))
+    proposed_quality = max(0, min(100, int(getattr(proposed, "min_journey_quality_score", 0) or 0)))
+    quality_direction = "none"
+    if proposed_quality > baseline_quality:
+        quality_direction = "tighten"
+    elif proposed_quality < baseline_quality:
+        quality_direction = "loosen"
+
+    quality_impact = 0
+    eligible_journeys = len(filter_journeys_by_quality(JOURNEYS, proposed_quality))
     for journey in JOURNEYS:
+        q_score = journey_quality_score(journey)
+        baseline_quality_allowed = q_score >= baseline_quality
+        proposed_quality_allowed = q_score >= proposed_quality
+        if baseline_quality_allowed != proposed_quality_allowed:
+            quality_impact += 1
         if not journey.get("converted", True):
+            continue
+        if not proposed_quality_allowed and not baseline_quality_allowed:
             continue
         duration = _journey_duration_days(journey)
         if duration is None:
@@ -1364,16 +1387,22 @@ def attribution_preview(
     return AttributionPreviewResponse(
         previewAvailable=True,
         totalJourneys=len(JOURNEYS),
+        eligibleJourneys=eligible_journeys,
         windowImpactCount=window_impact,
         windowDirection=window_direction,
+        qualityImpactCount=quality_impact,
+        qualityDirection=quality_direction,
         useConvertedFlagImpact=converted_impact,
         useConvertedFlagDirection=converted_direction,
         decision=build_attribution_preview_decision(
             preview_available=True,
             reason=None,
             total_journeys=len(JOURNEYS),
+            eligible_journeys=eligible_journeys,
             window_impact_count=window_impact,
             window_direction=window_direction,
+            quality_impact_count=quality_impact,
+            quality_direction=quality_direction,
             converted_impact_count=converted_impact,
             converted_direction=converted_direction,
         ),

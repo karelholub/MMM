@@ -2,6 +2,7 @@
   "attribution": {
     "lookback_window_days": 31,
     "use_converted_flag": true,
+    "min_journey_quality_score": 0,
     "min_conversion_value": 0.0,
     "time_decay_half_life_days": 7.0,
     "position_first_pct": 0.4,

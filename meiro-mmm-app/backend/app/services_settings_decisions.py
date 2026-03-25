@@ -33,8 +33,11 @@ def build_attribution_preview_decision(
     preview_available: bool,
     reason: Optional[str],
     total_journeys: int,
+    eligible_journeys: int,
     window_impact_count: int,
     window_direction: str,
+    quality_impact_count: int,
+    quality_direction: str,
     converted_impact_count: int,
     converted_direction: str,
 ) -> Dict[str, Any]:
@@ -60,6 +63,28 @@ def build_attribution_preview_decision(
     actions: List[Dict[str, Any]] = []
     score = 88.0
     status = "ready"
+
+    if quality_direction == "tighten" and quality_impact_count > 0:
+        warnings.append(
+            f"{quality_impact_count} journeys would be excluded by the stricter minimum quality threshold."
+        )
+        actions.append(
+            _action(
+                "review_quality_threshold",
+                "Review journey-quality threshold",
+                benefit="Avoid excluding too much usable attribution data",
+                target_section="attribution",
+            )
+        )
+        status = "warning"
+        score = min(score, 60.0)
+    elif quality_direction == "loosen" and quality_impact_count > 0:
+        reasons.append(
+            f"{quality_impact_count} journeys would become newly eligible under the looser quality threshold."
+        )
+
+    if eligible_journeys < total_journeys:
+        reasons.append(f"{eligible_journeys} journeys remain eligible after the proposed quality threshold.")
 
     if window_direction == "tighten" and window_impact_count > 0:
         warnings.append(

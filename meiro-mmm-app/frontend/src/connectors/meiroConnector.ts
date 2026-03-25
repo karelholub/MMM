@@ -59,9 +59,14 @@ export interface MeiroPullConfig {
   strict_ingest: boolean
   quarantine_unknown_channels: boolean
   quarantine_missing_utm: boolean
+  quarantine_duplicate_profiles?: boolean
   timestamp_fallback_policy: 'profile' | 'conversion' | 'quarantine'
   value_fallback_policy: 'default' | 'zero' | 'quarantine'
   currency_fallback_policy: 'default' | 'quarantine'
+  replay_mode?: 'all' | 'last_n' | 'date_range'
+  replay_archive_limit?: number
+  replay_date_from?: string | null
+  replay_date_to?: string | null
   conversion_event_aliases?: Record<string, string>
 }
 
@@ -77,6 +82,40 @@ export interface MeiroWebhookSuggestions {
     coverage_pct: number
     recommended: boolean
   }>
+  sanitation_suggestions?: Array<{
+    id: string
+    type: string
+    title: string
+    description: string
+    impact_count?: number
+    confidence?: { score?: number; band?: string }
+    recommended_action?: string
+    payload?: Record<string, unknown>
+  }>
+  apply_payloads?: {
+    sanitation?: Record<string, unknown>
+    [key: string]: unknown
+  }
+}
+
+export interface MeiroQuarantineRecord {
+  journey_id?: string
+  customer_id?: string
+  reason_codes: string[]
+  reasons?: Array<{ code: string; severity: string; message: string }>
+  quality?: { score?: number; band?: string }
+  original?: Record<string, unknown> | null
+  normalized?: Record<string, unknown> | null
+}
+
+export interface MeiroQuarantineRun {
+  id: string
+  source: string
+  created_at: string
+  import_note?: string | null
+  parser_version?: string | null
+  summary?: Record<string, unknown>
+  records?: MeiroQuarantineRecord[]
 }
 
 export async function connectMeiroCDP(params: { api_base_url: string; api_key: string }) {
@@ -203,5 +242,18 @@ export async function meiroDryRun(limit = 100): Promise<{
 }> {
   return apiSendJson<any>(withQuery('/api/connectors/meiro/dry-run', { limit }), 'POST', undefined, {
     fallbackMessage: 'Dry run failed',
+  })
+}
+
+export async function getMeiroQuarantineRuns(limit = 10): Promise<{ items: MeiroQuarantineRun[]; total: number }> {
+  return apiGetJson<{ items: MeiroQuarantineRun[]; total: number }>(
+    withQuery('/api/connectors/meiro/quarantine', { limit }),
+    { fallbackMessage: 'Failed to fetch Meiro quarantine runs' },
+  )
+}
+
+export async function getMeiroQuarantineRun(runId: string): Promise<MeiroQuarantineRun> {
+  return apiGetJson<MeiroQuarantineRun>(`/api/connectors/meiro/quarantine/${runId}`, {
+    fallbackMessage: 'Failed to fetch Meiro quarantine run',
   })
 }

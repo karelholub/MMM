@@ -62,3 +62,10 @@ def get_quarantine_runs(limit: int = 25, source: Optional[str] = None) -> List[D
     if source:
         runs = [run for run in runs if run.get("source") == source]
     return runs[:limit]
+
+
+def get_quarantine_run(run_id: str) -> Optional[Dict[str, Any]]:
+    for run in _load_runs():
+        if run.get("id") == run_id:
+            return run
+    return None

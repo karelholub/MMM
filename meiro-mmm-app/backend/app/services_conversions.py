@@ -37,6 +37,30 @@ def _tp_timestamp(tp: Dict[str, Any]) -> Any:
     return tp.get("ts") or tp.get("timestamp")
 
 
+def journey_quality_score(journey: Dict[str, Any]) -> int:
+    meta = journey.get("meta") if isinstance(journey.get("meta"), dict) else None
+    quality = meta.get("quality") if isinstance(meta, dict) and isinstance(meta.get("quality"), dict) else None
+    score = (
+        journey.get("quality_score")
+        if journey.get("quality_score") is not None
+        else (quality.get("score") if quality else None)
+    )
+    try:
+        return max(0, min(100, int(float(score))))
+    except Exception:
+        return 0
+
+
+def filter_journeys_by_quality(
+    journeys: List[Dict[str, Any]],
+    min_quality_score: int = 0,
+) -> List[Dict[str, Any]]:
+    threshold = max(0, min(100, int(min_quality_score or 0)))
+    if threshold <= 0:
+        return journeys
+    return [j for j in journeys if journey_quality_score(j) >= threshold]
+
+
 def filter_journeys_by_windows(
     journeys: List[Dict[str, Any]],
     config_json: Dict[str, Any],
@@ -112,7 +136,12 @@ def apply_model_config_to_journeys(
     config_json: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
     """Apply both time windows and conversion-key annotations to journeys."""
-    tmp = filter_journeys_by_windows(journeys, config_json)
+    quality_cfg = config_json.get("quality") or {}
+    tmp = filter_journeys_by_quality(
+        journeys,
+        min_quality_score=int(quality_cfg.get("min_journey_quality_score") or 0),
+    )
+    tmp = filter_journeys_by_windows(tmp, config_json)
     tmp = annotate_journeys_with_conversion_key(tmp, config_json)
     return tmp
 
@@ -224,9 +253,31 @@ def v2_to_legacy(j: Dict[str, Any]) -> Dict[str, Any]:
         ts = tp.get("ts") or tp.get("timestamp")
         if ts:
             lt["timestamp"] = ts
+        source = tp.get("source")
+        medium = tp.get("medium")
+        if source:
+            lt["source"] = source
+            lt["utm_source"] = source
+        if medium:
+            lt["medium"] = medium
+            lt["utm_medium"] = medium
         camp = tp.get("campaign")
         if camp:
             lt["campaign"] = camp.get("name", camp) if isinstance(camp, dict) else camp
+            lt["utm_campaign"] = lt["campaign"]
+        utm = tp.get("utm")
+        if isinstance(utm, dict):
+            lt["utm"] = {
+                "source": utm.get("source") or lt.get("utm_source"),
+                "medium": utm.get("medium") or lt.get("utm_medium"),
+                "campaign": utm.get("campaign") or lt.get("utm_campaign"),
+            }
+            if utm.get("source"):
+                lt["utm_source"] = utm.get("source")
+            if utm.get("medium"):
+                lt["utm_medium"] = utm.get("medium")
+            if utm.get("campaign"):
+                lt["utm_campaign"] = utm.get("campaign")
         tps.append(lt)
     return {
         "customer_id": cust.get("id", "unknown"),
@@ -234,6 +285,13 @@ def v2_to_legacy(j: Dict[str, Any]) -> Dict[str, Any]:
         "converted": len(convs) > 0,
         "conversion_value": float(primary.get("value", 0)) if primary else 0.0,
         "kpi_type": primary.get("name") if primary else j.get("kpi_type"),
+        "meta": j.get("meta") if isinstance(j.get("meta"), dict) else {},
+        "quality_score": journey_quality_score(j),
+        "quality_band": (
+            (((j.get("meta") or {}).get("quality") or {}).get("band"))
+            if isinstance(j.get("meta"), dict)
+            else None
+        ),
     }
 
 
