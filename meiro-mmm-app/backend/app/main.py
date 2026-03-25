@@ -69,6 +69,7 @@ from app.services_nba_defaults import (
     build_nba_preview_summary,
     filter_nba_recommendations,
 )
+from app.services_mmm_defaults import build_mmm_defaults_preview
 from app.services_attention_queue import build_attention_queue
 from app.services_data_sources import list_data_sources
 from app.services_data_sources_readiness import build_data_sources_readiness
@@ -764,6 +765,17 @@ class NBAPreviewResponse(BaseModel):
     decision: Optional[Dict[str, Any]] = None
 
 
+class MMMDefaultsPreviewPayload(BaseModel):
+    settings: MMMSettings
+
+
+class MMMDefaultsPreviewResponse(BaseModel):
+    previewAvailable: bool
+    summary: Dict[str, Any]
+    reason: Optional[str] = None
+    decision: Optional[Dict[str, Any]] = None
+
+
 class NBATestPayload(BaseModel):
     settings: NBASettings
     path_prefix: str
@@ -1423,6 +1435,30 @@ def nba_preview(
         filteredByConversionPct=float(summary.get("filteredByConversionPct") or 0.0),
         reason=summary.get("reason"),
         decision=summary.get("decision"),
+    )
+
+
+@app.post(
+    "/api/mmm/defaults/preview",
+    response_model=MMMDefaultsPreviewResponse,
+)
+def mmm_defaults_preview(
+    payload: MMMDefaultsPreviewPayload,
+    db=Depends(get_db),
+) -> MMMDefaultsPreviewResponse:
+    """Return readiness and impact context for MMM default aggregation frequency."""
+    global JOURNEYS
+    if not JOURNEYS:
+        JOURNEYS = load_journeys_from_db(db, limit=50000)
+    preview = build_mmm_defaults_preview(
+        journeys=JOURNEYS or [],
+        settings=payload.settings,
+    )
+    return MMMDefaultsPreviewResponse(
+        previewAvailable=bool(preview.get("previewAvailable")),
+        summary=dict(preview.get("summary") or {}),
+        reason=preview.get("reason"),
+        decision=preview.get("decision"),
     )
 
 

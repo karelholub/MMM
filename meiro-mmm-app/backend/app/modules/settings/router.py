@@ -24,6 +24,7 @@ from app.services_notifications import (
 from app.services_revenue_config import normalize_revenue_config
 from app.services_attribution_defaults import build_attribution_defaults_overview
 from app.services_nba_defaults import build_nba_preview_summary
+from app.services_mmm_defaults import build_mmm_defaults_preview
 from app.utils.taxonomy import (
     ChannelRule,
     MatchExpression,
@@ -121,6 +122,7 @@ def create_router(
         db=Depends(get_db_dependency),
         confirm_attribution_warnings: bool = Query(False),
         confirm_nba_warnings: bool = Query(False),
+        confirm_mmm_warnings: bool = Query(False),
         _ctx=Depends(require_permission_dependency("settings.manage")),
     ):
         current_settings = get_settings_obj()
@@ -146,6 +148,17 @@ def create_router(
             else dict(new_settings.nba or {})
         )
         nba_changed = current_nba != proposed_nba
+        current_mmm = (
+            current_settings.mmm.model_dump()
+            if hasattr(current_settings.mmm, "model_dump")
+            else dict(current_settings.mmm or {})
+        )
+        proposed_mmm = (
+            new_settings.mmm.model_dump()
+            if hasattr(new_settings.mmm, "model_dump")
+            else dict(new_settings.mmm or {})
+        )
+        mmm_changed = current_mmm != proposed_mmm
 
         if attribution_changed:
             journeys = ensure_journeys_loaded_fn(db)
@@ -194,6 +207,30 @@ def create_router(
                     status_code=409,
                     detail={
                         "message": "NBA defaults require warning acknowledgment before save.",
+                        "decision": decision,
+                    },
+                )
+
+        if mmm_changed:
+            journeys = ensure_journeys_loaded_fn(db)
+            mmm_preview = build_mmm_defaults_preview(
+                journeys=journeys,
+                settings=new_settings.mmm,
+            )
+            decision = (mmm_preview.get("decision") or {}) if isinstance(mmm_preview, dict) else {}
+            if decision.get("status") == "blocked":
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "MMM defaults cannot be saved while dependencies are blocked.",
+                        "decision": decision,
+                    },
+                )
+            if decision.get("status") == "warning" and not confirm_mmm_warnings:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "MMM defaults require warning acknowledgment before save.",
                         "decision": decision,
                     },
                 )

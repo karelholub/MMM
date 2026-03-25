@@ -566,6 +566,26 @@ interface NBAPreviewSummary {
   } | null
 }
 
+interface MMMDefaultsPreviewSummary {
+  previewAvailable: boolean
+  summary: {
+    journeys_total: number
+    touchpoint_span_days: number
+    distinct_weeks: number
+    distinct_months: number
+    frequency: string
+  }
+  reason?: string | null
+  decision?: {
+    status: string
+    confidence?: { score: number; band: string } | null
+    blockers?: string[]
+    warnings?: string[]
+    reasons?: string[]
+    recommended_actions?: RecommendedActionItem[]
+  } | null
+}
+
 interface NBATestRecommendationRow {
   step: string
   channel: string
@@ -1203,7 +1223,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       queryFn: async () =>
         apiGetJson<AttributionDefaultsOverview>('/api/attribution/defaults/overview', {
           fallbackMessage: 'Failed to load attribution dependency overview',
-        }),
+      }),
       enabled: activeSection === 'attribution',
     })
     const currentFlags =
@@ -1337,6 +1357,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         settings: Settings
         confirmAttributionWarnings?: boolean
         confirmNbaWarnings?: boolean
+        confirmMmmWarnings?: boolean
       }) =>
         apiSendJson<Settings>((
           () => {
@@ -1346,6 +1367,9 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
             }
             if (payload.confirmNbaWarnings) {
               params.set('confirm_nba_warnings', 'true')
+            }
+            if (payload.confirmMmmWarnings) {
+              params.set('confirm_mmm_warnings', 'true')
             }
             const query = params.toString()
             return query ? `/api/settings?${query}` : '/api/settings'
@@ -1513,6 +1537,17 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
     const [adsGovernanceDraft, setAdsGovernanceDraft] = useState<AdsGovernanceSettings>(
       deepClone(DEFAULT_SETTINGS.ads_governance),
     )
+    const mmmDefaultsPreviewQuery = useQuery<MMMDefaultsPreviewSummary>({
+      queryKey: ['mmm-defaults', 'preview', mmmDraft],
+      queryFn: async () =>
+        apiSendJson<MMMDefaultsPreviewSummary>(
+          '/api/mmm/defaults/preview',
+          'POST',
+          { settings: mmmDraft },
+          { fallbackMessage: 'Failed to calculate MMM defaults preview' },
+        ),
+      enabled: activeSection === 'mmm',
+    })
 
     const [taxonomyBaseline, setTaxonomyBaseline] =
       useState<Taxonomy | null>(null)
@@ -1598,6 +1633,9 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
     const [nbaDependencyAcknowledged, setNbaDependencyAcknowledged] = useState(false)
     const [nbaSaveGuardDecision, setNbaSaveGuardDecision] =
       useState<NBAPreviewSummary['decision'] | null>(null)
+    const [mmmDependencyAcknowledged, setMmmDependencyAcknowledged] = useState(false)
+    const [mmmSaveGuardDecision, setMmmSaveGuardDecision] =
+      useState<MMMDefaultsPreviewSummary['decision'] | null>(null)
 
     const toastIdRef = useRef(0)
     const [toast, setToast] = useState<{
@@ -2285,6 +2323,17 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       nbaDraft,
       settingsBaseline?.nba,
       nbaPreview?.decision?.status,
+    ])
+
+    useEffect(() => {
+      if (activeSection !== 'mmm') return
+      setMmmDependencyAcknowledged(false)
+      setMmmSaveGuardDecision(null)
+    }, [
+      activeSection,
+      mmmDraft,
+      settingsBaseline?.mmm,
+      mmmDefaultsPreviewQuery.data?.decision?.status,
     ])
 
     const attributionPreviewKey = useMemo(() => {
@@ -3766,6 +3815,36 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                 }
               }
             }
+            if (settingsSections.includes('mmm')) {
+              const baselineMmm = settingsBaseline?.mmm ?? DEFAULT_SETTINGS.mmm
+              const mmmSettingsChanged = !deepEqual(mmmDraft, baselineMmm)
+              if (mmmSettingsChanged) {
+                const mmmOverview =
+                  mmmDefaultsPreviewQuery.data ??
+                  (await mmmDefaultsPreviewQuery.refetch()).data
+                const status = mmmOverview?.decision?.status
+                if (status === 'blocked') {
+                  toastIdRef.current += 1
+                  setToast({
+                    id: toastIdRef.current,
+                    type: 'error',
+                    message:
+                      'MMM defaults are blocked by current data readiness.',
+                  })
+                  return false
+                }
+                if (status === 'warning' && !mmmDependencyAcknowledged) {
+                  toastIdRef.current += 1
+                  setToast({
+                    id: toastIdRef.current,
+                    type: 'error',
+                    message:
+                      'Acknowledge MMM warnings before saving defaults.',
+                  })
+                  return false
+                }
+              }
+            }
 
             const payload = settingsPayload({})
             if (settingsSections.includes('attribution')) {
@@ -3788,9 +3867,13 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                 confirmNbaWarnings: settingsSections.includes('nba')
                   ? nbaDependencyAcknowledged
                   : false,
+                confirmMmmWarnings: settingsSections.includes('mmm')
+                  ? mmmDependencyAcknowledged
+                  : false,
               })
               setAttributionSaveGuardDecision(null)
               setNbaSaveGuardDecision(null)
+              setMmmSaveGuardDecision(null)
             } catch (error) {
               if (settingsSections.includes('attribution')) {
                 const saveDecision = extractDecisionFromConflictError(error)
@@ -3820,6 +3903,22 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                       saveDecision.status === 'blocked'
                         ? 'NBA defaults are blocked by current preview dependencies.'
                         : 'NBA defaults require warning acknowledgment before saving.',
+                  })
+                  return false
+                }
+              }
+              if (settingsSections.includes('mmm')) {
+                const saveDecision = extractDecisionFromConflictError(error)
+                if (saveDecision) {
+                  setMmmSaveGuardDecision(saveDecision)
+                  toastIdRef.current += 1
+                  setToast({
+                    id: toastIdRef.current,
+                    type: 'error',
+                    message:
+                      saveDecision.status === 'blocked'
+                        ? 'MMM defaults are blocked by current data readiness.'
+                        : 'MMM defaults require warning acknowledgment before saving.',
                   })
                   return false
                 }
@@ -4070,6 +4169,8 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         attributionDefaultsOverviewQuery,
         attributionDependencyAcknowledged,
         nbaDependencyAcknowledged,
+        mmmDependencyAcknowledged,
+        mmmDefaultsPreviewQuery,
         settingsBaseline,
       ],
     )
@@ -6259,41 +6360,167 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       )
     }
 
-    const renderMmm = () => (
-      <div style={{ maxWidth: 360 }}>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <span
-            style={{
-              fontSize: t.font.sizeSm,
-              fontWeight: t.font.weightMedium,
-              color: t.color.textSecondary,
-            }}
-          >
-            Time aggregation
-          </span>
-          <select
-            value={mmmDraft.frequency}
-            onChange={(e) =>
-              setMmmDraft((prev) => ({ ...prev, frequency: e.target.value }))
-            }
-            style={{
-              padding: `${t.space.sm}px ${t.space.md}px`,
-              borderRadius: t.radius.sm,
-              border: `1px solid ${t.color.border}`,
-              background: t.color.surface,
-              fontSize: t.font.sizeSm,
-              color: t.color.text,
-            }}
-          >
-            <option value="W">Weekly</option>
-            <option value="M">Monthly</option>
-          </select>
-          <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
-            Applied when scheduling new MMM runs. Analysts can override per run.
-          </span>
-        </label>
-      </div>
-    )
+    const renderMmm = () => {
+      const cardStyle: CSSProperties = {
+        border: `1px solid ${t.color.borderLight}`,
+        borderRadius: t.radius.md,
+        padding: t.space.lg,
+        display: 'grid',
+        gap: t.space.md,
+        background: t.color.surface,
+        boxShadow: t.shadowSm,
+      }
+      const labelStyle: CSSProperties = {
+        fontSize: t.font.sizeSm,
+        fontWeight: t.font.weightMedium,
+        color: t.color.textSecondary,
+      }
+      const helperTextStyle: CSSProperties = {
+        fontSize: t.font.sizeXs,
+        color: t.color.textMuted,
+      }
+      const inputStyle: CSSProperties = {
+        padding: `${t.space.sm}px ${t.space.md}px`,
+        borderRadius: t.radius.sm,
+        border: `1px solid ${t.color.border}`,
+        background: t.color.surface,
+        fontSize: t.font.sizeSm,
+        color: t.color.text,
+      }
+      const mmmDirty = dirtySections.includes('mmm')
+      const mmmPreviewDecision =
+        (mmmSaveGuardDecision ?? mmmDefaultsPreviewQuery.data?.decision) ?? null
+      const needsMmmDependencyAck =
+        mmmDirty &&
+        mmmPreviewDecision?.status === 'warning'
+
+      return (
+        <div style={{ display: 'grid', gap: t.space.xl }}>
+          <div style={{ ...cardStyle, maxWidth: 420 }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <span style={labelStyle}>Time aggregation</span>
+              <select
+                value={mmmDraft.frequency}
+                onChange={(e) =>
+                  setMmmDraft((prev) => ({ ...prev, frequency: e.target.value }))
+                }
+                style={inputStyle}
+              >
+                <option value="W">Weekly</option>
+                <option value="M">Monthly</option>
+              </select>
+              <span style={helperTextStyle}>
+                Applied when scheduling new MMM runs. Analysts can override per run.
+              </span>
+            </label>
+          </div>
+
+          <div style={cardStyle}>
+            <div style={{ display: 'grid', gap: t.space.xs }}>
+              <h3
+                style={{
+                  margin: 0,
+                  fontSize: t.font.sizeMd,
+                  fontWeight: t.font.weightSemibold,
+                  color: t.color.text,
+                }}
+              >
+                Readiness
+              </h3>
+              <p style={helperTextStyle}>
+                Validate whether selected MMM aggregation is supported by current journey time coverage.
+              </p>
+            </div>
+            {mmmDefaultsPreviewQuery.isLoading && (
+              <span style={helperTextStyle}>Calculating MMM defaults readiness…</span>
+            )}
+            {mmmDefaultsPreviewQuery.error && (
+              <DecisionStatusCard
+                title="MMM readiness unavailable"
+                status="blocked"
+                compact
+                blockers={[(mmmDefaultsPreviewQuery.error as Error)?.message || 'Failed to calculate MMM defaults preview']}
+              />
+            )}
+            {mmmPreviewDecision && (
+              <DecisionStatusCard
+                title="Preview assessment"
+                status={mmmPreviewDecision.status}
+                compact
+                subtitle={
+                  mmmPreviewDecision.confidence?.score != null
+                    ? `Confidence ${mmmPreviewDecision.confidence.band} (${mmmPreviewDecision.confidence.score}/100)`
+                    : undefined
+                }
+                blockers={mmmPreviewDecision.blockers}
+                warnings={mmmPreviewDecision.warnings}
+                actions={mmmPreviewDecision.recommended_actions}
+                onActionClick={(action) =>
+                  navigateForRecommendedAction(action, { defaultPage: 'settings' })
+                }
+              />
+            )}
+            {needsMmmDependencyAck ? (
+              <label
+                style={{
+                  display: 'flex',
+                  gap: t.space.sm,
+                  alignItems: 'flex-start',
+                  border: `1px solid ${t.color.warning}`,
+                  borderRadius: t.radius.sm,
+                  background: t.color.warningSubtle,
+                  padding: t.space.sm,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={mmmDependencyAcknowledged}
+                  onChange={(e) => setMmmDependencyAcknowledged(e.target.checked)}
+                  style={{ marginTop: 3 }}
+                />
+                <span style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+                  I reviewed MMM warnings and still want to save these defaults.
+                </span>
+              </label>
+            ) : null}
+            {mmmDefaultsPreviewQuery.data?.summary ? (
+              <div
+                style={{
+                  display: 'grid',
+                  gap: t.space.sm,
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
+                }}
+              >
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.bgSubtle }}>
+                  <div style={helperTextStyle}>Journeys</div>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+                    {mmmDefaultsPreviewQuery.data.summary.journeys_total.toLocaleString()}
+                  </div>
+                </div>
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.bgSubtle }}>
+                  <div style={helperTextStyle}>Touchpoint span</div>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+                    {mmmDefaultsPreviewQuery.data.summary.touchpoint_span_days} days
+                  </div>
+                </div>
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.bgSubtle }}>
+                  <div style={helperTextStyle}>Distinct weeks</div>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+                    {mmmDefaultsPreviewQuery.data.summary.distinct_weeks}
+                  </div>
+                </div>
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.bgSubtle }}>
+                  <div style={helperTextStyle}>Distinct months</div>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+                    {mmmDefaultsPreviewQuery.data.summary.distinct_months}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )
+    }
 
     const renderKpi = () => {
       const sortedDefinitions = kpiDraft.definitions
@@ -9697,6 +9924,10 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                           !dirtySections.includes(activeSection) ||
                           sectionIsSaving(activeSection) ||
                           (activeSection === 'kpi' && kpiValidation.hasErrors) ||
+                          (activeSection === 'mmm' &&
+                            dirtySections.includes('mmm') &&
+                            ((mmmSaveGuardDecision ?? mmmDefaultsPreviewQuery.data?.decision)?.status === 'warning') &&
+                            !mmmDependencyAcknowledged) ||
                           (activeSection === 'measurement-models' &&
                             (!!modelConfigError || modelConfigJson.trim().length === 0))
                         }
@@ -9704,13 +9935,23 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                           padding: `${t.space.sm}px ${t.space.lg}px`,
                           borderRadius: t.radius.sm,
                           border: 'none',
-                          background: dirtySections.includes(activeSection)
+                          background: (
+                            dirtySections.includes(activeSection) &&
+                            !(activeSection === 'mmm' &&
+                              ((mmmSaveGuardDecision ?? mmmDefaultsPreviewQuery.data?.decision)?.status === 'warning') &&
+                              !mmmDependencyAcknowledged)
+                          )
                             ? t.color.accent
                             : t.color.borderLight,
                           color: t.color.surface,
                           fontSize: t.font.sizeSm,
                           fontWeight: t.font.weightSemibold,
-                          cursor: dirtySections.includes(activeSection)
+                          cursor: (
+                            dirtySections.includes(activeSection) &&
+                            !(activeSection === 'mmm' &&
+                              ((mmmSaveGuardDecision ?? mmmDefaultsPreviewQuery.data?.decision)?.status === 'warning') &&
+                              !mmmDependencyAcknowledged)
+                          )
                             ? 'pointer'
                             : 'not-allowed',
                           opacity: sectionIsSaving(activeSection) ? 0.7 : 1,
