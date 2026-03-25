@@ -1,5 +1,429 @@
 [
 {
+"id": "8216a371-386",
+"source": "meiro_webhook",
+"started_at": "2026-03-25T10:15:53.300066Z",
+"finished_at": "2026-03-25T10:15:53.300066Z",
+"status": "success",
+"total": 10721,
+"valid": 10721,
+"invalid": 0,
+"converted": 10721,
+"channels_detected": [
+"115358-print non-i\u010d centr\u00e1la",
+"chatgpt.com",
+"copilot.com",
+"direct",
+"firmy.cz",
+"home page",
+"home_page",
+"ig",
+"interaktivni_rozcestnik",
+"mapy.com",
+"meta_ads",
+"pinterest",
+"search.seznam.cz",
+"seznam",
+"unknown",
+"volna_mista"
+],
+"validation_summary": {},
+"config_snapshot": {
+"mapping_preset": "saved",
+"schema_version": "1.0",
+"dedup_interval_minutes": 5,
+"dedup_mode": "balanced",
+"primary_dedup_key": "order_id",
+"fallback_dedup_keys": [
+"conversion_id",
+"event_id"
+]
+},
+"initiated_by": null,
+"import_note": "Reprocessed from webhook archive using current approved mapping",
+"error": null,
+"preview_rows": [
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 4,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 3,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 3,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 4,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 4,
+"value": 0.0
+}
+]
+},
+{
+"id": "58216e95-3b4",
+"source": "meiro_webhook",
+"started_at": "2026-03-25T10:08:22.672378Z",
+"finished_at": "2026-03-25T10:08:22.672378Z",
+"status": "success",
+"total": 11630,
+"valid": 11630,
+"invalid": 0,
+"converted": 11630,
+"channels_detected": [
+"115358-print non-i\u010d centr\u00e1la",
+"chatgpt.com",
+"copilot.com",
+"direct",
+"firmy.cz",
+"home page",
+"home_page",
+"ig",
+"interaktivni_rozcestnik",
+"mapy.com",
+"meta_ads",
+"microsite",
+"pinterest",
+"search.seznam.cz",
+"seznam",
+"unknown",
+"volna_mista"
+],
+"validation_summary": {},
+"config_snapshot": {
+"mapping_preset": "saved",
+"schema_version": "1.0",
+"dedup_interval_minutes": 5,
+"dedup_mode": "balanced",
+"primary_dedup_key": "order_id",
+"fallback_dedup_keys": [
+"conversion_id",
+"event_id"
+]
+},
+"initiated_by": null,
+"import_note": null,
+"error": null,
+"preview_rows": [
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+}
+]
+},
+{
+"id": "28573f69-aaa",
+"source": "sample",
+"started_at": "2026-03-25T10:08:11.629570Z",
+"finished_at": "2026-03-25T10:08:11.629570Z",
+"status": "success",
+"total": 30,
+"valid": 30,
+"invalid": 0,
+"converted": 25,
+"channels_detected": [
+"direct",
+"email",
+"google_ads",
+"linkedin_ads",
+"meta_ads",
+"whatsapp"
+],
+"validation_summary": {
+"top_errors": [],
+"top_warnings": []
+},
+"config_snapshot": {
+"schema_version": "1.0"
+},
+"initiated_by": null,
+"import_note": null,
+"error": null,
+"preview_rows": [
+{
+"customer_id": "c001",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c002",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c003",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c004",
+"touchpoints": 5,
+"converted": true
+},
+{
+"customer_id": "c005",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c006",
+"touchpoints": 1,
+"converted": true
+},
+{
+"customer_id": "c007",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c008",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c009",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c010",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c011",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c012",
+"touchpoints": 6,
+"converted": true
+},
+{
+"customer_id": "c013",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c014",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c015",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c016",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c017",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c018",
+"touchpoints": 1,
+"converted": true
+},
+{
+"customer_id": "c019",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c020",
+"touchpoints": 2,
+"converted": true
+}
+]
+},
+{
 "id": "08a8a8e5-03f",
 "source": "meiro_webhook",
 "started_at": "2026-03-25T08:01:32.657877Z",

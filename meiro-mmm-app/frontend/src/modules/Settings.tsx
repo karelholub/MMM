@@ -327,6 +327,8 @@ interface TaxonomySuggestionsResponse {
   suggestions: TaxonomySuggestionItem[]
 }
 
+type TaxonomySuggestionState = 'saved' | 'draft' | 'pending'
+
 interface TaxonomyPreviewResponse {
   before: {
     unknown_share: number
@@ -1072,6 +1074,59 @@ function sanitizeTaxonomyPayload(taxonomy: Taxonomy): Taxonomy {
     source_aliases: { ...taxonomy.source_aliases },
     medium_aliases: { ...taxonomy.medium_aliases },
   }
+}
+
+function isTaxonomySuggestionApplied(
+  suggestion: TaxonomySuggestionItem,
+  taxonomy: Taxonomy,
+): boolean {
+  let requiredChecks = 0
+  let passedChecks = 0
+
+  if (suggestion.payload.source_alias) {
+    requiredChecks += 1
+    const alias = suggestion.payload.source_alias.raw.trim().toLowerCase()
+    const canonical = suggestion.payload.source_alias.canonical.trim()
+    if (alias && taxonomy.source_aliases[alias] === canonical) {
+      passedChecks += 1
+    }
+  }
+
+  if (suggestion.payload.medium_alias) {
+    requiredChecks += 1
+    const alias = suggestion.payload.medium_alias.raw.trim().toLowerCase()
+    const canonical = suggestion.payload.medium_alias.canonical.trim()
+    if (alias && taxonomy.medium_aliases[alias] === canonical) {
+      passedChecks += 1
+    }
+  }
+
+  if (suggestion.payload.channel_rule) {
+    requiredChecks += 1
+    const candidate = suggestion.payload.channel_rule
+    const candidateSource = ensureMatchExpression(candidate.source)
+    const candidateMedium = ensureMatchExpression(candidate.medium)
+    const candidateCampaign = ensureMatchExpression(candidate.campaign)
+    const exists = taxonomy.channel_rules.some((rule) => {
+      const source = ensureMatchExpression(rule.source)
+      const medium = ensureMatchExpression(rule.medium)
+      const campaign = ensureMatchExpression(rule.campaign)
+      return (
+        rule.channel.trim() === (candidate.channel ?? '').trim() &&
+        source.operator === candidateSource.operator &&
+        source.value.trim() === candidateSource.value.trim() &&
+        medium.operator === candidateMedium.operator &&
+        medium.value.trim() === candidateMedium.value.trim() &&
+        campaign.operator === candidateCampaign.operator &&
+        campaign.value.trim() === candidateCampaign.value.trim()
+      )
+    })
+    if (exists) {
+      passedChecks += 1
+    }
+  }
+
+  return requiredChecks > 0 && requiredChecks === passedChecks
 }
 
 function formatDateTime(value?: string | null): string {
@@ -2190,9 +2245,16 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
     const handleApplyTaxonomySuggestion = useCallback((suggestionId: string) => {
       const suggestion = taxonomySuggestionsQuery.data?.suggestions.find((item) => item.id === suggestionId)
       if (!suggestion) return
+      let changed = false
 
       if (suggestion.payload.source_alias) {
         const { raw, canonical } = suggestion.payload.source_alias
+        const existing = sourceAliasRows.find(
+          (row) => row.alias.trim().toLowerCase() === raw.trim().toLowerCase(),
+        )
+        if (!existing || existing.canonical.trim() !== canonical.trim()) {
+          changed = true
+        }
         updateSourceAliases((prev) => {
           const existing = prev.find((row) => row.alias.trim().toLowerCase() === raw.trim().toLowerCase())
           if (existing) {
@@ -2204,6 +2266,12 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
 
       if (suggestion.payload.medium_alias) {
         const { raw, canonical } = suggestion.payload.medium_alias
+        const existing = mediumAliasRows.find(
+          (row) => row.alias.trim().toLowerCase() === raw.trim().toLowerCase(),
+        )
+        if (!existing || existing.canonical.trim() !== canonical.trim()) {
+          changed = true
+        }
         updateMediumAliases((prev) => {
           const existing = prev.find((row) => row.alias.trim().toLowerCase() === raw.trim().toLowerCase())
           if (existing) {
@@ -2214,6 +2282,16 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       }
 
       if (suggestion.payload.channel_rule) {
+        const existsInDraft = taxonomyDraft.channel_rules.some((rule) =>
+          rule.channel === suggestion.payload.channel_rule?.channel &&
+          ensureMatchExpression(rule.source).operator === ensureMatchExpression(suggestion.payload.channel_rule?.source).operator &&
+          ensureMatchExpression(rule.source).value === ensureMatchExpression(suggestion.payload.channel_rule?.source).value &&
+          ensureMatchExpression(rule.medium).operator === ensureMatchExpression(suggestion.payload.channel_rule?.medium).operator &&
+          ensureMatchExpression(rule.medium).value === ensureMatchExpression(suggestion.payload.channel_rule?.medium).value
+        )
+        if (!existsInDraft) {
+          changed = true
+        }
         setTaxonomyDraft((prev) => {
           const exists = prev.channel_rules.some((rule) =>
             rule.channel === suggestion.payload.channel_rule?.channel &&
@@ -2244,12 +2322,28 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       }
 
       toastIdRef.current += 1
+      if (!changed) {
+        setToast({
+          id: toastIdRef.current,
+          type: 'success',
+          message: 'Suggestion is already reflected in the draft',
+        })
+        return
+      }
+      setTaxonomyActiveTab('preview')
       setToast({
         id: toastIdRef.current,
         type: 'success',
-        message: 'Applied taxonomy suggestion to draft',
+        message: 'Applied taxonomy suggestion to draft and opened preview',
       })
-    }, [taxonomySuggestionsQuery.data?.suggestions, updateMediumAliases, updateSourceAliases])
+    }, [
+      mediumAliasRows,
+      sourceAliasRows,
+      taxonomyDraft.channel_rules,
+      taxonomySuggestionsQuery.data?.suggestions,
+      updateMediumAliases,
+      updateSourceAliases,
+    ])
 
     const handleImportSourceAliases = useCallback(() => {
       try {
@@ -3617,6 +3711,24 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         }),
       enabled: activeSection === 'taxonomy' && taxonomyDirty,
     })
+    const taxonomySuggestionStatusById = useMemo<
+      Record<string, TaxonomySuggestionState>
+    >(() => {
+      const statuses: Record<string, TaxonomySuggestionState> = {}
+      const suggestions = taxonomySuggestionsQuery.data?.suggestions ?? []
+      for (const suggestion of suggestions) {
+        const inSaved = taxonomyBaseline
+          ? isTaxonomySuggestionApplied(suggestion, taxonomyBaseline)
+          : false
+        if (inSaved) {
+          statuses[suggestion.id] = 'saved'
+          continue
+        }
+        const inDraft = isTaxonomySuggestionApplied(suggestion, taxonomyDraft)
+        statuses[suggestion.id] = inDraft ? 'draft' : 'pending'
+      }
+      return statuses
+    }, [taxonomyBaseline, taxonomyDraft, taxonomySuggestionsQuery.data?.suggestions])
 
     const kpiDirty = useMemo(() => {
       if (!kpiBaseline) return false
@@ -7188,6 +7300,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
               suggestions={taxonomySuggestionsQuery.data}
               loading={taxonomySuggestionsQuery.isLoading}
               error={(taxonomySuggestionsQuery.error as Error | undefined)?.message || null}
+              suggestionStatusById={taxonomySuggestionStatusById}
               onApplySuggestion={handleApplyTaxonomySuggestion}
             />
           )}

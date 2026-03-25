@@ -25,7 +25,7 @@
       "enabled": true,
       "source": {
         "operator": "regex",
-        "value": "facebook|meta|instagram|linkedin|twitter|tiktok"
+        "value": "facebook|meta|instagram|linkedin|twitter|tiktok|pinterest"
       },
       "medium": {
         "operator": "regex",

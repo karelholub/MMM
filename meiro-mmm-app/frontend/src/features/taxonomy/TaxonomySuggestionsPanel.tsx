@@ -22,6 +22,7 @@ interface TaxonomySuggestionsPanelProps {
   suggestions?: TaxonomySuggestionsResponse
   loading: boolean
   error?: string | null
+  suggestionStatusById?: Record<string, 'saved' | 'draft' | 'pending'>
   onApplySuggestion: (id: string) => void
 }
 
@@ -33,6 +34,7 @@ export default function TaxonomySuggestionsPanel({
   suggestions,
   loading,
   error,
+  suggestionStatusById,
   onApplySuggestion,
 }: TaxonomySuggestionsPanelProps) {
   const groupedSuggestions = (suggestions?.suggestions || []).reduce<Record<string, TaxonomySuggestion[]>>((acc, suggestion) => {
@@ -79,6 +81,42 @@ export default function TaxonomySuggestionsPanel({
               </div>
               {items.map((suggestion) => (
                 <div key={suggestion.id} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, display: 'grid', gap: t.space.xs, background: t.color.bg }}>
+                  {(() => {
+                    const status = suggestionStatusById?.[suggestion.id] ?? 'pending'
+                    const isSaved = status === 'saved'
+                    const isDraft = status === 'draft'
+                    const label = isSaved
+                      ? 'Already in saved config'
+                      : isDraft
+                      ? 'Already in draft (unsaved)'
+                      : 'Ready to apply'
+                    const color = isSaved
+                      ? t.color.success
+                      : isDraft
+                      ? t.color.warning
+                      : t.color.accent
+                    const background = isSaved
+                      ? t.color.successMuted
+                      : isDraft
+                      ? t.color.warningSubtle
+                      : t.color.accentMuted
+                    return (
+                      <div
+                        style={{
+                          justifySelf: 'start',
+                          padding: '2px 8px',
+                          borderRadius: 999,
+                          fontSize: t.font.sizeXs,
+                          fontWeight: t.font.weightMedium,
+                          color,
+                          background,
+                          border: `1px solid ${color}`,
+                        }}
+                      >
+                        {label}
+                      </div>
+                    )
+                  })()}
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'center', flexWrap: 'wrap' }}>
                     <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>{suggestion.title}</div>
                     <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
@@ -105,21 +143,34 @@ export default function TaxonomySuggestionsPanel({
                     <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>{suggestion.recommended_action}</div>
                   ) : null}
                   <div>
-                    <button
-                      type="button"
-                      onClick={() => onApplySuggestion(suggestion.id)}
-                      style={{
-                        padding: `${t.space.xs}px ${t.space.sm}px`,
-                        borderRadius: t.radius.sm,
-                        border: `1px solid ${t.color.accent}`,
-                        background: t.color.accentMuted,
-                        color: t.color.accent,
-                        fontSize: t.font.sizeXs,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Apply to draft
-                    </button>
+                    {(() => {
+                      const status = suggestionStatusById?.[suggestion.id] ?? 'pending'
+                      const disabled = status !== 'pending'
+                      const buttonLabel =
+                        status === 'saved'
+                          ? 'Already saved'
+                          : status === 'draft'
+                          ? 'Already in draft'
+                          : 'Apply to draft'
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => onApplySuggestion(suggestion.id)}
+                          disabled={disabled}
+                          style={{
+                            padding: `${t.space.xs}px ${t.space.sm}px`,
+                            borderRadius: t.radius.sm,
+                            border: `1px solid ${disabled ? t.color.border : t.color.accent}`,
+                            background: disabled ? t.color.borderLight : t.color.accentMuted,
+                            color: disabled ? t.color.textMuted : t.color.accent,
+                            fontSize: t.font.sizeXs,
+                            cursor: disabled ? 'not-allowed' : 'pointer',
+                          }}
+                        >
+                          {buttonLabel}
+                        </button>
+                      )
+                    })()}
                   </div>
                 </div>
               ))}
