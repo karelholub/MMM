@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 
 @dataclass
@@ -218,13 +219,79 @@ def save_taxonomy(taxonomy: Taxonomy) -> None:
     path.write_text(json.dumps(payload, indent=2))
 
 
+def _normalized_host(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = urlparse(text if "://" in text else f"https://{text}")
+    except Exception:
+        return ""
+    host = (parsed.netloc or parsed.path or "").strip().lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def infer_source_medium_from_referrer(tp: Dict[str, Any]) -> Dict[str, str]:
+    raw_source = str(tp.get("utm_source") or tp.get("source") or "").strip()
+    raw_medium = str(tp.get("utm_medium") or tp.get("medium") or "").strip()
+    if raw_source or raw_medium:
+        return {}
+
+    referrer = tp.get("page_referrer") or tp.get("referrer")
+    if not referrer:
+        return {}
+
+    ref_host = _normalized_host(referrer)
+    if not ref_host:
+        return {}
+
+    page_host = _normalized_host(tp.get("page_location") or tp.get("url") or tp.get("page_url"))
+    if page_host and (ref_host == page_host or ref_host.endswith(f".{page_host}") or page_host.endswith(f".{ref_host}")):
+        return {}
+
+    search_sources = {
+        "google.": "google",
+        "bing.": "bing",
+        "search.yahoo.": "yahoo",
+        "duckduckgo.": "duckduckgo",
+        "seznam.": "seznam",
+        "yandex.": "yandex",
+        "baidu.": "baidu",
+    }
+    for fragment, source in search_sources.items():
+        if ref_host == fragment[:-1] or ref_host.startswith(fragment):
+            return {"source": source, "medium": "organic"}
+
+    social_sources = {
+        "facebook.": "facebook",
+        "instagram.": "instagram",
+        "linkedin.": "linkedin",
+        "t.co": "twitter",
+        "twitter.": "twitter",
+        "x.com": "twitter",
+        "tiktok.": "tiktok",
+        "youtube.": "youtube",
+        "pinterest.": "pinterest",
+        "reddit.": "reddit",
+    }
+    for fragment, source in social_sources.items():
+        if ref_host == fragment.rstrip(".") or ref_host.startswith(fragment):
+            return {"source": source, "medium": "social_referral"}
+
+    return {"source": ref_host, "medium": "referral"}
+
+
 def normalize_touchpoint(tp: Dict[str, Any], taxonomy: Optional[Taxonomy] = None) -> Dict[str, Any]:
     if taxonomy is None:
         taxonomy = load_taxonomy()
 
+    referrer_fallback = infer_source_medium_from_referrer(tp)
+
     # raw inputs
-    raw_source = str(tp.get("utm_source") or tp.get("source") or "").lower()
-    raw_medium = str(tp.get("utm_medium") or tp.get("medium") or "").lower()
+    raw_source = str(tp.get("utm_source") or tp.get("source") or referrer_fallback.get("source") or "").lower()
+    raw_medium = str(tp.get("utm_medium") or tp.get("medium") or referrer_fallback.get("medium") or "").lower()
     raw_campaign = str(tp.get("utm_campaign") or tp.get("campaign") or "").lower()
 
     source = taxonomy.source_aliases.get(raw_source, raw_source)
@@ -257,5 +324,8 @@ def normalize_touchpoint(tp: Dict[str, Any], taxonomy: Optional[Taxonomy] = None
         normalized["ad"] = ad
     if creative is not None:
         normalized["creative"] = creative
+    if referrer_fallback:
+        normalized.setdefault("meta", {})
+        normalized["meta"]["inferred_source_medium_from_referrer"] = True
 
     return normalized

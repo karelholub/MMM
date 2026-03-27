@@ -203,6 +203,34 @@ def _conversion_id(conversion: Dict[str, Any], payload: Dict[str, Any], fallback
     ).strip()
 
 
+def _safe_status(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if raw in {"pending", "valid", "refunded", "partially_refunded", "cancelled", "invalid", "disqualified"}:
+        return raw
+    return "valid"
+
+
+def _safe_adjustment_type(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    mapping = {
+        "refund": "refund",
+        "partial_refund": "partial_refund",
+        "partially_refunded": "partial_refund",
+        "cancellation": "cancellation",
+        "cancelled": "cancellation",
+        "returned_order": "cancellation",
+        "return": "cancellation",
+        "invalid_lead": "invalid_lead",
+        "invalid": "invalid_lead",
+        "disqualified_lead": "disqualified_lead",
+        "disqualified": "disqualified_lead",
+        "duplicate_lead": "invalid_lead",
+        "spam_lead": "invalid_lead",
+        "test_lead": "invalid_lead",
+    }
+    return mapping.get(raw, raw or "adjustment")
+
+
 def _dedup_key_value(
     *,
     conversion: Dict[str, Any],
@@ -360,14 +388,60 @@ def extract_revenue_entries(
                 value_for_base = default_value
                 default_applied = True
                 default_reason = "zero"
+        gross_value_in_base = _safe_number(_to_base(value_for_base, currency, effective))
+        status = _safe_status(conversion.get("status"))
+        refunded_value = 0.0
+        cancelled_value = 0.0
+        invalidated = status in {"invalid", "disqualified"}
+        adjustments = conversion.get("adjustments")
+        if isinstance(adjustments, list):
+            for item in adjustments:
+                if not isinstance(item, dict):
+                    continue
+                adjustment_type = _safe_adjustment_type(item.get("type"))
+                adjustment_currency = str(item.get("currency") or currency or effective.get("base_currency") or "EUR").strip().upper()
+                adjustment_value = _safe_number(item.get("value"))
+                adjustment_in_base = _safe_number(_to_base(adjustment_value, adjustment_currency, effective))
+                if adjustment_type in {"refund", "partial_refund"}:
+                    refunded_value += adjustment_in_base
+                elif adjustment_type == "cancellation":
+                    cancelled_value += gross_value_in_base
+                    status = "cancelled"
+                elif adjustment_type in {"invalid_lead", "disqualified_lead"}:
+                    invalidated = True
+                    status = "disqualified" if adjustment_type == "disqualified_lead" else "invalid"
+        net_value_in_base = max(0.0, gross_value_in_base - refunded_value)
+        if status == "cancelled":
+            net_value_in_base = 0.0
+        if status in {"refunded"}:
+            net_value_in_base = 0.0
+        if refunded_value >= gross_value_in_base > 0 and status not in {"cancelled", "invalid", "disqualified"}:
+            status = "refunded"
+            net_value_in_base = 0.0
+        elif refunded_value > 0 and status not in {"cancelled", "invalid", "disqualified", "refunded"}:
+            status = "partially_refunded"
+        if invalidated:
+            net_value_in_base = 0.0
         out.append(
             {
                 "name": name,
                 "dedup_key": dedup_value,
+                "conversion_id": _conversion_id(conversion, payload, fallback_conversion_id),
+                "status": status,
                 "currency": currency,
                 "value_raw": _safe_number(raw_value),
                 "value_effective": _safe_number(value_for_base),
-                "value_in_base": _safe_number(_to_base(value_for_base, currency, effective)),
+                "value_in_base": gross_value_in_base,
+                "gross_value_in_base": gross_value_in_base,
+                "net_value_in_base": net_value_in_base,
+                "refunded_value": refunded_value,
+                "cancelled_value": cancelled_value,
+                "gross_value": _safe_number(value_for_base),
+                "net_value": max(0.0, _safe_number(value_for_base) - _safe_number(refunded_value)),
+                "gross_conversions": 1.0,
+                "net_conversions": 0.0 if status in {"refunded", "cancelled", "invalid", "disqualified"} else 1.0,
+                "invalid_leads": 1.0 if status in {"invalid", "disqualified"} else 0.0,
+                "valid_leads": 0.0 if status in {"invalid", "disqualified"} else 1.0,
                 "default_applied": default_applied,
                 "default_reason": default_reason,
                 "value_source": "defaulted" if default_applied else "raw",

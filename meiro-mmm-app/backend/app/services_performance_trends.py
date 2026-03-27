@@ -5,6 +5,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from app.services_metrics import (
     SUPPORTED_KPIS,
+    journey_outcome_summary,
     journey_revenue_value,
     metric_value,
     summarize_rows,
@@ -102,6 +103,65 @@ def _add_metric_rollup(
     bucket_entry["revenue"] += revenue
 
 
+def _empty_outcome_metrics() -> Dict[str, float]:
+    return {
+        "gross_conversions": 0.0,
+        "net_conversions": 0.0,
+        "gross_revenue": 0.0,
+        "net_revenue": 0.0,
+        "refunded_value": 0.0,
+        "cancelled_value": 0.0,
+        "invalid_leads": 0.0,
+        "valid_leads": 0.0,
+        "click_through_conversions": 0.0,
+        "view_through_conversions": 0.0,
+        "mixed_path_conversions": 0.0,
+    }
+
+
+def _path_type(journey: Dict[str, Any]) -> str:
+    summary = ((journey.get("meta") or {}).get("interaction_summary") or {}) if isinstance(journey.get("meta"), dict) else {}
+    path_type = summary.get("path_type") or journey.get("interaction_path_type")
+    if isinstance(path_type, str) and path_type:
+        return path_type
+    touchpoints = journey.get("touchpoints") or []
+    has_impression = False
+    has_click_like = False
+    for tp in touchpoints:
+        if not isinstance(tp, dict):
+            continue
+        interaction = str(tp.get("interaction_type") or "").strip().lower()
+        if interaction == "impression":
+            has_impression = True
+        elif interaction in {"click", "visit", "direct"}:
+            has_click_like = True
+    if has_impression and has_click_like:
+        return "mixed_path"
+    if has_click_like:
+        return "click_through"
+    if has_impression:
+        return "view_through"
+    return "unknown"
+
+
+def _merge_outcome_metrics(target: Dict[str, float], outcome: Dict[str, float], path_type: str) -> None:
+    target["gross_conversions"] += float(outcome.get("gross_conversions", 0.0) or 0.0)
+    target["net_conversions"] += float(outcome.get("net_conversions", 0.0) or 0.0)
+    target["gross_revenue"] += float(outcome.get("gross_value", 0.0) or 0.0)
+    target["net_revenue"] += float(outcome.get("net_value", 0.0) or 0.0)
+    target["refunded_value"] += float(outcome.get("refunded_value", 0.0) or 0.0)
+    target["cancelled_value"] += float(outcome.get("cancelled_value", 0.0) or 0.0)
+    target["invalid_leads"] += float(outcome.get("invalid_leads", 0.0) or 0.0)
+    target["valid_leads"] += float(outcome.get("valid_leads", 0.0) or 0.0)
+    selected_count = float(outcome.get("net_conversions", 0.0) or 0.0)
+    if path_type == "click_through":
+        target["click_through_conversions"] += selected_count
+    elif path_type == "view_through":
+        target["view_through_conversions"] += selected_count
+    elif path_type == "mixed_path":
+        target["mixed_path_conversions"] += selected_count
+
+
 
 def _expense_records(expenses: Any) -> Iterable[Any]:
     if isinstance(expenses, dict):
@@ -136,12 +196,19 @@ def _collect_channel_rollups(
     compare: bool,
     channels: Optional[List[str]],
     conversion_key: Optional[str] = None,
-) -> Tuple[Dict[str, Dict[str, Dict[str, float]]], Dict[str, Dict[str, Dict[str, float]]]]:
+) -> Tuple[
+    Dict[str, Dict[str, Dict[str, float]]],
+    Dict[str, Dict[str, Dict[str, float]]],
+    Dict[str, Dict[str, float]],
+    Dict[str, Dict[str, float]],
+]:
     tz = _safe_tz(timezone)
     allowed_channels = set(channels or [])
     filter_channels = bool(allowed_channels)
     curr_store: Dict[str, Dict[str, Dict[str, float]]] = {}
     prev_store: Dict[str, Dict[str, Dict[str, float]]] = {}
+    curr_outcomes: Dict[str, Dict[str, float]] = {}
+    prev_outcomes: Dict[str, Dict[str, float]] = {}
     dedupe_curr: set[str] = set()
     dedupe_prev: set[str] = set()
 
@@ -178,12 +245,18 @@ def _collect_channel_rollups(
         if day is None:
             continue
         bucket = _bucket_start(day, resolved_grain).isoformat()
+        outcome = journey_outcome_summary(journey)
+        path_type = _path_type(journey)
         if curr_from <= day <= curr_to:
             revenue = journey_revenue_value(journey, dedupe_seen=dedupe_curr)
             _add_metric_rollup(curr_store, channel, bucket, conversions=1.0, revenue=revenue)
+            metrics = curr_outcomes.setdefault(channel, _empty_outcome_metrics())
+            _merge_outcome_metrics(metrics, outcome, path_type)
         elif compare and prev_from <= day <= prev_to:
             revenue = journey_revenue_value(journey, dedupe_seen=dedupe_prev)
             _add_metric_rollup(prev_store, channel, bucket, conversions=1.0, revenue=revenue)
+            metrics = prev_outcomes.setdefault(channel, _empty_outcome_metrics())
+            _merge_outcome_metrics(metrics, outcome, path_type)
 
     for exp in _expense_records(expenses):
         channel, start_raw, amount, status = _expense_fields(exp)
@@ -200,7 +273,7 @@ def _collect_channel_rollups(
             _add_metric_rollup(curr_store, channel, bucket, spend=amount)
         elif compare and prev_from <= day <= prev_to:
             _add_metric_rollup(prev_store, channel, bucket, spend=amount)
-    return curr_store, prev_store
+    return curr_store, prev_store, curr_outcomes, prev_outcomes
 
 
 def _collect_campaign_rollups(
@@ -222,6 +295,8 @@ def _collect_campaign_rollups(
     filter_channels = bool(allowed_channels)
     curr_store: Dict[str, Dict[str, Dict[str, float]]] = {}
     prev_store: Dict[str, Dict[str, Dict[str, float]]] = {}
+    curr_outcomes: Dict[str, Dict[str, float]] = {}
+    prev_outcomes: Dict[str, Dict[str, float]] = {}
     meta: Dict[str, Dict[str, Any]] = {}
     dedupe_curr: set[str] = set()
     dedupe_prev: set[str] = set()
@@ -283,12 +358,18 @@ def _collect_campaign_rollups(
         if day is None:
             continue
         bucket = _bucket_start(day, resolved_grain).isoformat()
+        outcome = journey_outcome_summary(journey)
+        path_type = _path_type(journey)
         if curr_from <= day <= curr_to:
             revenue = journey_revenue_value(journey, dedupe_seen=dedupe_curr)
             _add_metric_rollup(curr_store, c_key, bucket, conversions=1.0, revenue=revenue)
+            metrics = curr_outcomes.setdefault(c_key, _empty_outcome_metrics())
+            _merge_outcome_metrics(metrics, outcome, path_type)
         elif compare and prev_from <= day <= prev_to:
             revenue = journey_revenue_value(journey, dedupe_seen=dedupe_prev)
             _add_metric_rollup(prev_store, c_key, bucket, conversions=1.0, revenue=revenue)
+            metrics = prev_outcomes.setdefault(c_key, _empty_outcome_metrics())
+            _merge_outcome_metrics(metrics, outcome, path_type)
 
     # Spend remains channel-level in source data. Allocate channel spend to campaign keys
     # per bucket to avoid double-counting when campaign totals are aggregated:
@@ -348,6 +429,8 @@ def _collect_campaign_rollups(
     _allocate_spend(channel_spend_curr, curr_store)
     if compare:
         _allocate_spend(channel_spend_prev, prev_store)
+    meta["__current_outcomes__"] = curr_outcomes
+    meta["__previous_outcomes__"] = prev_outcomes
     return curr_store, prev_store, meta
 
 
@@ -374,7 +457,7 @@ def build_channel_trend_response(
     prev_to = _parse_date(windows["previous_period"]["date_to"])
     current_keys = _bucket_keys_for_period(curr_from, curr_to, resolved_grain)
     prev_keys = _bucket_keys_for_period(prev_from, prev_to, resolved_grain)
-    curr_store, prev_store = _collect_channel_rollups(
+    curr_store, prev_store, _curr_outcomes, _prev_outcomes = _collect_channel_rollups(
         journeys=journeys,
         expenses=expenses,
         timezone=timezone,
@@ -448,6 +531,8 @@ def build_campaign_trend_response(
         channels=channels,
         conversion_key=conversion_key,
     )
+    if isinstance(meta.get("__current_outcomes__"), dict):
+        meta = {key: value for key, value in meta.items() if not str(key).startswith("__")}
 
     dims = sorted(set(meta.keys()) | set(curr_store.keys()) | (set(prev_store.keys()) if compare else set()))
     series: List[Dict[str, Any]] = []
@@ -509,7 +594,7 @@ def build_channel_summary_response(
     curr_to = _parse_date(windows["current_period"]["date_to"])
     prev_from = _parse_date(windows["previous_period"]["date_from"])
     prev_to = _parse_date(windows["previous_period"]["date_to"])
-    curr_store, prev_store = _collect_channel_rollups(
+    curr_store, prev_store, curr_outcomes, prev_outcomes = _collect_channel_rollups(
         journeys=journeys,
         expenses=expenses,
         timezone=timezone,
@@ -533,6 +618,10 @@ def build_channel_summary_response(
                 "current": curr_totals,
                 "previous": prev_totals if compare else None,
                 "derived": {"roas": curr_derived["roas"], "cpa": curr_derived["cpa"]},
+                "outcomes": {
+                    "current": curr_outcomes.get(dim, _empty_outcome_metrics()),
+                    "previous": prev_outcomes.get(dim, _empty_outcome_metrics()) if compare else None,
+                },
             }
         )
     totals_current = {"spend": 0.0, "visits": 0.0, "conversions": 0.0, "revenue": 0.0}
@@ -547,6 +636,20 @@ def build_channel_summary_response(
         totals_previous["visits"] += float(prev_row.get("visits", 0.0))
         totals_previous["conversions"] += float(prev_row.get("conversions", 0.0))
         totals_previous["revenue"] += float(prev_row.get("revenue", 0.0))
+    totals_outcomes_current = _empty_outcome_metrics()
+    totals_outcomes_previous = _empty_outcome_metrics()
+    for item in items:
+        for key, value in (item.get("outcomes") or {}).get("current", {}).items():
+            totals_outcomes_current[key] = totals_outcomes_current.get(key, 0.0) + float(value or 0.0)
+        for key, value in ((item.get("outcomes") or {}).get("previous") or {}).items():
+            totals_outcomes_previous[key] = totals_outcomes_previous.get(key, 0.0) + float(value or 0.0)
+    notes: List[str] = []
+    if totals_outcomes_current["view_through_conversions"] > totals_outcomes_current["click_through_conversions"]:
+        notes.append("View-through conversions exceed click-through conversions in the selected period.")
+    if totals_outcomes_current["invalid_leads"] > 0:
+        notes.append("Invalid or disqualified leads are present; compare gross vs net conversion totals.")
+    if totals_outcomes_current["refunded_value"] > 0 or totals_outcomes_current["cancelled_value"] > 0:
+        notes.append("Refunded or cancelled value is present; net revenue is lower than gross revenue.")
     return {
         "current_period": windows["current_period"],
         "previous_period": windows["previous_period"],
@@ -554,7 +657,10 @@ def build_channel_summary_response(
         "totals": {
             "current": totals_current,
             "previous": totals_previous if compare else None,
+            "outcomes_current": totals_outcomes_current,
+            "outcomes_previous": totals_outcomes_previous if compare else None,
         },
+        "notes": notes,
     }
 
 
@@ -587,6 +693,8 @@ def build_campaign_summary_response(
         channels=channels,
         conversion_key=conversion_key,
     )
+    curr_outcomes = meta.pop("__current_outcomes__", {}) if isinstance(meta.get("__current_outcomes__"), dict) else {}
+    prev_outcomes = meta.pop("__previous_outcomes__", {}) if isinstance(meta.get("__previous_outcomes__"), dict) else {}
     dims = sorted(set(curr_store.keys()) | (set(prev_store.keys()) if compare else set()))
     items: List[Dict[str, Any]] = []
     for dim in dims:
@@ -602,6 +710,10 @@ def build_campaign_summary_response(
                 "current": curr_totals,
                 "previous": prev_totals if compare else None,
                 "derived": {"roas": curr_derived["roas"], "cpa": curr_derived["cpa"]},
+                "outcomes": {
+                    "current": curr_outcomes.get(dim, _empty_outcome_metrics()),
+                    "previous": prev_outcomes.get(dim, _empty_outcome_metrics()) if compare else None,
+                },
             }
         )
     totals_current = {"spend": 0.0, "visits": 0.0, "conversions": 0.0, "revenue": 0.0}
@@ -616,6 +728,20 @@ def build_campaign_summary_response(
         totals_previous["visits"] += float(prev_row.get("visits", 0.0))
         totals_previous["conversions"] += float(prev_row.get("conversions", 0.0))
         totals_previous["revenue"] += float(prev_row.get("revenue", 0.0))
+    totals_outcomes_current = _empty_outcome_metrics()
+    totals_outcomes_previous = _empty_outcome_metrics()
+    for item in items:
+        for key, value in (item.get("outcomes") or {}).get("current", {}).items():
+            totals_outcomes_current[key] = totals_outcomes_current.get(key, 0.0) + float(value or 0.0)
+        for key, value in ((item.get("outcomes") or {}).get("previous") or {}).items():
+            totals_outcomes_previous[key] = totals_outcomes_previous.get(key, 0.0) + float(value or 0.0)
+    notes: List[str] = []
+    if totals_outcomes_current["view_through_conversions"] > totals_outcomes_current["click_through_conversions"]:
+        notes.append("View-through conversions exceed click-through conversions in the selected period.")
+    if totals_outcomes_current["invalid_leads"] > 0:
+        notes.append("Invalid or disqualified leads are present; compare gross vs net conversion totals.")
+    if totals_outcomes_current["refunded_value"] > 0 or totals_outcomes_current["cancelled_value"] > 0:
+        notes.append("Refunded or cancelled value is present; net revenue is lower than gross revenue.")
     return {
         "current_period": windows["current_period"],
         "previous_period": windows["previous_period"],
@@ -623,8 +749,11 @@ def build_campaign_summary_response(
         "totals": {
             "current": totals_current,
             "previous": totals_previous if compare else None,
+            "outcomes_current": totals_outcomes_current,
+            "outcomes_previous": totals_outcomes_previous if compare else None,
         },
         "notes": [
             "Channel-level spend is allocated across campaign keys per bucket (revenue-weighted, equal-split fallback).",
+            *notes,
         ],
     }

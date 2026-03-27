@@ -13,6 +13,7 @@ interface MeiroPipesSettingsProps {
   meiroWebhookEvents?: { items: MeiroWebhookEvent[]; total: number }
   meiroWebhookDiagnostics?: MeiroWebhookDiagnostics
   meiroWebhookArchiveStatus?: MeiroWebhookArchiveStatus
+  meiroEventArchiveStatus?: MeiroWebhookArchiveStatus
   meiroWebhookEventsLoading: boolean
   meiroWebhookEventsError?: string | null
   meiroWebhookDiagnosticsError?: string | null
@@ -31,6 +32,7 @@ export default function MeiroPipesSettings({
   meiroWebhookEvents,
   meiroWebhookDiagnostics,
   meiroWebhookArchiveStatus,
+  meiroEventArchiveStatus,
   meiroWebhookEventsLoading,
   meiroWebhookEventsError,
   meiroWebhookDiagnosticsError,
@@ -41,15 +43,31 @@ export default function MeiroPipesSettings({
   saveMeiroPullPending,
 }: MeiroPipesSettingsProps) {
   const webhookUrl = meiroConfig?.webhook_url || 'http://localhost:8000/api/connectors/meiro/profiles'
+  const eventWebhookUrl = meiroConfig?.event_webhook_url || 'http://localhost:8000/api/connectors/meiro/events'
   const webhookHealthUrl = `${webhookUrl.replace(/\/$/, '')}/health`
+  const eventWebhookHealthUrl = `${eventWebhookUrl.replace(/\/$/, '')}/health`
   const aliasText = Object.entries(meiroPullDraft.conversion_event_aliases || {})
     .map(([raw, canonical]) => `${raw}=${canonical}`)
     .join('\n')
+  const interactionAliasText = Object.entries(meiroPullDraft.touchpoint_interaction_aliases || {})
+    .map(([raw, canonical]) => `${raw}=${canonical}`)
+    .join('\n')
+  const adjustmentAliasText = Object.entries(meiroPullDraft.adjustment_event_aliases || {})
+    .map(([raw, canonical]) => `${raw}=${canonical}`)
+    .join('\n')
   const [aliasDraft, setAliasDraft] = useState(aliasText)
+  const [interactionAliasDraft, setInteractionAliasDraft] = useState(interactionAliasText)
+  const [adjustmentAliasDraft, setAdjustmentAliasDraft] = useState(adjustmentAliasText)
 
   useEffect(() => {
     setAliasDraft(aliasText)
   }, [aliasText])
+  useEffect(() => {
+    setInteractionAliasDraft(interactionAliasText)
+  }, [interactionAliasText])
+  useEffect(() => {
+    setAdjustmentAliasDraft(adjustmentAliasText)
+  }, [adjustmentAliasText])
 
   return (
     <div style={{ display: 'grid', gap: t.space.md }}>
@@ -86,6 +104,40 @@ export default function MeiroPipesSettings({
           Health check URL: <code>{webhookHealthUrl}</code>
         </div>
         {webhookSecretValue && <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>New secret (shown once): <code>{webhookSecretValue}</code></div>}
+      </div>
+
+      <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.bg, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
+        <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Meiro Pipes raw events webhook</div>
+        <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Use this when Meiro Pipes pushes raw events instead of already assembled profiles. Events are archived immutably first and then reconstructed into journeys for replay/import.</div>
+        <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap', alignItems: 'center' }}>
+          <code style={{ display: 'block', padding: '6px 8px', borderRadius: t.radius.sm, background: t.color.surface, border: `1px solid ${t.color.border}`, fontSize: t.font.sizeXs }}>
+            {eventWebhookUrl}
+          </code>
+          <button
+            type="button"
+            onClick={async () => {
+              const val = eventWebhookUrl
+              try {
+                await navigator.clipboard.writeText(val)
+                setOauthToast('Event webhook URL copied.')
+              } catch {
+                setOauthToast(val)
+              }
+            }}
+            style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '6px 10px', cursor: 'pointer', fontSize: t.font.sizeXs }}
+          >
+            Copy URL
+          </button>
+        </div>
+        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+          Received: {Number(meiroConfig?.event_webhook_received_count ?? 0).toLocaleString()} raw events · Last received: {relativeTime(meiroConfig?.event_webhook_last_received_at)} · Archive: {Number(meiroConfig?.event_webhook_received_count ?? 0).toLocaleString()} events
+        </div>
+        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+          Health check URL: <code>{eventWebhookHealthUrl}</code>
+        </div>
+        <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+          Uses the same <code>X-Meiro-Webhook-Secret</code> as the profile webhook.
+        </div>
       </div>
 
       <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.bg, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
@@ -164,6 +216,69 @@ export default function MeiroPipesSettings({
           <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
             Use one alias per line in the form <code>raw_event=canonical_event</code>. These aliases run before deterministic conversion mapping and quarantine checks.
           </div>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+            Touchpoint interaction aliases
+            <textarea
+              value={interactionAliasDraft}
+              onChange={(e) => {
+                const nextDraft = e.target.value
+                setInteractionAliasDraft(nextDraft)
+                const next = Object.fromEntries(
+                  nextDraft
+                    .split('\n')
+                    .map((line) => line.trim())
+                    .filter(Boolean)
+                    .map((line) => line.split('=').map((part) => part.trim()))
+                    .filter((parts): parts is [string, string] => parts.length === 2 && Boolean(parts[0]) && Boolean(parts[1]))
+                )
+                setMeiroPullDraft((prev) => ({ ...prev, touchpoint_interaction_aliases: next }))
+              }}
+              placeholder={'ad_impression=impression\nemail_click=click\npage_view=visit'}
+              rows={4}
+              style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, fontFamily: 'monospace' }}
+            />
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+            Refund / invalid event aliases
+            <textarea
+              value={adjustmentAliasDraft}
+              onChange={(e) => {
+                const nextDraft = e.target.value
+                setAdjustmentAliasDraft(nextDraft)
+                const next = Object.fromEntries(
+                  nextDraft
+                    .split('\n')
+                    .map((line) => line.trim())
+                    .filter(Boolean)
+                    .map((line) => line.split('=').map((part) => part.trim()))
+                    .filter((parts): parts is [string, string] => parts.length === 2 && Boolean(parts[0]) && Boolean(parts[1]))
+                )
+                setMeiroPullDraft((prev) => ({ ...prev, adjustment_event_aliases: next }))
+              }}
+              placeholder={'order_refunded=refund\norder_cancelled=cancellation\ninvalid_lead=invalid_lead'}
+              rows={4}
+              style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, fontFamily: 'monospace' }}
+            />
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+            Adjustment linkage keys
+            <input
+              value={(meiroPullDraft.adjustment_linkage_keys || []).join(', ')}
+              onChange={(e) =>
+                setMeiroPullDraft((prev) => ({
+                  ...prev,
+                  adjustment_linkage_keys: e.target.value
+                    .split(',')
+                    .map((value) => value.trim())
+                    .filter((value): value is 'conversion_id' | 'order_id' | 'lead_id' | 'event_id' =>
+                      ['conversion_id', 'order_id', 'lead_id', 'event_id'].includes(value),
+                    ),
+                }))
+              }
+              placeholder="conversion_id, order_id, lead_id, event_id"
+              style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+            />
+          </label>
           <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
             <button type="button" onClick={onSaveMeiroPull} disabled={saveMeiroPullPending} style={{ border: `1px solid ${t.color.accent}`, background: t.color.accent, color: '#fff', borderRadius: t.radius.sm, padding: '8px 10px', cursor: 'pointer', opacity: saveMeiroPullPending ? 0.7 : 1 }}>
               {saveMeiroPullPending ? 'Saving…' : 'Save webhook sanitation'}
@@ -238,6 +353,18 @@ export default function MeiroPipesSettings({
               <option value="date_range">Date range</option>
             </select>
           </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+            Replay source
+            <select
+              value={meiroPullDraft.replay_archive_source || DEFAULT_MEIRO_PULL_CONFIG.replay_archive_source}
+              onChange={(e) => setMeiroPullDraft((prev) => ({ ...prev, replay_archive_source: e.target.value as MeiroPullConfig['replay_archive_source'] }))}
+              style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, background: '#fff' }}
+            >
+              <option value="auto">Auto (freshest archive)</option>
+              <option value="profiles">Profiles archive</option>
+              <option value="events">Raw events archive</option>
+            </select>
+          </label>
           {(meiroPullDraft.replay_mode || DEFAULT_MEIRO_PULL_CONFIG.replay_mode) === 'last_n' ? (
             <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
               Archived batches to replay
@@ -275,7 +402,8 @@ export default function MeiroPipesSettings({
           ) : null}
         </div>
         <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-          Archive status: {meiroWebhookArchiveStatus?.available ? `${Number(meiroWebhookArchiveStatus.entries || 0).toLocaleString()} archived batches containing ${Number(meiroWebhookArchiveStatus.profiles_received || 0).toLocaleString()} payloads.` : 'No archived batches yet.'}
+          Profile archive: {meiroWebhookArchiveStatus?.available ? `${Number(meiroWebhookArchiveStatus.entries || 0).toLocaleString()} batches containing ${Number(meiroWebhookArchiveStatus.profiles_received || 0).toLocaleString()} payloads.` : 'empty'}{' '}
+          · Event archive: {meiroEventArchiveStatus?.available ? `${Number(meiroEventArchiveStatus.entries || 0).toLocaleString()} batches containing ${Number(meiroEventArchiveStatus.events_received || 0).toLocaleString()} events.` : 'empty'}
         </div>
       </div>
 

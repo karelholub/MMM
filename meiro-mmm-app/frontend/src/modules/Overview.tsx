@@ -95,6 +95,10 @@ interface FreshnessResponse {
 
 interface OverviewSummaryResponse {
   kpi_tiles: KpiTileResponse[]
+  outcomes?: {
+    current?: Record<string, number>
+    previous?: Record<string, number>
+  }
   highlights: HighlightItem[]
   freshness: FreshnessResponse
   readiness?: JourneyReadinessResponse
@@ -123,6 +127,7 @@ interface ChannelDriver {
   delta_visits_pct?: number | null
   delta_conversions_pct?: number | null
   delta_revenue_pct?: number | null
+  outcomes?: Record<string, number>
 }
 
 interface CampaignDriver {
@@ -130,6 +135,7 @@ interface CampaignDriver {
   revenue: number
   conversions: number
   delta_revenue_pct?: number | null
+  outcomes?: Record<string, number>
 }
 
 interface OverviewDriversResponse {
@@ -157,6 +163,13 @@ interface OverviewFunnelsResponse {
   date_to: string
   summary: {
     total_conversions: number
+    net_conversions?: number
+    gross_conversions?: number
+    net_revenue?: number
+    gross_revenue?: number
+    click_through_conversions?: number
+    view_through_conversions?: number
+    mixed_path_conversions?: number
     distinct_paths: number
     top_paths_conversion_share: number
     median_path_length: number

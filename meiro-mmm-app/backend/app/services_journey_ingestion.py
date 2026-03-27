@@ -35,6 +35,35 @@ CHANNEL_ALIASES: Dict[str, str] = {
     "direct": "direct",
 }
 
+INTERACTION_TYPE_ALIASES: Dict[str, str] = {
+    "impression": "impression",
+    "view": "impression",
+    "ad_impression": "impression",
+    "click": "click",
+    "ad_click": "click",
+    "email_click": "click",
+    "visit": "visit",
+    "session": "visit",
+    "page_view": "visit",
+    "direct": "direct",
+}
+
+ADJUSTMENT_TYPE_ALIASES: Dict[str, str] = {
+    "refund": "refund",
+    "partial_refund": "partial_refund",
+    "partially_refunded": "partial_refund",
+    "cancellation": "cancellation",
+    "cancelled": "cancellation",
+    "returned_order": "cancellation",
+    "invalid_lead": "invalid_lead",
+    "invalid": "invalid_lead",
+    "disqualified_lead": "disqualified_lead",
+    "disqualified": "disqualified_lead",
+    "duplicate_lead": "invalid_lead",
+    "spam_lead": "invalid_lead",
+    "test_lead": "invalid_lead",
+}
+
 
 def detect_schema(raw: Any) -> Tuple[str, List[Any], Dict[str, Any]]:
     """
@@ -149,6 +178,283 @@ def _normalize_conversion_name(value: Any, aliases: Dict[str, str], default_name
     return aliases.get(token, token)
 
 
+def _normalize_interaction_type(value: Any, aliases: Dict[str, str], channel: Any = None) -> str:
+    token = _normalize_token(value)
+    if token:
+        normalized = aliases.get(token, token)
+        if normalized in {"impression", "click", "visit", "direct", "unknown"}:
+            return normalized
+    channel_token = _normalize_token(channel)
+    if channel_token == "direct":
+        return "direct"
+    return "unknown"
+
+
+def _normalize_adjustment_type(value: Any, aliases: Dict[str, str]) -> Optional[str]:
+    token = _normalize_token(value)
+    if token is None:
+        return None
+    normalized = aliases.get(token, token)
+    if normalized in {"refund", "partial_refund", "cancellation", "invalid_lead", "disqualified_lead"}:
+        return normalized
+    return None
+
+
+def _event_name_token(event: Dict[str, Any]) -> Optional[str]:
+    return _normalize_token(
+        _first_present(
+            event.get("event_name"),
+            event.get("event_type"),
+            event.get("name"),
+            event.get("type"),
+        )
+    )
+
+
+def _extract_customer_id_from_event(event: Dict[str, Any], fallback_idx: int) -> str:
+    customer = event.get("customer")
+    profile = event.get("profile")
+    customer_id = _first_present(
+        event.get("customer_id"),
+        event.get("profile_id"),
+        event.get("lead_id"),
+        event.get("user_id"),
+        event.get("person_id"),
+        event.get("external_id"),
+        customer.get("id") if isinstance(customer, dict) else None,
+        profile.get("id") if isinstance(profile, dict) else None,
+        event.get("id"),
+    )
+    return str(customer_id or f"anon-event-{fallback_idx}")
+
+
+def _extract_event_timestamp(event: Dict[str, Any]) -> Optional[str]:
+    return _candidate_timestamp(
+        event.get("ts"),
+        event.get("timestamp"),
+        event.get("occurred_at"),
+        event.get("created_at"),
+        event.get("event_date"),
+        event.get("date"),
+    )
+
+
+def _looks_like_touchpoint_event(event: Dict[str, Any], interaction_type: str) -> bool:
+    if interaction_type in {"impression", "click", "visit", "direct"}:
+        return True
+    for key in ("channel", "source", "medium", "campaign", "utm_source", "utm_medium", "utm_campaign", "placement_id", "click_id", "impression_id"):
+        if event.get(key) not in (None, "", []):
+            return True
+    return False
+
+
+def _looks_like_conversion_event(
+    event: Dict[str, Any],
+    *,
+    name_token: Optional[str],
+    interaction_type: str,
+    adjustment_type: Optional[str],
+    ingest_cfg: Dict[str, Any],
+) -> bool:
+    if adjustment_type is not None:
+        return True
+    if bool(event.get("is_conversion")):
+        return True
+    converted = event.get("converted")
+    if isinstance(converted, bool) and converted:
+        return True
+    if isinstance(converted, str) and converted.strip().lower() in {"true", "1", "yes"}:
+        return True
+    if interaction_type in {"impression", "click", "visit", "direct"}:
+        return False
+    for key in ("conversion_id", "order_id", "lead_id", "original_conversion_id"):
+        if event.get(key) not in (None, "", []):
+            return True
+    value = event.get("value")
+    if value not in (None, "", []):
+        try:
+            float(value)
+            return True
+        except (TypeError, ValueError):
+            pass
+    aliases = ingest_cfg.get("conversion_event_aliases") or {}
+    alias_tokens = {
+        _normalize_token(key)
+        for key in aliases.keys()
+        if _normalize_token(key) is not None
+    }
+    canonical_tokens = {
+        _normalize_token(value)
+        for value in aliases.values()
+        if _normalize_token(value) is not None
+    }
+    if name_token and name_token in alias_tokens.union(canonical_tokens):
+        return True
+    if name_token and any(token in name_token for token in ("purchase", "checkout", "order", "lead", "submit", "conversion")):
+        return True
+    return False
+
+
+def rebuild_profiles_from_meiro_events(
+    raw_events: List[Any],
+    *,
+    dedup_config: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    ingest_cfg = _normalize_meiro_dedup_config(dedup_config)
+    grouped: Dict[str, Dict[str, Any]] = {}
+    seen_event_keys: Set[str] = set()
+    for idx, item in enumerate(raw_events):
+        event = item
+        if isinstance(item, dict) and isinstance(item.get("event_payload"), dict):
+            event = item.get("event_payload")
+        if not isinstance(event, dict):
+            continue
+        event_key = str(
+            event.get("event_id")
+            or event.get("id")
+            or hashlib.sha256(json.dumps(event, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+        )
+        if event_key in seen_event_keys:
+            continue
+        seen_event_keys.add(event_key)
+        customer_id = _extract_customer_id_from_event(event, idx)
+        journey = grouped.setdefault(
+            customer_id,
+            {
+                "customer_id": customer_id,
+                "converted": False,
+                "conversion_value": 0.0,
+                "touchpoints": [],
+                "conversions": [],
+                "_event_count": 0,
+            },
+        )
+        journey["_event_count"] += 1
+        name_token = _event_name_token(event)
+        interaction_type = _normalize_interaction_type(
+            _first_present(event.get("interaction_type"), event.get("event_type"), event.get("type")),
+            ingest_cfg.get("touchpoint_interaction_aliases") or INTERACTION_TYPE_ALIASES,
+            _first_present(event.get("channel"), event.get("source"), event.get("utm_source")),
+        )
+        adjustment_type = _normalize_adjustment_type(
+            name_token,
+            ingest_cfg.get("adjustment_event_aliases") or ADJUSTMENT_TYPE_ALIASES,
+        )
+        timestamp = _extract_event_timestamp(event)
+        looks_like_touchpoint = _looks_like_touchpoint_event(event, interaction_type)
+        looks_like_conversion = _looks_like_conversion_event(
+            event,
+            name_token=name_token,
+            interaction_type=interaction_type,
+            adjustment_type=adjustment_type,
+            ingest_cfg=ingest_cfg,
+        )
+        if looks_like_touchpoint and not looks_like_conversion:
+            touchpoint: Dict[str, Any] = {
+                "id": str(event.get("touchpoint_id") or event.get("id") or event.get("event_id") or f"tp_evt_{event_key[:12]}"),
+                "timestamp": timestamp,
+                "channel": _first_present(event.get("channel"), event.get("source"), event.get("utm_source"), "unknown"),
+                "source": _first_present(event.get("source"), event.get("utm_source")),
+                "medium": _first_present(event.get("medium"), event.get("utm_medium")),
+                "campaign": _first_present(
+                    event.get("campaign"),
+                    event.get("campaign_name"),
+                    event.get("utm_campaign"),
+                ),
+                "utm_source": event.get("utm_source"),
+                "utm_medium": event.get("utm_medium"),
+                "utm_campaign": event.get("utm_campaign"),
+                "utm_content": event.get("utm_content"),
+                "interaction_type": interaction_type,
+                "event_type": _first_present(event.get("event_type"), event.get("type"), event.get("event_name")),
+                "impression_id": event.get("impression_id"),
+                "click_id": event.get("click_id"),
+                "placement_id": event.get("placement_id"),
+                "creative_id": event.get("creative_id"),
+                "ad_id": event.get("ad_id"),
+                "campaign_id": _first_present(event.get("campaign_id"), event.get("campaign", {}).get("id") if isinstance(event.get("campaign"), dict) else None),
+            }
+            journey["touchpoints"].append({k: v for k, v in touchpoint.items() if v not in (None, "", [])})
+            continue
+        if looks_like_conversion:
+            conversion: Dict[str, Any] = {
+                "id": str(event.get("conversion_id") or event.get("order_id") or event.get("lead_id") or event.get("event_id") or event.get("id") or f"cv_evt_{event_key[:12]}"),
+                "timestamp": timestamp,
+                "event_name": _first_present(event.get("event_name"), event.get("event_type"), event.get("name"), event.get("type")),
+                "value": _first_present(event.get("value"), event.get("conversion_value")),
+                "currency": event.get("currency"),
+                "order_id": event.get("order_id"),
+                "lead_id": event.get("lead_id"),
+                "conversion_id": event.get("conversion_id"),
+                "event_id": _first_present(event.get("event_id"), event.get("id")),
+                "original_conversion_id": event.get("original_conversion_id"),
+                "reason": _first_present(event.get("reason"), event.get("status_reason"), event.get("status")),
+            }
+            journey["conversions"].append({k: v for k, v in conversion.items() if v not in (None, "", [])})
+            if adjustment_type is None:
+                journey["converted"] = True
+                try:
+                    journey["conversion_value"] = max(float(journey.get("conversion_value") or 0.0), float(conversion.get("value") or 0.0))
+                except (TypeError, ValueError):
+                    pass
+            continue
+        journey["touchpoints"].append(
+            {
+                "id": str(event.get("id") or event.get("event_id") or f"tp_evt_{event_key[:12]}"),
+                "timestamp": timestamp,
+                "channel": _first_present(event.get("channel"), event.get("source"), "unknown"),
+                "source": _first_present(event.get("source"), event.get("utm_source")),
+                "medium": _first_present(event.get("medium"), event.get("utm_medium")),
+                "campaign": _first_present(event.get("campaign"), event.get("campaign_name"), event.get("utm_campaign")),
+                "event_type": _first_present(event.get("event_type"), event.get("type"), event.get("event_name")),
+                "interaction_type": interaction_type if interaction_type != "unknown" else "unknown",
+            }
+        )
+
+    profiles = list(grouped.values())
+    for profile in profiles:
+        profile["touchpoints"] = sorted(
+            profile.get("touchpoints") or [],
+            key=lambda item: str(item.get("timestamp") or item.get("ts") or ""),
+        )
+        profile["conversions"] = sorted(
+            profile.get("conversions") or [],
+            key=lambda item: str(item.get("timestamp") or item.get("ts") or ""),
+        )
+    return profiles
+
+
+def _derive_conversion_status(conversion: Dict[str, Any]) -> str:
+    status = str(conversion.get("status") or "valid").strip().lower() or "valid"
+    value = 0.0
+    try:
+        value = float(conversion.get("value") or 0.0)
+    except Exception:
+        value = 0.0
+    refunded_value = 0.0
+    for adjustment in conversion.get("adjustments") or []:
+        if not isinstance(adjustment, dict):
+            continue
+        adjustment_type = str(adjustment.get("type") or "").strip().lower()
+        try:
+            adjustment_value = float(adjustment.get("value") or 0.0)
+        except Exception:
+            adjustment_value = 0.0
+        if adjustment_type in {"refund", "partial_refund"}:
+            refunded_value += adjustment_value
+        elif adjustment_type == "cancellation":
+            return "cancelled"
+        elif adjustment_type == "invalid_lead":
+            return "invalid"
+        elif adjustment_type == "disqualified_lead":
+            return "disqualified"
+    if refunded_value >= value > 0:
+        return "refunded"
+    if refunded_value > 0:
+        return "partially_refunded"
+    return status
+
+
 def _first_present(*values: Any) -> Any:
     for value in values:
         if value not in (None, "", []):
@@ -225,6 +531,39 @@ def _normalize_meiro_dedup_config(raw: Optional[Dict[str, Any]]) -> Dict[str, An
             if src and dst:
                 event_aliases[src] = dst
 
+    interaction_aliases_raw = cfg.get("touchpoint_interaction_aliases")
+    interaction_aliases: Dict[str, str] = dict(INTERACTION_TYPE_ALIASES)
+    if isinstance(interaction_aliases_raw, dict):
+        for key, value in interaction_aliases_raw.items():
+            src = _normalize_token(key)
+            dst = _normalize_token(value)
+            if src and dst and dst in {"impression", "click", "visit", "direct", "unknown"}:
+                interaction_aliases[src] = dst
+
+    adjustment_aliases_raw = cfg.get("adjustment_event_aliases")
+    adjustment_aliases: Dict[str, str] = dict(ADJUSTMENT_TYPE_ALIASES)
+    if isinstance(adjustment_aliases_raw, dict):
+        for key, value in adjustment_aliases_raw.items():
+            src = _normalize_token(key)
+            dst = _normalize_token(value)
+            if src and dst and dst in {"refund", "partial_refund", "cancellation", "invalid_lead", "disqualified_lead"}:
+                adjustment_aliases[src] = dst
+
+    linkage_raw = cfg.get("adjustment_linkage_keys")
+    linkage_keys: List[str] = []
+    if isinstance(linkage_raw, list):
+        source_linkage = linkage_raw
+    elif isinstance(linkage_raw, str):
+        source_linkage = [part.strip() for part in linkage_raw.split(",")]
+    else:
+        source_linkage = []
+    for item in source_linkage:
+        key = str(item or "").strip().lower()
+        if key in {"conversion_id", "order_id", "lead_id", "event_id"} and key not in linkage_keys:
+            linkage_keys.append(key)
+    if not linkage_keys:
+        linkage_keys = ["conversion_id", "order_id", "lead_id", "event_id"]
+
     value_fallback_policy = str(cfg.get("value_fallback_policy") or "default").strip().lower()
     if value_fallback_policy not in {"default", "zero", "quarantine"}:
         value_fallback_policy = "default"
@@ -250,6 +589,9 @@ def _normalize_meiro_dedup_config(raw: Optional[Dict[str, Any]]) -> Dict[str, An
         "value_fallback_policy": value_fallback_policy,
         "currency_fallback_policy": currency_fallback_policy,
         "conversion_event_aliases": event_aliases,
+        "touchpoint_interaction_aliases": interaction_aliases,
+        "adjustment_event_aliases": adjustment_aliases,
+        "adjustment_linkage_keys": linkage_keys,
     }
 
 
@@ -426,6 +768,7 @@ def _build_v2_touchpoints(
                     "id": f"tp_{idx}_{ti}",
                     "ts": ts or _iso_datetime(datetime.now(timezone.utc)),
                     "channel": _canonicalize_channel(str(raw_tp)),
+                    "interaction_type": "unknown",
                     "meta": {
                         "parser": {
                             "used_inferred_mapping": True,
@@ -466,12 +809,16 @@ def _build_v2_touchpoints(
             [
                 (f"configured:{str(mapping.get('source_field') or 'source')}", _extract_path(raw_tp, str(mapping.get("source_field") or "source")), False),
                 ("fallback:touchpoint.source", raw_tp.get("source"), True),
+                ("fallback:touchpoint.page_referrer", raw_tp.get("page_referrer"), True),
+                ("fallback:touchpoint.referrer", raw_tp.get("referrer"), True),
             ]
         )
         medium_value, medium_source, medium_inferred = _resolve_candidate(
             [
                 (f"configured:{str(mapping.get('medium_field') or 'medium')}", _extract_path(raw_tp, str(mapping.get("medium_field") or "medium")), False),
                 ("fallback:touchpoint.medium", raw_tp.get("medium"), True),
+                ("fallback:touchpoint.page_referrer", raw_tp.get("page_referrer"), True),
+                ("fallback:touchpoint.referrer", raw_tp.get("referrer"), True),
             ]
         )
         campaign_value, campaign_source, campaign_inferred = _resolve_candidate(
@@ -491,6 +838,8 @@ def _build_v2_touchpoints(
                 "utm_campaign": raw_tp.get("utm_campaign"),
                 "utm_content": raw_tp.get("utm_content"),
                 "campaign": _normalize_campaign_name(campaign_value),
+                "page_referrer": _first_present(raw_tp.get("page_referrer"), raw_tp.get("referrer")),
+                "page_location": _first_present(raw_tp.get("page_location"), raw_tp.get("url")),
                 "adset": raw_tp.get("adset"),
                 "ad": raw_tp.get("ad"),
                 "creative": _first_present(raw_tp.get("creative"), raw_tp.get("utm_content")),
@@ -503,10 +852,23 @@ def _build_v2_touchpoints(
             raw_timestamp = _iso_datetime(datetime.now(timezone.utc))
         elif raw_timestamp is None:
             raw_timestamp = _iso_datetime(datetime.now(timezone.utc))
+        interaction_value, interaction_source, interaction_inferred = _resolve_candidate(
+            [
+                ("fallback:touchpoint.interaction_type", raw_tp.get("interaction_type"), True),
+                ("fallback:touchpoint.event_type", raw_tp.get("event_type"), True),
+                ("fallback:touchpoint.type", raw_tp.get("type"), True),
+                ("fallback:touchpoint.engagement_type", raw_tp.get("engagement_type"), True),
+            ]
+        )
         tp: Dict[str, Any] = {
             "id": str(raw_tp.get("id") or f"tp_{idx}_{ti}"),
             "ts": raw_timestamp,
             "channel": str(normalized.get("channel") or "unknown"),
+            "interaction_type": _normalize_interaction_type(
+                interaction_value,
+                ingest_cfg.get("touchpoint_interaction_aliases") or INTERACTION_TYPE_ALIASES,
+                normalized.get("channel"),
+            ),
         }
         if normalized.get("source") not in (None, "", []):
             tp["source"] = _normalize_token(normalized.get("source")) or normalized.get("source")
@@ -529,6 +891,9 @@ def _build_v2_touchpoints(
             utm["content"] = _normalize_text(raw_tp.get("utm_content")) or str(raw_tp.get("utm_content"))
         if utm:
             tp["utm"] = utm
+        for field in ("impression_id", "click_id", "placement_id", "creative_id", "ad_id", "campaign_id"):
+            if raw_tp.get(field) not in (None, "", []):
+                tp[field] = raw_tp.get(field)
         tp["meta"] = {
             "parser": {
                 "used_inferred_mapping": bool(
@@ -537,6 +902,7 @@ def _build_v2_touchpoints(
                     or source_inferred
                     or medium_inferred
                     or campaign_inferred
+                    or interaction_inferred
                 ),
                 "field_sources": {
                     "timestamp": timestamp_source or ("fallback:generated_now" if raw_timestamp else None),
@@ -544,6 +910,7 @@ def _build_v2_touchpoints(
                     "source": source_source,
                     "medium": medium_source,
                     "campaign": campaign_source,
+                    "interaction_type": interaction_source,
                 },
             }
         }
@@ -590,6 +957,7 @@ def _build_v2_conversions(
         or "currency"
     )
     conversions: List[Dict[str, Any]] = []
+    pending_adjustments: List[Dict[str, Any]] = []
     for ci, raw_conv in enumerate(source_items):
         value, value_source, value_inferred = _resolve_candidate(
             [
@@ -639,35 +1007,39 @@ def _build_v2_conversions(
             ingest_cfg.get("conversion_event_aliases") or {},
             _normalize_conversion_name(default_name, {}, "conversion"),
         )
+        adjustment_type = _normalize_adjustment_type(
+            normalized_name,
+            ingest_cfg.get("adjustment_event_aliases") or ADJUSTMENT_TYPE_ALIASES,
+        )
         normalized_currency = _normalize_currency_code(currency)
         if normalized_currency is None and str(ingest_cfg.get("currency_fallback_policy") or "default") != "quarantine":
             normalized_currency = _normalize_currency_code(revenue_config.get("base_currency")) or "EUR"
         fallback_currency_marker = "__missing_currency__" if str(ingest_cfg.get("currency_fallback_policy") or "default") == "quarantine" else ""
-        conversion = {
-            "id": str(
-                raw_conv.get("id")
-                or raw_conv.get("conversion_id")
-                or raw_conv.get("event_id")
-                or raw_conv.get("order_id")
-                or f"cv_{idx}_{ci}"
-            ),
+        base_id = str(
+            raw_conv.get("id")
+            or raw_conv.get("conversion_id")
+            or raw_conv.get("event_id")
+            or raw_conv.get("order_id")
+            or raw_conv.get("lead_id")
+            or f"cv_{idx}_{ci}"
+        )
+        base_payload = {
+            "id": base_id,
             "ts": _candidate_timestamp(ts_value),
-            "name": normalized_name,
             "currency": normalized_currency or (_normalize_text(currency) or fallback_currency_marker),
         }
         if value not in (None, "", []):
             try:
-                conversion["value"] = float(value)
+                base_payload["value"] = float(value)
             except (TypeError, ValueError):
                 if str(ingest_cfg.get("value_fallback_policy") or "default") == "zero":
-                    conversion["value"] = 0.0
+                    base_payload["value"] = 0.0
         elif str(ingest_cfg.get("value_fallback_policy") or "default") == "zero":
-            conversion["value"] = 0.0
-        if raw_conv.get("order_id") not in (None, "", []):
-            conversion["order_id"] = raw_conv.get("order_id")
-        if raw_conv.get("event_id") not in (None, "", []):
-            conversion["event_id"] = raw_conv.get("event_id")
-        conversion["meta"] = {
+            base_payload["value"] = 0.0
+        for field in ("order_id", "event_id", "lead_id", "original_conversion_id"):
+            if raw_conv.get(field) not in (None, "", []):
+                base_payload[field] = raw_conv.get(field)
+        parser_meta = {
             "parser": {
                 "used_inferred_mapping": bool(value_inferred or currency_inferred or ts_inferred or name_inferred),
                 "field_sources": {
@@ -678,7 +1050,47 @@ def _build_v2_conversions(
                 },
             }
         }
+        if adjustment_type:
+            adjustment = {
+                **base_payload,
+                "type": adjustment_type,
+                "reason": _normalize_text(raw_conv.get("reason") or raw_conv.get("status_reason") or raw_conv.get("status")),
+                "meta": parser_meta,
+            }
+            pending_adjustments.append(adjustment)
+            continue
+        conversion = {
+            **base_payload,
+            "name": normalized_name,
+            "status": str(raw_conv.get("status") or raw_conv.get("conversion_status") or "valid").strip().lower() or "valid",
+            "adjustments": [],
+            "meta": parser_meta,
+        }
         conversions.append(conversion)
+    if pending_adjustments and conversions:
+        linkage_keys = [str(key or "").strip().lower() for key in (ingest_cfg.get("adjustment_linkage_keys") or [])]
+        for adjustment in pending_adjustments:
+            matched = None
+            for key in linkage_keys:
+                if key == "conversion_id":
+                    link_value = adjustment.get("original_conversion_id") or adjustment.get("conversion_id") or adjustment.get("id")
+                else:
+                    link_value = adjustment.get(key)
+                if link_value in (None, "", []):
+                    continue
+                for conversion in reversed(conversions):
+                    candidate = conversion.get("id") if key == "conversion_id" else conversion.get(key)
+                    if candidate not in (None, "", []) and str(candidate) == str(link_value):
+                        matched = conversion
+                        break
+                if matched is not None:
+                    break
+            if matched is None:
+                matched = conversions[-1]
+                matched.setdefault("meta", {}).setdefault("parser", {}).setdefault("warnings", []).append("unlinked_adjustment_fell_back_to_latest_conversion")
+            matched.setdefault("adjustments", []).append(adjustment)
+        for conversion in conversions:
+            conversion["status"] = _derive_conversion_status(conversion)
     return conversions
 
 
@@ -856,6 +1268,8 @@ def _compute_quarantine_reasons(journey: Dict[str, Any], ingest_cfg: Dict[str, A
         reasons.append(_reason_code(code="missing_touchpoints", severity="error", message="Journey has no touchpoints"))
     if not conversions:
         reasons.append(_reason_code(code="missing_conversions", severity="warning", message="Journey has no conversions"))
+    if touchpoints and all(str(tp.get("interaction_type") or "unknown") == "impression" for tp in touchpoints):
+        reasons.append(_reason_code(code="impression_only_path", severity="warning", message="Journey only contains impression touchpoints"))
 
     for tp in touchpoints:
         tp_parser = ((tp.get("meta") or {}).get("parser") or {}) if isinstance(tp, dict) else {}
@@ -896,6 +1310,9 @@ def _compute_quarantine_reasons(journey: Dict[str, Any], ingest_cfg: Dict[str, A
             break
         if "conversion_value" in value_source or "conversion.value" in value_source:
             continue
+        parser_warnings = conv_parser.get("warnings") or []
+        if any("unlinked_adjustment" in str(item) for item in parser_warnings):
+            reasons.append(_reason_code(code="unlinked_adjustment", severity="warning", message="Adjustment could not be deterministically linked"))
 
     unique: Dict[str, Dict[str, str]] = {}
     for reason in reasons:
@@ -1271,6 +1688,11 @@ def _validate_and_normalize_v2(
             "id": tp.get("id", f"tp_{idx}_{ti}"),
             "ts": _iso_datetime(ts_dt),
             "channel": canonical,
+            "interaction_type": _normalize_interaction_type(
+                tp.get("interaction_type"),
+                INTERACTION_TYPE_ALIASES,
+                canonical,
+            ),
         }
         if camp:
             nt["campaign"] = camp if isinstance(camp, dict) else {"name": str(camp)}
@@ -1280,6 +1702,9 @@ def _validate_and_normalize_v2(
             nt["utm"] = tp["utm"]
         if tp.get("cost"):
             nt["cost"] = tp["cost"]
+        for field in ("impression_id", "click_id", "placement_id", "creative_id", "ad_id", "campaign_id"):
+            if tp.get(field) not in (None, "", []):
+                nt[field] = tp.get(field)
         if tp.get("meta"):
             nt["meta"] = tp["meta"]
         v2_touchpoints.append(nt)
@@ -1304,6 +1729,7 @@ def _validate_and_normalize_v2(
             "ts": _iso_datetime(cts),
             "name": str(c.get("name", "conversion")),
             "currency": c.get("currency") or defaults.get("currency", "EUR"),
+            "status": str(c.get("status") or "valid"),
         }
         if value_present:
             try:
@@ -1311,6 +1737,13 @@ def _validate_and_normalize_v2(
             except (TypeError, ValueError):
                 val = 0.0
             conversion_item["value"] = max(0.0, val)
+        for field in ("order_id", "event_id", "lead_id", "original_conversion_id"):
+            if c.get(field) not in (None, "", []):
+                conversion_item[field] = c.get(field)
+        if isinstance(c.get("adjustments"), list):
+            conversion_item["adjustments"] = [
+                item for item in c.get("adjustments") if isinstance(item, dict)
+            ]
         if c.get("meta"):
             conversion_item["meta"] = c["meta"]
         v2_conversions.append(conversion_item)

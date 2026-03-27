@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 CONFIG_PATH = DATA_DIR / "meiro_config.json"
 WEBHOOK_ARCHIVE_PATH = DATA_DIR / "meiro_webhook_archive.jsonl"
+EVENT_ARCHIVE_PATH = DATA_DIR / "meiro_event_archive.jsonl"
 MEIRO_CDP_PLATFORM = "meiro_cdp"
 
 
@@ -93,6 +94,12 @@ def append_webhook_archive_entry(entry: Dict[str, Any]) -> None:
         handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+def append_event_archive_entry(entry: Dict[str, Any]) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with EVENT_ARCHIVE_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
 def get_webhook_archive_entries(limit: int = 100) -> list[Dict[str, Any]]:
     return query_webhook_archive_entries(limit=limit)
 
@@ -108,6 +115,43 @@ def query_webhook_archive_entries(
     rows: list[Dict[str, Any]] = []
     try:
         with WEBHOOK_ARCHIVE_PATH.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    parsed = json.loads(line)
+                except Exception:
+                    continue
+                if isinstance(parsed, dict):
+                    rows.append(parsed)
+    except Exception:
+        return []
+    if since:
+        rows = [row for row in rows if str(row.get("received_at") or "") >= since]
+    if until:
+        rows = [row for row in rows if str(row.get("received_at") or "") <= until]
+    if limit is not None:
+        keep = max(1, min(50000, int(limit)))
+        rows = rows[-keep:]
+    return list(reversed(rows))
+
+
+def get_event_archive_entries(limit: int = 100) -> list[Dict[str, Any]]:
+    return query_event_archive_entries(limit=limit)
+
+
+def query_event_archive_entries(
+    *,
+    limit: Optional[int] = 100,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+) -> list[Dict[str, Any]]:
+    if not EVENT_ARCHIVE_PATH.exists():
+        return []
+    rows: list[Dict[str, Any]] = []
+    try:
+        with EVENT_ARCHIVE_PATH.open("r", encoding="utf-8") as handle:
             for line in handle:
                 line = line.strip()
                 if not line:
@@ -166,6 +210,47 @@ def get_webhook_archive_status() -> Dict[str, Any]:
         "available": entries > 0,
         "entries": entries,
         "profiles_received": profiles_received,
+        "last_received_at": last_received_at,
+        "parser_versions": sorted(parser_versions),
+    }
+
+
+def get_event_archive_status() -> Dict[str, Any]:
+    if not EVENT_ARCHIVE_PATH.exists():
+        return {"available": False, "entries": 0, "events_received": 0, "last_received_at": None, "parser_versions": []}
+    entries = 0
+    events_received = 0
+    last_received_at: Optional[str] = None
+    parser_versions: set[str] = set()
+    try:
+        with EVENT_ARCHIVE_PATH.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    parsed = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(parsed, dict):
+                    continue
+                entries += 1
+                try:
+                    events_received += int(parsed.get("received_count") or len(parsed.get("events") or []))
+                except Exception:
+                    pass
+                received_at = parsed.get("received_at")
+                if isinstance(received_at, str) and received_at:
+                    last_received_at = received_at
+                parser_version = parsed.get("parser_version")
+                if isinstance(parser_version, str) and parser_version:
+                    parser_versions.add(parser_version)
+    except Exception:
+        return {"available": False, "entries": 0, "events_received": 0, "last_received_at": None, "parser_versions": []}
+    return {
+        "available": entries > 0,
+        "entries": entries,
+        "events_received": events_received,
         "last_received_at": last_received_at,
         "parser_versions": sorted(parser_versions),
     }
@@ -305,6 +390,7 @@ def _normalize_pull_config(raw: Any) -> Dict[str, Any]:
     allowed_currency_fallback = {"default", "quarantine"}
     allowed_timestamp_fallback = {"profile", "conversion", "quarantine"}
     allowed_replay_modes = {"all", "last_n", "date_range"}
+    allowed_replay_sources = {"auto", "profiles", "events"}
 
     def _as_int(value: Any, default: int, minimum: int, maximum: int) -> int:
         try:
@@ -356,6 +442,39 @@ def _normalize_pull_config(raw: Any) -> Dict[str, Any]:
             if src and dst:
                 event_aliases[src] = dst
 
+    interaction_aliases_raw = raw.get("touchpoint_interaction_aliases")
+    interaction_aliases: dict[str, str] = {}
+    if isinstance(interaction_aliases_raw, dict):
+        for key, value in interaction_aliases_raw.items():
+            src = str(key or "").strip().lower()
+            dst = str(value or "").strip().lower()
+            if src and dst:
+                interaction_aliases[src] = dst
+
+    adjustment_aliases_raw = raw.get("adjustment_event_aliases")
+    adjustment_aliases: dict[str, str] = {}
+    if isinstance(adjustment_aliases_raw, dict):
+        for key, value in adjustment_aliases_raw.items():
+            src = str(key or "").strip().lower()
+            dst = str(value or "").strip().lower()
+            if src and dst:
+                adjustment_aliases[src] = dst
+
+    linkage_raw = raw.get("adjustment_linkage_keys")
+    linkage_keys: list[str] = []
+    if isinstance(linkage_raw, list):
+        source_linkage = linkage_raw
+    elif isinstance(linkage_raw, str):
+        source_linkage = [part.strip() for part in linkage_raw.split(",")]
+    else:
+        source_linkage = []
+    for item in source_linkage:
+        key = str(item or "").strip().lower()
+        if key in {"conversion_id", "order_id", "lead_id", "event_id"} and key not in linkage_keys:
+            linkage_keys.append(key)
+    if not linkage_keys:
+        linkage_keys = ["conversion_id", "order_id", "lead_id", "event_id"]
+
     value_fallback_policy = str(raw.get("value_fallback_policy") or "default").strip().lower()
     if value_fallback_policy not in allowed_value_fallback:
         value_fallback_policy = "default"
@@ -371,6 +490,9 @@ def _normalize_pull_config(raw: Any) -> Dict[str, Any]:
     replay_mode = str(raw.get("replay_mode") or "last_n").strip().lower()
     if replay_mode not in allowed_replay_modes:
         replay_mode = "last_n"
+    replay_archive_source = str(raw.get("replay_archive_source") or "auto").strip().lower()
+    if replay_archive_source not in allowed_replay_sources:
+        replay_archive_source = "auto"
 
     return {
         "lookback_days": _as_int(raw.get("lookback_days"), 30, 1, 365),
@@ -389,10 +511,14 @@ def _normalize_pull_config(raw: Any) -> Dict[str, Any]:
         "value_fallback_policy": value_fallback_policy,
         "currency_fallback_policy": currency_fallback_policy,
         "replay_mode": replay_mode,
+        "replay_archive_source": replay_archive_source,
         "replay_archive_limit": _as_int(raw.get("replay_archive_limit"), 5000, 1, 50000),
         "replay_date_from": str(raw.get("replay_date_from") or "").strip() or None,
         "replay_date_to": str(raw.get("replay_date_to") or "").strip() or None,
         "conversion_event_aliases": event_aliases,
+        "touchpoint_interaction_aliases": interaction_aliases,
+        "adjustment_event_aliases": adjustment_aliases,
+        "adjustment_linkage_keys": linkage_keys,
     }
 
 

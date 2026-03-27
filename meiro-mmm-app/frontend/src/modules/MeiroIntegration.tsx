@@ -118,6 +118,13 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
         fallbackMessage: 'Failed to load webhook archive status',
       }),
   })
+  const meiroEventArchiveStatusQuery = useQuery<MeiroWebhookArchiveStatus>({
+    queryKey: ['meiro-event-archive-status-page'],
+    queryFn: async () =>
+      apiGetJson<MeiroWebhookArchiveStatus>('/api/connectors/meiro/events/archive-status', {
+        fallbackMessage: 'Failed to load event archive status',
+      }),
+  })
   const meiroQuarantineRunsQuery = useQuery({
     queryKey: ['meiro-quarantine-runs'],
     queryFn: () => getMeiroQuarantineRuns(10),
@@ -206,6 +213,7 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
     }
     return {
       replay_mode: replayMode,
+      archive_source: meiroPullDraft.replay_archive_source || 'auto',
       archive_limit: replayMode === 'last_n' ? (meiroPullDraft.replay_archive_limit || 5000) : undefined,
       date_from: replayMode === 'date_range' ? toIso(meiroPullDraft.replay_date_from) : undefined,
       date_to: replayMode === 'date_range' ? toIso(meiroPullDraft.replay_date_to) : undefined,
@@ -222,6 +230,7 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
       await invalidateJourneyState()
       await queryClient.invalidateQueries({ queryKey: ['meiro-webhook-events-page'] })
       await queryClient.invalidateQueries({ queryKey: ['meiro-webhook-archive-status-page'] })
+      await queryClient.invalidateQueries({ queryKey: ['meiro-event-archive-status-page'] })
     },
   })
   const reprocessSelectedQuarantineMutation = useMutation({
@@ -410,6 +419,7 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
               meiroWebhookEvents={meiroWebhookEventsQuery.data}
               meiroWebhookDiagnostics={meiroWebhookDiagnosticsQuery.data}
               meiroWebhookArchiveStatus={meiroWebhookArchiveStatusQuery.data}
+              meiroEventArchiveStatus={meiroEventArchiveStatusQuery.data}
               meiroWebhookEventsLoading={meiroWebhookEventsQuery.isLoading}
               meiroWebhookEventsError={(meiroWebhookEventsQuery.error as Error | undefined)?.message || null}
               meiroWebhookDiagnosticsError={(meiroWebhookDiagnosticsQuery.error as Error | undefined)?.message || null}

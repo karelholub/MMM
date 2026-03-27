@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from .models_config_dq import ConversionPath
 from .models_overview_alerts import AlertEvent, AlertRule
-from .services_metrics import delta_pct
+from .services_metrics import delta_pct, journey_outcome_summary
 from .services_revenue_config import compute_payload_revenue_value, get_revenue_config
 
 
@@ -48,6 +48,67 @@ def _conversion_path_is_converted(row: Any) -> bool:
     if isinstance(conversions, list) and conversions:
         return True
     return bool(payload.get("converted"))
+
+
+def _overview_path_type(payload: Dict[str, Any]) -> str:
+    summary = ((payload.get("meta") or {}).get("interaction_summary") or {}) if isinstance(payload.get("meta"), dict) else {}
+    path_type = summary.get("path_type")
+    if isinstance(path_type, str) and path_type:
+        return path_type
+    touchpoints = payload.get("touchpoints") or []
+    has_impression = False
+    has_click_like = False
+    for tp in touchpoints:
+        if not isinstance(tp, dict):
+            continue
+        interaction = str(tp.get("interaction_type") or "").strip().lower()
+        if interaction == "impression":
+            has_impression = True
+        elif interaction in {"click", "visit", "direct"}:
+            has_click_like = True
+    if has_impression and has_click_like:
+        return "mixed_path"
+    if has_click_like:
+        return "click_through"
+    if has_impression:
+        return "view_through"
+    return "unknown"
+
+
+def _empty_outcomes() -> Dict[str, float]:
+    return {
+        "gross_conversions": 0.0,
+        "net_conversions": 0.0,
+        "gross_value": 0.0,
+        "net_value": 0.0,
+        "refunded_value": 0.0,
+        "cancelled_value": 0.0,
+        "invalid_leads": 0.0,
+        "valid_leads": 0.0,
+        "click_through_conversions": 0.0,
+        "view_through_conversions": 0.0,
+        "mixed_path_conversions": 0.0,
+    }
+
+
+def _merge_outcomes(target: Dict[str, float], payload: Dict[str, Any]) -> None:
+    outcome = journey_outcome_summary(payload)
+    target["gross_conversions"] += float(outcome.get("gross_conversions", 0.0) or 0.0)
+    target["net_conversions"] += float(outcome.get("net_conversions", 0.0) or 0.0)
+    target["gross_value"] += float(outcome.get("gross_value", 0.0) or 0.0)
+    target["net_value"] += float(outcome.get("net_value", 0.0) or 0.0)
+    target["refunded_value"] += float(outcome.get("refunded_value", 0.0) or 0.0)
+    target["cancelled_value"] += float(outcome.get("cancelled_value", 0.0) or 0.0)
+    target["invalid_leads"] += float(outcome.get("invalid_leads", 0.0) or 0.0)
+    target["valid_leads"] += float(outcome.get("valid_leads", 0.0) or 0.0)
+    path_type = _overview_path_type(payload)
+    count = float(outcome.get("net_conversions", 0.0) or 0.0)
+    if path_type == "click_through":
+        target["click_through_conversions"] += count
+    elif path_type == "view_through":
+        target["view_through_conversions"] += count
+    elif path_type == "mixed_path":
+        target["mixed_path_conversions"] += count
 
 
 def _expense_by_channel(
@@ -116,6 +177,26 @@ def _conversions_and_revenue_from_paths(
         daily[d]["revenue"] += val
     series = sorted(daily.values(), key=lambda x: x["date"])
     return sum(int(item.get("conversions", 0)) for item in series), total_value, series
+
+
+def _aggregate_outcomes_from_paths(
+    db: Session,
+    date_from: datetime,
+    date_to: datetime,
+    conversion_key: Optional[str],
+) -> Dict[str, float]:
+    q = db.query(ConversionPath).filter(ConversionPath.conversion_ts >= date_from, ConversionPath.conversion_ts <= date_to)
+    if conversion_key:
+        q = q.filter(ConversionPath.conversion_key == conversion_key)
+    rows = q.order_by(ConversionPath.conversion_ts.desc()).all()
+    totals = _empty_outcomes()
+    for row in rows:
+        if not _conversion_path_is_converted(row):
+            continue
+        payload = row.path_json or {}
+        if isinstance(payload, dict):
+            _merge_outcomes(totals, payload)
+    return totals
 
 
 def _sparkline_from_series(series: List[Dict[str, Any]], key: str, num_points: int = 14) -> List[float]:
@@ -526,6 +607,8 @@ def get_overview_summary(
 
     current_paths = _series_from_conversion_paths(db, dt_from, dt_to, grain)
     prev_paths = _series_from_conversion_paths(db, prev_from, prev_to, grain)
+    current_outcomes = _aggregate_outcomes_from_paths(db, dt_from, dt_to, None)
+    prev_outcomes = _aggregate_outcomes_from_paths(db, prev_from, prev_to, None)
     current_visits = _series_from_visits(db, dt_from, dt_to, grain)
     prev_visits = _series_from_visits(db, prev_from, prev_to, grain)
     current_expenses = _series_from_expenses(expenses or {}, dt_from, dt_to, grain)
@@ -675,6 +758,24 @@ def get_overview_summary(
             series_prev=prev_rev_series,
         ),
     ]
+    kpi_tiles.extend(
+        [
+            _tile_payload(
+                kpi_key="net_conversions",
+                value=float(current_outcomes["net_conversions"]),
+                prev_value=float(prev_outcomes["net_conversions"]),
+                series=current_conv_series,
+                series_prev=prev_conv_series,
+            ),
+            _tile_payload(
+                kpi_key="net_revenue",
+                value=float(current_outcomes["net_value"]),
+                prev_value=float(prev_outcomes["net_value"]),
+                series=current_rev_series,
+                series_prev=prev_rev_series,
+            ),
+        ]
+    )
 
     # Highlights: from alerts + KPI deltas
     highlights: List[Dict[str, Any]] = []
@@ -745,6 +846,10 @@ def get_overview_summary(
 
     return {
         "kpi_tiles": kpi_tiles,
+        "outcomes": {
+            "current": current_outcomes,
+            "previous": prev_outcomes,
+        },
         "highlights": highlights,
         "freshness": freshness,
         "readiness": readiness,
@@ -802,12 +907,16 @@ def get_overview_drivers(
     # Aggregate by channel from paths (revenue/conversions)
     ch_rev: Dict[str, float] = {}
     ch_conv: Dict[str, int] = {}
+    ch_outcomes: Dict[str, Dict[str, float]] = {}
     camp_rev: Dict[str, float] = {}
     camp_conv: Dict[str, int] = {}
+    camp_outcomes: Dict[str, Dict[str, float]] = {}
     for r in rows:
         if not _conversion_path_is_converted(r):
             continue
         payload = r.path_json or {}
+        outcome = journey_outcome_summary(payload)
+        path_type = _overview_path_type(payload)
         val = compute_payload_revenue_value(
             payload,
             revenue_config,
@@ -819,6 +928,8 @@ def get_overview_drivers(
             ch = tp.get("channel", "unknown") if isinstance(tp, dict) else "unknown"
             ch_rev[ch] = ch_rev.get(ch, 0) + val / max(len(tps), 1)
             ch_conv[ch] = ch_conv.get(ch, 0) + (1 if idx == len(tps) - 1 else 0)  # last-touch count
+            metrics = ch_outcomes.setdefault(ch, _empty_outcomes())
+            _merge_outcomes(metrics, payload)
         if tps:
             last = tps[-1] if isinstance(tps[-1], dict) else {}
             camp = last.get("campaign") or last.get("campaign_name") if isinstance(last, dict) else "unknown"
@@ -827,6 +938,8 @@ def get_overview_drivers(
             camp = camp or "unknown"
             camp_rev[camp] = camp_rev.get(camp, 0) + val
             camp_conv[camp] = camp_conv.get(camp, 0) + 1
+            metrics = camp_outcomes.setdefault(camp, _empty_outcomes())
+            _merge_outcomes(metrics, payload)
 
     prev_rows = db.query(ConversionPath).filter(
         ConversionPath.conversion_ts >= prev_from,
@@ -911,6 +1024,7 @@ def get_overview_drivers(
             "delta_visits_pct": delta_pct(float(visits), float(prev_visits)),
             "delta_conversions_pct": delta_pct(float(conv), float(prev_conv)),
             "delta_revenue_pct": delta_pct(rev, prev_rev),
+            "outcomes": ch_outcomes.get(ch, _empty_outcomes()),
         })
     by_channel.sort(key=lambda x: -x["revenue"])
 
@@ -921,6 +1035,7 @@ def get_overview_drivers(
             "revenue": round(camp_rev[c], 2),
             "conversions": camp_conv.get(c, 0),
             "delta_revenue_pct": delta_pct(camp_rev.get(c, 0), prev_camp_rev.get(c, 0)),
+            "outcomes": camp_outcomes.get(c, _empty_outcomes()),
         }
         for c in campaigns_sorted
     ]
@@ -1219,6 +1334,7 @@ def get_overview_funnels(
 
     aggs: Dict[str, Dict[str, Any]] = {}
     total_conversions = 0
+    outcomes = _empty_outcomes()
     path_length_counts: Dict[int, int] = defaultdict(int)
     for row in rows:
         if not _conversion_path_is_converted(row):
@@ -1226,6 +1342,7 @@ def get_overview_funnels(
         payload = row.path_json or {}
         if not isinstance(payload, dict):
             payload = {}
+        _merge_outcomes(outcomes, payload)
         steps = _path_steps_from_payload(payload)
         path_key = " > ".join(steps)
         revenue = _payload_revenue_value(
@@ -1304,6 +1421,13 @@ def get_overview_funnels(
         "date_to": date_to,
         "summary": {
             "total_conversions": total_conversions,
+            "net_conversions": round(outcomes["net_conversions"], 2),
+            "gross_conversions": round(outcomes["gross_conversions"], 2),
+            "net_revenue": round(outcomes["net_value"], 2),
+            "gross_revenue": round(outcomes["gross_value"], 2),
+            "view_through_conversions": round(outcomes["view_through_conversions"], 2),
+            "click_through_conversions": round(outcomes["click_through_conversions"], 2),
+            "mixed_path_conversions": round(outcomes["mixed_path_conversions"], 2),
             "distinct_paths": len(items),
             "top_paths_conversion_share": round(sum(item["conversions"] for item in top_converting) / total_conversions, 6) if total_conversions > 0 else 0.0,
             "median_path_length": _weighted_median(path_length_counts),

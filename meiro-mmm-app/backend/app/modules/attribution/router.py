@@ -662,6 +662,7 @@ def create_router(
         journeys_for_model = _apply_attribution_filters(journeys_for_model)
         settings = get_settings_obj()
         kwargs: Dict[str, Any] = {}
+        kwargs["value_mode"] = str(getattr(settings.attribution, "conversion_value_mode", "gross_only") or "gross_only")
         if model == "time_decay":
             kwargs["half_life_days"] = settings.attribution.time_decay_half_life_days
         elif model == "position_based":
@@ -686,6 +687,7 @@ def create_router(
         for model in attribution_models_obj:
             try:
                 kwargs: Dict[str, Any] = {}
+                kwargs["value_mode"] = str(getattr(settings.attribution, "conversion_value_mode", "gross_only") or "gross_only")
                 if model == "time_decay":
                     kwargs["half_life_days"] = settings.attribution.time_decay_half_life_days
                 elif model == "position_based":
@@ -746,6 +748,7 @@ def create_router(
         journeys_for_model = _apply_attribution_filters(journeys_for_model)
         settings = get_settings_obj()
         kwargs: Dict[str, Any] = {}
+        kwargs["value_mode"] = str(getattr(settings.attribution, "conversion_value_mode", "gross_only") or "gross_only")
         if model == "time_decay" and settings.attribution.time_decay_half_life_days:
             kwargs["half_life_days"] = settings.attribution.time_decay_half_life_days
         if model == "position_based":
@@ -1190,6 +1193,7 @@ def create_router(
                 raise HTTPException(status_code=400, detail="No journeys loaded.")
             settings = get_settings_obj()
             kwargs: Dict[str, Any] = {}
+            kwargs["value_mode"] = str(getattr(settings.attribution, "conversion_value_mode", "gross_only") or "gross_only")
             if model == "time_decay":
                 kwargs["half_life_days"] = settings.attribution.time_decay_half_life_days
             elif model == "position_based":
@@ -1246,6 +1250,7 @@ def create_router(
 
         settings = get_settings_obj()
         kwargs: Dict[str, Any] = {}
+        kwargs["value_mode"] = str(getattr(settings.attribution, "conversion_value_mode", "gross_only") or "gross_only")
         if model == "time_decay":
             kwargs["half_life_days"] = settings.attribution.time_decay_half_life_days
         elif model == "position_based":

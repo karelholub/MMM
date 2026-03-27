@@ -40,6 +40,19 @@ interface ModelResult {
   channel_credit: Record<string, number>
   total_conversions: number
   total_value: number
+  gross_total_conversions?: number
+  net_total_conversions?: number
+  gross_total_value?: number
+  net_total_value?: number
+  refunded_value?: number
+  cancelled_value?: number
+  invalid_leads?: number
+  value_mode?: string
+  interaction_summary?: {
+    click_through_conversions?: number
+    view_through_conversions?: number
+    mixed_path_conversions?: number
+  }
   channels: { channel: string; attributed_value: number; attributed_share: number; attributed_conversions: number }[]
   error?: string
   config?: {
@@ -503,6 +516,11 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
               <div style={{ fontSize: t.font.sizeXl, fontWeight: t.font.weightBold, color: t.color.text, marginTop: t.space.xs, fontVariantNumeric: 'tabular-nums' }}>
                 {formatCurrency(selectedResult.total_value)}
               </div>
+              {(selectedResult.gross_total_value != null || selectedResult.net_total_value != null) && (
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary, marginTop: t.space.xs }}>
+                  Gross {formatCurrency(selectedResult.gross_total_value || selectedResult.total_value)} · Net {formatCurrency(selectedResult.net_total_value || selectedResult.total_value)}
+                </div>
+              )}
             </div>
             <div
               style={{
@@ -518,6 +536,30 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
               </div>
               <div style={{ fontSize: t.font.sizeXl, fontWeight: t.font.weightBold, color: t.color.text, marginTop: t.space.xs, fontVariantNumeric: 'tabular-nums' }}>
                 {selectedResult.total_conversions.toLocaleString()}
+              </div>
+              {(selectedResult.gross_total_conversions != null || selectedResult.net_total_conversions != null) && (
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary, marginTop: t.space.xs }}>
+                  Gross {Number(selectedResult.gross_total_conversions || selectedResult.total_conversions).toLocaleString()} · Net {Number(selectedResult.net_total_conversions || selectedResult.total_conversions).toLocaleString()}
+                </div>
+              )}
+            </div>
+            <div
+              style={{
+                background: t.color.surface,
+                border: `1px solid ${t.color.borderLight}`,
+                borderRadius: t.radius.md,
+                padding: `${t.space.lg}px ${t.space.xl}px`,
+                boxShadow: t.shadowSm,
+              }}
+            >
+              <div style={{ fontSize: t.font.sizeXs, fontWeight: t.font.weightMedium, color: t.color.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Click / View Split
+              </div>
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.text, marginTop: t.space.xs, lineHeight: 1.5 }}>
+                Click {Number(selectedResult.interaction_summary?.click_through_conversions || 0).toLocaleString()} · View {Number(selectedResult.interaction_summary?.view_through_conversions || 0).toLocaleString()} · Mixed {Number(selectedResult.interaction_summary?.mixed_path_conversions || 0).toLocaleString()}
+              </div>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary, marginTop: t.space.xs }}>
+                {selectedResult.value_mode === 'net_only' ? 'Net-only attribution mode' : selectedResult.value_mode === 'gross_and_net' ? 'Gross and net tracked side by side' : 'Gross-only attribution mode'}
               </div>
             </div>
           </>

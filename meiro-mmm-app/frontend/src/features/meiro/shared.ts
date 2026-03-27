@@ -16,6 +16,7 @@ export interface MeiroWebhookArchiveStatus {
   available: boolean
   entries: number
   profiles_received?: number
+  events_received?: number
   last_received_at?: string | null
   parser_versions?: string[]
 }
@@ -44,10 +45,26 @@ export const DEFAULT_MEIRO_PULL_CONFIG: MeiroPullConfig = {
   value_fallback_policy: 'default',
   currency_fallback_policy: 'default',
   replay_mode: 'last_n',
+  replay_archive_source: 'auto',
   replay_archive_limit: 5000,
   replay_date_from: null,
   replay_date_to: null,
   conversion_event_aliases: {},
+  touchpoint_interaction_aliases: {
+    ad_impression: 'impression',
+    impression: 'impression',
+    ad_click: 'click',
+    email_click: 'click',
+    page_view: 'visit',
+  },
+  adjustment_event_aliases: {
+    refund: 'refund',
+    partial_refund: 'partial_refund',
+    cancelled: 'cancellation',
+    invalid_lead: 'invalid_lead',
+    disqualified_lead: 'disqualified_lead',
+  },
+  adjustment_linkage_keys: ['conversion_id', 'order_id', 'lead_id', 'event_id'],
 }
 
 export function normalizeMeiroPullConfig(raw?: Partial<MeiroPullConfig> | Record<string, unknown> | null): MeiroPullConfig {
@@ -84,6 +101,22 @@ export function normalizeMeiroPullConfig(raw?: Partial<MeiroPullConfig> | Record
   const replayMode = typeof cfg.replay_mode === 'string' && ['all', 'last_n', 'date_range'].includes(cfg.replay_mode)
     ? cfg.replay_mode as MeiroPullConfig['replay_mode']
     : DEFAULT_MEIRO_PULL_CONFIG.replay_mode
+  const replayArchiveSource = typeof cfg.replay_archive_source === 'string' && ['auto', 'profiles', 'events'].includes(cfg.replay_archive_source)
+    ? cfg.replay_archive_source as MeiroPullConfig['replay_archive_source']
+    : DEFAULT_MEIRO_PULL_CONFIG.replay_archive_source
+  const normalizeMap = (value: unknown, fallback: Record<string, string>) =>
+    typeof value === 'object' && value && !Array.isArray(value)
+      ? Object.fromEntries(
+          Object.entries(value)
+            .map(([key, val]) => [String(key).trim(), String(val ?? '').trim()])
+            .filter(([key, val]) => key && val),
+        )
+      : fallback
+  const linkageKeys = Array.isArray(cfg.adjustment_linkage_keys)
+    ? cfg.adjustment_linkage_keys
+        .map((value) => String(value || '').trim())
+        .filter((value): value is 'conversion_id' | 'order_id' | 'lead_id' | 'event_id' => ['conversion_id', 'order_id', 'lead_id', 'event_id'].includes(value))
+    : DEFAULT_MEIRO_PULL_CONFIG.adjustment_linkage_keys
   return {
     lookback_days: asInt(cfg.lookback_days, DEFAULT_MEIRO_PULL_CONFIG.lookback_days, 1, 365),
     session_gap_minutes: asInt(cfg.session_gap_minutes, DEFAULT_MEIRO_PULL_CONFIG.session_gap_minutes, 1, 720),
@@ -101,11 +134,13 @@ export function normalizeMeiroPullConfig(raw?: Partial<MeiroPullConfig> | Record
     value_fallback_policy: valueFallbackPolicy,
     currency_fallback_policy: currencyFallbackPolicy,
     replay_mode: replayMode,
+    replay_archive_source: replayArchiveSource,
     replay_archive_limit: asInt(cfg.replay_archive_limit, DEFAULT_MEIRO_PULL_CONFIG.replay_archive_limit || 5000, 1, 50000),
     replay_date_from: typeof cfg.replay_date_from === 'string' && cfg.replay_date_from.trim() ? cfg.replay_date_from.trim() : null,
     replay_date_to: typeof cfg.replay_date_to === 'string' && cfg.replay_date_to.trim() ? cfg.replay_date_to.trim() : null,
-    conversion_event_aliases: typeof cfg.conversion_event_aliases === 'object' && cfg.conversion_event_aliases && !Array.isArray(cfg.conversion_event_aliases)
-      ? Object.fromEntries(Object.entries(cfg.conversion_event_aliases).map(([key, value]) => [String(key).trim(), String(value ?? '').trim()]).filter(([key, value]) => key && value))
-      : DEFAULT_MEIRO_PULL_CONFIG.conversion_event_aliases,
+    conversion_event_aliases: normalizeMap(cfg.conversion_event_aliases, DEFAULT_MEIRO_PULL_CONFIG.conversion_event_aliases),
+    touchpoint_interaction_aliases: normalizeMap(cfg.touchpoint_interaction_aliases, DEFAULT_MEIRO_PULL_CONFIG.touchpoint_interaction_aliases || {}),
+    adjustment_event_aliases: normalizeMap(cfg.adjustment_event_aliases, DEFAULT_MEIRO_PULL_CONFIG.adjustment_event_aliases || {}),
+    adjustment_linkage_keys: linkageKeys.length ? linkageKeys : DEFAULT_MEIRO_PULL_CONFIG.adjustment_linkage_keys,
   }
 }

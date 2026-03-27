@@ -161,6 +161,61 @@ def test_build_channel_summary_uses_same_source_rollups():
     assert out["totals"]["current"]["revenue"] == 150.0
 
 
+def test_build_channel_summary_exposes_outcomes_and_notes():
+    journeys = [
+        {
+            "converted": True,
+            "interaction_path_type": "view_through",
+            "_revenue_entries": [
+                {
+                    "dedup_key": "order:1",
+                    "value_in_base": 120.0,
+                    "gross_value": 120.0,
+                    "net_value": 80.0,
+                    "gross_conversions": 1.0,
+                    "net_conversions": 1.0,
+                    "refunded_value": 40.0,
+                    "cancelled_value": 0.0,
+                    "invalid_leads": 0.0,
+                    "valid_leads": 1.0,
+                }
+            ],
+            "touchpoints": [{"timestamp": "2026-02-01T10:00:00Z", "channel": "google_ads", "interaction_type": "impression"}],
+        },
+        {
+            "converted": True,
+            "interaction_path_type": "click_through",
+            "_revenue_entries": [
+                {
+                    "dedup_key": "lead:1",
+                    "value_in_base": 0.0,
+                    "gross_value": 0.0,
+                    "net_value": 0.0,
+                    "gross_conversions": 1.0,
+                    "net_conversions": 0.0,
+                    "refunded_value": 0.0,
+                    "cancelled_value": 0.0,
+                    "invalid_leads": 1.0,
+                    "valid_leads": 0.0,
+                }
+            ],
+            "touchpoints": [{"timestamp": "2026-02-01T12:00:00Z", "channel": "google_ads", "interaction_type": "click"}],
+        },
+    ]
+    out = build_channel_summary_response(
+        journeys=journeys,
+        expenses=[],
+        date_from="2026-02-01",
+        date_to="2026-02-01",
+        compare=False,
+    )
+    assert out["totals"]["outcomes_current"]["net_revenue"] == 80.0
+    assert out["totals"]["outcomes_current"]["refunded_value"] == 40.0
+    assert out["totals"]["outcomes_current"]["view_through_conversions"] == 1.0
+    assert out["totals"]["outcomes_current"]["invalid_leads"] == 1.0
+    assert out["notes"]
+
+
 def test_build_channel_trend_supports_visits_for_all_touchpoints():
     journeys = [
         {
@@ -217,6 +272,7 @@ def test_build_campaign_summary_shape_and_notes():
     assert row["current"]["conversions"] == 1.0
     assert out["totals"]["current"]["spend"] == 30.0
     assert out["totals"]["current"]["revenue"] == 120.0
+    assert "outcomes_current" in out["totals"]
 
 
 def test_campaign_summary_spend_is_allocated_without_double_counting():

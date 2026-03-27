@@ -46,9 +46,50 @@ def delta_pct(current: float, previous: float) -> float:
     return round((current - previous) / previous * 100.0, 1)
 
 
+def journey_outcome_summary(journey: Dict[str, Any]) -> Dict[str, float]:
+    entries = journey.get("_revenue_entries")
+    if not isinstance(entries, list):
+        gross = float(journey.get("conversion_value") or 0.0)
+        converted = 1.0 if journey.get("converted", True) else 0.0
+        return {
+            "gross_value": gross,
+            "net_value": gross,
+            "refunded_value": 0.0,
+            "cancelled_value": 0.0,
+            "gross_conversions": converted,
+            "net_conversions": converted,
+            "invalid_leads": 0.0,
+            "valid_leads": converted,
+        }
+
+    summary = {
+        "gross_value": 0.0,
+        "net_value": 0.0,
+        "refunded_value": 0.0,
+        "cancelled_value": 0.0,
+        "gross_conversions": 0.0,
+        "net_conversions": 0.0,
+        "invalid_leads": 0.0,
+        "valid_leads": 0.0,
+    }
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        if not any(key in entry for key in summary):
+            summary["gross_conversions"] += 1.0
+            summary["net_conversions"] += 1.0
+        for key in tuple(summary.keys()):
+            try:
+                summary[key] += float(entry.get(key) or 0.0)
+            except Exception:
+                continue
+    return summary
+
+
 def journey_revenue_value(
     journey: Dict[str, Any],
     *,
+    value_mode: str = "gross_only",
     dedupe_seen: Optional[Set[str]] = None,
 ) -> float:
     entries = journey.get("_revenue_entries")
@@ -64,7 +105,10 @@ def journey_revenue_value(
                 continue
             dedupe_seen.add(dedup_key)
         try:
-            total += float(entry.get("value_in_base") or 0.0)
+            if value_mode == "net_only":
+                total += float(entry.get("net_value_in_base") or entry.get("value_in_base") or 0.0)
+            else:
+                total += float(entry.get("value_in_base") or 0.0)
         except Exception:
             continue
     return total

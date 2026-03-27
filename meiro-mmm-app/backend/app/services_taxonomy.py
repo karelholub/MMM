@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from sqlalchemy.orm import Session
 
 from .models_config_dq import DQSnapshot
-from .utils.taxonomy import Taxonomy, ChannelRule, load_taxonomy, save_taxonomy
+from .utils.taxonomy import Taxonomy, ChannelRule, infer_source_medium_from_referrer, load_taxonomy, save_taxonomy
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +265,7 @@ def normalize_touchpoint_with_confidence(
     """
     if taxonomy is None:
         taxonomy = load_taxonomy()
+    referrer_fallback = infer_source_medium_from_referrer(tp)
     
     # Extract UTM parameters
     utm_params = {
@@ -280,11 +281,13 @@ def normalize_touchpoint_with_confidence(
     source = (
         utm_validation.normalized.get("utm_source") or
         tp.get("source") or
+        referrer_fallback.get("source") or
         ""
     )
     medium = (
         utm_validation.normalized.get("utm_medium") or
         tp.get("medium") or
+        referrer_fallback.get("medium") or
         ""
     )
     
@@ -322,6 +325,9 @@ def normalize_touchpoint_with_confidence(
         "matched_rule": channel_mapping.matched_rule,
         "fallback_reason": channel_mapping.fallback_reason,
     }
+    if referrer_fallback:
+        normalized.setdefault("_inference", {})
+        normalized["_inference"]["source_medium_from_referrer"] = True
     
     return normalized, confidence
 

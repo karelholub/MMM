@@ -143,3 +143,73 @@ def test_run_attribution_uses_revenue_entries_with_cross_journey_dedup():
     # Same dedup key should be counted once in configured revenue.
     assert result["total_value"] == 120.0
     assert math.isclose(sum(result["channel_credit"].values()), 120.0, rel_tol=1e-6)
+
+
+def test_run_attribution_reports_click_view_mixed_and_net_outcomes():
+    journeys = [
+        {
+            "customer_id": "view-only",
+            "touchpoints": [{"channel": "meta_ads", "interaction_type": "impression"}],
+            "converted": True,
+            "interaction_path_type": "view_through",
+            "_revenue_entries": [
+                {
+                    "dedup_key": "order:view",
+                    "value_in_base": 40.0,
+                    "net_value_in_base": 40.0,
+                    "gross_conversions": 1.0,
+                    "net_conversions": 1.0,
+                    "refunded_value": 0.0,
+                    "cancelled_value": 0.0,
+                    "invalid_leads": 0.0,
+                    "valid_leads": 1.0,
+                }
+            ],
+        },
+        {
+            "customer_id": "mixed",
+            "touchpoints": [{"channel": "google_ads", "interaction_type": "click"}],
+            "converted": True,
+            "interaction_path_type": "click_through",
+            "_revenue_entries": [
+                {
+                    "dedup_key": "order:1",
+                    "value_in_base": 100.0,
+                    "net_value_in_base": 70.0,
+                    "gross_conversions": 1.0,
+                    "net_conversions": 1.0,
+                    "refunded_value": 30.0,
+                    "cancelled_value": 0.0,
+                    "invalid_leads": 0.0,
+                    "valid_leads": 1.0,
+                }
+            ],
+        },
+        {
+            "customer_id": "invalid-lead",
+            "touchpoints": [{"channel": "email", "interaction_type": "click"}],
+            "converted": True,
+            "interaction_path_type": "click_through",
+            "_revenue_entries": [
+                {
+                    "dedup_key": "lead:1",
+                    "value_in_base": 0.0,
+                    "net_value_in_base": 0.0,
+                    "gross_conversions": 1.0,
+                    "net_conversions": 0.0,
+                    "refunded_value": 0.0,
+                    "cancelled_value": 0.0,
+                    "invalid_leads": 1.0,
+                    "valid_leads": 0.0,
+                }
+            ],
+        },
+    ]
+    result = run_attribution(journeys, model="linear", value_mode="net_only")
+    assert result["gross_total_conversions"] == 3.0
+    assert result["net_total_conversions"] == 2.0
+    assert result["gross_total_value"] == 140.0
+    assert result["net_total_value"] == 110.0
+    assert result["refunded_value"] == 30.0
+    assert result["invalid_leads"] == 1.0
+    assert result["interaction_summary"]["view_through_conversions"] == 1.0

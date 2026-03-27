@@ -24,6 +24,7 @@ class MeiroCDPExportRequest(BaseModel):
 
 class MeiroWebhookReprocessRequest(BaseModel):
     archive_limit: Optional[int] = None
+    archive_source: Optional[str] = "auto"
     replay_mode: Optional[str] = "last_n"
     date_from: Optional[str] = None
     date_to: Optional[str] = None

@@ -7,8 +7,11 @@ export interface MeiroConfig {
   last_test_at: string | null
   has_key: boolean
   webhook_url: string
+  event_webhook_url?: string
   webhook_last_received_at: string | null
   webhook_received_count: number
+  event_webhook_last_received_at?: string | null
+  event_webhook_received_count?: number
   webhook_has_secret: boolean
 }
 
@@ -81,10 +84,14 @@ export interface MeiroPullConfig {
   value_fallback_policy: 'default' | 'zero' | 'quarantine'
   currency_fallback_policy: 'default' | 'quarantine'
   replay_mode?: 'all' | 'last_n' | 'date_range'
+  replay_archive_source?: 'auto' | 'profiles' | 'events'
   replay_archive_limit?: number
   replay_date_from?: string | null
   replay_date_to?: string | null
   conversion_event_aliases?: Record<string, string>
+  touchpoint_interaction_aliases?: Record<string, string>
+  adjustment_event_aliases?: Record<string, string>
+  adjustment_linkage_keys?: Array<'conversion_id' | 'order_id' | 'lead_id' | 'event_id'>
 }
 
 export interface MeiroWebhookSuggestions {

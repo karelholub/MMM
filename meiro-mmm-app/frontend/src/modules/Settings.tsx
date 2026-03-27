@@ -131,6 +131,7 @@ const SECTION_META: Record<SectionKey, SectionMeta> = {
 interface AttributionSettings {
   lookback_window_days: number
   use_converted_flag: boolean
+  conversion_value_mode: 'gross_only' | 'net_only' | 'gross_and_net'
   min_journey_quality_score: number
   min_conversion_value: number
   time_decay_half_life_days: number
@@ -812,6 +813,7 @@ const DEFAULT_SETTINGS: Settings = {
   attribution: {
     lookback_window_days: 30,
     use_converted_flag: true,
+    conversion_value_mode: 'gross_only',
     min_journey_quality_score: 0,
     min_conversion_value: 0,
     time_decay_half_life_days: 7,
@@ -2446,6 +2448,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         lookback_window_days,
         min_conversion_value,
         use_converted_flag,
+        conversion_value_mode,
         time_decay_half_life_days,
         position_first_pct,
         position_last_pct,
@@ -2455,6 +2458,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         lookback_window_days,
         min_conversion_value,
         use_converted_flag,
+        conversion_value_mode,
         time_decay_half_life_days,
         position_first_pct,
         position_last_pct,
@@ -2831,6 +2835,17 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       }
     }, [currentConfigObject])
 
+    const attributionModelConfig = useMemo(() => {
+      const attribution = (currentConfigObject?.attribution ?? {}) as Record<string, any>
+      return {
+        interaction_mode:
+          typeof attribution.interaction_mode === 'string'
+            ? attribution.interaction_mode
+            : 'click_preferred',
+        include_impression_only_paths: Boolean(attribution.include_impression_only_paths ?? false),
+      }
+    }, [currentConfigObject])
+
     const conversionsConfig = useMemo(() => {
       const conversions = (currentConfigObject?.conversions ?? {}) as Record<string, any>
       const definitions = Array.isArray(conversions.conversion_definitions)
@@ -2924,6 +2939,17 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
           const windows = { ...(prev.windows ?? {}) }
           windows[field] = value
           return { ...prev, windows }
+        })
+      },
+      [updateConfigObject],
+    )
+
+    const handleAttributionModelFieldChange = useCallback(
+      (field: 'interaction_mode' | 'include_impression_only_paths', value: string | boolean) => {
+        updateConfigObject((prev) => {
+          const attribution = { ...(prev.attribution ?? {}) }
+          attribution[field] = value
+          return { ...prev, attribution }
         })
       },
       [updateConfigObject],
@@ -5039,6 +5065,26 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                     of that flag.
                   </span>
                 </div>
+              </label>
+              <label style={{ display: 'grid', gap: 6, maxWidth: 320 }}>
+                <span style={labelStyle}>Conversion validity mode</span>
+                <select
+                  value={attributionDraft.conversion_value_mode}
+                  onChange={(e) =>
+                    setAttributionDraft((prev) => ({
+                      ...prev,
+                      conversion_value_mode: e.target.value as AttributionSettings['conversion_value_mode'],
+                    }))
+                  }
+                  style={inputBaseStyle}
+                >
+                  <option value="gross_only">Gross conversions only</option>
+                  <option value="net_only">Net conversions only</option>
+                  <option value="gross_and_net">Gross and net side by side</option>
+                </select>
+                <span style={helperTextStyle}>
+                  Gross keeps original conversions. Net excludes refunded, cancelled, and invalidated outcomes from core attribution totals.
+                </span>
               </label>
             </div>
 
@@ -9144,6 +9190,54 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                                     fontSize: t.font.sizeSm,
                                   }}
                                 />
+                              </label>
+                            </div>
+                          </div>
+
+                          <div
+                            style={{
+                              border: `1px solid ${t.color.borderLight}`,
+                              borderRadius: t.radius.md,
+                              padding: t.space.md,
+                              display: 'grid',
+                              gap: t.space.sm,
+                              background: t.color.surface,
+                            }}
+                          >
+                            <span
+                              style={{
+                                fontSize: t.font.sizeSm,
+                                fontWeight: t.font.weightSemibold,
+                              }}
+                            >
+                              Interaction handling
+                            </span>
+                            <div
+                              style={{
+                                display: 'grid',
+                                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                                gap: t.space.sm,
+                              }}
+                            >
+                              <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                                Attribution mode
+                                <select
+                                  value={attributionModelConfig.interaction_mode}
+                                  onChange={(e) => handleAttributionModelFieldChange('interaction_mode', e.target.value)}
+                                  style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, background: '#fff' }}
+                                >
+                                  <option value="click_only">Click only</option>
+                                  <option value="click_plus_viewthrough">Click + view-through</option>
+                                  <option value="click_preferred">Click preferred</option>
+                                </select>
+                              </label>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: t.font.sizeSm, color: t.color.text }}>
+                                <input
+                                  type="checkbox"
+                                  checked={attributionModelConfig.include_impression_only_paths}
+                                  onChange={(e) => handleAttributionModelFieldChange('include_impression_only_paths', e.target.checked)}
+                                />
+                                Include impression-only paths in standard reports
                               </label>
                             </div>
                           </div>

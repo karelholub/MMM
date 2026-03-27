@@ -121,6 +121,10 @@ interface ChannelSummaryItem {
     }
   }
   confidence?: Confidence | null
+  outcomes?: {
+    current?: Record<string, number>
+    previous?: Record<string, number> | null
+  }
 }
 
 interface ChannelSummaryResponse {
@@ -130,6 +134,8 @@ interface ChannelSummaryResponse {
   totals?: {
     current: { spend: number; visits: number; conversions: number; revenue: number }
     previous?: { spend: number; visits: number; conversions: number; revenue: number } | null
+    outcomes_current?: Record<string, number>
+    outcomes_previous?: Record<string, number> | null
   }
   config?: {
     config_id?: string
@@ -157,6 +163,7 @@ interface ChannelSummaryResponse {
   } | null
   consistency_warnings?: string[]
   meta?: { query_context?: { compare?: boolean } }
+  notes?: string[]
 }
 
 const MODEL_LABELS: Record<string, string> = {
@@ -559,6 +566,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
 
   const summaryCurrent = summaryQuery.data?.totals?.current ?? { spend: 0, visits: 0, revenue: 0, conversions: 0 }
   const summaryPrevious = summaryQuery.data?.totals?.previous ?? { spend: 0, visits: 0, revenue: 0, conversions: 0 }
+  const summaryOutcomesCurrent = summaryQuery.data?.totals?.outcomes_current ?? {}
   const totalSpend = summaryCurrent.spend
   const totalVisits = summaryCurrent.visits
   const totalValue = summaryCurrent.revenue
@@ -623,6 +631,8 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     { label: 'Revenue / Visit', value: formatCurrency(totalRevenuePerVisit), def: METRIC_DEFINITIONS['Revenue / Visit'] },
     { label: 'ROAS', value: `${totalROAS.toFixed(2)}×`, def: METRIC_DEFINITIONS['ROAS'] },
     { label: 'Avg CPA', value: formatCurrency(avgCPA), def: METRIC_DEFINITIONS['CPA'] },
+    { label: 'Net Revenue', value: formatCurrency(Number(summaryOutcomesCurrent.net_revenue || 0)), def: 'Revenue after refunds, cancellations, and invalidation.' },
+    { label: 'Net Conversions', value: Number(summaryOutcomesCurrent.net_conversions || 0).toLocaleString(), def: 'Conversions remaining valid after post-conversion adjustments.' },
   ]
 
   const tableColumns: { key: SortKey; label: string; align: 'left' | 'right'; format: (ch: ChannelData) => string }[] = [
@@ -754,6 +764,22 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
             Why?
           </button>
         </div>
+      </div>
+      {!!summaryQuery.data?.notes?.length && (
+        <div style={{ marginBottom: t.space.md, display: 'grid', gap: t.space.xs }}>
+          {summaryQuery.data.notes.map((note, idx) => (
+            <div key={`${note}-${idx}`} style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary, padding: `${t.space.sm}px ${t.space.md}px`, border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, background: t.color.surface }}>
+              {note}
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ marginBottom: t.space.md, display: 'flex', gap: t.space.md, flexWrap: 'wrap', fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+        <span>Click-through: {Number(summaryOutcomesCurrent.click_through_conversions || 0).toLocaleString()}</span>
+        <span>View-through: {Number(summaryOutcomesCurrent.view_through_conversions || 0).toLocaleString()}</span>
+        <span>Mixed paths: {Number(summaryOutcomesCurrent.mixed_path_conversions || 0).toLocaleString()}</span>
+        <span>Refunded value: {formatCurrency(Number(summaryOutcomesCurrent.refunded_value || 0))}</span>
+        <span>Invalid leads: {Number(summaryOutcomesCurrent.invalid_leads || 0).toLocaleString()}</span>
       </div>
 
       {summaryQuery.data?.readiness && (summaryQuery.data.readiness.status === 'blocked' || summaryQuery.data.readiness.warnings.length > 0) ? (

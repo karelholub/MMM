@@ -19,6 +19,7 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from .models_config_dq import ConversionPath
+from .services_metrics import journey_outcome_summary
 from .services_revenue_config import compute_payload_revenue_value, extract_revenue_entries, get_revenue_config
 
 
@@ -35,6 +36,57 @@ def _parse_ts(ts: Any):
 def _tp_timestamp(tp: Dict[str, Any]) -> Any:
     """Get timestamp from touchpoint (v1: timestamp, v2: ts)."""
     return tp.get("ts") or tp.get("timestamp")
+
+
+def _tp_interaction_type(tp: Dict[str, Any]) -> str:
+    raw = str(tp.get("interaction_type") or "").strip().lower()
+    if raw in {"impression", "click", "visit", "direct", "unknown"}:
+        return raw
+    if str(tp.get("channel") or "").strip().lower() == "direct":
+        return "direct"
+    return "unknown"
+
+
+def _dedupe_click_preferred_touchpoints(touchpoints: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    click_keys = set()
+    for tp in touchpoints:
+        if _tp_interaction_type(tp) != "click":
+            continue
+        campaign = tp.get("campaign")
+        if isinstance(campaign, dict):
+            campaign = campaign.get("name")
+        click_keys.add((str(tp.get("channel") or ""), str(campaign or "")))
+    out: List[Dict[str, Any]] = []
+    for tp in touchpoints:
+        if _tp_interaction_type(tp) != "impression":
+            out.append(tp)
+            continue
+        campaign = tp.get("campaign")
+        if isinstance(campaign, dict):
+            campaign = campaign.get("name")
+        key = (str(tp.get("channel") or ""), str(campaign or ""))
+        if key in click_keys:
+            continue
+        out.append(tp)
+    return out
+
+
+def classify_journey_interaction(journey: Dict[str, Any]) -> str:
+    touchpoints = journey.get("touchpoints") or []
+    has_click_like = any(_tp_interaction_type(tp) in {"click", "visit", "direct"} for tp in touchpoints if isinstance(tp, dict))
+    has_impression = any(_tp_interaction_type(tp) == "impression" for tp in touchpoints if isinstance(tp, dict))
+    if has_click_like and has_impression:
+        return "mixed_path"
+    if has_click_like:
+        return "click_through"
+    if has_impression:
+        return "view_through"
+    return "unknown"
+
+
+def _selected_conversion_count(journey: Dict[str, Any], value_mode: str) -> float:
+    summary = journey_outcome_summary(journey)
+    return float(summary["net_conversions"] if value_mode == "net_only" else summary["gross_conversions"])
 
 
 def journey_quality_score(journey: Dict[str, Any]) -> int:
@@ -70,11 +122,14 @@ def filter_journeys_by_windows(
     Supports both v1 (timestamp) and v2 (ts) touchpoint format.
     """
     windows = config_json.get("windows") or {}
-    click_days = windows.get("click_lookback_days")
-    if not click_days or click_days <= 0:
+    click_days = float(windows.get("click_lookback_days") or 0)
+    impression_days = float(windows.get("impression_lookback_days") or 0)
+    attribution_cfg = config_json.get("attribution") or {}
+    interaction_mode = str(attribution_cfg.get("interaction_mode") or "click_preferred").strip().lower()
+    include_view_only = bool(attribution_cfg.get("include_impression_only_paths", False))
+    if click_days <= 0 and impression_days <= 0:
         return journeys
 
-    max_delta = timedelta(days=float(click_days))
     out: List[Dict[str, Any]] = []
 
     for j in journeys:
@@ -88,19 +143,36 @@ def filter_journeys_by_windows(
             out.append(j)
             continue
         last_ts = max(valid_ts)
-        min_ts = last_ts - max_delta
         kept_tps = []
         for tp, ts in zip(tps, parsed):
+            interaction_type = _tp_interaction_type(tp if isinstance(tp, dict) else {})
             if ts is None:
                 # Keep touchpoints without timestamps; they're rare and carry some information
                 kept_tps.append(tp)
-            elif ts >= min_ts:
-                kept_tps.append(tp)
+                continue
+            if interaction_type == "impression":
+                if impression_days > 0 and ts >= (last_ts - timedelta(days=float(impression_days))):
+                    kept_tps.append(tp)
+            else:
+                if click_days <= 0 or ts >= (last_ts - timedelta(days=float(click_days))):
+                    kept_tps.append(tp)
+        if interaction_mode == "click_only":
+            kept_tps = [tp for tp in kept_tps if _tp_interaction_type(tp) in {"click", "visit", "direct"}]
+        elif interaction_mode == "click_preferred":
+            kept_tps = _dedupe_click_preferred_touchpoints(kept_tps)
         if not kept_tps:
             # If all touchpoints fall out of window, drop journey from attribution set
             continue
         new_j = dict(j)
         new_j["touchpoints"] = kept_tps
+        path_kind = classify_journey_interaction(new_j)
+        new_j.setdefault("meta", {})["interaction_summary"] = {
+            "path_type": path_kind,
+            "impression_touchpoints": sum(1 for tp in kept_tps if _tp_interaction_type(tp) == "impression"),
+            "click_touchpoints": sum(1 for tp in kept_tps if _tp_interaction_type(tp) in {"click", "visit", "direct"}),
+        }
+        if path_kind == "view_through" and not include_view_only:
+            continue
         out.append(new_j)
 
     return out
@@ -253,6 +325,7 @@ def v2_to_legacy(j: Dict[str, Any]) -> Dict[str, Any]:
         ts = tp.get("ts") or tp.get("timestamp")
         if ts:
             lt["timestamp"] = ts
+        lt["interaction_type"] = _tp_interaction_type(tp)
         source = tp.get("source")
         medium = tp.get("medium")
         if source:
@@ -278,7 +351,11 @@ def v2_to_legacy(j: Dict[str, Any]) -> Dict[str, Any]:
                 lt["utm_medium"] = utm.get("medium")
             if utm.get("campaign"):
                 lt["utm_campaign"] = utm.get("campaign")
+        for field in ("impression_id", "click_id", "placement_id", "creative_id", "ad_id", "campaign_id"):
+            if tp.get(field) not in (None, "", []):
+                lt[field] = tp.get(field)
         tps.append(lt)
+    outcome = journey_outcome_summary(j)
     return {
         "customer_id": cust.get("id", "unknown"),
         "touchpoints": tps,
@@ -292,6 +369,8 @@ def v2_to_legacy(j: Dict[str, Any]) -> Dict[str, Any]:
             if isinstance(j.get("meta"), dict)
             else None
         ),
+        "conversion_outcome": outcome,
+        "interaction_path_type": classify_journey_interaction({"touchpoints": tps}),
     }
 
 
@@ -326,5 +405,6 @@ def load_journeys_from_db(
             )
             legacy["conversion_value"] = float(revenue_value)
             legacy["_revenue_entries"] = entries
+            legacy["conversion_outcome"] = journey_outcome_summary(legacy)
             journeys.append(legacy)
     return journeys

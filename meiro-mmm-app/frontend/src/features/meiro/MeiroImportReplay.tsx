@@ -9,6 +9,7 @@ interface MeiroImportReplayProps {
   meiroPullDraft: MeiroPullConfig
   meiroMappingState?: MeiroMappingState
   meiroWebhookArchiveStatus?: MeiroWebhookArchiveStatus
+  meiroEventArchiveStatus?: MeiroWebhookArchiveStatus
   meiroDryRunPending: boolean
   meiroDryRunData?: DryRunResult
   importFromMeiroPending: boolean
@@ -36,6 +37,7 @@ export default function MeiroImportReplay({
   meiroPullDraft,
   meiroMappingState,
   meiroWebhookArchiveStatus,
+  meiroEventArchiveStatus,
   meiroDryRunPending,
   meiroDryRunData,
   importFromMeiroPending,
@@ -65,12 +67,15 @@ export default function MeiroImportReplay({
     meiroDryRunData?.import_summary
   const cleaningReport = latestImportSummary?.cleaning_report || meiroDryRunData?.cleaning_report
   const replayMode = meiroPullDraft.replay_mode || DEFAULT_MEIRO_PULL_CONFIG.replay_mode
+  const replaySource = meiroPullDraft.replay_archive_source || DEFAULT_MEIRO_PULL_CONFIG.replay_archive_source
   const replayScopeLabel =
     replayMode === 'all'
       ? 'Entire archive'
       : replayMode === 'date_range'
         ? `Date range${meiroPullDraft.replay_date_from ? ` from ${meiroPullDraft.replay_date_from}` : ''}${meiroPullDraft.replay_date_to ? ` to ${meiroPullDraft.replay_date_to}` : ''}`
         : `Last ${Number(meiroPullDraft.replay_archive_limit || DEFAULT_MEIRO_PULL_CONFIG.replay_archive_limit || 5000).toLocaleString()} archived batches`
+  const replaySourceLabel =
+    replaySource === 'events' ? 'Raw events archive' : replaySource === 'profiles' ? 'Profiles archive' : 'Auto (freshest archive)'
   const indexedRecords = (selectedQuarantineRun?.records || []).map((record, index) => ({ record, index }))
   const recordsForDisplay = indexedRecords.filter(({ record }) => {
     if (showResolvedRecords) return true
@@ -152,16 +157,22 @@ export default function MeiroImportReplay({
 
       <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.bg, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
         <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Replay archived Pipes payloads</div>
-        {meiroWebhookArchiveStatus?.available ? (
+        {(meiroWebhookArchiveStatus?.available || meiroEventArchiveStatus?.available) ? (
           <>
             <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-              Received payloads: <strong>{Number(meiroConfig?.webhook_received_count || 0).toLocaleString()}</strong> · archived batches: <strong>{Number(meiroWebhookArchiveStatus.entries || 0).toLocaleString()}</strong> · archived payloads: <strong>{Number(meiroWebhookArchiveStatus.profiles_received || 0).toLocaleString()}</strong>
+              Profile payloads received: <strong>{Number(meiroConfig?.webhook_received_count || 0).toLocaleString()}</strong> · profile archive: <strong>{Number(meiroWebhookArchiveStatus?.entries || 0).toLocaleString()}</strong> batches / <strong>{Number(meiroWebhookArchiveStatus?.profiles_received || 0).toLocaleString()}</strong> payloads
             </div>
             <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-              Replay scope: <strong>{replayScopeLabel}</strong> · last received {relativeTime(meiroWebhookArchiveStatus.last_received_at)}
+              Raw events received: <strong>{Number(meiroConfig?.event_webhook_received_count || 0).toLocaleString()}</strong> · event archive: <strong>{Number(meiroEventArchiveStatus?.entries || 0).toLocaleString()}</strong> batches / <strong>{Number(meiroEventArchiveStatus?.events_received || 0).toLocaleString()}</strong> events
             </div>
             <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-              Parser versions: <strong>{(meiroWebhookArchiveStatus.parser_versions || []).join(', ') || '—'}</strong>
+              Replay source: <strong>{replaySourceLabel}</strong> · replay scope: <strong>{replayScopeLabel}</strong>
+            </div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Latest profile archive: <strong>{relativeTime(meiroWebhookArchiveStatus?.last_received_at)}</strong> · latest event archive: <strong>{relativeTime(meiroEventArchiveStatus?.last_received_at)}</strong>
+            </div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Parser versions: <strong>{Array.from(new Set([...(meiroWebhookArchiveStatus?.parser_versions || []), ...(meiroEventArchiveStatus?.parser_versions || [])])).join(', ') || '—'}</strong>
             </div>
             <button type="button" onClick={onReplayArchive} disabled={reprocessWebhookArchivePending || meiroMappingState?.approval?.status !== 'approved'} style={{ justifySelf: 'flex-start', border: `1px solid ${t.color.accent}`, background: '#fff', color: t.color.accent, borderRadius: t.radius.sm, padding: '8px 10px', cursor: 'pointer', opacity: reprocessWebhookArchivePending || meiroMappingState?.approval?.status !== 'approved' ? 0.7 : 1 }}>
               {reprocessWebhookArchivePending ? 'Reprocessing…' : 'Replay archive into attribution'}
@@ -171,7 +182,7 @@ export default function MeiroImportReplay({
             ) : null}
           </>
         ) : (
-          <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>No archived Pipes payloads available yet.</div>
+          <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>No archived Pipes profiles or raw events available yet.</div>
         )}
       </div>
 

@@ -115,6 +115,10 @@ interface CampaignSummaryItem {
     }
   }
   confidence?: Confidence | null
+  outcomes?: {
+    current?: Record<string, number>
+    previous?: Record<string, number> | null
+  }
 }
 
 interface CampaignSummaryResponse {
@@ -124,6 +128,8 @@ interface CampaignSummaryResponse {
   totals?: {
     current: { spend: number; visits: number; conversions: number; revenue: number }
     previous?: { spend: number; visits: number; conversions: number; revenue: number } | null
+    outcomes_current?: Record<string, number>
+    outcomes_previous?: Record<string, number> | null
   }
   config?: {
     config_id?: string
@@ -620,6 +626,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
   }
 
   const summaryCurrent = summaryQuery.data?.totals?.current ?? { spend: 0, visits: 0, revenue: 0, conversions: 0 }
+  const summaryOutcomesCurrent = summaryQuery.data?.totals?.outcomes_current ?? {}
   const totalSpend = summaryCurrent.spend
   const totalVisits = summaryCurrent.visits
   const totalValue = summaryCurrent.revenue
@@ -640,6 +647,8 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
     { label: 'Revenue / Visit', value: formatCurrency(totalRevenuePerVisit), def: METRIC_DEFINITIONS['Revenue / Visit'] },
     { label: 'ROAS', value: `${totalROAS.toFixed(2)}×`, def: '' },
     { label: 'Avg CPA', value: formatCurrency(avgCPA), def: '' },
+    { label: 'Net Revenue', value: formatCurrency(Number(summaryOutcomesCurrent.net_revenue || 0)), def: 'Revenue after refunds, cancellations, and invalidation.' },
+    { label: 'Net Conversions', value: Number(summaryOutcomesCurrent.net_conversions || 0).toLocaleString(), def: 'Conversions remaining valid after post-conversion adjustments.' },
   ]
   const coverage = summaryQuery.data?.mapping_coverage
   const roleRows = [...sortedCampaigns]
@@ -657,6 +666,22 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
 
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto' }}>
+      {!!summaryQuery.data?.notes?.length && (
+        <div style={{ marginBottom: t.space.md, display: 'grid', gap: t.space.xs }}>
+          {summaryQuery.data.notes.map((note, idx) => (
+            <div key={`${note}-${idx}`} style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary, padding: `${t.space.sm}px ${t.space.md}px`, border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, background: t.color.surface }}>
+              {note}
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ marginBottom: t.space.md, display: 'flex', gap: t.space.md, flexWrap: 'wrap', fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+        <span>Click-through: {Number(summaryOutcomesCurrent.click_through_conversions || 0).toLocaleString()}</span>
+        <span>View-through: {Number(summaryOutcomesCurrent.view_through_conversions || 0).toLocaleString()}</span>
+        <span>Mixed paths: {Number(summaryOutcomesCurrent.mixed_path_conversions || 0).toLocaleString()}</span>
+        <span>Refunded value: {formatCurrency(Number(summaryOutcomesCurrent.refunded_value || 0))}</span>
+        <span>Invalid leads: {Number(summaryOutcomesCurrent.invalid_leads || 0).toLocaleString()}</span>
+      </div>
       {/* Page title + measurement context bar */}
       <div
         style={{

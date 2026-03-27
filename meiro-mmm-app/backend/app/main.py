@@ -109,7 +109,13 @@ from app.services_conversions import (
     load_journeys_from_db,
     persist_journeys_as_conversion_paths,
 )
-from app.services_journey_ingestion import MEIRO_PARSER_VERSION, canonicalize_meiro_profiles, validate_and_normalize, detect_schema
+from app.services_journey_ingestion import (
+    MEIRO_PARSER_VERSION,
+    canonicalize_meiro_profiles,
+    detect_schema,
+    rebuild_profiles_from_meiro_events,
+    validate_and_normalize,
+)
 from app.services_import_runs import (
     create_run as create_import_run,
     get_runs as get_import_runs,
@@ -2589,6 +2595,7 @@ app.include_router(
         from_cdp_request_factory=FromCDPRequest,
         attribution_mapping_config_cls=AttributionMappingConfig,
         canonicalize_meiro_profiles_fn=canonicalize_meiro_profiles,
+        rebuild_profiles_from_meiro_events_fn=rebuild_profiles_from_meiro_events,
         persist_journeys_fn=persist_journeys_as_conversion_paths,
         refresh_journey_aggregates_fn=_refresh_journey_aggregates_after_import,
         append_import_run_fn=_append_import_run,
@@ -3010,16 +3017,16 @@ def explainability_summary(
         else:
             try:
                 if scope == "channel":
-                    curr_res = run_attribution(curr_j, model=model) if curr_j else {"total_value": 0, "channels": []}
-                    prev_res = run_attribution(prev_j, model=model) if prev_j else {"total_value": 0, "channels": []}
+                    curr_res = run_attribution(curr_j, model=model, value_mode=str(getattr(SETTINGS.attribution, "conversion_value_mode", "gross_only") or "gross_only")) if curr_j else {"total_value": 0, "channels": []}
+                    prev_res = run_attribution(prev_j, model=model, value_mode=str(getattr(SETTINGS.attribution, "conversion_value_mode", "gross_only") or "gross_only")) if prev_j else {"total_value": 0, "channels": []}
                 else:
                     curr_res = (
-                        run_attribution_campaign(curr_j, model=model)
+                        run_attribution_campaign(curr_j, model=model, value_mode=str(getattr(SETTINGS.attribution, "conversion_value_mode", "gross_only") or "gross_only"))
                         if curr_j
                         else {"total_value": 0, "channels": []}
                     )
                     prev_res = (
-                        run_attribution_campaign(prev_j, model=model)
+                        run_attribution_campaign(prev_j, model=model, value_mode=str(getattr(SETTINGS.attribution, "conversion_value_mode", "gross_only") or "gross_only"))
                         if prev_j
                         else {"total_value": 0, "channels": []}
                     )

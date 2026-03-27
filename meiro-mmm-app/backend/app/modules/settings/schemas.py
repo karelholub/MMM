@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 class AttributionSettings(BaseModel):
     lookback_window_days: int = 30
     use_converted_flag: bool = True
+    conversion_value_mode: str = "gross_only"
     min_journey_quality_score: int = Field(default=0, ge=0, le=100)
     min_conversion_value: float = 0.0
     time_decay_half_life_days: float = 7.0

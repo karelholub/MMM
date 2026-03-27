@@ -1,4 +1,4 @@
-from app.services_conversions import filter_journeys_by_quality, v2_to_legacy
+from app.services_conversions import classify_journey_interaction, filter_journeys_by_quality, filter_journeys_by_windows, v2_to_legacy
 
 
 def test_filter_journeys_by_quality_uses_ingest_quality_score():
@@ -42,3 +42,66 @@ def test_v2_to_legacy_preserves_quality_metadata():
     assert legacy["touchpoints"][0]["utm_medium"] == "cpc"
     assert legacy["touchpoints"][0]["utm_campaign"] == "brand"
     assert legacy["touchpoints"][0]["utm"] == {"source": "google", "medium": "cpc", "campaign": "brand"}
+
+
+def test_v2_to_legacy_preserves_interaction_type_and_outcome_summary():
+    journey = {
+        "_schema": "v2",
+        "customer": {"id": "cust-1"},
+        "touchpoints": [
+            {"channel": "google_ads", "ts": "2026-03-01T00:00:00Z", "interaction_type": "impression"},
+            {"channel": "google_ads", "ts": "2026-03-02T00:00:00Z", "interaction_type": "click"},
+        ],
+        "conversions": [
+            {
+                "id": "ord-1",
+                "name": "purchase",
+                "value": 120.0,
+                "status": "partially_refunded",
+                "adjustments": [{"id": "adj-1", "type": "refund", "value": 20.0, "currency": "EUR"}],
+            }
+        ],
+    }
+
+    legacy = v2_to_legacy(journey)
+
+    assert legacy["touchpoints"][0]["interaction_type"] == "impression"
+    assert legacy["touchpoints"][1]["interaction_type"] == "click"
+    assert legacy["interaction_path_type"] == "mixed_path"
+    assert legacy["conversion_outcome"]["gross_conversions"] == 1.0
+
+
+def test_filter_journeys_by_windows_supports_click_only_and_view_through_modes():
+    journeys = [
+        {
+            "customer_id": "view-only",
+            "touchpoints": [
+                {"channel": "meta_ads", "timestamp": "2026-03-01T00:00:00Z", "interaction_type": "impression"},
+            ],
+            "converted": True,
+            "conversion_value": 10.0,
+        },
+        {
+            "customer_id": "mixed",
+            "touchpoints": [
+                {"channel": "google_ads", "timestamp": "2026-03-01T00:00:00Z", "interaction_type": "impression", "campaign": "Brand"},
+                {"channel": "google_ads", "timestamp": "2026-03-02T00:00:00Z", "interaction_type": "click", "campaign": "Brand"},
+            ],
+            "converted": True,
+            "conversion_value": 10.0,
+        },
+    ]
+
+    click_only = filter_journeys_by_windows(
+        journeys,
+        {"windows": {"click_lookback_days": 30, "impression_lookback_days": 7}, "attribution": {"interaction_mode": "click_only"}},
+    )
+    assert [journey["customer_id"] for journey in click_only] == ["mixed"]
+    assert all(tp["interaction_type"] == "click" for tp in click_only[0]["touchpoints"])
+
+    click_preferred = filter_journeys_by_windows(
+        journeys,
+        {"windows": {"click_lookback_days": 30, "impression_lookback_days": 7}, "attribution": {"interaction_mode": "click_preferred", "include_impression_only_paths": True}},
+    )
+    assert classify_journey_interaction(click_preferred[0]) == "view_through"
+    assert classify_journey_interaction(click_preferred[1]) == "click_through"

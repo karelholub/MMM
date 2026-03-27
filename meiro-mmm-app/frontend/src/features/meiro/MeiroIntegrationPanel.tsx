@@ -35,6 +35,7 @@ interface MeiroIntegrationPanelProps {
   meiroWebhookEvents?: { items: MeiroWebhookEvent[]; total: number }
   meiroWebhookDiagnostics?: MeiroWebhookDiagnostics
   meiroWebhookArchiveStatus?: MeiroWebhookArchiveStatus
+  meiroEventArchiveStatus?: MeiroWebhookArchiveStatus
   meiroWebhookEventsLoading: boolean
   meiroWebhookEventsError?: string | null
   meiroWebhookDiagnosticsError?: string | null
@@ -171,6 +172,7 @@ export default function MeiroIntegrationPanel(props: MeiroIntegrationPanelProps)
           meiroWebhookEvents={props.meiroWebhookEvents}
           meiroWebhookDiagnostics={props.meiroWebhookDiagnostics}
           meiroWebhookArchiveStatus={props.meiroWebhookArchiveStatus}
+          meiroEventArchiveStatus={props.meiroEventArchiveStatus}
           meiroWebhookEventsLoading={props.meiroWebhookEventsLoading}
           meiroWebhookEventsError={props.meiroWebhookEventsError}
           meiroWebhookDiagnosticsError={props.meiroWebhookDiagnosticsError}
@@ -202,6 +204,7 @@ export default function MeiroIntegrationPanel(props: MeiroIntegrationPanelProps)
           meiroPullDraft={props.meiroPullDraft}
           meiroMappingState={props.meiroMappingState}
           meiroWebhookArchiveStatus={props.meiroWebhookArchiveStatus}
+          meiroEventArchiveStatus={props.meiroEventArchiveStatus}
           meiroDryRunPending={props.meiroDryRunPending}
           meiroDryRunData={props.meiroDryRunData}
           importFromMeiroPending={props.importFromMeiroPending}

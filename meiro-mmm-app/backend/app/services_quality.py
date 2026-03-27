@@ -245,7 +245,7 @@ def load_config_and_meta(
         "session_timeout_minutes": windows.get("session_timeout_minutes"),
         "conversion_latency_days": windows.get("conversion_latency_days"),
     }
-    elig = attribution.get("eligible_touchpoints", {}) or {}
+    elig = cfg_json.get("eligible_touchpoints", {}) or attribution.get("eligible_touchpoints", {}) or {}
     eligible_touchpoints = {
         "include_channels": elig.get("include_channels"),
         "exclude_channels": elig.get("exclude_channels"),
@@ -258,6 +258,8 @@ def load_config_and_meta(
         "conversion_key": conversion_key,
         "time_window": time_window,
         "eligible_touchpoints": eligible_touchpoints,
+        "interaction_mode": attribution.get("interaction_mode"),
+        "include_impression_only_paths": attribution.get("include_impression_only_paths"),
     }
     return cfg, meta
 

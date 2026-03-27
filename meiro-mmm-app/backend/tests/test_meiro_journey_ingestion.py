@@ -1,4 +1,4 @@
-from app.services_journey_ingestion import canonicalize_meiro_profiles
+from app.services_journey_ingestion import canonicalize_meiro_profiles, rebuild_profiles_from_meiro_events
 from app.services_metrics import journey_revenue_value
 
 
@@ -285,3 +285,134 @@ def test_canonicalize_meiro_profiles_attaches_quality_score():
     quality = journey["meta"]["quality"]
     assert isinstance(quality["score"], int)
     assert quality["band"] in {"high", "medium", "low"}
+
+
+def test_canonicalize_meiro_profiles_preserves_interaction_type_and_adjustments():
+    result = canonicalize_meiro_profiles(
+        [
+            {
+                "customer_id": "cust-1",
+                "touchpoints": [
+                    {
+                        "timestamp": "2026-03-02T08:00:00Z",
+                        "source": "google",
+                        "medium": "display",
+                        "campaign": "Prospecting",
+                        "event_type": "ad_impression",
+                        "impression_id": "imp-1",
+                    },
+                    {
+                        "timestamp": "2026-03-02T08:10:00Z",
+                        "source": "google",
+                        "medium": "cpc",
+                        "campaign": "Prospecting",
+                        "event_type": "ad_click",
+                        "click_id": "clk-1",
+                    },
+                ],
+                "conversions": [
+                    {
+                        "conversion_id": "ord-1",
+                        "timestamp": "2026-03-02T09:00:00Z",
+                        "name": "purchase",
+                        "value": 100,
+                        "currency": "EUR",
+                        "order_id": "ord-1",
+                    },
+                    {
+                        "event_id": "adj-1",
+                        "timestamp": "2026-03-03T09:00:00Z",
+                        "event_name": "refund",
+                        "value": 25,
+                        "currency": "EUR",
+                        "order_id": "ord-1",
+                    },
+                ],
+            }
+        ],
+        revenue_config={"conversion_names": ["purchase"]},
+        dedup_config={
+            "touchpoint_interaction_aliases": {"ad_impression": "impression", "ad_click": "click"},
+            "adjustment_event_aliases": {"refund": "refund"},
+            "adjustment_linkage_keys": ["order_id", "conversion_id"],
+        },
+    )
+
+    journey = result["valid_journeys"][0]
+    assert journey["touchpoints"][0]["interaction_type"] == "impression"
+    assert journey["touchpoints"][1]["interaction_type"] == "click"
+    assert journey["touchpoints"][0]["impression_id"] == "imp-1"
+    assert journey["touchpoints"][1]["click_id"] == "clk-1"
+    assert journey["conversions"][0]["status"] == "partially_refunded"
+    assert journey["conversions"][0]["adjustments"][0]["type"] == "refund"
+    assert journey_revenue_value(journey, value_mode="gross_only") == 100.0
+    assert journey_revenue_value(journey, value_mode="net_only") == 75.0
+
+
+def test_rebuild_profiles_from_meiro_events_groups_touchpoints_and_adjustments():
+    profiles = rebuild_profiles_from_meiro_events(
+        [
+            {
+                "event_payload": {
+                    "event_id": "evt-1",
+                    "customer_id": "cust-1",
+                    "timestamp": "2026-03-02T08:00:00Z",
+                    "event_type": "ad_click",
+                    "source": "google",
+                    "medium": "cpc",
+                    "campaign": "Prospecting",
+                    "click_id": "clk-1",
+                }
+            },
+            {
+                "event_payload": {
+                    "event_id": "evt-2",
+                    "customer_id": "cust-1",
+                    "timestamp": "2026-03-02T09:00:00Z",
+                    "event_name": "purchase",
+                    "order_id": "ord-1",
+                    "value": 100,
+                    "currency": "EUR",
+                }
+            },
+            {
+                "event_payload": {
+                    "event_id": "evt-3",
+                    "customer_id": "cust-1",
+                    "timestamp": "2026-03-03T09:00:00Z",
+                    "event_name": "refund",
+                    "order_id": "ord-1",
+                    "value": 25,
+                    "currency": "EUR",
+                }
+            },
+        ],
+        dedup_config={
+            "touchpoint_interaction_aliases": {"ad_click": "click"},
+            "adjustment_event_aliases": {"refund": "refund"},
+            "conversion_event_aliases": {"purchase": "purchase"},
+        },
+    )
+
+    assert len(profiles) == 1
+    profile = profiles[0]
+    assert profile["customer_id"] == "cust-1"
+    assert len(profile["touchpoints"]) == 1
+    assert profile["touchpoints"][0]["interaction_type"] == "click"
+    assert len(profile["conversions"]) == 2
+    assert profile["converted"] is True
+    assert profile["conversion_value"] == 100.0
+
+    result = canonicalize_meiro_profiles(
+        profiles,
+        revenue_config={"conversion_names": ["purchase"]},
+        dedup_config={
+            "touchpoint_interaction_aliases": {"ad_click": "click"},
+            "adjustment_event_aliases": {"refund": "refund"},
+            "adjustment_linkage_keys": ["order_id", "conversion_id"],
+            "conversion_event_aliases": {"purchase": "purchase"},
+        },
+    )
+    journey = result["valid_journeys"][0]
+    assert journey["conversions"][0]["status"] == "partially_refunded"
+    assert journey["conversions"][0]["adjustments"][0]["type"] == "refund"

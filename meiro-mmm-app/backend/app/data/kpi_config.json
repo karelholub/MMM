@@ -1,23 +1,4 @@
 {
-  "definitions": [
-    {
-      "id": "form_submit",
-      "label": "Form Submit",
-      "type": "primary",
-      "event_name": "form_submit",
-      "value_field": "value",
-      "weight": 1.0,
-      "lookback_days": 30
-    },
-    {
-      "id": "order_finalized",
-      "label": "Order Finalized",
-      "type": "micro",
-      "event_name": "order_finalized",
-      "value_field": null,
-      "weight": 0.5,
-      "lookback_days": 14
-    }
-  ],
-  "primary_kpi_id": "form_submit"
+  "definitions": [],
+  "primary_kpi_id": null
 }

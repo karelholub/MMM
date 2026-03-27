@@ -379,6 +379,14 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
       }),
     enabled: meiroDrawerOpen,
   })
+  const meiroEventArchiveStatusQuery = useQuery<MeiroWebhookArchiveStatus>({
+    queryKey: ['meiro-event-archive-status-datasources'],
+    queryFn: async () =>
+      apiGetJson<MeiroWebhookArchiveStatus>('/api/connectors/meiro/events/archive-status', {
+        fallbackMessage: 'Failed to load event archive status',
+      }),
+    enabled: meiroDrawerOpen,
+  })
 
   const uploadMutation = useMutation({
     mutationFn: async (file: File) => {
@@ -476,6 +484,7 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
     }
     return {
       replay_mode: replayMode,
+      archive_source: meiroPullDraft.replay_archive_source || 'auto',
       archive_limit: replayMode === 'last_n' ? (meiroPullDraft.replay_archive_limit || 5000) : undefined,
       date_from: replayMode === 'date_range' ? toIso(meiroPullDraft.replay_date_from) : undefined,
       date_to: replayMode === 'date_range' ? toIso(meiroPullDraft.replay_date_to) : undefined,
@@ -492,6 +501,7 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
       onJourneysImported()
       await queryClient.invalidateQueries({ queryKey: ['meiro-webhook-events'] })
       await queryClient.invalidateQueries({ queryKey: ['meiro-webhook-archive-status-datasources'] })
+      await queryClient.invalidateQueries({ queryKey: ['meiro-event-archive-status-datasources'] })
       await queryClient.invalidateQueries({ queryKey: ['journeys-summary'] })
       await queryClient.invalidateQueries({ queryKey: ['journeys-validation-summary'] })
       await queryClient.invalidateQueries({ queryKey: ['journeys-preview-20'] })
@@ -1811,6 +1821,7 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
                   meiroWebhookSuggestions={meiroWebhookSuggestionsQuery.data}
                   meiroWebhookEvents={meiroWebhookEventsQuery.data}
                   meiroWebhookArchiveStatus={meiroWebhookArchiveStatusQuery.data}
+                  meiroEventArchiveStatus={meiroEventArchiveStatusQuery.data}
                   meiroWebhookEventsLoading={meiroWebhookEventsQuery.isLoading}
                   meiroWebhookEventsError={(meiroWebhookEventsQuery.error as Error | undefined)?.message || null}
                   meiroWebhookSuggestionsLoading={meiroWebhookSuggestionsQuery.isLoading}

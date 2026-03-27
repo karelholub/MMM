@@ -19,8 +19,11 @@ from app.modules.meiro_integration.schemas import (
     MeiroWebhookReprocessRequest,
 )
 from app.utils.meiro_config import (
+    append_event_archive_entry,
     append_webhook_archive_entry,
     append_webhook_event,
+    get_event_archive_entries,
+    get_event_archive_status,
     get_last_test_at,
     get_mapping,
     get_mapping_state,
@@ -32,6 +35,7 @@ from app.utils.meiro_config import (
     get_webhook_last_received_at,
     get_webhook_received_count,
     get_webhook_secret,
+    query_event_archive_entries,
     rebuild_profiles_from_webhook_archive,
     rotate_webhook_secret,
     save_mapping,
@@ -118,6 +122,24 @@ def _extract_payload_hints(payload_profiles: list[Any]) -> tuple[list[str], list
             if isinstance(channel, str) and channel.strip():
                 channels.add(channel.strip())
     return sorted(conversion_names)[:20], sorted(channels)[:20]
+
+
+def _extract_event_payload_hints(payload_events: list[Any]) -> tuple[list[str], list[str]]:
+    event_names: set[str] = set()
+    channels: set[str] = set()
+    for item in payload_events[:200]:
+        event = item
+        if isinstance(item, dict) and isinstance(item.get("event_payload"), dict):
+            event = item.get("event_payload")
+        if not isinstance(event, dict):
+            continue
+        event_name = event.get("event_name") or event.get("event_type") or event.get("name") or event.get("type")
+        if isinstance(event_name, str) and event_name.strip():
+            event_names.add(event_name.strip())
+        channel = event.get("channel") or event.get("source") or event.get("utm_source")
+        if isinstance(channel, str) and channel.strip():
+            channels.add(channel.strip())
+    return sorted(event_names)[:20], sorted(channels)[:20]
 
 
 def _analyze_payload(payload_profiles: list[Any]) -> Dict[str, Any]:
@@ -250,6 +272,8 @@ def _analyze_payload(payload_profiles: list[Any]) -> Dict[str, Any]:
 def _record_webhook_diagnostic_event(
     *,
     request: Request,
+    parser_version: Optional[str] = None,
+    ingest_kind: Optional[str] = None,
     payload_shape: str,
     status_code: int,
     outcome: str,
@@ -265,7 +289,8 @@ def _record_webhook_diagnostic_event(
             "received_count": int(received_count),
             "stored_total": int(stored_total or 0),
             "replace": False,
-            "parser_version": meiro_parser_version,
+            "parser_version": parser_version,
+            "ingest_kind": ingest_kind,
             "ip": request.client.host if request.client else None,
             "user_agent": (request.headers.get("user-agent") or "")[:256] or None,
             "payload_shape": payload_shape,
@@ -277,6 +302,29 @@ def _record_webhook_diagnostic_event(
         },
         max_items=250,
     )
+
+
+def _prefer_event_archive(
+    requested_source: str,
+    profile_archive_status: Dict[str, Any],
+    event_archive_status: Dict[str, Any],
+) -> bool:
+    source = str(requested_source or "auto").strip().lower()
+    if source == "events":
+        return True
+    if source == "profiles":
+        return False
+    profile_last = str(profile_archive_status.get("last_received_at") or "")
+    event_last = str(event_archive_status.get("last_received_at") or "")
+    profile_available = bool(profile_archive_status.get("available"))
+    event_available = bool(event_archive_status.get("available"))
+    if event_available and not profile_available:
+        return True
+    if profile_available and not event_available:
+        return False
+    if event_available and profile_available:
+        return event_last >= profile_last
+    return False
 
 
 def create_router(
@@ -291,6 +339,7 @@ def create_router(
     from_cdp_request_factory: Callable[..., Any],
     attribution_mapping_config_cls: Any,
     canonicalize_meiro_profiles_fn: Callable[..., Dict[str, Any]],
+    rebuild_profiles_from_meiro_events_fn: Callable[..., List[Dict[str, Any]]],
     persist_journeys_fn: Callable[..., None],
     refresh_journey_aggregates_fn: Callable[..., None],
     append_import_run_fn: Callable[..., None],
@@ -346,14 +395,19 @@ def create_router(
     def meiro_config():
         meta = meiro_cdp.get_connection_metadata()
         webhook_url = f"{get_base_url_fn()}/api/connectors/meiro/profiles"
+        event_webhook_url = f"{get_base_url_fn()}/api/connectors/meiro/events"
+        event_archive_status = get_event_archive_status()
         return {
             "connected": meiro_cdp.is_connected(),
             "api_base_url": meta["api_base_url"] if meta else None,
             "last_test_at": meta["last_test_at"] if meta else get_last_test_at(),
             "has_key": meta["has_key"] if meta else False,
             "webhook_url": webhook_url,
+            "event_webhook_url": event_webhook_url,
             "webhook_last_received_at": get_webhook_last_received_at(),
             "webhook_received_count": get_webhook_received_count(),
+            "event_webhook_last_received_at": event_archive_status.get("last_received_at"),
+            "event_webhook_received_count": event_archive_status.get("events_received", 0),
             "webhook_has_secret": bool(get_webhook_secret() or os.getenv("MEIRO_WEBHOOK_SECRET", "").strip()),
         }
 
@@ -448,6 +502,18 @@ def create_router(
             "last_received_at": get_webhook_last_received_at(),
         }
 
+    @router.get("/api/connectors/meiro/events/health")
+    @router.head("/api/connectors/meiro/events/health")
+    def meiro_events_webhook_explicit_health():
+        event_archive_status = get_event_archive_status()
+        return {
+            "ok": True,
+            "service": "meiro_events_webhook",
+            "message": "Explicit raw event webhook health check.",
+            "received_count": event_archive_status.get("events_received", 0),
+            "last_received_at": event_archive_status.get("last_received_at"),
+        }
+
     @router.post("/api/connectors/meiro/profiles")
     async def meiro_receive_profiles(
         request: Request,
@@ -459,6 +525,8 @@ def create_router(
                 if webhook_secret and (not x_meiro_webhook_secret or x_meiro_webhook_secret != webhook_secret):
                     _record_webhook_diagnostic_event(
                         request=request,
+                        parser_version=meiro_parser_version,
+                        ingest_kind="profiles",
                         payload_shape="unknown",
                         status_code=401,
                         outcome="error",
@@ -473,6 +541,8 @@ def create_router(
             except Exception as exc:
                 _record_webhook_diagnostic_event(
                     request=request,
+                    parser_version=meiro_parser_version,
+                    ingest_kind="profiles",
                     payload_shape="invalid_json",
                     status_code=400,
                     outcome="error",
@@ -508,6 +578,8 @@ def create_router(
             else:
                 _record_webhook_diagnostic_event(
                     request=request,
+                    parser_version=meiro_parser_version,
+                    ingest_kind="profiles",
                     payload_shape="unknown",
                     status_code=400,
                     outcome="error",
@@ -550,6 +622,7 @@ def create_router(
                     "stored_total": int(len(to_store)),
                     "replace": bool(replace),
                     "parser_version": meiro_parser_version,
+                    "ingest_kind": "profiles",
                     "ip": request.client.host if request.client else None,
                     "user_agent": (request.headers.get("user-agent") or "")[:256] or None,
                     "payload_shape": "array" if isinstance(body, list) else "object",
@@ -581,6 +654,8 @@ def create_router(
             logger.exception("Unhandled Meiro webhook failure")
             _record_webhook_diagnostic_event(
                 request=request,
+                parser_version=meiro_parser_version,
+                ingest_kind="profiles",
                 payload_shape="unknown",
                 status_code=503,
                 outcome="error",
@@ -593,6 +668,154 @@ def create_router(
                     "ok": False,
                     "error_code": "webhook_upstream_unavailable",
                     "detail": "Webhook processing failed before a complete response could be returned.",
+                    "reason": str(exc),
+                },
+            )
+
+    @router.post("/api/connectors/meiro/events")
+    async def meiro_receive_events(
+        request: Request,
+        x_meiro_webhook_secret: Optional[str] = Header(None, alias="X-Meiro-Webhook-Secret"),
+    ):
+        try:
+            try:
+                webhook_secret = get_webhook_secret() or os.getenv("MEIRO_WEBHOOK_SECRET", "").strip()
+                if webhook_secret and (not x_meiro_webhook_secret or x_meiro_webhook_secret != webhook_secret):
+                    _record_webhook_diagnostic_event(
+                        request=request,
+                        parser_version=meiro_parser_version,
+                        ingest_kind="events",
+                        payload_shape="unknown",
+                        status_code=401,
+                        outcome="error",
+                        error_class="auth",
+                        error_detail="Invalid or missing X-Meiro-Webhook-Secret",
+                    )
+                    raise HTTPException(status_code=401, detail="Invalid or missing X-Meiro-Webhook-Secret")
+                body = await request.json()
+            except HTTPException:
+                raise
+            except Exception as exc:
+                _record_webhook_diagnostic_event(
+                    request=request,
+                    parser_version=meiro_parser_version,
+                    ingest_kind="events",
+                    payload_shape="invalid_json",
+                    status_code=400,
+                    outcome="error",
+                    error_class="invalid_json",
+                    error_detail=str(exc),
+                )
+                raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}")
+
+            if isinstance(body, list):
+                events = body
+                replace = False
+            elif isinstance(body, dict):
+                events = body.get("events")
+                if not isinstance(events, list):
+                    data_payload = body.get("data")
+                    if isinstance(data_payload, list):
+                        events = data_payload
+                if not isinstance(events, list) and isinstance(body.get("event_payload"), dict):
+                    events = [body]
+                if not isinstance(events, list):
+                    events = [body]
+                replace = bool(body.get("replace", False))
+            else:
+                _record_webhook_diagnostic_event(
+                    request=request,
+                    parser_version=meiro_parser_version,
+                    ingest_kind="events",
+                    payload_shape="unknown",
+                    status_code=400,
+                    outcome="error",
+                    error_class="invalid_payload_shape",
+                    error_detail="Body must be JSON array or object with 'events' key",
+                )
+                raise HTTPException(status_code=400, detail="Body must be JSON array or object with 'events' key")
+
+            out_path = get_data_dir_obj() / "meiro_cdp_events.json"
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            if replace or not out_path.exists():
+                to_store = events
+            else:
+                try:
+                    existing = json.loads(out_path.read_text())
+                    to_store = (existing if isinstance(existing, list) else []) + list(events)
+                except Exception:
+                    to_store = list(events)
+            out_path.write_text(json.dumps(to_store, indent=2))
+
+            now_iso = datetime.utcnow().isoformat() + "Z"
+            set_webhook_received(count_delta=len(events), last_received_at=now_iso)
+            payload_excerpt, payload_truncated, payload_bytes = _safe_json_excerpt(body)
+            event_names_detected, channels_detected = _extract_event_payload_hints(events)
+            append_event_archive_entry(
+                {
+                    "received_at": now_iso,
+                    "parser_version": meiro_parser_version,
+                    "replace": bool(replace),
+                    "payload_shape": "array" if isinstance(body, list) else "object",
+                    "received_count": int(len(events)),
+                    "events": events,
+                }
+            )
+            rebuilt_profiles = rebuild_profiles_from_meiro_events_fn(events, dedup_config=get_pull_config())
+            append_webhook_event(
+                {
+                    "received_at": now_iso,
+                    "received_count": int(len(events)),
+                    "stored_total": int(len(to_store)),
+                    "replace": bool(replace),
+                    "parser_version": meiro_parser_version,
+                    "ip": request.client.host if request.client else None,
+                    "user_agent": (request.headers.get("user-agent") or "")[:256] or None,
+                    "payload_shape": "array" if isinstance(body, list) else "object",
+                    "payload_excerpt": payload_excerpt,
+                    "payload_truncated": payload_truncated,
+                    "payload_bytes": payload_bytes,
+                    "payload_json_valid": True,
+                    "conversion_event_names": event_names_detected,
+                    "channels_detected": channels_detected,
+                    "status_code": 200,
+                    "outcome": "success",
+                    "error_class": None,
+                    "ingest_kind": "events",
+                    "reconstructed_profiles": len(rebuilt_profiles),
+                },
+                max_items=100,
+            )
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "ok": True,
+                    "received": len(events),
+                    "stored_total": len(to_store),
+                    "reconstructed_profiles": len(rebuilt_profiles),
+                    "message": "Events saved. Use Replay archived webhook payloads or import from the event archive to build journeys.",
+                },
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.exception("Unhandled Meiro event webhook failure")
+            _record_webhook_diagnostic_event(
+                request=request,
+                parser_version=meiro_parser_version,
+                ingest_kind="events",
+                payload_shape="unknown",
+                status_code=503,
+                outcome="error",
+                error_class="app_error",
+                error_detail=str(exc),
+            )
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "ok": False,
+                    "error_code": "webhook_upstream_unavailable",
+                    "detail": "Event webhook processing failed before a complete response could be returned.",
                     "reason": str(exc),
                 },
             )
@@ -653,9 +876,18 @@ def create_router(
     def meiro_webhook_archive_status():
         return get_webhook_archive_status()
 
+    @router.get("/api/connectors/meiro/events/archive-status")
+    def meiro_event_archive_status():
+        return get_event_archive_status()
+
     @router.get("/api/connectors/meiro/webhook/archive")
     def meiro_webhook_archive(limit: int = Query(25, ge=1, le=500)):
         items = get_webhook_archive_entries(limit=limit)
+        return {"items": items, "total": len(items)}
+
+    @router.get("/api/connectors/meiro/events/archive")
+    def meiro_event_archive(limit: int = Query(25, ge=1, le=500)):
+        items = get_event_archive_entries(limit=limit)
         return {"items": items, "total": len(items)}
 
     @router.get("/api/connectors/meiro/quarantine")
@@ -681,19 +913,47 @@ def create_router(
         replay_mode = str(payload.replay_mode or "last_n").strip().lower()
         if replay_mode not in {"all", "last_n", "date_range"}:
             replay_mode = "last_n"
+        archive_source = str(payload.archive_source or "auto").strip().lower()
+        if archive_source not in {"auto", "profiles", "events"}:
+            archive_source = "auto"
         archive_limit = payload.archive_limit or 5000
         date_from = payload.date_from if replay_mode == "date_range" else None
         date_to = payload.date_to if replay_mode == "date_range" else None
 
+        profile_archive_status = get_webhook_archive_status()
+        event_archive_status = get_event_archive_status()
+        use_event_archive = _prefer_event_archive(archive_source, profile_archive_status, event_archive_status)
+
         if replay_mode == "all":
-            archive_entries = query_webhook_archive_entries(limit=None)
-            archived_profiles = rebuild_profiles_from_webhook_archive(limit=None)
+            if use_event_archive:
+                archive_entries = query_event_archive_entries(limit=None)
+                archived_profiles = rebuild_profiles_from_meiro_events_fn(
+                    [event for entry in reversed(archive_entries) for event in (entry.get("events") or [])],
+                    dedup_config=get_pull_config(),
+                )
+            else:
+                archive_entries = query_webhook_archive_entries(limit=None)
+                archived_profiles = rebuild_profiles_from_webhook_archive(limit=None)
         elif replay_mode == "date_range":
-            archive_entries = query_webhook_archive_entries(limit=None, since=date_from, until=date_to)
-            archived_profiles = rebuild_profiles_from_webhook_archive(limit=None, since=date_from, until=date_to)
+            if use_event_archive:
+                archive_entries = query_event_archive_entries(limit=None, since=date_from, until=date_to)
+                archived_profiles = rebuild_profiles_from_meiro_events_fn(
+                    [event for entry in reversed(archive_entries) for event in (entry.get("events") or [])],
+                    dedup_config=get_pull_config(),
+                )
+            else:
+                archive_entries = query_webhook_archive_entries(limit=None, since=date_from, until=date_to)
+                archived_profiles = rebuild_profiles_from_webhook_archive(limit=None, since=date_from, until=date_to)
         else:
-            archive_entries = get_webhook_archive_entries(limit=archive_limit)
-            archived_profiles = rebuild_profiles_from_webhook_archive(limit=archive_limit)
+            if use_event_archive:
+                archive_entries = get_event_archive_entries(limit=archive_limit)
+                archived_profiles = rebuild_profiles_from_meiro_events_fn(
+                    [event for entry in reversed(archive_entries) for event in (entry.get("events") or [])],
+                    dedup_config=get_pull_config(),
+                )
+            else:
+                archive_entries = get_webhook_archive_entries(limit=archive_limit)
+                archived_profiles = rebuild_profiles_from_webhook_archive(limit=archive_limit)
         if not archived_profiles:
             raise HTTPException(status_code=404, detail="No archived webhook payloads found to reprocess.")
         mapping_state = get_mapping_state()
@@ -705,6 +965,7 @@ def create_router(
         result: Dict[str, Any] = {
             "reprocessed_profiles": len(archived_profiles),
             "archive_entries_used": len(archive_entries),
+            "archive_source": "events" if use_event_archive else "profiles",
             "replay_mode": replay_mode,
             "date_from": date_from,
             "date_to": date_to,

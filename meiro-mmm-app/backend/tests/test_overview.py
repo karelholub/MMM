@@ -36,6 +36,7 @@ def test_overview_summary_returns_consistent_shape():
     assert "kpi_tiles" in body
     assert "highlights" in body
     assert "freshness" in body
+    assert "outcomes" in body
     assert isinstance(body["kpi_tiles"], list)
     assert isinstance(body["highlights"], list)
     assert "last_touchpoint_ts" in body["freshness"]
@@ -55,7 +56,7 @@ def test_overview_summary_returns_consistent_shape():
         assert "confidence_score" in tile
         assert "confidence_level" in tile
         assert "confidence_reasons" in tile
-        assert tile["kpi_key"] in ("spend", "visits", "conversions", "revenue")
+        assert tile["kpi_key"] in ("spend", "visits", "conversions", "revenue", "net_conversions", "net_revenue")
 
 
 def test_overview_summary_previous_period_is_equal_length():
@@ -137,6 +138,7 @@ def test_overview_drivers_returns_consistent_shape():
         assert "visits" in ch
         assert "conversions" in ch
         assert "revenue" in ch
+        assert "outcomes" in ch
 
 
 def test_overview_drivers_top_n():
@@ -303,6 +305,8 @@ def test_overview_funnels_ranks_paths_by_conversions_revenue_and_speed():
         )
 
         assert out["summary"]["total_conversions"] == 4
+        assert "net_conversions" in out["summary"]
+        assert "gross_revenue" in out["summary"]
         assert out["tabs"]["conversions"][0]["path"] == "paid_social > direct"
         assert out["tabs"]["conversions"][0]["conversions"] == 2
         assert out["tabs"]["revenue"][0]["path"] == "email > direct"

@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from app.services_metrics import journey_revenue_value
+from app.services_metrics import journey_outcome_summary, journey_revenue_value
 from app.utils.taxonomy import normalize_touchpoint, load_taxonomy
 
 logger = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ ATTRIBUTION_MODELS = [
 # Core attribution functions
 # ---------------------------------------------------------------------------
 
-def last_touch(journeys: List[Dict]) -> Dict[str, float]:
+def last_touch(journeys: List[Dict], *, value_mode: str = "gross_only") -> Dict[str, float]:
     """100% credit to the last touchpoint before conversion."""
     credit: Dict[str, float] = defaultdict(float)
     dedupe_seen: set[str] = set()
@@ -75,11 +75,11 @@ def last_touch(journeys: List[Dict]) -> Dict[str, float]:
             continue
         last_tp = j["touchpoints"][-1]
         channel = last_tp.get("channel", "unknown")
-        credit[channel] += journey_revenue_value(j, dedupe_seen=dedupe_seen)
+        credit[channel] += journey_revenue_value(j, value_mode=value_mode, dedupe_seen=dedupe_seen)
     return dict(credit)
 
 
-def first_touch(journeys: List[Dict]) -> Dict[str, float]:
+def first_touch(journeys: List[Dict], *, value_mode: str = "gross_only") -> Dict[str, float]:
     """100% credit to the first touchpoint."""
     credit: Dict[str, float] = defaultdict(float)
     dedupe_seen: set[str] = set()
@@ -88,11 +88,11 @@ def first_touch(journeys: List[Dict]) -> Dict[str, float]:
             continue
         first_tp = j["touchpoints"][0]
         channel = first_tp.get("channel", "unknown")
-        credit[channel] += journey_revenue_value(j, dedupe_seen=dedupe_seen)
+        credit[channel] += journey_revenue_value(j, value_mode=value_mode, dedupe_seen=dedupe_seen)
     return dict(credit)
 
 
-def linear(journeys: List[Dict]) -> Dict[str, float]:
+def linear(journeys: List[Dict], *, value_mode: str = "gross_only") -> Dict[str, float]:
     """Equal credit distributed across all touchpoints."""
     credit: Dict[str, float] = defaultdict(float)
     dedupe_seen: set[str] = set()
@@ -100,7 +100,7 @@ def linear(journeys: List[Dict]) -> Dict[str, float]:
         if not j.get("converted", True) or not j.get("touchpoints"):
             continue
         tps = j["touchpoints"]
-        value = journey_revenue_value(j, dedupe_seen=dedupe_seen)
+        value = journey_revenue_value(j, value_mode=value_mode, dedupe_seen=dedupe_seen)
         share = value / len(tps) if tps else 0
         for tp in tps:
             channel = tp.get("channel", "unknown")
@@ -108,7 +108,7 @@ def linear(journeys: List[Dict]) -> Dict[str, float]:
     return dict(credit)
 
 
-def time_decay(journeys: List[Dict], half_life_days: float = 7.0) -> Dict[str, float]:
+def time_decay(journeys: List[Dict], half_life_days: float = 7.0, *, value_mode: str = "gross_only") -> Dict[str, float]:
     """More credit to touchpoints closer to conversion. Exponential decay."""
     credit: Dict[str, float] = defaultdict(float)
     dedupe_seen: set[str] = set()
@@ -116,7 +116,7 @@ def time_decay(journeys: List[Dict], half_life_days: float = 7.0) -> Dict[str, f
         if not j.get("converted", True) or not j.get("touchpoints"):
             continue
         tps = j["touchpoints"]
-        value = journey_revenue_value(j, dedupe_seen=dedupe_seen)
+        value = journey_revenue_value(j, value_mode=value_mode, dedupe_seen=dedupe_seen)
 
         # Parse timestamps for decay calculation
         timestamps = []
@@ -154,7 +154,7 @@ def time_decay(journeys: List[Dict], half_life_days: float = 7.0) -> Dict[str, f
     return dict(credit)
 
 
-def position_based(journeys: List[Dict], first_pct: float = 0.4, last_pct: float = 0.4) -> Dict[str, float]:
+def position_based(journeys: List[Dict], first_pct: float = 0.4, last_pct: float = 0.4, *, value_mode: str = "gross_only") -> Dict[str, float]:
     """U-shaped: 40% first, 40% last, 20% split among middle touchpoints."""
     middle_pct = 1.0 - first_pct - last_pct
     credit: Dict[str, float] = defaultdict(float)
@@ -164,7 +164,7 @@ def position_based(journeys: List[Dict], first_pct: float = 0.4, last_pct: float
         if not j.get("converted", True) or not j.get("touchpoints"):
             continue
         tps = j["touchpoints"]
-        value = journey_revenue_value(j, dedupe_seen=dedupe_seen)
+        value = journey_revenue_value(j, value_mode=value_mode, dedupe_seen=dedupe_seen)
         n = len(tps)
 
         if n == 1:
@@ -197,7 +197,7 @@ def position_based(journeys: List[Dict], first_pct: float = 0.4, last_pct: float
         if not j.get("converted", True) or not j.get("touchpoints"):
             continue
         tps = j["touchpoints"]
-        value = journey_revenue_value(j, dedupe_seen=dedupe_seen_second_pass)
+        value = journey_revenue_value(j, value_mode=value_mode, dedupe_seen=dedupe_seen_second_pass)
         n = len(tps)
 
         if n == 1:
@@ -216,7 +216,7 @@ def position_based(journeys: List[Dict], first_pct: float = 0.4, last_pct: float
     return dict(credit_fixed)
 
 
-def markov(journeys: List[Dict]) -> Dict[str, float]:
+def markov(journeys: List[Dict], *, value_mode: str = "gross_only") -> Dict[str, float]:
     """
     Data-driven attribution using first-order Markov chain removal effect.
 
@@ -236,7 +236,7 @@ def markov(journeys: List[Dict]) -> Dict[str, float]:
         if converted:
             channels.append("__conversion__")
             total_conversions += 1
-            total_value += journey_revenue_value(j, dedupe_seen=dedupe_seen)
+            total_value += journey_revenue_value(j, value_mode=value_mode, dedupe_seen=dedupe_seen)
         else:
             channels.append("__null__")
 
@@ -509,11 +509,48 @@ def run_attribution(
 
     fn = MODEL_FN[model]
     converted_journeys = [j for j in journeys if j.get("converted", True)]
-    total_conversions = len(converted_journeys)
+    value_mode = str(kwargs.pop("value_mode", "gross_only") or "gross_only")
+    total_conversions = 0.0
+    gross_total_conversions = 0.0
+    net_total_conversions = 0.0
+    gross_total_value = 0.0
+    net_total_value = 0.0
+    refunded_value = 0.0
+    cancelled_value = 0.0
+    invalid_leads = 0.0
+    interaction_summary = {
+        "click_through_conversions": 0.0,
+        "view_through_conversions": 0.0,
+        "mixed_path_conversions": 0.0,
+    }
     dedupe_seen: set[str] = set()
-    total_value = sum(journey_revenue_value(j, dedupe_seen=dedupe_seen) for j in converted_journeys)
+    net_dedupe_seen: set[str] = set()
+    for journey in converted_journeys:
+        summary = journey_outcome_summary(journey)
+        gross_total_conversions += float(summary.get("gross_conversions", 0.0) or 0.0)
+        net_total_conversions += float(summary.get("net_conversions", 0.0) or 0.0)
+        gross_total_value += journey_revenue_value(journey, value_mode="gross_only", dedupe_seen=dedupe_seen)
+        net_total_value += journey_revenue_value(journey, value_mode="net_only", dedupe_seen=net_dedupe_seen)
+        refunded_value += float(summary.get("refunded_value", 0.0) or 0.0)
+        cancelled_value += float(summary.get("cancelled_value", 0.0) or 0.0)
+        invalid_leads += float(summary.get("invalid_leads", 0.0) or 0.0)
+        path_type = (
+            (((journey.get("meta") or {}).get("interaction_summary") or {}).get("path_type"))
+            or journey.get("interaction_path_type")
+            or "unknown"
+        )
+        selected_count = float(summary.get("net_conversions" if value_mode == "net_only" else "gross_conversions", 0.0) or 0.0)
+        if path_type == "click_through":
+            interaction_summary["click_through_conversions"] += selected_count
+        elif path_type == "view_through":
+            interaction_summary["view_through_conversions"] += selected_count
+        elif path_type == "mixed_path":
+            interaction_summary["mixed_path_conversions"] += selected_count
 
-    credit = fn(converted_journeys, **kwargs) if kwargs else fn(converted_journeys)
+    total_conversions = net_total_conversions if value_mode == "net_only" else gross_total_conversions
+    total_value = net_total_value if value_mode == "net_only" else gross_total_value
+
+    credit = fn(converted_journeys, value_mode=value_mode, **kwargs) if kwargs else fn(converted_journeys, value_mode=value_mode)
     diagnostics: Optional[Dict[str, Any]] = None
     if model == "markov":
         try:
@@ -530,14 +567,25 @@ def run_attribution(
             "channel": ch,
             "attributed_value": round(val, 2),
             "attributed_share": round(val / total_credit, 4),
-            "attributed_conversions": round(val / (total_value / total_conversions) if total_value > 0 else 0, 2),
+            "attributed_conversions": round(val / (total_value / total_conversions) if total_value > 0 and total_conversions > 0 else 0, 2),
         })
 
     result: Dict[str, Any] = {
         "model": model,
         "channel_credit": {ch: round(v, 2) for ch, v in credit.items()},
-        "total_conversions": total_conversions,
+        "total_conversions": round(total_conversions, 2),
         "total_value": round(total_value, 2),
+        "gross_total_conversions": round(gross_total_conversions, 2),
+        "net_total_conversions": round(net_total_conversions, 2),
+        "gross_total_value": round(gross_total_value, 2),
+        "net_total_value": round(net_total_value, 2),
+        "refunded_value": round(refunded_value, 2),
+        "cancelled_value": round(cancelled_value, 2),
+        "invalid_leads": round(invalid_leads, 2),
+        "value_mode": value_mode,
+        "interaction_summary": {
+            key: round(value, 2) for key, value in interaction_summary.items()
+        },
         "channels": channels,
     }
     if diagnostics is not None:

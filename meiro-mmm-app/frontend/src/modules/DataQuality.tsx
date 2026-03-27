@@ -60,6 +60,7 @@ interface MeiroWebhookEvent {
   stored_total: number
   replace: boolean
   parser_version?: string | null
+  ingest_kind?: 'profiles' | 'events' | string | null
   ip?: string | null
   user_agent?: string | null
   payload_shape?: string | null
@@ -940,11 +941,12 @@ export default function DataQuality() {
               <thead>
                 <tr style={{ borderBottom: `2px solid ${t.color.border}` }}>
                   <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Received</th>
-                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right' }}>Profiles</th>
+                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Kind</th>
+                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right' }}>Records</th>
                   <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Mode</th>
                   <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right' }}>Payload size</th>
                   <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Detected events</th>
-                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Detected channels</th>
+                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Detected channels / profiles</th>
                   <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Source</th>
                   <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'center' }}>Payload</th>
                 </tr>
@@ -952,11 +954,30 @@ export default function DataQuality() {
               <tbody>
                 {(meiroWebhookEventsQuery.data?.items || []).map((event, idx) => {
                   const isExpanded = expandedWebhookRow === idx
+                  const ingestKind = String(event.ingest_kind || 'profiles')
+                  const detectedSummary =
+                    ingestKind === 'events'
+                      ? (event.channels_detected?.length ? event.channels_detected.join(', ') : 'Reconstructed on replay/import')
+                      : (event.channels_detected?.length ? event.channels_detected.join(', ') : '—')
                   return (
                     <Fragment key={`evt-${idx}`}>
                       <tr style={{ borderBottom: `1px solid ${t.color.borderLight}` }}>
                         <td style={{ padding: `${t.space.sm}px ${t.space.md}px` }}>
                           {event.received_at ? new Date(event.received_at).toLocaleString() : '—'}
+                        </td>
+                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px` }}>
+                          <span
+                            style={{
+                              padding: '2px 6px',
+                              borderRadius: 999,
+                              fontSize: t.font.sizeXs,
+                              fontWeight: t.font.weightMedium,
+                              background: ingestKind === 'events' ? t.color.warningMuted : t.color.successMuted,
+                              color: ingestKind === 'events' ? t.color.warning : t.color.success,
+                            }}
+                          >
+                            {ingestKind === 'events' ? 'events' : 'profiles'}
+                          </span>
                         </td>
                         <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right' }}>
                           {(event.received_count ?? 0).toLocaleString()}
@@ -969,7 +990,7 @@ export default function DataQuality() {
                           {event.conversion_event_names?.length ? event.conversion_event_names.join(', ') : '—'}
                         </td>
                         <td style={{ padding: `${t.space.sm}px ${t.space.md}px` }}>
-                          {event.channels_detected?.length ? event.channels_detected.join(', ') : '—'}
+                          {detectedSummary}
                         </td>
                         <td style={{ padding: `${t.space.sm}px ${t.space.md}px` }}>
                           {event.ip || '—'}
@@ -1038,7 +1059,7 @@ export default function DataQuality() {
                       </tr>
                       {isExpanded && (
                         <tr style={{ borderBottom: `1px solid ${t.color.borderLight}` }}>
-                          <td colSpan={8} style={{ padding: `${t.space.sm}px ${t.space.md}px` }}>
+                          <td colSpan={9} style={{ padding: `${t.space.sm}px ${t.space.md}px` }}>
                             <pre
                               style={{
                                 margin: 0,
@@ -1067,7 +1088,7 @@ export default function DataQuality() {
           </div>
         ) : (
           <p style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-            No webhook events captured yet. Send data to `/api/connectors/meiro/profiles` first.
+            No Meiro webhook traffic captured yet. Send data to either `/api/connectors/meiro/profiles` or `/api/connectors/meiro/events`.
           </p>
         )}
       </div>
