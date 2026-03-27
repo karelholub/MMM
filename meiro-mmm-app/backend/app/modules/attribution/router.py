@@ -612,7 +612,11 @@ def create_router(
 
         persist_journeys_fn(db, journeys, replace=True)
         refresh_journey_aggregates_fn(db)
-        converted = sum(1 for j in journeys if j.get("converted", True))
+        converted = sum(
+            1
+            for j in journeys
+            if bool(j.get("conversions")) or bool(j.get("converted", False))
+        )
         ch_set = {tp.get("channel", "unknown") for j in journeys for tp in j.get("touchpoints", [])}
         summary = result.get("import_summary") or {}
         pull_cfg = get_pull_config_fn()

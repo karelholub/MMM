@@ -1,5 +1,1463 @@
 [
 {
+"id": "913369dd-6ce",
+"source": "meiro_webhook",
+"started_at": "2026-03-27T10:15:28.112865Z",
+"finished_at": "2026-03-27T10:15:28.112865Z",
+"status": "success",
+"total": 151,
+"valid": 151,
+"invalid": 0,
+"converted": 151,
+"channels_detected": [
+"chatgpt.com",
+"meta_ads",
+"paid_search",
+"paid_social",
+"referral"
+],
+"validation_summary": {},
+"config_snapshot": {
+"mapping_preset": "saved",
+"schema_version": "1.0",
+"dedup_interval_minutes": 5,
+"dedup_mode": "balanced",
+"primary_dedup_key": "conversion_id",
+"fallback_dedup_keys": [
+"order_id",
+"event_id"
+]
+},
+"initiated_by": null,
+"import_note": null,
+"error": null,
+"preview_rows": [
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+}
+]
+},
+{
+"id": "dab3e062-ac9",
+"source": "sample",
+"started_at": "2026-03-27T10:15:23.935952Z",
+"finished_at": "2026-03-27T10:15:23.935952Z",
+"status": "success",
+"total": 30,
+"valid": 30,
+"invalid": 0,
+"converted": 25,
+"channels_detected": [
+"direct",
+"email",
+"google_ads",
+"linkedin_ads",
+"meta_ads",
+"whatsapp"
+],
+"validation_summary": {
+"top_errors": [],
+"top_warnings": []
+},
+"config_snapshot": {
+"schema_version": "1.0"
+},
+"initiated_by": null,
+"import_note": null,
+"error": null,
+"preview_rows": [
+{
+"customer_id": "c001",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c002",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c003",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c004",
+"touchpoints": 5,
+"converted": true
+},
+{
+"customer_id": "c005",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c006",
+"touchpoints": 1,
+"converted": true
+},
+{
+"customer_id": "c007",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c008",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c009",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c010",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c011",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c012",
+"touchpoints": 6,
+"converted": true
+},
+{
+"customer_id": "c013",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c014",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c015",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c016",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c017",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c018",
+"touchpoints": 1,
+"converted": true
+},
+{
+"customer_id": "c019",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c020",
+"touchpoints": 2,
+"converted": true
+}
+]
+},
+{
+"id": "4ab62d5f-0c6",
+"source": "meiro_webhook",
+"started_at": "2026-03-27T10:12:43.580419Z",
+"finished_at": "2026-03-27T10:12:43.580419Z",
+"status": "success",
+"total": 151,
+"valid": 151,
+"invalid": 0,
+"converted": 151,
+"channels_detected": [
+"chatgpt.com",
+"meta_ads",
+"paid_search",
+"paid_social",
+"referral"
+],
+"validation_summary": {},
+"config_snapshot": {
+"mapping_preset": "saved",
+"schema_version": "1.0",
+"dedup_interval_minutes": 5,
+"dedup_mode": "balanced",
+"primary_dedup_key": "conversion_id",
+"fallback_dedup_keys": [
+"order_id",
+"event_id"
+]
+},
+"initiated_by": null,
+"import_note": "Reprocessed from webhook archive using current approved mapping",
+"error": null,
+"preview_rows": [
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+}
+]
+},
+{
+"id": "995b7fa7-706",
+"source": "meiro_events_replay",
+"started_at": "2026-03-27T10:10:44.224515Z",
+"finished_at": "2026-03-27T10:10:44.224515Z",
+"status": "success",
+"total": 990,
+"valid": 150,
+"invalid": 840,
+"converted": 150,
+"channels_detected": [
+"chatgpt.com",
+"meta_ads",
+"paid_search",
+"paid_social",
+"referral"
+],
+"validation_summary": {
+"cleaning_report": {
+"fixed": 150,
+"dropped": 840,
+"ambiguous": 149,
+"duplicate_profiles": 0,
+"top_unresolved_patterns": [
+{
+"code": "unknown_channel",
+"count": 840
+},
+{
+"code": "inferred_conversion_name",
+"count": 816
+},
+{
+"code": "missing_conversions",
+"count": 17
+}
+],
+"quality": {
+"average_score": 49.0,
+"high": 0,
+"medium": 150,
+"low": 840
+}
+},
+"top_quarantine_reasons": [
+{
+"code": "unknown_channel",
+"count": 840
+},
+{
+"code": "inferred_conversion_name",
+"count": 816
+},
+{
+"code": "missing_conversions",
+"count": 17
+}
+],
+"replay_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 3196,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 7510,
+"profiles_reconstructed": 990,
+"avg_events_per_profile": 7.59,
+"touchpoints_reconstructed": 7414,
+"conversions_reconstructed": 95,
+"profiles_with_touchpoints": 990,
+"profiles_with_conversions": 25,
+"attributable_profiles": 25,
+"avg_touchpoints_per_profile": 7.49,
+"avg_conversions_per_profile": 0.1,
+"warnings": [],
+"journeys_valid": 150,
+"journeys_quarantined": 0,
+"journeys_invalid": 0,
+"journeys_persisted": 150,
+"journeys_converted": 0,
+"persisted_from_attributable_share": 6.0
+}
+},
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 7510,
+"profiles_reconstructed": 990,
+"avg_events_per_profile": 7.59,
+"touchpoints_reconstructed": 7414,
+"conversions_reconstructed": 95,
+"profiles_with_touchpoints": 990,
+"profiles_with_conversions": 25,
+"attributable_profiles": 25,
+"avg_touchpoints_per_profile": 7.49,
+"avg_conversions_per_profile": 0.1,
+"warnings": [],
+"journeys_valid": 150,
+"journeys_quarantined": 0,
+"journeys_invalid": 0,
+"journeys_persisted": 150,
+"journeys_converted": 0,
+"persisted_from_attributable_share": 6.0
+}
+},
+"config_snapshot": {
+"mapping_preset": "saved",
+"schema_version": "1.0",
+"dedup_interval_minutes": 5,
+"dedup_mode": "balanced",
+"primary_dedup_key": "conversion_id",
+"fallback_dedup_keys": [
+"order_id",
+"event_id"
+],
+"strict_ingest": true,
+"timestamp_fallback_policy": "profile",
+"value_fallback_policy": "default",
+"currency_fallback_policy": "default",
+"replay_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 3196,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 7510,
+"profiles_reconstructed": 990,
+"avg_events_per_profile": 7.59,
+"touchpoints_reconstructed": 7414,
+"conversions_reconstructed": 95,
+"profiles_with_touchpoints": 990,
+"profiles_with_conversions": 25,
+"attributable_profiles": 25,
+"avg_touchpoints_per_profile": 7.49,
+"avg_conversions_per_profile": 0.1,
+"warnings": [],
+"journeys_valid": 150,
+"journeys_quarantined": 0,
+"journeys_invalid": 0,
+"journeys_persisted": 150,
+"journeys_converted": 0,
+"persisted_from_attributable_share": 6.0
+}
+}
+},
+"initiated_by": null,
+"import_note": null,
+"error": null,
+"preview_rows": [
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+}
+]
+},
+{
+"id": "28f7246c-81e",
+"source": "meiro_webhook",
+"started_at": "2026-03-27T10:06:31.864459Z",
+"finished_at": "2026-03-27T10:06:31.864459Z",
+"status": "success",
+"total": 150,
+"valid": 150,
+"invalid": 0,
+"converted": 150,
+"channels_detected": [
+"chatgpt.com",
+"meta_ads",
+"paid_search",
+"paid_social",
+"referral"
+],
+"validation_summary": {},
+"config_snapshot": {
+"mapping_preset": "saved",
+"schema_version": "1.0",
+"dedup_interval_minutes": 5,
+"dedup_mode": "balanced",
+"primary_dedup_key": "conversion_id",
+"fallback_dedup_keys": [
+"order_id",
+"event_id"
+]
+},
+"initiated_by": null,
+"import_note": "Reprocessed from webhook archive using current approved mapping",
+"error": null,
+"preview_rows": [
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+}
+]
+},
+{
+"id": "4bb139ae-2bd",
+"source": "meiro_webhook",
+"started_at": "2026-03-27T10:06:02.937862Z",
+"finished_at": "2026-03-27T10:06:02.937862Z",
+"status": "success",
+"total": 71,
+"valid": 10,
+"invalid": 61,
+"converted": 0,
+"channels_detected": [
+"direct",
+"home_page",
+"interaktivni_rozcestnik",
+"meta_ads"
+],
+"validation_summary": {
+"cleaning_report": {
+"fixed": 0,
+"dropped": 61,
+"ambiguous": 10,
+"duplicate_profiles": 17,
+"top_unresolved_patterns": [
+{
+"code": "duplicate_profile_id",
+"count": 61
+},
+{
+"code": "missing_conversions",
+"count": 57
+}
+],
+"quality": {
+"average_score": 67.5,
+"high": 11,
+"medium": 60,
+"low": 0
+}
+},
+"top_quarantine_reasons": [
+{
+"code": "duplicate_profile_id",
+"count": 61
+},
+{
+"code": "missing_conversions",
+"count": 57
+}
+]
+},
+"config_snapshot": {
+"mapping_preset": "saved",
+"schema_version": "1.0",
+"dedup_interval_minutes": 5,
+"dedup_mode": "balanced",
+"primary_dedup_key": "conversion_id",
+"fallback_dedup_keys": [
+"order_id",
+"event_id"
+],
+"strict_ingest": true,
+"timestamp_fallback_policy": "profile",
+"value_fallback_policy": "default",
+"currency_fallback_policy": "default"
+},
+"initiated_by": null,
+"import_note": null,
+"error": null,
+"preview_rows": [
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 6,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 11,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+}
+]
+},
+{
+"id": "6f211f5c-c87",
+"source": "meiro_webhook",
+"started_at": "2026-03-27T10:05:44.144591Z",
+"finished_at": "2026-03-27T10:05:44.144591Z",
+"status": "success",
+"total": 71,
+"valid": 10,
+"invalid": 61,
+"converted": 0,
+"channels_detected": [
+"direct",
+"home_page",
+"interaktivni_rozcestnik",
+"meta_ads"
+],
+"validation_summary": {
+"cleaning_report": {
+"fixed": 0,
+"dropped": 61,
+"ambiguous": 10,
+"duplicate_profiles": 17,
+"top_unresolved_patterns": [
+{
+"code": "duplicate_profile_id",
+"count": 61
+},
+{
+"code": "missing_conversions",
+"count": 57
+}
+],
+"quality": {
+"average_score": 67.5,
+"high": 11,
+"medium": 60,
+"low": 0
+}
+},
+"top_quarantine_reasons": [
+{
+"code": "duplicate_profile_id",
+"count": 61
+},
+{
+"code": "missing_conversions",
+"count": 57
+}
+]
+},
+"config_snapshot": {
+"mapping_preset": "saved",
+"schema_version": "1.0",
+"dedup_interval_minutes": 5,
+"dedup_mode": "balanced",
+"primary_dedup_key": "conversion_id",
+"fallback_dedup_keys": [
+"order_id",
+"event_id"
+],
+"strict_ingest": true,
+"timestamp_fallback_policy": "profile",
+"value_fallback_policy": "default",
+"currency_fallback_policy": "default"
+},
+"initiated_by": null,
+"import_note": null,
+"error": null,
+"preview_rows": [
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 6,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 11,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+}
+]
+},
+{
+"id": "b4474f14-cb0",
+"source": "meiro_webhook",
+"started_at": "2026-03-27T09:56:56.680143Z",
+"finished_at": "2026-03-27T09:56:56.680143Z",
+"status": "success",
+"total": 10,
+"valid": 10,
+"invalid": 0,
+"converted": 10,
+"channels_detected": [
+"direct",
+"home_page",
+"interaktivni_rozcestnik",
+"meta_ads"
+],
+"validation_summary": {},
+"config_snapshot": {
+"mapping_preset": "saved",
+"schema_version": "1.0",
+"dedup_interval_minutes": 5,
+"dedup_mode": "balanced",
+"primary_dedup_key": "conversion_id",
+"fallback_dedup_keys": [
+"order_id",
+"event_id"
+]
+},
+"initiated_by": null,
+"import_note": null,
+"error": null,
+"preview_rows": [
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 6,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 11,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+}
+]
+},
+{
+"id": "22370d67-e2f",
+"source": "sample",
+"started_at": "2026-03-27T09:56:47.798590Z",
+"finished_at": "2026-03-27T09:56:47.798590Z",
+"status": "success",
+"total": 30,
+"valid": 30,
+"invalid": 0,
+"converted": 25,
+"channels_detected": [
+"direct",
+"email",
+"google_ads",
+"linkedin_ads",
+"meta_ads",
+"whatsapp"
+],
+"validation_summary": {
+"top_errors": [],
+"top_warnings": []
+},
+"config_snapshot": {
+"schema_version": "1.0"
+},
+"initiated_by": null,
+"import_note": null,
+"error": null,
+"preview_rows": [
+{
+"customer_id": "c001",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c002",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c003",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c004",
+"touchpoints": 5,
+"converted": true
+},
+{
+"customer_id": "c005",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c006",
+"touchpoints": 1,
+"converted": true
+},
+{
+"customer_id": "c007",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c008",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c009",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c010",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c011",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c012",
+"touchpoints": 6,
+"converted": true
+},
+{
+"customer_id": "c013",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c014",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c015",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c016",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c017",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c018",
+"touchpoints": 1,
+"converted": true
+},
+{
+"customer_id": "c019",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c020",
+"touchpoints": 2,
+"converted": true
+}
+]
+},
+{
+"id": "686de62f-1f3",
+"source": "meiro_webhook",
+"started_at": "2026-03-27T09:38:44.554089Z",
+"finished_at": "2026-03-27T09:38:44.554089Z",
+"status": "success",
+"total": 10,
+"valid": 10,
+"invalid": 0,
+"converted": 10,
+"channels_detected": [
+"direct",
+"home_page",
+"interaktivni_rozcestnik",
+"meta_ads"
+],
+"validation_summary": {},
+"config_snapshot": {
+"mapping_preset": "saved",
+"schema_version": "1.0",
+"dedup_interval_minutes": 5,
+"dedup_mode": "balanced",
+"primary_dedup_key": "conversion_id",
+"fallback_dedup_keys": [
+"order_id",
+"event_id"
+]
+},
+"initiated_by": null,
+"import_note": null,
+"error": null,
+"preview_rows": [
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 6,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 11,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+}
+]
+},
+{
+"id": "5fbea7eb-4e9",
+"source": "sample",
+"started_at": "2026-03-27T09:38:39.304514Z",
+"finished_at": "2026-03-27T09:38:39.304514Z",
+"status": "success",
+"total": 30,
+"valid": 30,
+"invalid": 0,
+"converted": 25,
+"channels_detected": [
+"direct",
+"email",
+"google_ads",
+"linkedin_ads",
+"meta_ads",
+"whatsapp"
+],
+"validation_summary": {
+"top_errors": [],
+"top_warnings": []
+},
+"config_snapshot": {
+"schema_version": "1.0"
+},
+"initiated_by": null,
+"import_note": null,
+"error": null,
+"preview_rows": [
+{
+"customer_id": "c001",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c002",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c003",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c004",
+"touchpoints": 5,
+"converted": true
+},
+{
+"customer_id": "c005",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c006",
+"touchpoints": 1,
+"converted": true
+},
+{
+"customer_id": "c007",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c008",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c009",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c010",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c011",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c012",
+"touchpoints": 6,
+"converted": true
+},
+{
+"customer_id": "c013",
+"touchpoints": 2,
+"converted": true
+},
+{
+"customer_id": "c014",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c015",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c016",
+"touchpoints": 3,
+"converted": true
+},
+{
+"customer_id": "c017",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c018",
+"touchpoints": 1,
+"converted": true
+},
+{
+"customer_id": "c019",
+"touchpoints": 4,
+"converted": true
+},
+{
+"customer_id": "c020",
+"touchpoints": 2,
+"converted": true
+}
+]
+},
+{
 "id": "b4c12615-474",
 "source": "meiro_webhook",
 "started_at": "2026-03-27T09:26:10.854257Z",

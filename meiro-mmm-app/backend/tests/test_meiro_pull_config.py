@@ -68,3 +68,24 @@ def test_pull_config_normalizes_primary_ingest_source(monkeypatch, tmp_path):
     cfg = meiro_config.get_pull_config()
     assert cfg["primary_ingest_source"] == "events"
     assert cfg["replay_archive_source"] == "auto"
+
+
+def test_pull_config_normalizes_auto_replay_settings(monkeypatch, tmp_path):
+    config_path = tmp_path / "meiro_config.json"
+    monkeypatch.setattr(meiro_config, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
+
+    meiro_config.save_pull_config(
+        {
+            "auto_replay_mode": "interval",
+            "auto_replay_interval_minutes": "22",
+            "auto_replay_require_mapping_approval": "true",
+            "auto_replay_quarantine_spike_threshold_pct": "55",
+        }
+    )
+
+    cfg = meiro_config.get_pull_config()
+    assert cfg["auto_replay_mode"] == "interval"
+    assert cfg["auto_replay_interval_minutes"] == 22
+    assert cfg["auto_replay_require_mapping_approval"] is True
+    assert cfg["auto_replay_quarantine_spike_threshold_pct"] == 55

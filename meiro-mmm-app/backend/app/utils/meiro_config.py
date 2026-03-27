@@ -381,6 +381,31 @@ def update_mapping_approval(status: str, note: Optional[str] = None) -> Dict[str
     return get_mapping_state()
 
 
+def get_auto_replay_state() -> Dict[str, Any]:
+    raw = _load().get("auto_replay_state", {})
+    if not isinstance(raw, dict):
+        raw = {}
+    return {
+        "last_attempted_at": raw.get("last_attempted_at"),
+        "last_completed_at": raw.get("last_completed_at"),
+        "last_status": raw.get("last_status"),
+        "last_reason": raw.get("last_reason"),
+        "last_trigger": raw.get("last_trigger"),
+        "last_archive_entries_seen": int(raw.get("last_archive_entries_seen") or 0),
+        "last_archive_received_at": raw.get("last_archive_received_at"),
+        "last_result_summary": raw.get("last_result_summary") if isinstance(raw.get("last_result_summary"), dict) else {},
+    }
+
+
+def update_auto_replay_state(patch: Dict[str, Any]) -> Dict[str, Any]:
+    current = get_auto_replay_state()
+    merged = {**current, **(patch if isinstance(patch, dict) else {})}
+    d = _load()
+    d["auto_replay_state"] = merged
+    _save(d)
+    return get_auto_replay_state()
+
+
 def _normalize_pull_config(raw: Any) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raw = {}
@@ -392,6 +417,7 @@ def _normalize_pull_config(raw: Any) -> Dict[str, Any]:
     allowed_replay_modes = {"all", "last_n", "date_range"}
     allowed_replay_sources = {"auto", "profiles", "events"}
     allowed_primary_sources = {"profiles", "events"}
+    allowed_auto_replay_modes = {"disabled", "interval", "after_batch"}
 
     def _as_int(value: Any, default: int, minimum: int, maximum: int) -> int:
         try:
@@ -497,6 +523,9 @@ def _normalize_pull_config(raw: Any) -> Dict[str, Any]:
     replay_archive_source = str(raw.get("replay_archive_source") or "auto").strip().lower()
     if replay_archive_source not in allowed_replay_sources:
         replay_archive_source = "auto"
+    auto_replay_mode = str(raw.get("auto_replay_mode") or "disabled").strip().lower()
+    if auto_replay_mode not in allowed_auto_replay_modes:
+        auto_replay_mode = "disabled"
 
     return {
         "lookback_days": _as_int(raw.get("lookback_days"), 30, 1, 365),
@@ -520,6 +549,10 @@ def _normalize_pull_config(raw: Any) -> Dict[str, Any]:
         "replay_archive_limit": _as_int(raw.get("replay_archive_limit"), 5000, 1, 50000),
         "replay_date_from": str(raw.get("replay_date_from") or "").strip() or None,
         "replay_date_to": str(raw.get("replay_date_to") or "").strip() or None,
+        "auto_replay_mode": auto_replay_mode,
+        "auto_replay_interval_minutes": _as_int(raw.get("auto_replay_interval_minutes"), 15, 1, 1440),
+        "auto_replay_require_mapping_approval": _as_bool(raw.get("auto_replay_require_mapping_approval"), True),
+        "auto_replay_quarantine_spike_threshold_pct": _as_int(raw.get("auto_replay_quarantine_spike_threshold_pct"), 40, 0, 100),
         "conversion_event_aliases": event_aliases,
         "touchpoint_interaction_aliases": interaction_aliases,
         "adjustment_event_aliases": adjustment_aliases,

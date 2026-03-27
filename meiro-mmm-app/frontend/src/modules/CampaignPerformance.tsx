@@ -331,7 +331,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
         fallbackMessage: 'Failed to fetch campaign trends',
       })
     },
-    enabled: modelsReady && !!trendDateRange.dateFrom && !!trendDateRange.dateTo,
+    enabled: !!trendDateRange.dateFrom && !!trendDateRange.dateTo,
     refetchInterval: false,
   })
 
@@ -349,7 +349,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
         fallbackMessage: 'Failed to fetch campaign summary',
       })
     },
-    enabled: modelsReady && !!trendDateRange.dateFrom && !!trendDateRange.dateTo,
+    enabled: !!trendDateRange.dateFrom && !!trendDateRange.dateTo,
     refetchInterval: false,
   })
 
@@ -410,7 +410,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       } as CampaignData
     })
   }, [summaryQuery.data?.items])
-  const loading = !modelsReady || summaryQuery.isLoading
+  const loading = summaryQuery.isLoading
 
   const filteredCampaigns = useMemo(() => {
     if (!campaigns.length) return []

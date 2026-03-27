@@ -334,7 +334,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
         fallbackMessage: 'Failed to load channel trend',
       })
     },
-    enabled: modelsReady && !!trendDateRange.dateFrom && !!trendDateRange.dateTo,
+    enabled: !!trendDateRange.dateFrom && !!trendDateRange.dateTo,
     refetchInterval: false,
   })
 
@@ -352,11 +352,11 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
         fallbackMessage: 'Failed to load channel summary',
       })
     },
-    enabled: modelsReady && !!trendDateRange.dateFrom && !!trendDateRange.dateTo,
+    enabled: !!trendDateRange.dateFrom && !!trendDateRange.dateTo,
     refetchInterval: false,
   })
 
-  const loading = !modelsReady || summaryQuery.isLoading
+  const loading = summaryQuery.isLoading
 
   const channelRows = useMemo(() => {
     const rows = summaryQuery.data?.items ?? []

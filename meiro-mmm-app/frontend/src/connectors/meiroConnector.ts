@@ -14,6 +14,16 @@ export interface MeiroConfig {
   event_webhook_last_received_at?: string | null
   event_webhook_received_count?: number
   webhook_has_secret: boolean
+  auto_replay_state?: {
+    last_attempted_at?: string | null
+    last_completed_at?: string | null
+    last_status?: string | null
+    last_reason?: string | null
+    last_trigger?: string | null
+    last_archive_entries_seen?: number
+    last_archive_received_at?: string | null
+    last_result_summary?: Record<string, unknown>
+  }
 }
 
 export interface MeiroMapping {
@@ -91,6 +101,10 @@ export interface MeiroPullConfig {
   replay_archive_limit?: number
   replay_date_from?: string | null
   replay_date_to?: string | null
+  auto_replay_mode?: 'disabled' | 'interval' | 'after_batch'
+  auto_replay_interval_minutes?: number
+  auto_replay_require_mapping_approval?: boolean
+  auto_replay_quarantine_spike_threshold_pct?: number
   conversion_event_aliases?: Record<string, string>
   touchpoint_interaction_aliases?: Record<string, string>
   adjustment_event_aliases?: Record<string, string>

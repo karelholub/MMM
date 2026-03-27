@@ -3,7 +3,7 @@ import logging
 import os
 import re
 import statistics
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -28,6 +28,7 @@ from app.utils.meiro_config import (
     get_last_test_at,
     get_mapping,
     get_mapping_state,
+    get_auto_replay_state,
     get_pull_config,
     query_webhook_archive_entries,
     get_webhook_archive_entries,
@@ -42,6 +43,7 @@ from app.utils.meiro_config import (
     save_mapping,
     save_pull_config,
     set_webhook_received,
+    update_auto_replay_state,
     update_mapping_approval,
 )
 from app.services_meiro_readiness import build_meiro_readiness
@@ -279,6 +281,21 @@ def _analyze_payload(payload_profiles: list[Any]) -> Dict[str, Any]:
 
 
 _UUID_LIKE_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.IGNORECASE)
+
+
+def _parse_iso_datetime(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except Exception:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _normalized_event_token(value: Any) -> str:
@@ -566,6 +583,252 @@ def create_router(
 ) -> APIRouter:
     router = APIRouter(tags=["meiro_integration"])
 
+    def _build_saved_mapping_config() -> Dict[str, Any]:
+        saved = get_mapping()
+        base = attribution_mapping_config_cls(
+            touchpoint_attr=saved.get("touchpoint_attr", "touchpoints"),
+            value_attr=saved.get("value_attr", "conversion_value"),
+            id_attr=saved.get("id_attr", "customer_id"),
+            channel_field=saved.get("channel_field", "channel"),
+            timestamp_field=saved.get("timestamp_field", "timestamp"),
+            source_field=saved.get("source_field", "source"),
+            medium_field=saved.get("medium_field", "medium"),
+            campaign_field=saved.get("campaign_field", "campaign"),
+            currency_field=saved.get("currency_field", "currency"),
+        )
+        return base.model_dump() if hasattr(base, "model_dump") else dict(base)
+
+    def _load_archived_profiles_for_replay(
+        *,
+        replay_mode: str,
+        archive_source: str,
+        archive_limit: int,
+        date_from: Optional[str],
+        date_to: Optional[str],
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], bool]:
+        profile_archive_status = get_webhook_archive_status()
+        event_archive_status = get_event_archive_status()
+        use_event_archive = _prefer_event_archive(
+            archive_source,
+            profile_archive_status,
+            event_archive_status,
+            primary_source=str(get_pull_config().get("primary_ingest_source") or "profiles"),
+        )
+        if replay_mode == "all":
+            if use_event_archive:
+                archive_entries = query_event_archive_entries(limit=None)
+                archived_profiles = rebuild_profiles_from_meiro_events_fn(
+                    [event for entry in reversed(archive_entries) for event in (entry.get("events") or [])],
+                    dedup_config=get_pull_config(),
+                )
+            else:
+                archive_entries = query_webhook_archive_entries(limit=None)
+                archived_profiles = rebuild_profiles_from_webhook_archive(limit=None)
+        elif replay_mode == "date_range":
+            if use_event_archive:
+                archive_entries = query_event_archive_entries(limit=None, since=date_from, until=date_to)
+                archived_profiles = rebuild_profiles_from_meiro_events_fn(
+                    [event for entry in reversed(archive_entries) for event in (entry.get("events") or [])],
+                    dedup_config=get_pull_config(),
+                )
+            else:
+                archive_entries = query_webhook_archive_entries(limit=None, since=date_from, until=date_to)
+                archived_profiles = rebuild_profiles_from_webhook_archive(limit=None, since=date_from, until=date_to)
+        else:
+            if use_event_archive:
+                archive_entries = get_event_archive_entries(limit=archive_limit)
+                archived_profiles = rebuild_profiles_from_meiro_events_fn(
+                    [event for entry in reversed(archive_entries) for event in (entry.get("events") or [])],
+                    dedup_config=get_pull_config(),
+                )
+            else:
+                archive_entries = get_webhook_archive_entries(limit=archive_limit)
+                archived_profiles = rebuild_profiles_from_webhook_archive(limit=archive_limit)
+        return archive_entries, archived_profiles, use_event_archive
+
+    def _evaluate_auto_replay_guardrails(
+        *,
+        trigger: str,
+        pull_config: Dict[str, Any],
+        auto_replay_state: Dict[str, Any],
+        event_archive_status: Dict[str, Any],
+        mapping_state: Dict[str, Any],
+    ) -> Optional[str]:
+        mode = str(pull_config.get("auto_replay_mode") or "disabled")
+        if mode == "disabled":
+            return "Auto-replay is disabled."
+        if str(pull_config.get("primary_ingest_source") or "profiles") != "events":
+            return "Primary ingest source is not raw events."
+        if not bool(event_archive_status.get("available")):
+            return "Raw event archive is empty."
+        if pull_config.get("auto_replay_require_mapping_approval", True):
+            approval = str(((mapping_state.get("approval") or {}).get("status") or "unreviewed")).lower()
+            if approval != "approved":
+                return "Mapping approval is required before auto-replay."
+        current_entries = int(event_archive_status.get("entries") or 0)
+        last_seen_entries = int(auto_replay_state.get("last_archive_entries_seen") or 0)
+        if current_entries <= last_seen_entries:
+            return "No new raw-event archive batches since the last auto-replay decision."
+        if mode == "after_batch" and trigger != "after_batch":
+            return "Auto-replay is configured to run after successful event batches."
+        if mode == "interval":
+            interval_minutes = max(1, int(pull_config.get("auto_replay_interval_minutes") or 15))
+            last_attempted = _parse_iso_datetime(auto_replay_state.get("last_attempted_at"))
+            if last_attempted:
+                next_allowed = last_attempted + timedelta(minutes=interval_minutes)
+                if next_allowed > datetime.now(timezone.utc):
+                    return f"Waiting for the {interval_minutes}-minute auto-replay interval."
+        return None
+
+    def _run_auto_replay(db: Any, *, trigger: str) -> Dict[str, Any]:
+        pull_config = get_pull_config()
+        mapping_state = get_mapping_state()
+        event_archive_status = get_event_archive_status()
+        auto_replay_state = get_auto_replay_state()
+        now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        guardrail_reason = _evaluate_auto_replay_guardrails(
+            trigger=trigger,
+            pull_config=pull_config,
+            auto_replay_state=auto_replay_state,
+            event_archive_status=event_archive_status,
+            mapping_state=mapping_state,
+        )
+        if guardrail_reason:
+            should_advance_checkpoint = guardrail_reason.startswith("No new raw-event archive batches")
+            state = update_auto_replay_state(
+                {
+                    "last_attempted_at": now_iso,
+                    "last_status": "skipped",
+                    "last_reason": guardrail_reason,
+                    "last_trigger": trigger,
+                    "last_archive_entries_seen": int(event_archive_status.get("entries") or 0) if should_advance_checkpoint else int(auto_replay_state.get("last_archive_entries_seen") or 0),
+                    "last_archive_received_at": event_archive_status.get("last_received_at") if should_advance_checkpoint else auto_replay_state.get("last_archive_received_at"),
+                }
+            )
+            return {"ok": False, "status": "skipped", "reason": guardrail_reason, "state": state}
+
+        replay_mode = str(pull_config.get("replay_mode") or "last_n").strip().lower()
+        archive_limit = int(pull_config.get("replay_archive_limit") or 5000)
+        date_from = pull_config.get("replay_date_from") if replay_mode == "date_range" else None
+        date_to = pull_config.get("replay_date_to") if replay_mode == "date_range" else None
+        update_auto_replay_state(
+            {
+                "last_attempted_at": now_iso,
+                "last_status": "running",
+                "last_reason": None,
+                "last_trigger": trigger,
+            }
+        )
+        archive_entries, archived_profiles, use_event_archive = _load_archived_profiles_for_replay(
+            replay_mode=replay_mode,
+            archive_source="events",
+            archive_limit=archive_limit,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        if not use_event_archive or not archive_entries or not archived_profiles:
+            state = update_auto_replay_state(
+                {
+                    "last_status": "skipped",
+                    "last_reason": "No raw-event archive data was available for auto-replay.",
+                    "last_archive_entries_seen": int(event_archive_status.get("entries") or 0),
+                    "last_archive_received_at": event_archive_status.get("last_received_at"),
+                }
+            )
+            return {"ok": False, "status": "skipped", "reason": state.get("last_reason"), "state": state}
+
+        mapping = _build_saved_mapping_config()
+        settings = get_settings_obj()
+        revenue_config = settings.revenue_config
+        preflight = canonicalize_meiro_profiles_fn(
+            archived_profiles,
+            mapping=mapping,
+            revenue_config=(revenue_config.model_dump() if hasattr(revenue_config, "model_dump") else revenue_config),
+            dedup_config=pull_config,
+        )
+        import_summary = preflight.get("import_summary") or {}
+        total_profiles = int(import_summary.get("total") or len(archived_profiles) or 0)
+        quarantine_count = int(
+            import_summary.get("quarantined")
+            or import_summary.get("quarantine_count")
+            or preflight.get("quarantine_count")
+            or 0
+        )
+        quarantine_share = (quarantine_count / total_profiles) if total_profiles > 0 else 0.0
+        quarantine_threshold = max(0, min(100, int(pull_config.get("auto_replay_quarantine_spike_threshold_pct") or 40))) / 100.0
+        if quarantine_share > quarantine_threshold:
+            reason = (
+                f"Auto-replay blocked because quarantined journeys reached {round(quarantine_share * 100, 2)}% "
+                f"of the replay set, above the configured {round(quarantine_threshold * 100, 2)}% threshold."
+            )
+            state = update_auto_replay_state(
+                {
+                    "last_completed_at": now_iso,
+                    "last_status": "blocked",
+                    "last_reason": reason,
+                    "last_archive_entries_seen": int(event_archive_status.get("entries") or 0),
+                    "last_archive_received_at": event_archive_status.get("last_received_at"),
+                    "last_result_summary": {
+                        "archive_entries_used": len(archive_entries),
+                        "profiles_reconstructed": len(archived_profiles),
+                        "quarantine_count": quarantine_count,
+                        "quarantine_share_pct": round(quarantine_share * 100, 2),
+                    },
+                }
+            )
+            return {"ok": False, "status": "blocked", "reason": reason, "state": state}
+
+        out_path = get_data_dir_obj() / "meiro_cdp_profiles.json"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(archived_profiles, indent=2))
+        replay_context_path = get_data_dir_obj() / "meiro_replay_context.json"
+        replay_context_path.write_text(
+            json.dumps(
+                {
+                    "archive_source": "events",
+                    "replay_mode": replay_mode,
+                    "archive_entries_used": len(archive_entries),
+                    "event_reconstruction_diagnostics": _build_event_replay_reconstruction_diagnostics(
+                        archive_entries=archive_entries,
+                        archived_profiles=archived_profiles,
+                    ),
+                    "auto_replay": True,
+                    "auto_replay_trigger": trigger,
+                },
+                indent=2,
+            )
+        )
+        import_result = import_journeys_from_cdp_fn(
+            req=from_cdp_request_factory(
+                import_note=f"Auto-replayed from raw-event archive ({trigger})",
+            ),
+            db=db,
+        )
+        completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        state = update_auto_replay_state(
+            {
+                "last_completed_at": completed_at,
+                "last_status": "success",
+                "last_reason": None,
+                "last_archive_entries_seen": int(event_archive_status.get("entries") or 0),
+                "last_archive_received_at": event_archive_status.get("last_received_at"),
+                "last_result_summary": {
+                    "archive_entries_used": len(archive_entries),
+                    "profiles_reconstructed": len(archived_profiles),
+                    "persisted_count": int(import_result.get("count") or 0),
+                    "quarantine_count": int(import_result.get("quarantine_count") or 0),
+                },
+            }
+        )
+        return {
+            "ok": True,
+            "status": "success",
+            "state": state,
+            "import_result": import_result,
+            "archive_entries_used": len(archive_entries),
+            "profiles_reconstructed": len(archived_profiles),
+        }
+
     @router.post("/api/connectors/meiro/test")
     def meiro_test(req: MeiroCDPTestRequest = MeiroCDPTestRequest()):
         api_base_url = req.api_base_url
@@ -628,6 +891,7 @@ def create_router(
             "event_webhook_received_count": event_archive_status.get("events_received", 0),
             "webhook_has_secret": bool(get_webhook_secret() or os.getenv("MEIRO_WEBHOOK_SECRET", "").strip()),
             "primary_ingest_source": pull_config.get("primary_ingest_source", "profiles"),
+            "auto_replay_state": get_auto_replay_state(),
         }
 
     @router.get("/api/connectors/meiro/readiness")
@@ -902,6 +1166,7 @@ def create_router(
     async def meiro_receive_events(
         request: Request,
         x_meiro_webhook_secret: Optional[str] = Header(None, alias="X-Meiro-Webhook-Secret"),
+        db=Depends(get_db_dependency),
     ):
         try:
             try:
@@ -1014,6 +1279,14 @@ def create_router(
                 },
                 max_items=100,
             )
+            auto_replay_result = None
+            auto_replay_mode = str(get_pull_config().get("auto_replay_mode") or "disabled")
+            if auto_replay_mode in {"after_batch", "interval"}:
+                try:
+                    auto_replay_result = _run_auto_replay(db, trigger="after_batch")
+                except Exception as exc:
+                    logger.exception("Auto-replay failed after raw event batch")
+                    auto_replay_result = {"ok": False, "status": "error", "reason": str(exc)}
             return JSONResponse(
                 status_code=200,
                 content={
@@ -1022,6 +1295,7 @@ def create_router(
                     "stored_total": len(to_store),
                     "reconstructed_profiles": len(rebuilt_profiles),
                     "message": "Events saved. Use Replay archived webhook payloads or import from the event archive to build journeys.",
+                    "auto_replay": auto_replay_result,
                 },
             )
         except HTTPException:
@@ -1751,6 +2025,22 @@ def create_router(
     def meiro_save_pull_config(config: dict):
         save_pull_config(config)
         return {"message": "Pull config saved"}
+
+    @router.get("/api/connectors/meiro/auto-replay")
+    def meiro_auto_replay_status():
+        return {
+            "config": get_pull_config(),
+            "state": get_auto_replay_state(),
+            "event_archive_status": get_event_archive_status(),
+            "mapping_approval": (get_mapping_state().get("approval") or {}),
+        }
+
+    @router.post("/api/connectors/meiro/auto-replay/run")
+    def meiro_auto_replay_run(
+        trigger: str = Body(default="manual", embed=True),
+        db=Depends(get_db_dependency),
+    ):
+        return _run_auto_replay(db, trigger=str(trigger or "manual").strip().lower() or "manual")
 
     @router.post("/api/connectors/meiro/pull")
     def meiro_pull(since: Optional[str] = None, until: Optional[str] = None, db=Depends(get_db_dependency)):

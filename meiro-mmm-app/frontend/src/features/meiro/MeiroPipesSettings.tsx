@@ -166,6 +166,71 @@ export default function MeiroPipesSettings({
       </div>
 
       <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.bg, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
+        <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Auto-replay raw events into attribution</div>
+        <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+          Let the app rebuild journeys from the raw-event archive automatically after successful event batches or at a controlled interval. Guardrails stop auto-replay when mappings are unapproved or quarantine spikes.
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: t.space.sm }}>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+            Auto-replay mode
+            <select
+              value={meiroPullDraft.auto_replay_mode || DEFAULT_MEIRO_PULL_CONFIG.auto_replay_mode}
+              onChange={(e) => setMeiroPullDraft((prev) => ({ ...prev, auto_replay_mode: e.target.value as MeiroPullConfig['auto_replay_mode'] }))}
+              style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, background: '#fff' }}
+            >
+              <option value="disabled">Disabled</option>
+              <option value="interval">Every N minutes</option>
+              <option value="after_batch">After each successful event batch</option>
+            </select>
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+            Interval minutes
+            <input
+              type="number"
+              min={1}
+              max={1440}
+              value={meiroPullDraft.auto_replay_interval_minutes ?? DEFAULT_MEIRO_PULL_CONFIG.auto_replay_interval_minutes}
+              onChange={(e) => setMeiroPullDraft((prev) => ({ ...prev, auto_replay_interval_minutes: Number(e.target.value || DEFAULT_MEIRO_PULL_CONFIG.auto_replay_interval_minutes) }))}
+              disabled={(meiroPullDraft.auto_replay_mode || DEFAULT_MEIRO_PULL_CONFIG.auto_replay_mode) !== 'interval'}
+              style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+            />
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+            Quarantine spike threshold (%)
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={meiroPullDraft.auto_replay_quarantine_spike_threshold_pct ?? DEFAULT_MEIRO_PULL_CONFIG.auto_replay_quarantine_spike_threshold_pct}
+              onChange={(e) => setMeiroPullDraft((prev) => ({ ...prev, auto_replay_quarantine_spike_threshold_pct: Number(e.target.value || DEFAULT_MEIRO_PULL_CONFIG.auto_replay_quarantine_spike_threshold_pct) }))}
+              style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+            />
+          </label>
+        </div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: t.font.sizeSm, color: t.color.text }}>
+          <input
+            type="checkbox"
+            checked={Boolean(meiroPullDraft.auto_replay_require_mapping_approval ?? DEFAULT_MEIRO_PULL_CONFIG.auto_replay_require_mapping_approval)}
+            onChange={(e) => setMeiroPullDraft((prev) => ({ ...prev, auto_replay_require_mapping_approval: e.target.checked }))}
+          />
+          Require approved mapping before auto-replay
+        </label>
+        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+          Last auto-replay attempt: {relativeTime(meiroConfig?.auto_replay_state?.last_attempted_at || null)} ·
+          Last completion: {relativeTime(meiroConfig?.auto_replay_state?.last_completed_at || null)} ·
+          Status: <strong>{String(meiroConfig?.auto_replay_state?.last_status || 'idle')}</strong>
+        </div>
+        {meiroConfig?.auto_replay_state?.last_reason ? (
+          <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+            Last note: {meiroConfig.auto_replay_state.last_reason}
+          </div>
+        ) : null}
+        <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+          Duplicate reprocessing is avoided by checkpointing the last processed raw-event archive snapshot. Auto-replay only runs for the raw-event primary source.
+        </div>
+      </div>
+
+      <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.bg, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
         <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Webhook sanitation & quarantine</div>
         <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
           These rules run on Meiro Pipes payloads before journeys are persisted into attribution. Use them to quarantine noisy webhook records instead of mixing them into production journeys.

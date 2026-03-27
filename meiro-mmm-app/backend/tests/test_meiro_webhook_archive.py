@@ -138,3 +138,87 @@ def test_webhook_suggestions_include_raw_event_ingests(monkeypatch, tmp_path):
     assert payload["total_touchpoints_observed"] >= 1
     assert payload["total_conversions_observed"] >= 1
     assert any(item["event_name"] == "purchase" for item in payload["conversion_event_suggestions"])
+
+
+def test_raw_event_ingest_skips_auto_replay_when_mapping_not_approved(monkeypatch, tmp_path):
+    monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(meiro_config, "CONFIG_PATH", tmp_path / "meiro_config.json")
+    monkeypatch.setattr(meiro_config, "WEBHOOK_ARCHIVE_PATH", tmp_path / "meiro_webhook_archive.jsonl")
+    monkeypatch.setattr(meiro_config, "EVENT_ARCHIVE_PATH", tmp_path / "meiro_event_archive.jsonl")
+
+    meiro_config.save_mapping({})
+    meiro_config.update_mapping_approval("rejected", "Needs review")
+    meiro_config.save_pull_config(
+        {
+            "primary_ingest_source": "events",
+            "auto_replay_mode": "after_batch",
+            "auto_replay_require_mapping_approval": True,
+        }
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/connectors/meiro/events",
+        json={
+            "events": [
+                {
+                    "event_id": "evt-page",
+                    "event_payload": {
+                        "event_id": "evt-page",
+                        "customer_id": "cust-1",
+                        "timestamp": "2026-03-27T10:00:00Z",
+                        "event_name": "page_view",
+                        "source": "google",
+                        "medium": "cpc",
+                        "campaign": "brand",
+                    },
+                }
+            ]
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["auto_replay"]["status"] == "skipped"
+    assert "Mapping approval is required" in payload["auto_replay"]["reason"]
+
+
+def test_manual_auto_replay_blocks_on_quarantine_spike(monkeypatch, tmp_path):
+    monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(meiro_config, "CONFIG_PATH", tmp_path / "meiro_config.json")
+    monkeypatch.setattr(meiro_config, "WEBHOOK_ARCHIVE_PATH", tmp_path / "meiro_webhook_archive.jsonl")
+    monkeypatch.setattr(meiro_config, "EVENT_ARCHIVE_PATH", tmp_path / "meiro_event_archive.jsonl")
+
+    meiro_config.save_mapping({})
+    meiro_config.update_mapping_approval("approved", "Ready")
+    meiro_config.save_pull_config(
+        {
+            "primary_ingest_source": "events",
+            "auto_replay_mode": "after_batch",
+            "auto_replay_quarantine_spike_threshold_pct": 0,
+        }
+    )
+
+    client = TestClient(app)
+    ingest = client.post(
+        "/api/connectors/meiro/events",
+        json={
+            "events": [
+                {
+                    "event_id": "evt-page",
+                    "event_payload": {
+                        "event_id": "evt-page",
+                        "customer_id": "cust-2",
+                        "timestamp": "2026-03-27T10:00:00Z",
+                        "event_name": "page_view",
+                    },
+                }
+            ]
+        },
+    )
+    assert ingest.status_code == 200
+
+    run = client.post("/api/connectors/meiro/auto-replay/run", json={"trigger": "manual"})
+    assert run.status_code == 200
+    payload = run.json()
+    assert payload["status"] == "blocked"
+    assert "quarantined journeys reached" in payload["reason"]

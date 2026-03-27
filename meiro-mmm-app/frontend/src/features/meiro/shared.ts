@@ -71,6 +71,10 @@ export const DEFAULT_MEIRO_PULL_CONFIG: MeiroPullConfig = {
   replay_archive_limit: 5000,
   replay_date_from: null,
   replay_date_to: null,
+  auto_replay_mode: 'disabled',
+  auto_replay_interval_minutes: 15,
+  auto_replay_require_mapping_approval: true,
+  auto_replay_quarantine_spike_threshold_pct: 40,
   conversion_event_aliases: {},
   touchpoint_interaction_aliases: {
     ad_impression: 'impression',
@@ -129,6 +133,9 @@ export function normalizeMeiroPullConfig(raw?: Partial<MeiroPullConfig> | Record
   const replayArchiveSource = typeof cfg.replay_archive_source === 'string' && ['auto', 'profiles', 'events'].includes(cfg.replay_archive_source)
     ? cfg.replay_archive_source as MeiroPullConfig['replay_archive_source']
     : DEFAULT_MEIRO_PULL_CONFIG.replay_archive_source
+  const autoReplayMode = typeof cfg.auto_replay_mode === 'string' && ['disabled', 'interval', 'after_batch'].includes(cfg.auto_replay_mode)
+    ? cfg.auto_replay_mode as MeiroPullConfig['auto_replay_mode']
+    : DEFAULT_MEIRO_PULL_CONFIG.auto_replay_mode
   const normalizeMap = (value: unknown, fallback: Record<string, string>) =>
     typeof value === 'object' && value && !Array.isArray(value)
       ? Object.fromEntries(
@@ -164,6 +171,10 @@ export function normalizeMeiroPullConfig(raw?: Partial<MeiroPullConfig> | Record
     replay_archive_limit: asInt(cfg.replay_archive_limit, DEFAULT_MEIRO_PULL_CONFIG.replay_archive_limit || 5000, 1, 50000),
     replay_date_from: typeof cfg.replay_date_from === 'string' && cfg.replay_date_from.trim() ? cfg.replay_date_from.trim() : null,
     replay_date_to: typeof cfg.replay_date_to === 'string' && cfg.replay_date_to.trim() ? cfg.replay_date_to.trim() : null,
+    auto_replay_mode: autoReplayMode,
+    auto_replay_interval_minutes: asInt(cfg.auto_replay_interval_minutes, DEFAULT_MEIRO_PULL_CONFIG.auto_replay_interval_minutes || 15, 1, 1440),
+    auto_replay_require_mapping_approval: Boolean(cfg.auto_replay_require_mapping_approval ?? DEFAULT_MEIRO_PULL_CONFIG.auto_replay_require_mapping_approval),
+    auto_replay_quarantine_spike_threshold_pct: asInt(cfg.auto_replay_quarantine_spike_threshold_pct, DEFAULT_MEIRO_PULL_CONFIG.auto_replay_quarantine_spike_threshold_pct || 40, 0, 100),
     conversion_event_aliases: normalizeMap(cfg.conversion_event_aliases, DEFAULT_MEIRO_PULL_CONFIG.conversion_event_aliases),
     touchpoint_interaction_aliases: normalizeMap(cfg.touchpoint_interaction_aliases, DEFAULT_MEIRO_PULL_CONFIG.touchpoint_interaction_aliases || {}),
     adjustment_event_aliases: normalizeMap(cfg.adjustment_event_aliases, DEFAULT_MEIRO_PULL_CONFIG.adjustment_event_aliases || {}),
