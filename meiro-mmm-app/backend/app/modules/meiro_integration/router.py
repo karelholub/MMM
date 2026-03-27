@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import statistics
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -185,7 +186,15 @@ def _analyze_payload(payload_profiles: list[Any]) -> Dict[str, Any]:
                 if not isinstance(conversion, dict):
                     continue
                 conversion_count += 1
-                _inc(conversion_event_counts, str(conversion.get("name") or "").strip().lower())
+                _inc(
+                    conversion_event_counts,
+                    str(
+                        conversion.get("name")
+                        or conversion.get("event_name")
+                        or conversion.get("type")
+                        or ""
+                    ).strip().lower(),
+                )
                 for dedup_key in ("conversion_id", "order_id", "event_id"):
                     if conversion.get(dedup_key):
                         dedup_key_counts[dedup_key] = dedup_key_counts.get(dedup_key, 0) + 1
@@ -269,6 +278,207 @@ def _analyze_payload(payload_profiles: list[Any]) -> Dict[str, Any]:
     }
 
 
+_UUID_LIKE_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.IGNORECASE)
+
+
+def _normalized_event_token(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+
+
+def _looks_like_meaningful_event_name(value: Any) -> bool:
+    token = _normalized_event_token(value)
+    if not token or token in {"other", "unknown", "unknown_event", "event"}:
+        return False
+    if _UUID_LIKE_RE.match(str(value or "").strip()):
+        return False
+    return True
+
+
+def _looks_like_touchpoint_name(value: Any) -> bool:
+    token = _normalized_event_token(value)
+    if not token:
+        return False
+    return any(fragment in token for fragment in ("page_view", "session", "click", "impression", "visit", "landing", "view"))
+
+
+def _looks_like_conversion_name(value: Any) -> bool:
+    token = _normalized_event_token(value)
+    if not token:
+        return False
+    return any(fragment in token for fragment in ("purchase", "checkout", "order", "lead", "submit", "signup", "refund", "cancel", "invalid", "disqual"))
+
+
+def _build_raw_event_stream_diagnostics(*, event_archive_entries: list[Dict[str, Any]], webhook_events: list[Dict[str, Any]]) -> Dict[str, Any]:
+    total_events = 0
+    batches = 0
+    usable_event_name_count = 0
+    identity_count = 0
+    source_medium_count = 0
+    referrer_only_count = 0
+    touchpoint_like_count = 0
+    conversion_like_count = 0
+    conversion_linkage_count = 0
+    per_batch_profile_counts: list[float] = []
+
+    for entry in event_archive_entries:
+        if not isinstance(entry, dict):
+            continue
+        batches += 1
+        for item in entry.get("events") or []:
+            event = item.get("event_payload") if isinstance(item, dict) and isinstance(item.get("event_payload"), dict) else item
+            if not isinstance(event, dict):
+                continue
+            total_events += 1
+            event_name = event.get("event_name") or event.get("event_type") or event.get("name") or event.get("type")
+            if _looks_like_meaningful_event_name(event_name):
+                usable_event_name_count += 1
+            if event.get("customer_id") or event.get("profile_id") or event.get("meiro_profile_id") or event.get("user_id"):
+                identity_count += 1
+            has_source_medium = bool((event.get("source") or event.get("utm_source")) and (event.get("medium") or event.get("utm_medium")))
+            has_referrer = bool(event.get("page_referrer") or event.get("referrer"))
+            if has_source_medium:
+                source_medium_count += 1
+            elif has_referrer:
+                referrer_only_count += 1
+            if _looks_like_touchpoint_name(event_name):
+                touchpoint_like_count += 1
+            if _looks_like_conversion_name(event_name):
+                conversion_like_count += 1
+                if event.get("conversion_id") or event.get("order_id") or event.get("lead_id") or event.get("original_conversion_id"):
+                    conversion_linkage_count += 1
+
+    for event in webhook_events:
+        if not isinstance(event, dict) or str(event.get("ingest_kind") or "") != "events":
+            continue
+        try:
+            received = float(event.get("received_count") or 0)
+            rebuilt = float(event.get("reconstructed_profiles") or 0)
+        except Exception:
+            continue
+        if received > 0:
+            per_batch_profile_counts.append(rebuilt / received)
+
+    def _share(count: int, total: int) -> float:
+        return round((count / total), 4) if total > 0 else 0.0
+
+    warnings: list[str] = []
+    usable_event_name_share = _share(usable_event_name_count, total_events)
+    source_medium_share = _share(source_medium_count, total_events)
+    referrer_only_share = _share(referrer_only_count, total_events)
+    conversion_linkage_share = _share(conversion_linkage_count, conversion_like_count)
+    if total_events > 0 and usable_event_name_share < 0.6:
+        warnings.append("Many raw events still use generic or opaque event names.")
+    if total_events > 0 and source_medium_share < 0.3 and referrer_only_share > 0.1:
+        warnings.append("A large share of raw events relies on referrer fallback instead of explicit source/medium.")
+    if conversion_like_count > 0 and conversion_linkage_share < 0.6:
+        warnings.append("Many conversion-like raw events still lack stable order/lead/conversion linkage keys.")
+
+    return {
+        "available": total_events > 0,
+        "batches_examined": batches,
+        "events_examined": total_events,
+        "usable_event_name_share": usable_event_name_share,
+        "identity_share": _share(identity_count, total_events),
+        "source_medium_share": source_medium_share,
+        "referrer_only_share": referrer_only_share,
+        "touchpoint_like_events": touchpoint_like_count,
+        "conversion_like_events": conversion_like_count,
+        "conversion_linkage_share": conversion_linkage_share,
+        "avg_reconstructed_profiles_per_event": round(statistics.mean(per_batch_profile_counts), 4) if per_batch_profile_counts else 0.0,
+        "warnings": warnings,
+    }
+
+
+def _build_event_replay_reconstruction_diagnostics(
+    *,
+    archive_entries: list[Dict[str, Any]],
+    archived_profiles: list[Dict[str, Any]],
+    import_result: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    events_loaded = sum(len(entry.get("events") or []) for entry in archive_entries if isinstance(entry, dict))
+    touchpoints_reconstructed = 0
+    conversions_reconstructed = 0
+    attributable_profiles = 0
+    profiles_with_touchpoints = 0
+    profiles_with_conversions = 0
+
+    for profile in archived_profiles:
+        if not isinstance(profile, dict):
+            continue
+        touchpoints = profile.get("touchpoints") or []
+        conversions = profile.get("conversions") or []
+        touchpoint_count = len(touchpoints) if isinstance(touchpoints, list) else 0
+        conversion_count = len(conversions) if isinstance(conversions, list) else 0
+        touchpoints_reconstructed += touchpoint_count
+        conversions_reconstructed += conversion_count
+        if touchpoint_count > 0:
+            profiles_with_touchpoints += 1
+        if conversion_count > 0:
+            profiles_with_conversions += 1
+        if touchpoint_count > 0 and conversion_count > 0:
+            attributable_profiles += 1
+
+    diagnostics: Dict[str, Any] = {
+        "archive_source": "events",
+        "events_loaded": int(events_loaded),
+        "profiles_reconstructed": int(len(archived_profiles)),
+        "avg_events_per_profile": round((events_loaded / len(archived_profiles)), 2) if archived_profiles else 0.0,
+        "touchpoints_reconstructed": int(touchpoints_reconstructed),
+        "conversions_reconstructed": int(conversions_reconstructed),
+        "profiles_with_touchpoints": int(profiles_with_touchpoints),
+        "profiles_with_conversions": int(profiles_with_conversions),
+        "attributable_profiles": int(attributable_profiles),
+        "avg_touchpoints_per_profile": round((touchpoints_reconstructed / len(archived_profiles)), 2) if archived_profiles else 0.0,
+        "avg_conversions_per_profile": round((conversions_reconstructed / len(archived_profiles)), 2) if archived_profiles else 0.0,
+        "warnings": [],
+    }
+
+    warnings: list[str] = []
+    if events_loaded > 0 and len(archived_profiles) == 0:
+        warnings.append("Raw events were received, but none could be reconstructed into profiles.")
+    if len(archived_profiles) > 0 and touchpoints_reconstructed == 0:
+        warnings.append("Reconstructed profiles contain no touchpoints, so channel and campaign attribution will stay empty.")
+    if len(archived_profiles) > 0 and conversions_reconstructed == 0:
+        warnings.append("Reconstructed profiles contain no conversions, so attribution models have nothing to score.")
+    if len(archived_profiles) > 0 and attributable_profiles == 0 and touchpoints_reconstructed > 0 and conversions_reconstructed > 0:
+        warnings.append("Touchpoints and conversions exist, but not on the same reconstructed profiles.")
+
+    if import_result:
+        summary = (import_result or {}).get("import_summary") or {}
+        cleaning_report = summary.get("cleaning_report") or {}
+        journeys_persisted = int(import_result.get("count", 0) or 0)
+        journeys_valid = int(summary.get("valid", journeys_persisted) or 0)
+        journeys_quarantined = int(summary.get("quarantined", import_result.get("quarantine_count", 0)) or 0)
+        journeys_invalid = int(summary.get("invalid", 0) or 0)
+        journeys_converted = int(summary.get("converted", 0) or 0)
+        diagnostics.update(
+            {
+                "journeys_valid": journeys_valid,
+                "journeys_quarantined": journeys_quarantined,
+                "journeys_invalid": journeys_invalid,
+                "journeys_persisted": journeys_persisted,
+                "journeys_converted": journeys_converted,
+                "persisted_from_attributable_share": round((journeys_persisted / attributable_profiles), 4) if attributable_profiles > 0 else 0.0,
+            }
+        )
+        if attributable_profiles > 0 and journeys_persisted == 0:
+            warnings.append("Attributable reconstructed profiles were found, but none survived import into persisted journeys.")
+        if journeys_quarantined > 0:
+            warnings.append(f"{journeys_quarantined} reconstructed journeys were quarantined during import.")
+        top_unresolved = cleaning_report.get("top_unresolved_patterns") or []
+        if top_unresolved:
+            top_label = ", ".join(
+                f"{item.get('code', 'unknown')} ({int(item.get('count', 0) or 0)})"
+                for item in top_unresolved[:3]
+                if isinstance(item, dict)
+            )
+            if top_label:
+                warnings.append(f"Top unresolved replay issues: {top_label}.")
+
+    diagnostics["warnings"] = warnings
+    return diagnostics
+
+
 def _record_webhook_diagnostic_event(
     *,
     request: Request,
@@ -308,6 +518,8 @@ def _prefer_event_archive(
     requested_source: str,
     profile_archive_status: Dict[str, Any],
     event_archive_status: Dict[str, Any],
+    *,
+    primary_source: str = "profiles",
 ) -> bool:
     source = str(requested_source or "auto").strip().lower()
     if source == "events":
@@ -318,6 +530,11 @@ def _prefer_event_archive(
     event_last = str(event_archive_status.get("last_received_at") or "")
     profile_available = bool(profile_archive_status.get("available"))
     event_available = bool(event_archive_status.get("available"))
+    preferred = str(primary_source or "profiles").strip().lower()
+    if preferred == "events" and event_available:
+        return True
+    if preferred == "profiles" and profile_available:
+        return False
     if event_available and not profile_available:
         return True
     if profile_available and not event_available:
@@ -397,6 +614,7 @@ def create_router(
         webhook_url = f"{get_base_url_fn()}/api/connectors/meiro/profiles"
         event_webhook_url = f"{get_base_url_fn()}/api/connectors/meiro/events"
         event_archive_status = get_event_archive_status()
+        pull_config = get_pull_config()
         return {
             "connected": meiro_cdp.is_connected(),
             "api_base_url": meta["api_base_url"] if meta else None,
@@ -409,20 +627,28 @@ def create_router(
             "event_webhook_last_received_at": event_archive_status.get("last_received_at"),
             "event_webhook_received_count": event_archive_status.get("events_received", 0),
             "webhook_has_secret": bool(get_webhook_secret() or os.getenv("MEIRO_WEBHOOK_SECRET", "").strip()),
+            "primary_ingest_source": pull_config.get("primary_ingest_source", "profiles"),
         }
 
     @router.get("/api/connectors/meiro/readiness")
     def meiro_readiness():
         config = meiro_config()
         mapping_state = get_mapping_state()
-        archive_status = get_webhook_archive_status()
+        profile_archive_status = get_webhook_archive_status()
+        event_archive_status = get_event_archive_status()
         pull_config = get_pull_config()
+        raw_event_diagnostics = _build_raw_event_stream_diagnostics(
+            event_archive_entries=get_event_archive_entries(limit=100),
+            webhook_events=get_webhook_events(limit=250),
+        )
         return build_meiro_readiness(
             meiro_connected=meiro_cdp.is_connected(),
             meiro_config=config,
             mapping_state=mapping_state,
-            archive_status=archive_status,
+            archive_status=profile_archive_status,
+            event_archive_status=event_archive_status,
             pull_config=pull_config,
+            raw_event_diagnostics=raw_event_diagnostics,
         )
 
     @router.get("/api/connectors/meiro/attributes")
@@ -762,6 +988,7 @@ def create_router(
                 }
             )
             rebuilt_profiles = rebuild_profiles_from_meiro_events_fn(events, dedup_config=get_pull_config())
+            payload_analysis = _analyze_payload(rebuilt_profiles)
             append_webhook_event(
                 {
                     "received_at": now_iso,
@@ -778,6 +1005,7 @@ def create_router(
                     "payload_json_valid": True,
                     "conversion_event_names": event_names_detected,
                     "channels_detected": channels_detected,
+                    "payload_analysis": payload_analysis,
                     "status_code": 200,
                     "outcome": "success",
                     "error_class": None,
@@ -922,7 +1150,12 @@ def create_router(
 
         profile_archive_status = get_webhook_archive_status()
         event_archive_status = get_event_archive_status()
-        use_event_archive = _prefer_event_archive(archive_source, profile_archive_status, event_archive_status)
+        use_event_archive = _prefer_event_archive(
+            archive_source,
+            profile_archive_status,
+            event_archive_status,
+            primary_source=str(get_pull_config().get("primary_ingest_source") or "profiles"),
+        )
 
         if replay_mode == "all":
             if use_event_archive:
@@ -961,6 +1194,7 @@ def create_router(
         out_path = get_data_dir_obj() / "meiro_cdp_profiles.json"
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(archived_profiles, indent=2))
+        replay_context_path = get_data_dir_obj() / "meiro_replay_context.json"
 
         result: Dict[str, Any] = {
             "reprocessed_profiles": len(archived_profiles),
@@ -974,7 +1208,24 @@ def create_router(
             "mapping_approval_status": ((mapping_state.get("approval") or {}).get("status") or "unreviewed"),
             "persisted_to_attribution": False,
         }
+        if use_event_archive:
+            result["event_reconstruction_diagnostics"] = _build_event_replay_reconstruction_diagnostics(
+                archive_entries=archive_entries,
+                archived_profiles=archived_profiles,
+            )
         if payload.persist_to_attribution:
+            if use_event_archive:
+                replay_context_path.write_text(
+                    json.dumps(
+                        {
+                            "archive_source": "events",
+                            "replay_mode": replay_mode,
+                            "archive_entries_used": len(archive_entries),
+                            "event_reconstruction_diagnostics": result.get("event_reconstruction_diagnostics") or {},
+                        },
+                        indent=2,
+                    )
+                )
             import_result = import_journeys_from_cdp_fn(
                 req=from_cdp_request_factory(
                     config_id=payload.config_id,
@@ -984,11 +1235,33 @@ def create_router(
             )
             result["persisted_to_attribution"] = True
             result["import_result"] = import_result
+            if use_event_archive:
+                result["event_reconstruction_diagnostics"] = _build_event_replay_reconstruction_diagnostics(
+                    archive_entries=archive_entries,
+                    archived_profiles=archived_profiles,
+                    import_result=import_result,
+                )
+                if replay_context_path.exists():
+                    replay_context_path.write_text(
+                        json.dumps(
+                            {
+                                "archive_source": "events",
+                                "replay_mode": replay_mode,
+                                "archive_entries_used": len(archive_entries),
+                                "event_reconstruction_diagnostics": result.get("event_reconstruction_diagnostics") or {},
+                            },
+                            indent=2,
+                        )
+                    )
         return result
 
     @router.get("/api/connectors/meiro/webhook/suggestions")
     def meiro_webhook_suggestions(limit: int = Query(100, ge=1, le=500)):
         events = get_webhook_events(limit=limit)
+        raw_event_diagnostics = _build_raw_event_stream_diagnostics(
+            event_archive_entries=get_event_archive_entries(limit=max(25, min(limit, 100))),
+            webhook_events=events,
+        )
         current_pull_config = get_pull_config()
         conversion_event_counts: Dict[str, int] = {}
         channel_counts: Dict[str, int] = {}
@@ -1416,6 +1689,7 @@ def create_router(
             "events_analyzed": len(events),
             "total_conversions_observed": total_conversions,
             "total_touchpoints_observed": total_touchpoints,
+            "event_stream_diagnostics": raw_event_diagnostics,
             "dedup_key_suggestion": best_dedup_key,
             "dedup_key_candidates": dedup_key_candidates,
             "kpi_suggestions": kpi_suggestions,

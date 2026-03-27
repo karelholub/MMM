@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 
-import type { MeiroConfig, MeiroImportResult, MeiroMappingState, MeiroPullConfig, MeiroQuarantineReprocessResult, MeiroQuarantineRun } from '../../connectors/meiroConnector'
+import type { MeiroConfig, MeiroImportResult, MeiroMappingState, MeiroPullConfig, MeiroQuarantineReprocessResult, MeiroQuarantineRun, MeiroWebhookSuggestions } from '../../connectors/meiroConnector'
 import { tokens as t } from '../../theme/tokens'
-import { DEFAULT_MEIRO_PULL_CONFIG, type DryRunResult, type MeiroWebhookArchiveStatus } from './shared'
+import { DEFAULT_MEIRO_PULL_CONFIG, type DryRunResult, type MeiroWebhookArchiveStatus, type MeiroWebhookReprocessResult } from './shared'
 
 interface MeiroImportReplayProps {
   meiroConfig?: MeiroConfig
@@ -10,12 +10,13 @@ interface MeiroImportReplayProps {
   meiroMappingState?: MeiroMappingState
   meiroWebhookArchiveStatus?: MeiroWebhookArchiveStatus
   meiroEventArchiveStatus?: MeiroWebhookArchiveStatus
+  meiroWebhookSuggestions?: MeiroWebhookSuggestions
   meiroDryRunPending: boolean
   meiroDryRunData?: DryRunResult
   importFromMeiroPending: boolean
   importFromMeiroResult?: MeiroImportResult | null
   reprocessWebhookArchivePending: boolean
-  reprocessWebhookArchiveResult?: { import_result?: MeiroImportResult } | null
+  reprocessWebhookArchiveResult?: MeiroWebhookReprocessResult | null
   reprocessQuarantinePending: boolean
   reprocessQuarantineResult?: MeiroQuarantineReprocessResult | null
   quarantineRuns?: { items: MeiroQuarantineRun[]; total: number }
@@ -38,6 +39,7 @@ export default function MeiroImportReplay({
   meiroMappingState,
   meiroWebhookArchiveStatus,
   meiroEventArchiveStatus,
+  meiroWebhookSuggestions,
   meiroDryRunPending,
   meiroDryRunData,
   importFromMeiroPending,
@@ -76,6 +78,7 @@ export default function MeiroImportReplay({
         : `Last ${Number(meiroPullDraft.replay_archive_limit || DEFAULT_MEIRO_PULL_CONFIG.replay_archive_limit || 5000).toLocaleString()} archived batches`
   const replaySourceLabel =
     replaySource === 'events' ? 'Raw events archive' : replaySource === 'profiles' ? 'Profiles archive' : 'Auto (freshest archive)'
+  const replayDiagnostics = reprocessWebhookArchiveResult?.event_reconstruction_diagnostics
   const indexedRecords = (selectedQuarantineRun?.records || []).map((record, index) => ({ record, index }))
   const recordsForDisplay = indexedRecords.filter(({ record }) => {
     if (showResolvedRecords) return true
@@ -174,6 +177,59 @@ export default function MeiroImportReplay({
             <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
               Parser versions: <strong>{Array.from(new Set([...(meiroWebhookArchiveStatus?.parser_versions || []), ...(meiroEventArchiveStatus?.parser_versions || [])])).join(', ') || '—'}</strong>
             </div>
+            {meiroWebhookSuggestions?.event_stream_diagnostics?.available ? (
+              <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, display: 'grid', gap: 6 }}>
+                <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Raw event archive quality</div>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  Usable names <strong>{(meiroWebhookSuggestions.event_stream_diagnostics.usable_event_name_share * 100).toFixed(1)}%</strong>
+                  {' '}· source/medium <strong>{(meiroWebhookSuggestions.event_stream_diagnostics.source_medium_share * 100).toFixed(1)}%</strong>
+                  {' '}· referrer-only <strong>{(meiroWebhookSuggestions.event_stream_diagnostics.referrer_only_share * 100).toFixed(1)}%</strong>
+                  {' '}· conversion linkage <strong>{(meiroWebhookSuggestions.event_stream_diagnostics.conversion_linkage_share * 100).toFixed(1)}%</strong>
+                </div>
+                {(meiroWebhookSuggestions.event_stream_diagnostics.warnings || []).length ? (
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.warning }}>
+                    {(meiroWebhookSuggestions.event_stream_diagnostics.warnings || []).join(' · ')}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {replayDiagnostics ? (
+              <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
+                <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Latest event replay reconstruction</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: t.space.sm }}>
+                  {[
+                    { label: 'Events loaded', value: Number(replayDiagnostics.events_loaded || 0).toLocaleString() },
+                    { label: 'Profiles reconstructed', value: Number(replayDiagnostics.profiles_reconstructed || 0).toLocaleString() },
+                    { label: 'Touchpoints reconstructed', value: Number(replayDiagnostics.touchpoints_reconstructed || 0).toLocaleString() },
+                    { label: 'Conversions reconstructed', value: Number(replayDiagnostics.conversions_reconstructed || 0).toLocaleString() },
+                    { label: 'Attributable profiles', value: Number(replayDiagnostics.attributable_profiles || 0).toLocaleString() },
+                    { label: 'Valid journeys', value: Number(replayDiagnostics.journeys_valid || 0).toLocaleString() },
+                    { label: 'Quarantined', value: Number(replayDiagnostics.journeys_quarantined || 0).toLocaleString() },
+                    { label: 'Persisted', value: Number(replayDiagnostics.journeys_persisted || 0).toLocaleString() },
+                    { label: 'Converted', value: Number(replayDiagnostics.journeys_converted || 0).toLocaleString() },
+                  ].map((item) => (
+                    <div key={item.label} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                      <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold }}>{item.value}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  Average <strong>{Number(replayDiagnostics.avg_events_per_profile || 0).toFixed(2)}</strong> events per reconstructed profile in the latest raw-event replay.
+                </div>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  Average <strong>{Number(replayDiagnostics.avg_touchpoints_per_profile || 0).toFixed(2)}</strong> touchpoints and <strong>{Number(replayDiagnostics.avg_conversions_per_profile || 0).toFixed(2)}</strong> conversions per reconstructed profile.
+                  {typeof replayDiagnostics.persisted_from_attributable_share === 'number' ? (
+                    <> Persisted retention from attributable profiles: <strong>{(replayDiagnostics.persisted_from_attributable_share * 100).toFixed(1)}%</strong>.</>
+                  ) : null}
+                </div>
+                {(replayDiagnostics.warnings || []).length ? (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>
+                    {(replayDiagnostics.warnings || []).join(' · ')}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             <button type="button" onClick={onReplayArchive} disabled={reprocessWebhookArchivePending || meiroMappingState?.approval?.status !== 'approved'} style={{ justifySelf: 'flex-start', border: `1px solid ${t.color.accent}`, background: '#fff', color: t.color.accent, borderRadius: t.radius.sm, padding: '8px 10px', cursor: 'pointer', opacity: reprocessWebhookArchivePending || meiroMappingState?.approval?.status !== 'approved' ? 0.7 : 1 }}>
               {reprocessWebhookArchivePending ? 'Reprocessing…' : 'Replay archive into attribution'}
             </button>

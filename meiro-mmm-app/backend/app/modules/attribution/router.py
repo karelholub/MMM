@@ -528,6 +528,14 @@ def create_router(
         data_dir = get_data_dir_obj()
         cdp_json_path = data_dir / "meiro_cdp_profiles.json"
         cdp_path = data_dir / "meiro_cdp.csv"
+        replay_context_path = data_dir / "meiro_replay_context.json"
+        replay_context: Dict[str, Any] = {}
+        if replay_context_path.exists():
+            try:
+                replay_context = json.loads(replay_context_path.read_text(encoding="utf-8"))
+            except Exception:
+                replay_context = {}
+        replay_context_active = bool(replay_context)
         saved = get_mapping_fn()
         base = attribution_mapping_config_cls(
             touchpoint_attr=saved.get("touchpoint_attr", "touchpoints"),
@@ -554,7 +562,7 @@ def create_router(
                 currency_field=req.mapping.currency_field or base.currency_field,
             )
 
-        source_label = "meiro_webhook"
+        source_label = "meiro_events_replay" if str(replay_context.get("archive_source") or "") == "events" else "meiro_webhook"
         if cdp_json_path.exists():
             with open(cdp_json_path) as fh:
                 profiles = json.load(fh)
@@ -577,6 +585,11 @@ def create_router(
             )
             journeys = result["valid_journeys"]
         except Exception as exc:
+            if replay_context_active and replay_context_path.exists():
+                try:
+                    replay_context_path.unlink()
+                except Exception:
+                    pass
             append_import_run_fn(source_label, 0, "error", error=str(exc))
             raise
 
@@ -603,6 +616,28 @@ def create_router(
         ch_set = {tp.get("channel", "unknown") for j in journeys for tp in j.get("touchpoints", [])}
         summary = result.get("import_summary") or {}
         pull_cfg = get_pull_config_fn()
+        validation_summary = {
+            "cleaning_report": cleaning_report,
+            "top_quarantine_reasons": cleaning_report.get("top_unresolved_patterns") or [],
+        }
+        if replay_context:
+            validation_summary["replay_context"] = replay_context
+            if replay_context.get("event_reconstruction_diagnostics"):
+                validation_summary["event_reconstruction_diagnostics"] = replay_context.get("event_reconstruction_diagnostics")
+        config_snapshot = {
+            "mapping_preset": "saved",
+            "schema_version": "1.0",
+            "dedup_interval_minutes": pull_cfg.get("dedup_interval_minutes"),
+            "dedup_mode": pull_cfg.get("dedup_mode"),
+            "primary_dedup_key": pull_cfg.get("primary_dedup_key"),
+            "fallback_dedup_keys": pull_cfg.get("fallback_dedup_keys"),
+            "strict_ingest": pull_cfg.get("strict_ingest"),
+            "timestamp_fallback_policy": pull_cfg.get("timestamp_fallback_policy"),
+            "value_fallback_policy": pull_cfg.get("value_fallback_policy"),
+            "currency_fallback_policy": pull_cfg.get("currency_fallback_policy"),
+        }
+        if replay_context:
+            config_snapshot["replay_context"] = replay_context
         append_import_run_fn(
             source_label,
             len(journeys),
@@ -612,22 +647,8 @@ def create_router(
             invalid=len(quarantine_records),
             converted=converted,
             channels_detected=sorted(ch_set),
-            validation_summary={
-                "cleaning_report": cleaning_report,
-                "top_quarantine_reasons": cleaning_report.get("top_unresolved_patterns") or [],
-            },
-            config_snapshot={
-                "mapping_preset": "saved",
-                "schema_version": "1.0",
-                "dedup_interval_minutes": pull_cfg.get("dedup_interval_minutes"),
-                "dedup_mode": pull_cfg.get("dedup_mode"),
-                "primary_dedup_key": pull_cfg.get("primary_dedup_key"),
-                "fallback_dedup_keys": pull_cfg.get("fallback_dedup_keys"),
-                "strict_ingest": pull_cfg.get("strict_ingest"),
-                "timestamp_fallback_policy": pull_cfg.get("timestamp_fallback_policy"),
-                "value_fallback_policy": pull_cfg.get("value_fallback_policy"),
-                "currency_fallback_policy": pull_cfg.get("currency_fallback_policy"),
-            },
+            validation_summary=validation_summary,
+            config_snapshot=config_snapshot,
             preview_rows=[
                 {
                     "customer_id": j.get("customer_id", "?"),
@@ -638,6 +659,11 @@ def create_router(
             ],
             import_note=getattr(req, "import_note", None),
         )
+        if replay_context_active and replay_context_path.exists():
+            try:
+                replay_context_path.unlink()
+            except Exception:
+                pass
         set_active_journey_source_fn("meiro")
         return {
             "count": len(journeys),

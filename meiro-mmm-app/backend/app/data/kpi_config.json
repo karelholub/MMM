@@ -1,4 +1,23 @@
 {
-  "definitions": [],
-  "primary_kpi_id": null
+  "definitions": [
+    {
+      "id": "conversion",
+      "label": "Conversion",
+      "type": "primary",
+      "event_name": "conversion",
+      "value_field": "value",
+      "weight": 1.0,
+      "lookback_days": 30
+    },
+    {
+      "id": "form_submit",
+      "label": "Form Submit",
+      "type": "micro",
+      "event_name": "form_submit",
+      "value_field": null,
+      "weight": 0.5,
+      "lookback_days": 14
+    }
+  ],
+  "primary_kpi_id": "conversion"
 }

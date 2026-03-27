@@ -11,6 +11,27 @@ def _status_rank(status: str) -> int:
     return {"blocked": 3, "warning": 2, "stale": 2, "ready": 1}.get(status, 0)
 
 
+def _extract_latest_event_replay_context(get_import_runs_fn: Any) -> Dict[str, Any] | None:
+    try:
+        runs = get_import_runs_fn(status="success", limit=25) or []
+    except Exception:
+        return None
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        validation_summary = run.get("validation_summary") or {}
+        diagnostics = validation_summary.get("event_reconstruction_diagnostics")
+        if isinstance(diagnostics, dict):
+            return {
+                "run_id": run.get("id"),
+                "source": run.get("source"),
+                "started_at": run.get("started_at") or run.get("at"),
+                "import_note": run.get("import_note"),
+                "diagnostics": diagnostics,
+            }
+    return None
+
+
 def build_journey_readiness(
     *,
     journeys: List[Dict[str, Any]],
@@ -29,6 +50,7 @@ def build_journey_readiness(
 
     validation = journeys_summary.get("validation", {})
     settings_validation = (active_settings.validation_json or {}) if active_settings else {}
+    latest_event_replay = _extract_latest_event_replay_context(get_import_runs_fn)
     settings_status = "ready"
     if settings_validation.get("errors"):
         settings_status = "blocked"
@@ -75,6 +97,21 @@ def build_journey_readiness(
         warnings.append(
             f"Primary KPI coverage is {kpi_overview['summary']['primary_coverage'] * 100:.1f}%."
         )
+    replay_diagnostics = (latest_event_replay or {}).get("diagnostics") or {}
+    if replay_diagnostics:
+        touchpoints_reconstructed = int(replay_diagnostics.get("touchpoints_reconstructed") or 0)
+        conversions_reconstructed = int(replay_diagnostics.get("conversions_reconstructed") or 0)
+        attributable_profiles = int(replay_diagnostics.get("attributable_profiles") or 0)
+        journeys_persisted = int(replay_diagnostics.get("journeys_persisted") or 0)
+        if touchpoints_reconstructed == 0:
+            warnings.append("Latest raw-event replay reconstructed no touchpoints, so channel and campaign reporting will stay empty.")
+        elif conversions_reconstructed == 0:
+            warnings.append("Latest raw-event replay reconstructed no conversions, so attribution models have nothing to score.")
+        elif attributable_profiles == 0:
+            warnings.append("Latest raw-event replay did not produce profiles with both touchpoints and conversions.")
+        elif journeys_persisted == 0:
+            warnings.append("Latest raw-event replay found attributable profiles, but none survived import into persisted journeys.")
+        warnings.extend((replay_diagnostics.get("warnings") or [])[:2])
     warnings.extend(active_settings_preview.get("warnings", [])[:3])
 
     recommended_actions: List[Dict[str, Any]] = []
@@ -120,6 +157,7 @@ def build_journey_readiness(
             "journey_quality_average": quality_summary.get("average_score"),
             "journey_quality_low_share": quality_summary.get("low_share"),
             "active_settings_version": getattr(active_settings, "version_label", None),
+            "latest_event_replay": latest_event_replay,
         },
         "blockers": blockers,
         "warnings": warnings[:8],
@@ -130,5 +168,6 @@ def build_journey_readiness(
             "kpi": kpi_overview,
             "settings_preview": active_settings_preview,
             "settings_validation": settings_validation,
+            "latest_event_replay": latest_event_replay,
         },
     }

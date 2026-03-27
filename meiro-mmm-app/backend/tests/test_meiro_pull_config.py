@@ -51,3 +51,20 @@ def test_pull_config_falls_back_to_safe_defaults(monkeypatch, tmp_path):
     assert cfg["dedup_mode"] == "balanced"
     assert cfg["primary_dedup_key"] == "auto"
     assert cfg["fallback_dedup_keys"] == ["conversion_id", "order_id", "event_id"]
+
+
+def test_pull_config_normalizes_primary_ingest_source(monkeypatch, tmp_path):
+    config_path = tmp_path / "meiro_config.json"
+    monkeypatch.setattr(meiro_config, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
+
+    meiro_config.save_pull_config(
+        {
+            "primary_ingest_source": "events",
+            "replay_archive_source": "auto",
+        }
+    )
+
+    cfg = meiro_config.get_pull_config()
+    assert cfg["primary_ingest_source"] == "events"
+    assert cfg["replay_archive_source"] == "auto"

@@ -24,6 +24,27 @@ export interface MeiroWebhookArchiveStatus {
 export interface MeiroWebhookReprocessResult {
   reprocessed_profiles: number
   archive_entries_used: number
+  archive_source?: 'profiles' | 'events'
+  event_reconstruction_diagnostics?: {
+    archive_source: 'events'
+    events_loaded: number
+    profiles_reconstructed: number
+    avg_events_per_profile: number
+    touchpoints_reconstructed?: number
+    conversions_reconstructed?: number
+    profiles_with_touchpoints?: number
+    profiles_with_conversions?: number
+    attributable_profiles?: number
+    avg_touchpoints_per_profile?: number
+    avg_conversions_per_profile?: number
+    journeys_valid?: number
+    journeys_quarantined?: number
+    journeys_invalid?: number
+    journeys_persisted?: number
+    journeys_converted?: number
+    persisted_from_attributable_share?: number
+    warnings?: string[]
+  }
   persisted_to_attribution: boolean
   import_result?: MeiroImportResult
 }
@@ -45,6 +66,7 @@ export const DEFAULT_MEIRO_PULL_CONFIG: MeiroPullConfig = {
   value_fallback_policy: 'default',
   currency_fallback_policy: 'default',
   replay_mode: 'last_n',
+  primary_ingest_source: 'profiles',
   replay_archive_source: 'auto',
   replay_archive_limit: 5000,
   replay_date_from: null,
@@ -101,6 +123,9 @@ export function normalizeMeiroPullConfig(raw?: Partial<MeiroPullConfig> | Record
   const replayMode = typeof cfg.replay_mode === 'string' && ['all', 'last_n', 'date_range'].includes(cfg.replay_mode)
     ? cfg.replay_mode as MeiroPullConfig['replay_mode']
     : DEFAULT_MEIRO_PULL_CONFIG.replay_mode
+  const primaryIngestSource = typeof cfg.primary_ingest_source === 'string' && ['profiles', 'events'].includes(cfg.primary_ingest_source)
+    ? cfg.primary_ingest_source as MeiroPullConfig['primary_ingest_source']
+    : DEFAULT_MEIRO_PULL_CONFIG.primary_ingest_source
   const replayArchiveSource = typeof cfg.replay_archive_source === 'string' && ['auto', 'profiles', 'events'].includes(cfg.replay_archive_source)
     ? cfg.replay_archive_source as MeiroPullConfig['replay_archive_source']
     : DEFAULT_MEIRO_PULL_CONFIG.replay_archive_source
@@ -134,6 +159,7 @@ export function normalizeMeiroPullConfig(raw?: Partial<MeiroPullConfig> | Record
     value_fallback_policy: valueFallbackPolicy,
     currency_fallback_policy: currencyFallbackPolicy,
     replay_mode: replayMode,
+    primary_ingest_source: primaryIngestSource,
     replay_archive_source: replayArchiveSource,
     replay_archive_limit: asInt(cfg.replay_archive_limit, DEFAULT_MEIRO_PULL_CONFIG.replay_archive_limit || 5000, 1, 50000),
     replay_date_from: typeof cfg.replay_date_from === 'string' && cfg.replay_date_from.trim() ? cfg.replay_date_from.trim() : null,

@@ -18,6 +18,7 @@ import MeiroNormalization from './MeiroNormalization'
 import MeiroOverview from './MeiroOverview'
 import MeiroPipesSettings from './MeiroPipesSettings'
 import type { DryRunResult, MeiroTab, MeiroWebhookArchiveStatus } from './shared'
+import type { MeiroWebhookReprocessResult } from './shared'
 
 interface MeiroIntegrationPanelProps {
   meiroTab: MeiroTab
@@ -51,7 +52,7 @@ interface MeiroIntegrationPanelProps {
   importFromMeiroPending: boolean
   importFromMeiroResult?: MeiroImportResult | null
   reprocessWebhookArchivePending: boolean
-  reprocessWebhookArchiveResult?: { import_result?: MeiroImportResult } | null
+  reprocessWebhookArchiveResult?: MeiroWebhookReprocessResult | null
   reprocessQuarantinePending?: boolean
   reprocessQuarantineResult?: MeiroQuarantineReprocessResult | null
   quarantineRuns?: { items: MeiroQuarantineRun[]; total: number }
@@ -205,6 +206,7 @@ export default function MeiroIntegrationPanel(props: MeiroIntegrationPanelProps)
           meiroMappingState={props.meiroMappingState}
           meiroWebhookArchiveStatus={props.meiroWebhookArchiveStatus}
           meiroEventArchiveStatus={props.meiroEventArchiveStatus}
+          meiroWebhookSuggestions={props.meiroWebhookSuggestions}
           meiroDryRunPending={props.meiroDryRunPending}
           meiroDryRunData={props.meiroDryRunData}
           importFromMeiroPending={props.importFromMeiroPending}

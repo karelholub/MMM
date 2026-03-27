@@ -391,6 +391,7 @@ def _normalize_pull_config(raw: Any) -> Dict[str, Any]:
     allowed_timestamp_fallback = {"profile", "conversion", "quarantine"}
     allowed_replay_modes = {"all", "last_n", "date_range"}
     allowed_replay_sources = {"auto", "profiles", "events"}
+    allowed_primary_sources = {"profiles", "events"}
 
     def _as_int(value: Any, default: int, minimum: int, maximum: int) -> int:
         try:
@@ -490,6 +491,9 @@ def _normalize_pull_config(raw: Any) -> Dict[str, Any]:
     replay_mode = str(raw.get("replay_mode") or "last_n").strip().lower()
     if replay_mode not in allowed_replay_modes:
         replay_mode = "last_n"
+    primary_ingest_source = str(raw.get("primary_ingest_source") or "profiles").strip().lower()
+    if primary_ingest_source not in allowed_primary_sources:
+        primary_ingest_source = "profiles"
     replay_archive_source = str(raw.get("replay_archive_source") or "auto").strip().lower()
     if replay_archive_source not in allowed_replay_sources:
         replay_archive_source = "auto"
@@ -511,6 +515,7 @@ def _normalize_pull_config(raw: Any) -> Dict[str, Any]:
         "value_fallback_policy": value_fallback_policy,
         "currency_fallback_policy": currency_fallback_policy,
         "replay_mode": replay_mode,
+        "primary_ingest_source": primary_ingest_source,
         "replay_archive_source": replay_archive_source,
         "replay_archive_limit": _as_int(raw.get("replay_archive_limit"), 5000, 1, 50000),
         "replay_date_from": str(raw.get("replay_date_from") or "").strip() or None,

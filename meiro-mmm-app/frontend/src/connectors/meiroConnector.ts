@@ -8,6 +8,7 @@ export interface MeiroConfig {
   has_key: boolean
   webhook_url: string
   event_webhook_url?: string
+  primary_ingest_source?: 'profiles' | 'events'
   webhook_last_received_at: string | null
   webhook_received_count: number
   event_webhook_last_received_at?: string | null
@@ -45,6 +46,7 @@ export interface MeiroWebhookEvent {
   received_count: number
   stored_total: number
   replace: boolean
+  ingest_kind?: 'profiles' | 'events' | string | null
   ip?: string | null
   user_agent?: string | null
   payload_shape?: string | null
@@ -84,6 +86,7 @@ export interface MeiroPullConfig {
   value_fallback_policy: 'default' | 'zero' | 'quarantine'
   currency_fallback_policy: 'default' | 'quarantine'
   replay_mode?: 'all' | 'last_n' | 'date_range'
+  primary_ingest_source?: 'profiles' | 'events'
   replay_archive_source?: 'auto' | 'profiles' | 'events'
   replay_archive_limit?: number
   replay_date_from?: string | null
@@ -99,6 +102,20 @@ export interface MeiroWebhookSuggestions {
   events_analyzed: number
   total_conversions_observed: number
   total_touchpoints_observed: number
+  event_stream_diagnostics?: {
+    available: boolean
+    batches_examined: number
+    events_examined: number
+    usable_event_name_share: number
+    identity_share: number
+    source_medium_share: number
+    referrer_only_share: number
+    touchpoint_like_events: number
+    conversion_like_events: number
+    conversion_linkage_share: number
+    avg_reconstructed_profiles_per_event: number
+    warnings?: string[]
+  }
   dedup_key_suggestion: string
   dedup_key_candidates: Array<{
     key: string

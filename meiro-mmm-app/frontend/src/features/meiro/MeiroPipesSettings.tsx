@@ -130,7 +130,7 @@ export default function MeiroPipesSettings({
           </button>
         </div>
         <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
-          Received: {Number(meiroConfig?.event_webhook_received_count ?? 0).toLocaleString()} raw events · Last received: {relativeTime(meiroConfig?.event_webhook_last_received_at)} · Archive: {Number(meiroConfig?.event_webhook_received_count ?? 0).toLocaleString()} events
+          Received: {Number(meiroConfig?.event_webhook_received_count ?? 0).toLocaleString()} raw events · Last received: {relativeTime(meiroConfig?.event_webhook_last_received_at)} · Archive: {meiroEventArchiveStatus?.available ? `${Number(meiroEventArchiveStatus.entries || 0).toLocaleString()} batches / ${Number(meiroEventArchiveStatus.events_received || 0).toLocaleString()} events` : 'empty'}
         </div>
         <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
           Health check URL: <code>{eventWebhookHealthUrl}</code>
@@ -138,6 +138,31 @@ export default function MeiroPipesSettings({
         <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
           Uses the same <code>X-Meiro-Webhook-Secret</code> as the profile webhook.
         </div>
+      </div>
+
+      <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.bg, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
+        <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Source selection</div>
+        <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+          Choose which Meiro webhook stream should be treated as the primary attribution source. Keep both active only while validating the raw-event path.
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: t.space.sm }}>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+            Primary attribution source
+            <select
+              value={meiroPullDraft.primary_ingest_source || DEFAULT_MEIRO_PULL_CONFIG.primary_ingest_source}
+              onChange={(e) => setMeiroPullDraft((prev) => ({ ...prev, primary_ingest_source: e.target.value as MeiroPullConfig['primary_ingest_source'] }))}
+              style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, background: '#fff' }}
+            >
+              <option value="profiles">Profiles webhook</option>
+              <option value="events">Raw events webhook</option>
+            </select>
+          </label>
+        </div>
+        {(Number(meiroConfig?.webhook_received_count || 0) > 0 && Number(meiroConfig?.event_webhook_received_count || 0) > 0) ? (
+          <div style={{ fontSize: t.font.sizeXs, color: t.color.warning }}>
+            Both profile and raw-event webhooks are receiving live traffic. Replay source should usually be pinned to the same source as the primary attribution source.
+          </div>
+        ) : null}
       </div>
 
       <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.bg, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
@@ -360,7 +385,7 @@ export default function MeiroPipesSettings({
               onChange={(e) => setMeiroPullDraft((prev) => ({ ...prev, replay_archive_source: e.target.value as MeiroPullConfig['replay_archive_source'] }))}
               style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, background: '#fff' }}
             >
-              <option value="auto">Auto (freshest archive)</option>
+              <option value="auto">Auto (primary source, then freshest archive)</option>
               <option value="profiles">Profiles archive</option>
               <option value="events">Raw events archive</option>
             </select>
@@ -418,7 +443,8 @@ export default function MeiroPipesSettings({
             <thead>
               <tr>
                 <th>Received</th>
-                <th>Profiles</th>
+                <th>Records</th>
+                <th>Kind</th>
                 <th>Mode</th>
                 <th>Stored total</th>
                 <th>Source IP</th>
@@ -429,6 +455,7 @@ export default function MeiroPipesSettings({
                 <tr key={`${event.received_at || 'event'}-${idx}`}>
                   <td>{relativeTime(event.received_at)}</td>
                   <td>{Number(event.received_count || 0).toLocaleString()}</td>
+                  <td>{String((event as MeiroWebhookEvent & { ingest_kind?: string }).ingest_kind || 'profiles')}</td>
                   <td>{event.replace ? 'replace' : 'append'}</td>
                   <td>{Number(event.stored_total || 0).toLocaleString()}</td>
                   <td>{event.ip || '—'}</td>
@@ -436,7 +463,7 @@ export default function MeiroPipesSettings({
               ))}
               {!(meiroWebhookEvents?.items || []).length && (
                 <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', color: t.color.textSecondary }}>No webhook events received yet.</td>
+                  <td colSpan={6} style={{ textAlign: 'center', color: t.color.textSecondary }}>No webhook events received yet.</td>
                 </tr>
               )}
             </tbody>

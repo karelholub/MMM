@@ -154,6 +154,19 @@ interface CampaignSummaryResponse {
     status: string
     blockers: string[]
     warnings: string[]
+    details?: {
+      latest_event_replay?: {
+        diagnostics?: {
+          events_loaded?: number
+          profiles_reconstructed?: number
+          touchpoints_reconstructed?: number
+          conversions_reconstructed?: number
+          attributable_profiles?: number
+          journeys_persisted?: number
+          warnings?: string[]
+        }
+      } | null
+    }
   } | null
   consistency_warnings?: string[]
   notes?: string[]
@@ -418,6 +431,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
   }, [campaigns, search, channelFilter, directMode])
 
   const channelsList = useMemo(() => Array.from(new Set(campaigns.map((c) => c.channel))).sort(), [campaigns])
+  const latestEventReplayDiagnostics = summaryQuery.data?.readiness?.details?.latest_event_replay?.diagnostics
 
   const sortedCampaigns = useMemo(() => {
     if (!filteredCampaigns.length) return []
@@ -621,6 +635,19 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
         <p style={{ margin: 0, fontSize: t.font.sizeMd, color: t.color.textSecondary }}>
           {'Load conversion journeys with a "campaign" field on touchpoints (e.g. load sample data), then run attribution models.'}
         </p>
+        {latestEventReplayDiagnostics ? (
+          <div style={{ marginTop: t.space.md, display: 'grid', gap: t.space.sm }}>
+            <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Latest raw-event replay diagnosis</div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Events {Number(latestEventReplayDiagnostics.events_loaded || 0).toLocaleString()} · reconstructed profiles {Number(latestEventReplayDiagnostics.profiles_reconstructed || 0).toLocaleString()} · touchpoints {Number(latestEventReplayDiagnostics.touchpoints_reconstructed || 0).toLocaleString()} · conversions {Number(latestEventReplayDiagnostics.conversions_reconstructed || 0).toLocaleString()} · attributable profiles {Number(latestEventReplayDiagnostics.attributable_profiles || 0).toLocaleString()} · persisted journeys {Number(latestEventReplayDiagnostics.journeys_persisted || 0).toLocaleString()}
+            </div>
+            {!!latestEventReplayDiagnostics.warnings?.length && (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>
+                {latestEventReplayDiagnostics.warnings.join(' · ')}
+              </div>
+            )}
+          </div>
+        ) : null}
       </div>
     )
   }

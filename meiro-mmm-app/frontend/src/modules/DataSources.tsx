@@ -860,6 +860,19 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
                   onActionClick={handleReadinessAction as any}
                 />
               ) : null}
+              {journeysSummary?.readiness?.details?.latest_event_replay?.diagnostics ? (
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.surface, padding: t.space.md, display: 'grid', gap: t.space.sm }}>
+                  <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Latest raw-event replay diagnosis</div>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    Events {Number(journeysSummary.readiness.details.latest_event_replay.diagnostics.events_loaded || 0).toLocaleString()} · reconstructed profiles {Number(journeysSummary.readiness.details.latest_event_replay.diagnostics.profiles_reconstructed || 0).toLocaleString()} · touchpoints {Number(journeysSummary.readiness.details.latest_event_replay.diagnostics.touchpoints_reconstructed || 0).toLocaleString()} · conversions {Number(journeysSummary.readiness.details.latest_event_replay.diagnostics.conversions_reconstructed || 0).toLocaleString()} · attributable profiles {Number(journeysSummary.readiness.details.latest_event_replay.diagnostics.attributable_profiles || 0).toLocaleString()} · persisted journeys {Number(journeysSummary.readiness.details.latest_event_replay.diagnostics.journeys_persisted || 0).toLocaleString()}
+                  </div>
+                  {!!journeysSummary.readiness.details.latest_event_replay.diagnostics.warnings?.length && (
+                    <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>
+                      {journeysSummary.readiness.details.latest_event_replay.diagnostics.warnings.join(' · ')}
+                    </div>
+                  )}
+                </div>
+              ) : null}
               <div style={{ display: 'grid', gap: t.space.sm, gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))' }}>
                 {readiness.map((kpi) => (
                   <button
@@ -1010,7 +1023,13 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
                         <td>{statusBadge(run.status || 'not_connected')}</td>
                         <td>{run.valid ?? run.count ?? 0}</td>
                         <td style={{ color: t.color.textSecondary, fontSize: t.font.sizeXs }}>
-                          {run.validation_summary?.cleaning_report ? (
+                          {run.validation_summary?.event_reconstruction_diagnostics ? (
+                            <>
+                              events {Number(run.validation_summary.event_reconstruction_diagnostics.events_loaded || 0).toLocaleString()}
+                              {' '}· attributable {Number(run.validation_summary.event_reconstruction_diagnostics.attributable_profiles || 0).toLocaleString()}
+                              {' '}· persisted {Number(run.validation_summary.event_reconstruction_diagnostics.journeys_persisted || 0).toLocaleString()}
+                            </>
+                          ) : run.validation_summary?.cleaning_report ? (
                             <>
                               fixed {Number(run.validation_summary.cleaning_report.fixed || 0).toLocaleString()}
                               {' '}· quarantined {Number(run.validation_summary.cleaning_report.dropped || 0).toLocaleString()}
@@ -1113,6 +1132,38 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
                           {!!importRunDetailQuery.data.validation_summary.cleaning_report.top_unresolved_patterns?.length && (
                             <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
                               Top unresolved patterns: {importRunDetailQuery.data.validation_summary.cleaning_report.top_unresolved_patterns.map((item: any) => `${item.code} (${item.count})`).join(' · ')}
+                            </div>
+                          )}
+                        </div>
+                      ) : null}
+
+                      {importRunDetailQuery.data.validation_summary?.event_reconstruction_diagnostics ? (
+                        <div style={{ display: 'grid', gap: t.space.sm }}>
+                          <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Event replay reconstruction</div>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: t.space.sm }}>
+                            {[
+                              { label: 'Events loaded', value: Number(importRunDetailQuery.data.validation_summary.event_reconstruction_diagnostics.events_loaded || 0).toLocaleString() },
+                              { label: 'Profiles reconstructed', value: Number(importRunDetailQuery.data.validation_summary.event_reconstruction_diagnostics.profiles_reconstructed || 0).toLocaleString() },
+                              { label: 'Touchpoints', value: Number(importRunDetailQuery.data.validation_summary.event_reconstruction_diagnostics.touchpoints_reconstructed || 0).toLocaleString() },
+                              { label: 'Conversions', value: Number(importRunDetailQuery.data.validation_summary.event_reconstruction_diagnostics.conversions_reconstructed || 0).toLocaleString() },
+                              { label: 'Attributable profiles', value: Number(importRunDetailQuery.data.validation_summary.event_reconstruction_diagnostics.attributable_profiles || 0).toLocaleString() },
+                              { label: 'Persisted journeys', value: Number(importRunDetailQuery.data.validation_summary.event_reconstruction_diagnostics.journeys_persisted || 0).toLocaleString() },
+                            ].map((item) => (
+                              <div key={item.label} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                                <div style={{ fontSize: t.font.sizeBase, fontWeight: t.font.weightSemibold }}>{item.value}</div>
+                              </div>
+                            ))}
+                          </div>
+                          <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                            Average {Number(importRunDetailQuery.data.validation_summary.event_reconstruction_diagnostics.avg_events_per_profile || 0).toFixed(2)} events, {Number(importRunDetailQuery.data.validation_summary.event_reconstruction_diagnostics.avg_touchpoints_per_profile || 0).toFixed(2)} touchpoints, and {Number(importRunDetailQuery.data.validation_summary.event_reconstruction_diagnostics.avg_conversions_per_profile || 0).toFixed(2)} conversions per reconstructed profile.
+                            {typeof importRunDetailQuery.data.validation_summary.event_reconstruction_diagnostics.persisted_from_attributable_share === 'number' ? (
+                              <> Persisted retention from attributable profiles: {(importRunDetailQuery.data.validation_summary.event_reconstruction_diagnostics.persisted_from_attributable_share * 100).toFixed(1)}%.</>
+                            ) : null}
+                          </div>
+                          {!!importRunDetailQuery.data.validation_summary.event_reconstruction_diagnostics.warnings?.length && (
+                            <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>
+                              {importRunDetailQuery.data.validation_summary.event_reconstruction_diagnostics.warnings.join(' · ')}
                             </div>
                           )}
                         </div>

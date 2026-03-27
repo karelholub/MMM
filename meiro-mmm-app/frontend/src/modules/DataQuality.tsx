@@ -77,6 +77,20 @@ interface MeiroWebhookSuggestions {
   events_analyzed: number
   total_conversions_observed: number
   total_touchpoints_observed: number
+  event_stream_diagnostics?: {
+    available: boolean
+    batches_examined: number
+    events_examined: number
+    usable_event_name_share: number
+    identity_share: number
+    source_medium_share: number
+    referrer_only_share: number
+    touchpoint_like_events: number
+    conversion_like_events: number
+    conversion_linkage_share: number
+    avg_reconstructed_profiles_per_event: number
+    warnings?: string[]
+  }
   dedup_key_suggestion: string
   sanitation_suggestions?: Array<{
     id: string
@@ -1144,6 +1158,38 @@ export default function DataQuality() {
               {' '}<strong>{meiroWebhookSuggestionsQuery.data.total_touchpoints_observed.toLocaleString()}</strong> touchpoints.
               {' '}Suggested dedup key: <strong>{meiroWebhookSuggestionsQuery.data.dedup_key_suggestion}</strong>.
             </div>
+
+            {meiroWebhookSuggestionsQuery.data.event_stream_diagnostics?.available ? (
+              <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, display: 'grid', gap: t.space.sm }}>
+                <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                  Raw event stream diagnostics
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: t.space.sm }}>
+                  {[
+                    { label: 'Usable names', value: `${(meiroWebhookSuggestionsQuery.data.event_stream_diagnostics.usable_event_name_share * 100).toFixed(1)}%` },
+                    { label: 'Identity coverage', value: `${(meiroWebhookSuggestionsQuery.data.event_stream_diagnostics.identity_share * 100).toFixed(1)}%` },
+                    { label: 'Source/medium', value: `${(meiroWebhookSuggestionsQuery.data.event_stream_diagnostics.source_medium_share * 100).toFixed(1)}%` },
+                    { label: 'Referrer-only', value: `${(meiroWebhookSuggestionsQuery.data.event_stream_diagnostics.referrer_only_share * 100).toFixed(1)}%` },
+                    { label: 'Conversion linkage', value: `${(meiroWebhookSuggestionsQuery.data.event_stream_diagnostics.conversion_linkage_share * 100).toFixed(1)}%` },
+                    { label: 'Touchpoint-like', value: Number(meiroWebhookSuggestionsQuery.data.event_stream_diagnostics.touchpoint_like_events || 0).toLocaleString() },
+                  ].map((item) => (
+                    <div key={item.label} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                      <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold }}>{item.value}</div>
+                    </div>
+                  ))}
+                </div>
+                {(meiroWebhookSuggestionsQuery.data.event_stream_diagnostics.warnings || []).length ? (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>
+                    {(meiroWebhookSuggestionsQuery.data.event_stream_diagnostics.warnings || []).join(' · ')}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    Recent raw events look structurally usable for reconstruction.
+                  </div>
+                )}
+              </div>
+            ) : null}
 
             <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md }}>
               <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, marginBottom: t.space.xs }}>

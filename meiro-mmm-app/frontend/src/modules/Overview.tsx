@@ -253,10 +253,34 @@ interface JourneyReadinessResponse {
     primary_kpi_coverage: number
     taxonomy_unknown_share: number
     freshness_hours?: number | null
+    latest_event_replay?: {
+      diagnostics?: {
+        events_loaded?: number
+        profiles_reconstructed?: number
+        touchpoints_reconstructed?: number
+        conversions_reconstructed?: number
+        attributable_profiles?: number
+        journeys_persisted?: number
+        warnings?: string[]
+      }
+    } | null
   }
   blockers: string[]
   warnings: string[]
   recommended_actions?: RecommendedActionItem[]
+  details?: {
+    latest_event_replay?: {
+      diagnostics?: {
+        events_loaded?: number
+        profiles_reconstructed?: number
+        touchpoints_reconstructed?: number
+        conversions_reconstructed?: number
+        attributable_profiles?: number
+        journeys_persisted?: number
+        warnings?: string[]
+      }
+    } | null
+  }
 }
 
 interface JourneyOverviewAlertRow {
@@ -463,6 +487,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
   const freshness = summary?.freshness
   const trendInsights = trendsQuery.data
   const journeysReadiness = summary?.readiness
+  const latestEventReplayDiagnostics = journeysReadiness?.details?.latest_event_replay?.diagnostics
   const overviewAttentionQueue = summary?.attention_queue ?? journeysReadiness?.recommended_actions ?? []
 
   const handleOverviewAction = (action: RecommendedActionItem) => {
@@ -620,6 +645,19 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
           Connect data sources and load journeys to see KPIs, drivers, and alerts here.
         </p>
       </div>
+      {latestEventReplayDiagnostics ? (
+        <div style={{ display: 'grid', gap: t.space.sm, textAlign: 'left', border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.lg, background: t.color.bgSubtle }}>
+          <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Latest raw-event replay diagnosis</div>
+          <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+            Events {Number(latestEventReplayDiagnostics.events_loaded || 0).toLocaleString()} · reconstructed profiles {Number(latestEventReplayDiagnostics.profiles_reconstructed || 0).toLocaleString()} · touchpoints {Number(latestEventReplayDiagnostics.touchpoints_reconstructed || 0).toLocaleString()} · conversions {Number(latestEventReplayDiagnostics.conversions_reconstructed || 0).toLocaleString()} · attributable profiles {Number(latestEventReplayDiagnostics.attributable_profiles || 0).toLocaleString()} · persisted journeys {Number(latestEventReplayDiagnostics.journeys_persisted || 0).toLocaleString()}
+          </div>
+          {!!latestEventReplayDiagnostics.warnings?.length && (
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>
+              {latestEventReplayDiagnostics.warnings.join(' · ')}
+            </div>
+          )}
+        </div>
+      ) : null}
       <div style={{ display: 'flex', justifyContent: 'center', gap: t.space.md, flexWrap: 'wrap' }}>
         <button
           type="button"

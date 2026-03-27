@@ -33,21 +33,35 @@ def build_meiro_readiness(
     meiro_config: Dict[str, Any],
     mapping_state: Dict[str, Any],
     archive_status: Dict[str, Any],
+    event_archive_status: Optional[Dict[str, Any]] = None,
     pull_config: Dict[str, Any],
+    raw_event_diagnostics: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     approval = (mapping_state.get("approval") or {}) if isinstance(mapping_state, dict) else {}
     approval_status = str(approval.get("status") or "unreviewed").strip().lower()
-    webhook_received_count = int(meiro_config.get("webhook_received_count") or 0)
+    profile_webhook_received_count = int(meiro_config.get("webhook_received_count") or 0)
+    event_webhook_received_count = int(meiro_config.get("event_webhook_received_count") or 0)
     webhook_has_secret = bool(meiro_config.get("webhook_has_secret"))
-    archive_entries = int(archive_status.get("entries") or 0)
+    profile_archive_entries = int(archive_status.get("entries") or 0)
+    event_archive_status = event_archive_status or {}
+    event_archive_entries = int(event_archive_status.get("entries") or 0)
+    archive_entries = profile_archive_entries + event_archive_entries
     conversion_selector = str(pull_config.get("conversion_selector") or "").strip()
+    primary_ingest_source = str(
+        pull_config.get("primary_ingest_source")
+        or meiro_config.get("primary_ingest_source")
+        or "profiles"
+    ).strip().lower() or "profiles"
+    replay_archive_source = str(pull_config.get("replay_archive_source") or "auto").strip().lower() or "auto"
+    dual_ingest_detected = profile_webhook_received_count > 0 and event_webhook_received_count > 0
+    raw_event_diagnostics = raw_event_diagnostics or {}
 
     blockers: List[str] = []
     warnings: List[str] = []
     reasons: List[str] = []
     actions: List[Dict[str, Any]] = []
 
-    has_any_ingestion_path = meiro_connected or webhook_received_count > 0
+    has_any_ingestion_path = meiro_connected or profile_webhook_received_count > 0 or event_webhook_received_count > 0
     if not has_any_ingestion_path:
         blockers.append("Neither Meiro CDP pull nor Meiro Pipes webhook ingestion is active.")
         actions.append(
@@ -74,9 +88,11 @@ def build_meiro_readiness(
             )
         )
 
-    if webhook_received_count > 0:
-        reasons.append(f"Meiro Pipes has delivered {webhook_received_count} payloads.")
-    else:
+    if profile_webhook_received_count > 0:
+        reasons.append(f"Meiro Pipes profiles webhook has delivered {profile_webhook_received_count} payloads.")
+    if event_webhook_received_count > 0:
+        reasons.append(f"Meiro Pipes raw events webhook has delivered {event_webhook_received_count} events.")
+    if profile_webhook_received_count == 0 and event_webhook_received_count == 0:
         warnings.append("No Meiro Pipes webhook payloads have been received yet.")
         actions.append(
             _action(
@@ -86,6 +102,45 @@ def build_meiro_readiness(
                 target_tab="pipes",
             )
         )
+
+    if primary_ingest_source == "events":
+        if event_webhook_received_count <= 0 and event_archive_entries <= 0:
+            warnings.append("Primary Meiro source is set to raw events, but no raw-event traffic has been received yet.")
+        else:
+            reasons.append("Raw events are configured as the primary Meiro attribution source.")
+        if raw_event_diagnostics.get("available"):
+            if float(raw_event_diagnostics.get("usable_event_name_share") or 0.0) < 0.6:
+                warnings.append("Raw-event naming quality is still weak for attribution.")
+            if float(raw_event_diagnostics.get("source_medium_share") or 0.0) < 0.3:
+                warnings.append("Raw-event source/medium coverage is still low.")
+            if float(raw_event_diagnostics.get("conversion_linkage_share") or 0.0) < 0.6 and int(raw_event_diagnostics.get("conversion_like_events") or 0) > 0:
+                warnings.append("Raw-event conversion linkage coverage is still low.")
+    else:
+        if profile_webhook_received_count <= 0 and profile_archive_entries <= 0:
+            warnings.append("Primary Meiro source is set to profiles, but no profile payloads have been received yet.")
+        else:
+            reasons.append("Profiles are configured as the primary Meiro attribution source.")
+
+    if dual_ingest_detected:
+        warnings.append("Both Meiro profile and raw-event webhooks are active. Only one should be treated as the primary attribution source.")
+        actions.append(
+            _action(
+                "review_meiro_primary_source",
+                "Choose a single primary Meiro source",
+                benefit="Avoid overlapping profile and raw-event attribution inputs",
+                target_tab="pipes",
+            )
+        )
+        if replay_archive_source == "auto":
+            warnings.append("Replay source is set to auto while both Meiro webhooks are active.")
+            actions.append(
+                _action(
+                    "pin_meiro_replay_source",
+                    "Pin replay source instead of auto",
+                    benefit="Keep replays aligned with the intended primary Meiro source",
+                    target_tab="pipes",
+                )
+            )
 
     if not webhook_has_secret:
         warnings.append("Webhook secret is not configured for Meiro Pipes.")
@@ -115,7 +170,7 @@ def build_meiro_readiness(
         reasons.append("Current Meiro mapping is approved.")
 
     if archive_entries > 0:
-        warnings.append(f"{archive_entries} archived webhook batches are available for replay.")
+        warnings.append(f"{archive_entries} archived Meiro webhook batches are available for replay.")
         actions.append(
             _action(
                 "review_replay_backlog",
@@ -163,14 +218,22 @@ def build_meiro_readiness(
         "confidence": _confidence(score),
         "summary": {
             "cdp_connected": meiro_connected,
-            "webhook_received_count": webhook_received_count,
+            "webhook_received_count": profile_webhook_received_count,
+            "event_webhook_received_count": event_webhook_received_count,
             "webhook_has_secret": webhook_has_secret,
             "mapping_status": approval_status or "unreviewed",
             "mapping_version": int(mapping_state.get("version") or 0) if isinstance(mapping_state, dict) else 0,
             "archive_entries": archive_entries,
+            "profile_archive_entries": profile_archive_entries,
+            "event_archive_entries": event_archive_entries,
             "last_test_at": meiro_config.get("last_test_at"),
             "last_webhook_received_at": meiro_config.get("webhook_last_received_at") or archive_status.get("last_received_at"),
+            "last_event_webhook_received_at": meiro_config.get("event_webhook_last_received_at") or event_archive_status.get("last_received_at"),
             "conversion_selector": conversion_selector or None,
+            "primary_ingest_source": primary_ingest_source,
+            "replay_archive_source": replay_archive_source,
+            "dual_ingest_detected": dual_ingest_detected,
+            "raw_event_diagnostics": raw_event_diagnostics,
         },
         "blockers": blockers,
         "warnings": warnings,

@@ -9,6 +9,38 @@ export interface JourneyReadiness {
     taxonomy_unknown_share: number
     journeys_loaded?: number
     freshness_hours?: number | null
+    latest_event_replay?: {
+      run_id?: string
+      source?: string
+      started_at?: string | null
+      import_note?: string | null
+      diagnostics?: {
+        events_loaded?: number
+        profiles_reconstructed?: number
+        touchpoints_reconstructed?: number
+        conversions_reconstructed?: number
+        attributable_profiles?: number
+        journeys_persisted?: number
+        warnings?: string[]
+      }
+    } | null
+  }
+  details?: {
+    latest_event_replay?: {
+      run_id?: string
+      source?: string
+      started_at?: string | null
+      import_note?: string | null
+      diagnostics?: {
+        events_loaded?: number
+        profiles_reconstructed?: number
+        touchpoints_reconstructed?: number
+        conversions_reconstructed?: number
+        attributable_profiles?: number
+        journeys_persisted?: number
+        warnings?: string[]
+      }
+    } | null
   }
 }
 

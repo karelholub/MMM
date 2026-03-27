@@ -47,13 +47,34 @@ interface MeiroReadinessResponse {
   summary: {
     cdp_connected: boolean
     webhook_received_count: number
+    event_webhook_received_count?: number
     webhook_has_secret: boolean
     mapping_status: string
     mapping_version: number
     archive_entries: number
+    profile_archive_entries?: number
+    event_archive_entries?: number
     last_test_at?: string | null
     last_webhook_received_at?: string | null
+    last_event_webhook_received_at?: string | null
     conversion_selector?: string | null
+    primary_ingest_source?: 'profiles' | 'events'
+    replay_archive_source?: 'auto' | 'profiles' | 'events'
+    dual_ingest_detected?: boolean
+    raw_event_diagnostics?: {
+      available: boolean
+      batches_examined: number
+      events_examined: number
+      usable_event_name_share: number
+      identity_share: number
+      source_medium_share: number
+      referrer_only_share: number
+      touchpoint_like_events: number
+      conversion_like_events: number
+      conversion_linkage_share: number
+      avg_reconstructed_profiles_per_event: number
+      warnings?: string[]
+    }
   }
   blockers: string[]
   warnings: string[]
@@ -284,7 +305,7 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
   const readiness = meiroReadinessQuery.data
   const mappingStatus = (readiness?.summary.mapping_status || meiroMappingQuery.data?.approval?.status || '').toLowerCase()
   const mappingNeedsReview = mappingStatus !== 'approved'
-  const archiveBacklog = Number(readiness?.summary.archive_entries || meiroWebhookArchiveStatusQuery.data?.entries || 0) > 0
+  const archiveBacklog = Number(readiness?.summary.archive_entries || 0) > 0
   const tone = statusTone(
     readiness?.summary.cdp_connected ?? !!meiroConfigQuery.data?.connected,
     readiness?.status === 'warning' || readiness?.status === 'blocked' || mappingNeedsReview || archiveBacklog,
@@ -362,7 +383,17 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
                 {
                   label: 'Pipes webhook',
                   value: webhookSecretValue || readiness?.summary.webhook_has_secret ? 'Configured' : 'Not configured',
-                  meta: (readiness?.summary.webhook_received_count || 0) > 0 ? `${Number(readiness?.summary.webhook_received_count || 0).toLocaleString()} payloads received` : 'No recent webhook events',
+                  meta:
+                    (Number(readiness?.summary.webhook_received_count || 0) > 0 || Number(readiness?.summary.event_webhook_received_count || 0) > 0)
+                      ? `${Number(readiness?.summary.webhook_received_count || 0).toLocaleString()} profile payloads · ${Number(readiness?.summary.event_webhook_received_count || 0).toLocaleString()} raw events`
+                      : 'No recent webhook events',
+                },
+                {
+                  label: 'Primary source',
+                  value: (readiness?.summary.primary_ingest_source || meiroPullDraft.primary_ingest_source || 'profiles') === 'events' ? 'Raw events' : 'Profiles',
+                  meta: readiness?.summary.dual_ingest_detected
+                    ? `Dual webhook traffic detected · replay ${readiness?.summary.replay_archive_source || meiroPullDraft.replay_archive_source || 'auto'}`
+                    : `Replay ${readiness?.summary.replay_archive_source || meiroPullDraft.replay_archive_source || 'auto'}`,
                 },
                 {
                   label: 'Mapping approval',
@@ -372,8 +403,19 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
                 {
                   label: 'Replay backlog',
                   value: String(readiness?.summary.archive_entries || 0),
-                  meta: archiveBacklog ? 'Archived events available for replay' : 'No archived backlog detected',
+                  meta: archiveBacklog
+                    ? `${Number(readiness?.summary.profile_archive_entries || 0).toLocaleString()} profile batches · ${Number(readiness?.summary.event_archive_entries || 0).toLocaleString()} event batches`
+                    : 'No archived backlog detected',
                 },
+                ...(readiness?.summary.raw_event_diagnostics?.available
+                  ? [
+                      {
+                        label: 'Raw event quality',
+                        value: `${((readiness.summary.raw_event_diagnostics.usable_event_name_share || 0) * 100).toFixed(0)}%`,
+                        meta: `usable names · ${((readiness.summary.raw_event_diagnostics.source_medium_share || 0) * 100).toFixed(0)}% source/medium · ${((readiness.summary.raw_event_diagnostics.conversion_linkage_share || 0) * 100).toFixed(0)}% conversion linkage`,
+                      },
+                    ]
+                  : []),
               ].map((item) => (
                 <div
                   key={item.label}

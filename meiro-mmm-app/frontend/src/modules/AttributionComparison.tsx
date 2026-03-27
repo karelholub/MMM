@@ -19,6 +19,19 @@ interface JourneyReadiness {
     primary_kpi_coverage: number
     taxonomy_unknown_share: number
   }
+  details?: {
+    latest_event_replay?: {
+      diagnostics?: {
+        events_loaded?: number
+        profiles_reconstructed?: number
+        touchpoints_reconstructed?: number
+        conversions_reconstructed?: number
+        attributable_profiles?: number
+        journeys_persisted?: number
+        warnings?: string[]
+      }
+    } | null
+  }
 }
 
 type Reliability = 'ok' | 'warning' | 'unreliable'
@@ -165,6 +178,7 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
   const conversionKey = configMeta?.conversion_key ?? journeysSummary?.primary_kpi_id ?? null
   const configVersion = configMeta?.config_version ?? null
   const readiness = journeysSummary?.readiness ?? null
+  const latestEventReplayDiagnostics = readiness?.details?.latest_event_replay?.diagnostics
 
   const baselineKey = useMemo(() => {
     if (models.includes(baselineModel)) return baselineModel
@@ -311,6 +325,19 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
         <p style={{ margin: 0, fontSize: t.font.sizeMd, color: t.color.textSecondary }}>
           Run models first: load journeys and click &quot;Re-run All Models&quot; in the header.
         </p>
+        {latestEventReplayDiagnostics ? (
+          <div style={{ marginTop: t.space.md, display: 'grid', gap: t.space.sm }}>
+            <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Latest raw-event replay diagnosis</div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Events {Number(latestEventReplayDiagnostics.events_loaded || 0).toLocaleString()} · reconstructed profiles {Number(latestEventReplayDiagnostics.profiles_reconstructed || 0).toLocaleString()} · touchpoints {Number(latestEventReplayDiagnostics.touchpoints_reconstructed || 0).toLocaleString()} · conversions {Number(latestEventReplayDiagnostics.conversions_reconstructed || 0).toLocaleString()} · attributable profiles {Number(latestEventReplayDiagnostics.attributable_profiles || 0).toLocaleString()} · persisted journeys {Number(latestEventReplayDiagnostics.journeys_persisted || 0).toLocaleString()}
+            </div>
+            {!!latestEventReplayDiagnostics.warnings?.length && (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>
+                {latestEventReplayDiagnostics.warnings.join(' · ')}
+              </div>
+            )}
+          </div>
+        ) : null}
       </div>
     )
   }
