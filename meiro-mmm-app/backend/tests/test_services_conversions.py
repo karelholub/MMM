@@ -281,3 +281,17 @@ def test_conversion_path_revenue_value_falls_back_to_legacy_conversion_value():
     )
 
     assert conversion_path_revenue_value(row, revenue_config={"mode": "sum"}) == 42.5
+
+
+def test_conversion_path_revenue_value_falls_back_to_first_conversion_value():
+    row = ConversionPath(
+        conversion_id="conv-list",
+        profile_id="cust-1",
+        conversion_key="purchase",
+        path_json={
+            "conversions": [{"name": "purchase", "value": 123.45}],
+            "touchpoints": [{"channel": "direct", "timestamp": "2026-03-01T00:00:00Z"}],
+        },
+    )
+
+    assert conversion_path_revenue_value(row, revenue_config={"mode": "sum"}) == 123.45

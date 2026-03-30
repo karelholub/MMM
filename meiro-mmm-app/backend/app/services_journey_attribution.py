@@ -13,9 +13,8 @@ from sqlalchemy.orm import Session
 
 from .attribution_engine import ATTRIBUTION_MODELS, run_attribution, run_attribution_campaign
 from .models_config_dq import ConversionPath, JourneyDefinition
-from .services_conversions import v2_to_legacy
+from .services_conversions import conversion_path_payload, conversion_path_revenue_value, v2_to_legacy
 from .services_journey_aggregates import _build_journey_steps, _path_hash
-from .services_metrics import journey_revenue_value
 
 PAID_CHANNEL_TOKENS = {
     "google_ads",
@@ -77,7 +76,7 @@ def _filter_conversion_paths(
 
     out: List[Tuple[ConversionPath, Dict[str, Any], Dict[str, Optional[str]], str]] = []
     for row in rows:
-        payload = row.path_json if isinstance(row.path_json, dict) else {}
+        payload = conversion_path_payload(row)
         conv_ts = row.conversion_ts
         if conv_ts.tzinfo is None:
             conv_ts = conv_ts.replace(tzinfo=timezone.utc)
@@ -194,7 +193,7 @@ def build_journey_attribution_summary(
             )
 
     dedupe_seen: set[str] = set()
-    observed_total = float(sum(journey_revenue_value(j, dedupe_seen=dedupe_seen) for j in journeys))
+    observed_total = float(sum(conversion_path_revenue_value(row, dedupe_seen=dedupe_seen) for row, _, _, _ in filtered_rows))
     delta_abs = round(total_attr - observed_total, 4)
     delta_pct = round((delta_abs / observed_total), 6) if observed_total > 0 else 0.0
 

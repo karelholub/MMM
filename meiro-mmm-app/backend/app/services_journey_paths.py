@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Optional
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .models_config_dq import JourneyPathDaily
@@ -40,6 +41,17 @@ def list_paths_for_journey_definition(
     if mode == "conversion_only":
         q = q.filter(JourneyPathDaily.count_conversions > 0)
 
+    summary_row = q.with_entities(
+        func.sum(JourneyPathDaily.count_journeys),
+        func.sum(JourneyPathDaily.count_conversions),
+        func.sum(JourneyPathDaily.gross_revenue_total),
+        func.sum(JourneyPathDaily.net_revenue_total),
+    ).first()
+    total_journeys = int(summary_row[0] or 0)
+    total_conversions = int(summary_row[1] or 0)
+    gross_revenue_total = float(summary_row[2] or 0.0)
+    net_revenue_total = float(summary_row[3] or 0.0)
+
     total = q.count()
     page = max(1, int(page))
     limit = max(1, min(int(limit), 200))
@@ -54,6 +66,8 @@ def list_paths_for_journey_definition(
     for row in rows:
         count_journeys = int(row.count_journeys or 0)
         count_conversions = int(row.count_conversions or 0)
+        gross_revenue = float(row.gross_revenue_total or 0.0)
+        net_revenue = float(row.net_revenue_total or 0.0)
         conversion_rate = (count_conversions / count_journeys) if count_journeys > 0 else 0.0
         items.append(
             {
@@ -63,6 +77,10 @@ def list_paths_for_journey_definition(
                 "count_journeys": count_journeys,
                 "count_conversions": count_conversions,
                 "conversion_rate": conversion_rate,
+                "gross_revenue": round(gross_revenue, 2),
+                "net_revenue": round(net_revenue, 2),
+                "gross_revenue_per_conversion": round((gross_revenue / count_conversions), 2) if count_conversions > 0 else 0.0,
+                "net_revenue_per_conversion": round((net_revenue / count_conversions), 2) if count_conversions > 0 else 0.0,
                 "avg_time_to_convert_sec": row.avg_time_to_convert_sec,
                 "p50_time_to_convert_sec": row.p50_time_to_convert_sec,
                 "p90_time_to_convert_sec": row.p90_time_to_convert_sec,
@@ -76,6 +94,15 @@ def list_paths_for_journey_definition(
     return {
         "items": items,
         "total": total,
+        "summary": {
+            "count_journeys": total_journeys,
+            "count_conversions": total_conversions,
+            "conversion_rate": (total_conversions / total_journeys) if total_journeys > 0 else 0.0,
+            "gross_revenue": round(gross_revenue_total, 2),
+            "net_revenue": round(net_revenue_total, 2),
+            "gross_revenue_per_conversion": round((gross_revenue_total / total_conversions), 2) if total_conversions > 0 else 0.0,
+            "net_revenue_per_conversion": round((net_revenue_total / total_conversions), 2) if total_conversions > 0 else 0.0,
+        },
         "page": page,
         "limit": limit,
         "mode": mode,

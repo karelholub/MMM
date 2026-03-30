@@ -258,15 +258,31 @@ def _path_metric_for_period(
     sums = q.with_entities(
         func.sum(JourneyPathDaily.count_journeys),
         func.sum(JourneyPathDaily.count_conversions),
+        func.sum(JourneyPathDaily.gross_conversions_total),
+        func.sum(JourneyPathDaily.net_conversions_total),
+        func.sum(JourneyPathDaily.gross_revenue_total),
+        func.sum(JourneyPathDaily.net_revenue_total),
         func.sum((JourneyPathDaily.p50_time_to_convert_sec) * (JourneyPathDaily.count_conversions)),
     ).first()
     journeys = int(sums[0] or 0)
     conversions = int(sums[1] or 0)
-    p50_weighted_sum = float(sums[2] or 0.0)
+    gross_conversions = float(sums[2] or 0.0)
+    net_conversions = float(sums[3] or 0.0)
+    gross_revenue = float(sums[4] or 0.0)
+    net_revenue = float(sums[5] or 0.0)
+    p50_weighted_sum = float(sums[6] or 0.0)
     if metric == "conversion_rate":
         return (float(conversions) / float(journeys)) if journeys > 0 else None
     if metric == "count_journeys":
         return float(journeys)
+    if metric == "gross_conversions_total":
+        return gross_conversions
+    if metric == "net_conversions_total":
+        return net_conversions
+    if metric == "gross_revenue_total":
+        return gross_revenue
+    if metric == "net_revenue_total":
+        return net_revenue
     if metric == "p50_time_to_convert_sec":
         return (p50_weighted_sum / float(conversions)) if conversions > 0 else None
     return None

@@ -19,6 +19,12 @@ from .models_config_dq import (
     JourneyPathDaily,
     JourneyTransitionDaily,
 )
+from .services_conversions import (
+    classify_journey_interaction,
+    conversion_path_is_converted,
+    conversion_path_outcome_summary,
+    conversion_path_payload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -84,21 +90,8 @@ def _to_utc_dt(value: Any) -> Optional[datetime]:
     return dt.astimezone(timezone.utc)
 
 
-def _payload_dict(path_json: Any) -> Dict[str, Any]:
-    if isinstance(path_json, dict):
-        return path_json
-    return {}
-
-
 def _conversion_path_is_converted(row: ConversionPath) -> bool:
-    conversion_key = getattr(row, "conversion_key", None)
-    if isinstance(conversion_key, str) and conversion_key.strip():
-        return True
-    payload = _payload_dict(getattr(row, "path_json", None))
-    conversions = payload.get("conversions")
-    if isinstance(conversions, list) and conversions:
-        return True
-    return bool(payload.get("converted"))
+    return conversion_path_is_converted(row)
 
 
 def _touchpoint_ts(tp: Dict[str, Any]) -> Optional[datetime]:
@@ -267,8 +260,8 @@ def _aggregate_for_day_definition(
         q = q.filter(ConversionPath.conversion_key == definition.conversion_kpi_id)
     rows = q.all()
 
-    path_aggs: Dict[str, Dict[str, Any]] = {}
-    trans_aggs: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    path_aggs: Dict[Tuple[str, Optional[str], Optional[str], Optional[str], Optional[str]], Dict[str, Any]] = {}
+    trans_aggs: Dict[Tuple[str, str, Optional[str], Optional[str], Optional[str], Optional[str]], Dict[str, Any]] = {}
 
     for row in rows:
         if not _conversion_path_is_converted(row):
@@ -276,7 +269,7 @@ def _aggregate_for_day_definition(
         conversion_ts = _to_utc_dt(row.conversion_ts)
         if conversion_ts is None:
             continue
-        payload = _payload_dict(row.path_json)
+        payload = conversion_path_payload(row)
         steps, ttc_sec, dims = _build_journey_steps(
             payload,
             conversion_ts=conversion_ts,
@@ -285,28 +278,64 @@ def _aggregate_for_day_definition(
         if not steps:
             continue
         phash = _path_hash(steps)
-        bucket = path_aggs.setdefault(
+        outcome = conversion_path_outcome_summary(row)
+        path_type = classify_journey_interaction(payload)
+        path_key = (
             phash,
+            dims.get("channel_group"),
+            dims.get("campaign_id"),
+            dims.get("device"),
+            dims.get("country"),
+        )
+        bucket = path_aggs.setdefault(
+            path_key,
             {
+                "path_hash": phash,
                 "path_steps": steps,
                 "path_length": len(steps),
                 "count_journeys": 0,
                 "count_conversions": 0,
+                "gross_conversions_total": 0.0,
+                "net_conversions_total": 0.0,
+                "gross_revenue_total": 0.0,
+                "net_revenue_total": 0.0,
+                "view_through_conversions_total": 0.0,
+                "click_through_conversions_total": 0.0,
+                "mixed_path_conversions_total": 0.0,
                 "ttc_values": [],
                 "channel_group": dims.get("channel_group"),
+                "campaign_id": dims.get("campaign_id"),
                 "device": dims.get("device"),
                 "country": dims.get("country"),
             },
         )
         bucket["count_journeys"] += 1
         bucket["count_conversions"] += 1
+        bucket["gross_conversions_total"] += float(outcome.get("gross_conversions", 0.0) or 0.0)
+        bucket["net_conversions_total"] += float(outcome.get("net_conversions", 0.0) or 0.0)
+        bucket["gross_revenue_total"] += float(outcome.get("gross_value", 0.0) or 0.0)
+        bucket["net_revenue_total"] += float(outcome.get("net_value", 0.0) or 0.0)
+        if path_type == "view_through":
+            bucket["view_through_conversions_total"] += float(outcome.get("net_conversions", 0.0) or 0.0)
+        elif path_type == "click_through":
+            bucket["click_through_conversions_total"] += float(outcome.get("net_conversions", 0.0) or 0.0)
+        elif path_type == "mixed_path":
+            bucket["mixed_path_conversions_total"] += float(outcome.get("net_conversions", 0.0) or 0.0)
         if ttc_sec is not None and ttc_sec >= 0:
             bucket["ttc_values"].append(float(ttc_sec))
 
         profile_id = str(row.profile_id or "")
         for from_step, to_step in zip(steps, steps[1:]):
+            transition_key = (
+                from_step,
+                to_step,
+                dims.get("channel_group"),
+                dims.get("campaign_id"),
+                dims.get("device"),
+                dims.get("country"),
+            )
             t_bucket = trans_aggs.setdefault(
-                (from_step, to_step),
+                transition_key,
                 {
                     "count_transitions": 0,
                     "profiles": set(),
@@ -330,21 +359,29 @@ def _aggregate_for_day_definition(
     ).delete(synchronize_session=False)
 
     now = datetime.now(timezone.utc)
-    for phash, payload in path_aggs.items():
+    for _path_key, payload in path_aggs.items():
         ttc_values = payload["ttc_values"]
         db.add(
             JourneyPathDaily(
                 date=day,
                 journey_definition_id=definition.id,
-                path_hash=phash,
+                path_hash=payload["path_hash"],
                 path_steps=payload["path_steps"],
                 path_length=payload["path_length"],
                 count_journeys=payload["count_journeys"],
                 count_conversions=payload["count_conversions"],
+                gross_conversions_total=payload["gross_conversions_total"],
+                net_conversions_total=payload["net_conversions_total"],
+                gross_revenue_total=payload["gross_revenue_total"],
+                net_revenue_total=payload["net_revenue_total"],
+                view_through_conversions_total=payload["view_through_conversions_total"],
+                click_through_conversions_total=payload["click_through_conversions_total"],
+                mixed_path_conversions_total=payload["mixed_path_conversions_total"],
                 avg_time_to_convert_sec=(sum(ttc_values) / len(ttc_values)) if ttc_values else None,
                 p50_time_to_convert_sec=_percentile(ttc_values, 0.5),
                 p90_time_to_convert_sec=_percentile(ttc_values, 0.9),
                 channel_group=payload["channel_group"],
+                campaign_id=payload["campaign_id"],
                 device=payload["device"],
                 country=payload["country"],
                 created_at=now,
@@ -352,7 +389,7 @@ def _aggregate_for_day_definition(
             )
         )
 
-    for (from_step, to_step), payload in trans_aggs.items():
+    for (from_step, to_step, _channel_group, _campaign_id, _device, _country), payload in trans_aggs.items():
         db.add(
             JourneyTransitionDaily(
                 date=day,

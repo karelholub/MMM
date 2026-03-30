@@ -63,7 +63,13 @@ def _validate_journey_alert_scope_and_metric(type: str, scope: Dict[str, Any], m
     metric = (metric or "").strip()
     allowed_metrics = {
         "path_cr_drop": {"conversion_rate"},
-        "path_volume_change": {"count_journeys"},
+        "path_volume_change": {
+            "count_journeys",
+            "gross_conversions_total",
+            "net_conversions_total",
+            "gross_revenue_total",
+            "net_revenue_total",
+        },
         "funnel_dropoff_spike": {"dropoff_rate"},
         "ttc_shift": {"p50_time_to_convert_sec"},
     }

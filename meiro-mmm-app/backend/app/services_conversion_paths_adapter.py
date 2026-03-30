@@ -177,6 +177,8 @@ def build_conversion_paths_analysis_from_daily(
     aggregated: Dict[Tuple[str, ...], Dict[str, float]] = defaultdict(lambda: {
         "count_journeys": 0.0,
         "count_conversions": 0.0,
+        "gross_revenue_total": 0.0,
+        "net_revenue_total": 0.0,
         "ttc_weighted_sec": 0.0,
         "ttc_weight": 0.0,
     })
@@ -197,6 +199,8 @@ def build_conversion_paths_analysis_from_daily(
         cc = int(row.count_conversions or 0)
         aggregated[key]["count_journeys"] += cj
         aggregated[key]["count_conversions"] += cc
+        aggregated[key]["gross_revenue_total"] += float(row.gross_revenue_total or 0.0)
+        aggregated[key]["net_revenue_total"] += float(row.net_revenue_total or 0.0)
 
         if row.avg_time_to_convert_sec is not None and cc > 0:
             aggregated[key]["ttc_weighted_sec"] += float(row.avg_time_to_convert_sec) * cc
@@ -242,6 +246,8 @@ def build_conversion_paths_analysis_from_daily(
     for steps, vals in aggregated.items():
         count = int(vals["count_journeys"])
         conv = int(vals["count_conversions"])
+        gross_revenue = float(vals["gross_revenue_total"] or 0.0)
+        net_revenue = float(vals["net_revenue_total"] or 0.0)
         path = " > ".join(steps)
         share = (count / total_journeys) if total_journeys > 0 else 0.0
         avg_days = None
@@ -256,6 +262,9 @@ def build_conversion_paths_analysis_from_daily(
                 "path": path,
                 "count": count,
                 "share": round(share, 6),
+                "gross_revenue": round(gross_revenue, 2),
+                "net_revenue": round(net_revenue, 2),
+                "avg_value": round((gross_revenue / conv), 2) if conv > 0 else 0.0,
                 "avg_time_to_convert_days": round(avg_days, 4) if avg_days is not None else None,
                 "path_length": len(steps),
             }
@@ -266,6 +275,7 @@ def build_conversion_paths_analysis_from_daily(
             nxt = steps[idx]
             next_step_stats[prefix][nxt]["count"] += count
             next_step_stats[prefix][nxt]["conversions"] += conv
+            next_step_stats[prefix][nxt]["gross_revenue"] = next_step_stats[prefix][nxt].get("gross_revenue", 0.0) + gross_revenue
 
     common_paths.sort(key=lambda p: p["count"], reverse=True)
 
@@ -284,7 +294,7 @@ def build_conversion_paths_analysis_from_daily(
                     "count": int(cnt),
                     "conversions": int(conv),
                     "conversion_rate": round(rate, 6),
-                    "avg_value": 0.0,
+                    "avg_value": round(float(stats.get("gross_revenue", 0.0)) / conv, 2) if conv > 0 else 0.0,
                 }
             )
         rec_list.sort(key=lambda r: (r["conversion_rate"], r["count"]), reverse=True)
@@ -395,7 +405,10 @@ def build_conversion_path_details_from_daily(
         "summary": {
             "count": int(target.get("count") or 0),
             "share": float(target.get("share") or 0.0),
+            "gross_revenue": float(target.get("gross_revenue") or 0.0),
+            "net_revenue": float(target.get("net_revenue") or 0.0),
             "avg_touchpoints": float(target.get("path_length") or len(steps)),
+            "avg_value": float(target.get("avg_value") or 0.0),
             "avg_time_to_convert_days": target.get("avg_time_to_convert_days"),
         },
         "step_breakdown": step_breakdown,

@@ -303,7 +303,32 @@ def conversion_path_is_converted(row: Any) -> bool:
 
 
 def conversion_path_outcome_summary(row: Any) -> Dict[str, Any]:
-    return journey_outcome_summary(conversion_path_payload(row))
+    payload = conversion_path_payload(row)
+    outcome = journey_outcome_summary(payload)
+    if isinstance(payload.get("_revenue_entries"), list) or payload.get("conversion_value") not in (None, "", []):
+        return outcome
+
+    conversions = payload.get("conversions")
+    first_conversion = conversions[0] if isinstance(conversions, list) and conversions and isinstance(conversions[0], dict) else {}
+    fallback_value = first_conversion.get("value") if isinstance(first_conversion, dict) else None
+    try:
+        fallback_numeric = float(fallback_value or 0.0)
+    except Exception:
+        fallback_numeric = 0.0
+    if abs(fallback_numeric) <= 1e-9:
+        return outcome
+
+    converted = 1.0 if conversion_path_is_converted(row) else 0.0
+    return {
+        "gross_value": max(float(outcome.get("gross_value", 0.0) or 0.0), fallback_numeric),
+        "net_value": max(float(outcome.get("net_value", 0.0) or 0.0), fallback_numeric),
+        "refunded_value": float(outcome.get("refunded_value", 0.0) or 0.0),
+        "cancelled_value": float(outcome.get("cancelled_value", 0.0) or 0.0),
+        "gross_conversions": max(float(outcome.get("gross_conversions", 0.0) or 0.0), converted),
+        "net_conversions": max(float(outcome.get("net_conversions", 0.0) or 0.0), converted),
+        "invalid_leads": float(outcome.get("invalid_leads", 0.0) or 0.0),
+        "valid_leads": max(float(outcome.get("valid_leads", 0.0) or 0.0), converted),
+    }
 
 
 def conversion_path_revenue_value(
@@ -324,6 +349,11 @@ def conversion_path_revenue_value(
     fallback_raw = payload.get("value")
     if fallback_raw in (None, "", []):
         fallback_raw = payload.get("conversion_value")
+    if fallback_raw in (None, "", []):
+        conversions = payload.get("conversions")
+        if isinstance(conversions, list) and conversions:
+            first_conversion = conversions[0] if isinstance(conversions[0], dict) else {}
+            fallback_raw = first_conversion.get("value") if isinstance(first_conversion, dict) else None
     try:
         return float(fallback_raw or 0.0)
     except Exception:

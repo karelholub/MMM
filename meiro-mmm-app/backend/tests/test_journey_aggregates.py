@@ -36,13 +36,17 @@ def _mk_conversion_path(
     conversion_ts: datetime,
     conversion_key: str = "purchase",
     touchpoints: list,
+    value: float = 0.0,
 ) -> ConversionPath:
     return ConversionPath(
         conversion_id=conversion_id,
         profile_id=profile_id,
         conversion_key=conversion_key,
         conversion_ts=conversion_ts,
-        path_json={"touchpoints": touchpoints, "conversions": [{"name": conversion_key, "ts": conversion_ts.isoformat() + "Z"}]},
+        path_json={
+            "touchpoints": touchpoints,
+            "conversions": [{"name": conversion_key, "ts": conversion_ts.isoformat() + "Z", "value": value}],
+        },
         path_hash=f"hash-{conversion_id}",
         length=len(touchpoints),
         first_touch_ts=conversion_ts - timedelta(days=2),
@@ -94,6 +98,7 @@ def test_run_daily_journey_aggregates_writes_paths_and_transitions_and_backfills
                 conversion_id="c1",
                 profile_id="p1",
                 conversion_ts=day1,
+                value=120.0,
                 touchpoints=[
                     {"ts": "2026-02-06T10:00:00Z", "channel": "google_ads", "utm": {"medium": "cpc"}},
                     {"ts": "2026-02-07T10:00:00Z", "event_name": "view_item", "channel": "google_ads"},
@@ -107,6 +112,7 @@ def test_run_daily_journey_aggregates_writes_paths_and_transitions_and_backfills
                 conversion_id="c2",
                 profile_id="p2",
                 conversion_ts=day2,
+                value=80.0,
                 touchpoints=[
                     {"ts": "2026-02-08T08:00:00Z", "channel": "direct"},
                     {"ts": "2026-02-09T10:00:00Z", "event_name": "content_view", "channel": "email"},
@@ -133,6 +139,9 @@ def test_run_daily_journey_aggregates_writes_paths_and_transitions_and_backfills
         assert len(path_rows) >= 2
         assert len(transition_rows) >= 1
         assert any(r.from_step in {STEP_PAID_LANDING, STEP_ORGANIC_LANDING} for r in transition_rows)
+        assert any(float(r.gross_conversions_total or 0.0) >= 1.0 for r in path_rows)
+        assert any(float(r.net_conversions_total or 0.0) >= 1.0 for r in path_rows)
+        assert round(sum(float(r.gross_revenue_total or 0.0) for r in path_rows), 2) == 200.0
 
         # Simulate data loss for day1 aggregates; rerun should backfill missing day1.
         day1_date = date(2026, 2, 8)

@@ -40,6 +40,13 @@ def _seed(db):
             path_length=3,
             count_journeys=10,
             count_conversions=8,
+            gross_conversions_total=8.0,
+            net_conversions_total=8.0,
+            gross_revenue_total=800.0,
+            net_revenue_total=760.0,
+            view_through_conversions_total=0.0,
+            click_through_conversions_total=8.0,
+            mixed_path_conversions_total=0.0,
             avg_time_to_convert_sec=172800.0,
             p50_time_to_convert_sec=160000.0,
             p90_time_to_convert_sec=260000.0,
@@ -58,6 +65,13 @@ def _seed(db):
             path_length=3,
             count_journeys=5,
             count_conversions=2,
+            gross_conversions_total=2.0,
+            net_conversions_total=1.0,
+            gross_revenue_total=120.0,
+            net_revenue_total=60.0,
+            view_through_conversions_total=0.0,
+            click_through_conversions_total=2.0,
+            mixed_path_conversions_total=0.0,
             avg_time_to_convert_sec=86400.0,
             p50_time_to_convert_sec=80000.0,
             p90_time_to_convert_sec=120000.0,
@@ -89,6 +103,8 @@ def test_analysis_shape_and_source():
         assert out["source"] == "journey_paths_daily"
         assert out["total_journeys"] == 15
         assert out["common_paths"]
+        assert out["common_paths"][0]["gross_revenue"] == 800.0
+        assert out["common_paths"][0]["avg_value"] == 100.0
         assert out["path_length_distribution"]["max"] >= 3
         assert isinstance(out["next_best_by_prefix"], dict)
     finally:
@@ -111,6 +127,8 @@ def test_details_returns_selected_path_summary():
         )
         assert out["path"] == path
         assert out["summary"]["count"] == 10
+        assert out["summary"]["gross_revenue"] == 800.0
+        assert out["summary"]["avg_value"] == 100.0
         assert out["step_breakdown"]
     finally:
         db.close()

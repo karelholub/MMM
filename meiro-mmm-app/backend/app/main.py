@@ -345,6 +345,13 @@ def _ensure_journey_paths_columns():
         with engine.connect() as conn:
             for stmt in (
                 "ALTER TABLE journey_paths_daily ADD COLUMN campaign_id VARCHAR(128)",
+                "ALTER TABLE journey_paths_daily ADD COLUMN gross_conversions_total FLOAT NOT NULL DEFAULT 0",
+                "ALTER TABLE journey_paths_daily ADD COLUMN net_conversions_total FLOAT NOT NULL DEFAULT 0",
+                "ALTER TABLE journey_paths_daily ADD COLUMN gross_revenue_total FLOAT NOT NULL DEFAULT 0",
+                "ALTER TABLE journey_paths_daily ADD COLUMN net_revenue_total FLOAT NOT NULL DEFAULT 0",
+                "ALTER TABLE journey_paths_daily ADD COLUMN view_through_conversions_total FLOAT NOT NULL DEFAULT 0",
+                "ALTER TABLE journey_paths_daily ADD COLUMN click_through_conversions_total FLOAT NOT NULL DEFAULT 0",
+                "ALTER TABLE journey_paths_daily ADD COLUMN mixed_path_conversions_total FLOAT NOT NULL DEFAULT 0",
                 "ALTER TABLE journey_transitions_daily ADD COLUMN campaign_id VARCHAR(128)",
                 "ALTER TABLE journey_transitions_daily ADD COLUMN country VARCHAR(64)",
             ):

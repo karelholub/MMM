@@ -7,9 +7,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
-from app.models_config_dq import ConversionPath
+from app.models_config_dq import ConversionPath, JourneyDefinition, JourneyPathDaily
 from app.main import app
 from app.services_overview import get_overview_drivers, get_overview_funnels
+from app.services_overview import get_overview_summary
 
 client = TestClient(app)
 
@@ -329,3 +330,176 @@ def test_overview_funnels_endpoint_returns_expected_shape():
     assert "summary" in body
     assert "tabs" in body
     assert set(body["tabs"].keys()) == {"conversions", "revenue", "speed"}
+
+
+def test_overview_funnels_prefers_daily_aggregates_when_single_definition_exists():
+    db = _unit_db_session()
+    try:
+        definition = JourneyDefinition(
+            id="def-overview",
+            name="Overview Journey",
+            conversion_kpi_id="purchase",
+            lookback_window_days=30,
+            mode_default="conversion_only",
+            created_by="test",
+            updated_by="test",
+            is_archived=False,
+            created_at=datetime(2024, 2, 1, 0, 0),
+            updated_at=datetime(2024, 2, 1, 0, 0),
+        )
+        db.add(definition)
+        db.add_all(
+            [
+                JourneyPathDaily(
+                    date=datetime(2024, 2, 10).date(),
+                    journey_definition_id="def-overview",
+                    path_hash="path-a",
+                    path_steps=["Paid Landing", "Purchase / Lead Won (conversion)"],
+                    path_length=2,
+                    count_journeys=2,
+                    count_conversions=2,
+                    gross_conversions_total=2.0,
+                    net_conversions_total=2.0,
+                    gross_revenue_total=190.0,
+                    net_revenue_total=190.0,
+                    click_through_conversions_total=2.0,
+                    view_through_conversions_total=0.0,
+                    mixed_path_conversions_total=0.0,
+                    avg_time_to_convert_sec=129600.0,
+                    p50_time_to_convert_sec=129600.0,
+                    p90_time_to_convert_sec=129600.0,
+                    channel_group="paid",
+                    campaign_id="cmp-a",
+                    device="mobile",
+                    country="US",
+                    created_at=datetime(2024, 2, 10, 0, 0),
+                    updated_at=datetime(2024, 2, 10, 0, 0),
+                ),
+                JourneyPathDaily(
+                    date=datetime(2024, 2, 11).date(),
+                    journey_definition_id="def-overview",
+                    path_hash="path-b",
+                    path_steps=["Organic Landing", "Purchase / Lead Won (conversion)"],
+                    path_length=2,
+                    count_journeys=1,
+                    count_conversions=1,
+                    gross_conversions_total=1.0,
+                    net_conversions_total=1.0,
+                    gross_revenue_total=300.0,
+                    net_revenue_total=300.0,
+                    click_through_conversions_total=1.0,
+                    view_through_conversions_total=0.0,
+                    mixed_path_conversions_total=0.0,
+                    avg_time_to_convert_sec=43200.0,
+                    p50_time_to_convert_sec=43200.0,
+                    p90_time_to_convert_sec=43200.0,
+                    channel_group="organic",
+                    campaign_id=None,
+                    device="desktop",
+                    country="US",
+                    created_at=datetime(2024, 2, 11, 0, 0),
+                    updated_at=datetime(2024, 2, 11, 0, 0),
+                ),
+            ]
+        )
+        db.commit()
+
+        out = get_overview_funnels(
+            db,
+            date_from="2024-02-01",
+            date_to="2024-02-29",
+            conversion_key="purchase",
+            limit=5,
+        )
+
+        assert out["summary"]["total_conversions"] == 3
+        assert out["summary"]["gross_revenue"] == 490.0
+        assert out["tabs"]["conversions"][0]["path"] == "Paid Landing > Purchase / Lead Won (conversion)"
+        assert out["tabs"]["revenue"][0]["revenue"] == 300.0
+        assert out["tabs"]["speed"][0]["path"] == "Organic Landing > Purchase / Lead Won (conversion)"
+    finally:
+        db.close()
+
+
+def test_overview_summary_prefers_daily_aggregates_when_single_definition_exists():
+    db = _unit_db_session()
+    try:
+        definition = JourneyDefinition(
+            id="def-summary",
+            name="Summary Journey",
+            conversion_kpi_id="purchase",
+            lookback_window_days=30,
+            mode_default="conversion_only",
+            created_by="test",
+            updated_by="test",
+            is_archived=False,
+            created_at=datetime(2024, 2, 1, 0, 0),
+            updated_at=datetime(2024, 2, 1, 0, 0),
+        )
+        db.add(definition)
+        db.add_all(
+            [
+                JourneyPathDaily(
+                    date=datetime(2024, 2, 11).date(),
+                    journey_definition_id="def-summary",
+                    path_hash="current-path",
+                    path_steps=["Paid Landing", "Purchase / Lead Won (conversion)"],
+                    path_length=2,
+                    count_journeys=4,
+                    count_conversions=3,
+                    gross_conversions_total=3.0,
+                    net_conversions_total=2.0,
+                    gross_revenue_total=490.0,
+                    net_revenue_total=450.0,
+                    click_through_conversions_total=2.0,
+                    view_through_conversions_total=0.0,
+                    mixed_path_conversions_total=0.0,
+                    avg_time_to_convert_sec=86400.0,
+                    p50_time_to_convert_sec=86400.0,
+                    p90_time_to_convert_sec=86400.0,
+                    created_at=datetime(2024, 2, 11, 0, 0),
+                    updated_at=datetime(2024, 2, 11, 0, 0),
+                ),
+                JourneyPathDaily(
+                    date=datetime(2024, 2, 5).date(),
+                    journey_definition_id="def-summary",
+                    path_hash="previous-path",
+                    path_steps=["Email", "Purchase / Lead Won (conversion)"],
+                    path_length=2,
+                    count_journeys=2,
+                    count_conversions=1,
+                    gross_conversions_total=1.0,
+                    net_conversions_total=1.0,
+                    gross_revenue_total=120.0,
+                    net_revenue_total=120.0,
+                    click_through_conversions_total=1.0,
+                    view_through_conversions_total=0.0,
+                    mixed_path_conversions_total=0.0,
+                    avg_time_to_convert_sec=43200.0,
+                    p50_time_to_convert_sec=43200.0,
+                    p90_time_to_convert_sec=43200.0,
+                    created_at=datetime(2024, 2, 5, 0, 0),
+                    updated_at=datetime(2024, 2, 5, 0, 0),
+                ),
+            ]
+        )
+        db.commit()
+
+        out = get_overview_summary(
+            db,
+            date_from="2024-02-10",
+            date_to="2024-02-15",
+            expenses={},
+        )
+
+        tiles = {tile["kpi_key"]: tile for tile in out["kpi_tiles"]}
+        assert tiles["conversions"]["value"] == 3
+        assert tiles["revenue"]["value"] == 490.0
+        assert tiles["net_conversions"]["value"] == 2
+        assert tiles["net_revenue"]["value"] == 450.0
+        assert any(point["value"] == 490.0 for point in tiles["revenue"]["series"])
+        assert out["outcomes"]["current"]["gross_conversions"] == 3.0
+        assert out["outcomes"]["current"]["net_conversions"] == 2.0
+        assert out["outcomes"]["previous"]["gross_value"] == 120.0
+    finally:
+        db.close()

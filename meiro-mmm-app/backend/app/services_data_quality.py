@@ -18,6 +18,7 @@ from .models_config_dq import (
     DQAlert,
     NotificationEndpoint,
 )
+from .services_conversions import conversion_path_payload
 from .utils.taxonomy import load_taxonomy
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
@@ -42,8 +43,8 @@ def _load_journeys(db: Session) -> List[Dict[str, Any]]:
     if rows:
         journeys: List[Dict[str, Any]] = []
         for r in rows:
-            payload = r.path_json
-            if isinstance(payload, dict):
+            payload = conversion_path_payload(r)
+            if payload:
                 journeys.append(payload)
         if journeys:
             return journeys

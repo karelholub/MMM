@@ -68,6 +68,13 @@ def _seed(session_factory):
                 path_length=2,
                 count_journeys=20,
                 count_conversions=10,
+                gross_conversions_total=10.0,
+                net_conversions_total=9.0,
+                gross_revenue_total=500.0,
+                net_revenue_total=450.0,
+                view_through_conversions_total=0.0,
+                click_through_conversions_total=10.0,
+                mixed_path_conversions_total=0.0,
                 avg_time_to_convert_sec=100.0,
                 p50_time_to_convert_sec=90.0,
                 p90_time_to_convert_sec=180.0,
@@ -86,6 +93,13 @@ def _seed(session_factory):
                 path_length=2,
                 count_journeys=15,
                 count_conversions=0,
+                gross_conversions_total=0.0,
+                net_conversions_total=0.0,
+                gross_revenue_total=0.0,
+                net_revenue_total=0.0,
+                view_through_conversions_total=0.0,
+                click_through_conversions_total=0.0,
+                mixed_path_conversions_total=0.0,
                 avg_time_to_convert_sec=0.0,
                 p50_time_to_convert_sec=0.0,
                 p90_time_to_convert_sec=0.0,
@@ -104,6 +118,13 @@ def _seed(session_factory):
                 path_length=2,
                 count_journeys=8,
                 count_conversions=4,
+                gross_conversions_total=4.0,
+                net_conversions_total=4.0,
+                gross_revenue_total=240.0,
+                net_revenue_total=240.0,
+                view_through_conversions_total=0.0,
+                click_through_conversions_total=4.0,
+                mixed_path_conversions_total=0.0,
                 avg_time_to_convert_sec=220.0,
                 p50_time_to_convert_sec=200.0,
                 p90_time_to_convert_sec=350.0,
@@ -133,6 +154,18 @@ def test_journey_paths_filters_and_mode(client):
     assert payload["total"] == 2  # excludes row with 0 conversions
     assert all(item["count_conversions"] > 0 for item in payload["items"])
     assert "conversion_rate" in payload["items"][0]
+    assert payload["items"][0]["gross_revenue"] == 500.0
+    assert payload["items"][0]["net_revenue"] == 450.0
+    assert payload["items"][0]["gross_revenue_per_conversion"] == 50.0
+    assert payload["summary"] == {
+        "count_journeys": 28,
+        "count_conversions": 14,
+        "conversion_rate": 0.5,
+        "gross_revenue": 740.0,
+        "net_revenue": 690.0,
+        "gross_revenue_per_conversion": 52.86,
+        "net_revenue_per_conversion": 49.29,
+    }
 
     all_mode = test_client.get(
         "/api/journeys/jd-1/paths",

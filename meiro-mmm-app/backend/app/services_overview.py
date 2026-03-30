@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from .models_config_dq import ConversionPath
+from .models_config_dq import ConversionPath, JourneyDefinition, JourneyPathDaily
 from .models_overview_alerts import AlertEvent, AlertRule
 from .services_conversions import (
     conversion_path_is_converted as _conversion_path_is_converted,
@@ -179,6 +179,106 @@ def _aggregate_outcomes_from_paths(
         if not _conversion_path_is_converted(row):
             continue
         _merge_outcomes(totals, conversion_path_payload(row))
+    return totals
+
+
+def _single_active_overview_definition_id(
+    db: Session,
+    *,
+    conversion_key: Optional[str] = None,
+) -> Optional[str]:
+    definition_query = (
+        db.query(JourneyDefinition)
+        .filter(JourneyDefinition.is_archived == False)  # noqa: E712
+        .order_by(JourneyDefinition.updated_at.desc())
+    )
+    if conversion_key:
+        definition_query = definition_query.filter(JourneyDefinition.conversion_kpi_id == conversion_key)
+    definitions = definition_query.limit(2).all()
+    if len(definitions) != 1:
+        return None
+    return str(definitions[0].id)
+
+
+def _series_from_daily_path_aggregates(
+    db: Session,
+    *,
+    journey_definition_id: str,
+    start: datetime,
+    end: datetime,
+) -> Dict[str, Any]:
+    rows = (
+        db.query(
+            JourneyPathDaily.date.label("day"),
+            func.sum(JourneyPathDaily.count_conversions).label("conversions_total"),
+            func.sum(JourneyPathDaily.gross_revenue_total).label("gross_revenue_total"),
+        )
+        .filter(
+            JourneyPathDaily.journey_definition_id == journey_definition_id,
+            JourneyPathDaily.date >= start.date(),
+            JourneyPathDaily.date <= end.date(),
+        )
+        .group_by(JourneyPathDaily.date)
+        .order_by(JourneyPathDaily.date.asc())
+        .all()
+    )
+
+    conv_map: Dict[str, float] = {}
+    rev_map: Dict[str, float] = {}
+    total_revenue = 0.0
+    total_conversions = 0
+    for row in rows:
+        day = row.day.isoformat()
+        conversions = float(row.conversions_total or 0.0)
+        revenue = float(row.gross_revenue_total or 0.0)
+        conv_map[day] = conv_map.get(day, 0.0) + conversions
+        rev_map[day] = rev_map.get(day, 0.0) + revenue
+        total_revenue += revenue
+        total_conversions += int(round(conversions))
+
+    return {
+        "conversions_total": total_conversions,
+        "revenue_total": round(total_revenue, 2),
+        "conversions_map": conv_map,
+        "revenue_map": rev_map,
+        "observed_points": len(conv_map),
+    }
+
+
+def _aggregate_outcomes_from_daily_path_aggregates(
+    db: Session,
+    *,
+    journey_definition_id: str,
+    start: datetime,
+    end: datetime,
+) -> Dict[str, float]:
+    row = (
+        db.query(
+            func.sum(JourneyPathDaily.gross_conversions_total),
+            func.sum(JourneyPathDaily.net_conversions_total),
+            func.sum(JourneyPathDaily.gross_revenue_total),
+            func.sum(JourneyPathDaily.net_revenue_total),
+            func.sum(JourneyPathDaily.view_through_conversions_total),
+            func.sum(JourneyPathDaily.click_through_conversions_total),
+            func.sum(JourneyPathDaily.mixed_path_conversions_total),
+        )
+        .filter(
+            JourneyPathDaily.journey_definition_id == journey_definition_id,
+            JourneyPathDaily.date >= start.date(),
+            JourneyPathDaily.date <= end.date(),
+        )
+        .first()
+    )
+    totals = _empty_outcomes()
+    if not row:
+        return totals
+    totals["gross_conversions"] = float(row[0] or 0.0)
+    totals["net_conversions"] = float(row[1] or 0.0)
+    totals["gross_value"] = float(row[2] or 0.0)
+    totals["net_value"] = float(row[3] or 0.0)
+    totals["view_through_conversions"] = float(row[4] or 0.0)
+    totals["click_through_conversions"] = float(row[5] or 0.0)
+    totals["mixed_path_conversions"] = float(row[6] or 0.0)
     return totals
 
 
@@ -413,6 +513,148 @@ def _weighted_median(counts: Dict[int, int]) -> float:
     return float(max(counts))
 
 
+def _path_steps_from_daily_value(path_steps: Any) -> List[str]:
+    if isinstance(path_steps, list):
+        return [str(step).strip() for step in path_steps if str(step).strip()]
+    if isinstance(path_steps, str):
+        return [step.strip() for step in path_steps.split(">") if step.strip()]
+    return []
+
+
+def _overview_funnels_from_daily_aggregates(
+    db: Session,
+    *,
+    dt_from: datetime,
+    dt_to: datetime,
+    conversion_key: Optional[str],
+    limit: int,
+) -> Optional[Dict[str, Any]]:
+    definition_query = (
+        db.query(JourneyDefinition)
+        .filter(JourneyDefinition.is_archived == False)  # noqa: E712
+        .order_by(JourneyDefinition.updated_at.desc())
+    )
+    if conversion_key:
+        definition_query = definition_query.filter(JourneyDefinition.conversion_kpi_id == conversion_key)
+    definitions = definition_query.limit(2).all()
+    if len(definitions) != 1:
+        return None
+
+    rows = (
+        db.query(JourneyPathDaily)
+        .filter(JourneyPathDaily.journey_definition_id == definitions[0].id)
+        .filter(JourneyPathDaily.date >= dt_from.date(), JourneyPathDaily.date <= dt_to.date())
+        .all()
+    )
+    if not rows:
+        return None
+
+    aggs: Dict[str, Dict[str, Any]] = {}
+    outcomes = _empty_outcomes()
+    total_conversions = 0
+    path_length_counts: Dict[int, int] = defaultdict(int)
+
+    for row in rows:
+        steps = _path_steps_from_daily_value(row.path_steps)
+        if not steps:
+            continue
+        conversions = int(row.count_conversions or 0)
+        revenue = float(row.gross_revenue_total or 0.0)
+        if conversions <= 0 and abs(revenue) <= 1e-9:
+            continue
+
+        path_key = " > ".join(steps)
+        entry = aggs.setdefault(
+            path_key,
+            {
+                "path": path_key,
+                "steps": steps,
+                "conversions": 0,
+                "revenue": 0.0,
+                "median_weighted_sec": 0.0,
+                "median_weight": 0.0,
+                "path_length": len(steps),
+                "ends_with_direct": steps[-1].strip().lower() == "direct",
+            },
+        )
+        entry["conversions"] += conversions
+        entry["revenue"] += revenue
+        latency_sec = float(row.p50_time_to_convert_sec or row.avg_time_to_convert_sec or 0.0)
+        if latency_sec > 0 and conversions > 0:
+            entry["median_weighted_sec"] += latency_sec * conversions
+            entry["median_weight"] += conversions
+
+        total_conversions += conversions
+        path_length_counts[len(steps)] += conversions
+        outcomes["gross_conversions"] += float(row.gross_conversions_total or 0.0)
+        outcomes["net_conversions"] += float(row.net_conversions_total or 0.0)
+        outcomes["gross_value"] += float(row.gross_revenue_total or 0.0)
+        outcomes["net_value"] += float(row.net_revenue_total or 0.0)
+        outcomes["view_through_conversions"] += float(row.view_through_conversions_total or 0.0)
+        outcomes["click_through_conversions"] += float(row.click_through_conversions_total or 0.0)
+        outcomes["mixed_path_conversions"] += float(row.mixed_path_conversions_total or 0.0)
+
+    if total_conversions <= 0 or not aggs:
+        return None
+
+    items: List[Dict[str, Any]] = []
+    for entry in aggs.values():
+        conversions = int(entry.get("conversions") or 0)
+        revenue = float(entry.get("revenue") or 0.0)
+        median_days = None
+        if float(entry.get("median_weight") or 0.0) > 0:
+            median_days = (float(entry["median_weighted_sec"]) / float(entry["median_weight"])) / 86400.0
+        items.append(
+            {
+                "path": entry["path"],
+                "path_display": " -> ".join(_display_channel_token(step) for step in entry.get("steps") or []),
+                "steps": entry.get("steps") or [],
+                "conversions": conversions,
+                "share": round((conversions / total_conversions), 6) if total_conversions > 0 else 0.0,
+                "revenue": round(revenue, 2),
+                "revenue_per_conversion": round((revenue / conversions), 2) if conversions > 0 else 0.0,
+                "median_days_to_convert": round(median_days, 2) if median_days is not None else None,
+                "path_length": int(entry.get("path_length") or 0),
+                "ends_with_direct": bool(entry.get("ends_with_direct")),
+            }
+        )
+
+    by_conversions = sorted(items, key=lambda item: (item["conversions"], item["revenue"]), reverse=True)
+    by_revenue = sorted(items, key=lambda item: (item["revenue"], item["conversions"]), reverse=True)
+    speed_candidates = [item for item in items if item["median_days_to_convert"] is not None]
+    direct_speed_candidates = [item for item in speed_candidates if item.get("ends_with_direct")]
+    if direct_speed_candidates:
+        speed_candidates = direct_speed_candidates
+    by_speed = sorted(
+        speed_candidates,
+        key=lambda item: (item["median_days_to_convert"], -item["conversions"], -item["revenue"]),
+    )
+
+    top_converting = by_conversions[: max(1, limit)]
+    return {
+        "date_from": dt_from.date().isoformat(),
+        "date_to": dt_to.date().isoformat(),
+        "summary": {
+            "total_conversions": total_conversions,
+            "net_conversions": round(outcomes["net_conversions"], 2),
+            "gross_conversions": round(outcomes["gross_conversions"], 2),
+            "net_revenue": round(outcomes["net_value"], 2),
+            "gross_revenue": round(outcomes["gross_value"], 2),
+            "view_through_conversions": round(outcomes["view_through_conversions"], 2),
+            "click_through_conversions": round(outcomes["click_through_conversions"], 2),
+            "mixed_path_conversions": round(outcomes["mixed_path_conversions"], 2),
+            "distinct_paths": len(items),
+            "top_paths_conversion_share": round(sum(item["conversions"] for item in top_converting) / total_conversions, 6) if total_conversions > 0 else 0.0,
+            "median_path_length": _weighted_median(path_length_counts),
+        },
+        "tabs": {
+            "conversions": top_converting,
+            "revenue": by_revenue[: max(1, limit)],
+            "speed": by_speed[: max(1, limit)],
+        },
+    }
+
+
 def _confidence_from_quality(
     *,
     freshness_lag_min: Optional[float],
@@ -578,10 +820,37 @@ def get_overview_summary(
     bucket_keys_prev = _bucket_keys_in_range(prev_from, prev_to, grain)
     expected_points = len(bucket_keys_current)
 
-    current_paths = _series_from_conversion_paths(db, dt_from, dt_to, grain)
-    prev_paths = _series_from_conversion_paths(db, prev_from, prev_to, grain)
-    current_outcomes = _aggregate_outcomes_from_paths(db, dt_from, dt_to, None)
-    prev_outcomes = _aggregate_outcomes_from_paths(db, prev_from, prev_to, None)
+    aggregate_definition_id = _single_active_overview_definition_id(db) if grain == "daily" else None
+    if aggregate_definition_id:
+        current_paths = _series_from_daily_path_aggregates(
+            db,
+            journey_definition_id=aggregate_definition_id,
+            start=dt_from,
+            end=dt_to,
+        )
+        prev_paths = _series_from_daily_path_aggregates(
+            db,
+            journey_definition_id=aggregate_definition_id,
+            start=prev_from,
+            end=prev_to,
+        )
+        current_outcomes = _aggregate_outcomes_from_daily_path_aggregates(
+            db,
+            journey_definition_id=aggregate_definition_id,
+            start=dt_from,
+            end=dt_to,
+        )
+        prev_outcomes = _aggregate_outcomes_from_daily_path_aggregates(
+            db,
+            journey_definition_id=aggregate_definition_id,
+            start=prev_from,
+            end=prev_to,
+        )
+    else:
+        current_paths = _series_from_conversion_paths(db, dt_from, dt_to, grain)
+        prev_paths = _series_from_conversion_paths(db, prev_from, prev_to, grain)
+        current_outcomes = _aggregate_outcomes_from_paths(db, dt_from, dt_to, None)
+        prev_outcomes = _aggregate_outcomes_from_paths(db, prev_from, prev_to, None)
     current_visits = _series_from_visits(db, dt_from, dt_to, grain)
     prev_visits = _series_from_visits(db, prev_from, prev_to, grain)
     current_expenses = _series_from_expenses(expenses or {}, dt_from, dt_to, grain)
@@ -1229,6 +1498,16 @@ def get_overview_funnels(
     limit: int = 5,
 ) -> Dict[str, Any]:
     dt_from, dt_to = _normalize_period_bounds(date_from, date_to)
+    aggregate_result = _overview_funnels_from_daily_aggregates(
+        db,
+        dt_from=dt_from,
+        dt_to=dt_to,
+        conversion_key=conversion_key,
+        limit=limit,
+    )
+    if aggregate_result is not None:
+        return aggregate_result
+
     dedupe_seen = set()
 
     q = db.query(ConversionPath).filter(

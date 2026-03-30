@@ -72,6 +72,13 @@ def _seed_paths(session_factory):
                 path_length=2,
                 count_journeys=100,
                 count_conversions=10 if d <= 7 else 20,
+                gross_conversions_total=float(10 if d <= 7 else 20),
+                net_conversions_total=float(8 if d <= 7 else 18),
+                gross_revenue_total=float(500 if d <= 7 else 1000),
+                net_revenue_total=float(400 if d <= 7 else 900),
+                view_through_conversions_total=0.0,
+                click_through_conversions_total=float(10 if d <= 7 else 20),
+                mixed_path_conversions_total=0.0,
                 avg_time_to_convert_sec=120.0,
                 p50_time_to_convert_sec=100.0,
                 p90_time_to_convert_sec=240.0,
@@ -228,6 +235,26 @@ def test_alert_evaluator_threshold_and_dedupe(client):
         assert db.query(JourneyAlertEvent).count() == 1
     finally:
         db.close()
+
+
+def test_alert_preview_supports_aggregate_revenue_metric(client):
+    test_client, session_factory = client
+    _seed_paths(session_factory)
+
+    preview = test_client.post(
+        "/api/alerts/preview",
+        json={
+            "type": "path_volume_change",
+            "scope": {"journey_definition_id": "jd-alert", "path_hash": "p-1"},
+            "metric": "gross_revenue_total",
+            "condition": {"comparison_mode": "previous_period", "window_days": 7, "threshold_pct": 20},
+        },
+    )
+    assert preview.status_code == 200
+    body = preview.json()
+    assert body["current_value"] == 3000.0
+    assert body["baseline_value"] == 6500.0
+    assert round(body["delta_pct"], 4) == round(((3000.0 - 6500.0) / 6500.0) * 100.0, 4)
 
 
 def test_funnel_dropoff_alert_type(client):

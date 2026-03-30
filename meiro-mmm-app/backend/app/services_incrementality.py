@@ -798,6 +798,7 @@ def auto_assign_from_conversion_paths(
     Returns {"treatment": count, "control": count}
     """
     from .models_config_dq import ConversionPath
+    from .services_conversions import conversion_path_payload, conversion_path_touchpoints
 
     # Find all conversion paths with touchpoints in the channel during the period
     paths = (
@@ -809,10 +810,8 @@ def auto_assign_from_conversion_paths(
 
     eligible_profiles = set()
     for path in paths:
-        path_json = path.path_json
-        if not isinstance(path_json, dict):
-            continue
-        touchpoints = path_json.get("touchpoints", [])
+        path_json = conversion_path_payload(path)
+        touchpoints = conversion_path_touchpoints(path)
         for tp in touchpoints:
             if tp.get("channel") == channel:
                 eligible_profiles.add(path.profile_id)

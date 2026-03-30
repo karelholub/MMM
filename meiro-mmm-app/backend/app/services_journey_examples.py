@@ -8,8 +8,8 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from .models_config_dq import ConversionPath, JourneyDefinition
+from .services_conversions import conversion_path_payload, conversion_path_revenue_value, conversion_path_touchpoints
 from .services_journey_aggregates import _build_journey_steps, _path_hash
-from .services_metrics import journey_revenue_value
 
 
 def list_examples_for_journey_definition(
@@ -40,7 +40,7 @@ def list_examples_for_journey_definition(
     step_token = str(contains_step or "").strip().lower()
 
     for row in query.limit(max(50, int(limit) * 8)).all():
-        payload = row.path_json if isinstance(row.path_json, dict) else {}
+        payload = conversion_path_payload(row)
         conversion_ts = row.conversion_ts
         if conversion_ts.tzinfo is None:
             conversion_ts = conversion_ts.replace(tzinfo=timezone.utc)
@@ -67,11 +67,9 @@ def list_examples_for_journey_definition(
         if country and (dims.get("country") or "").lower() != country.lower():
             continue
 
-        touchpoints = payload.get("touchpoints") if isinstance(payload.get("touchpoints"), list) else []
+        touchpoints = conversion_path_touchpoints(row)
         preview_touchpoints = []
         for tp in touchpoints[:5]:
-            if not isinstance(tp, dict):
-                continue
             campaign = tp.get("campaign")
             campaign_label = None
             if isinstance(campaign, dict):
@@ -96,7 +94,7 @@ def list_examples_for_journey_definition(
                 "path_hash": resolved_hash,
                 "steps": steps,
                 "touchpoints_count": len(touchpoints),
-                "conversion_value": round(float(journey_revenue_value(payload)), 2),
+                "conversion_value": round(float(conversion_path_revenue_value(row)), 2),
                 "dimensions": {
                     "channel_group": dims.get("channel_group"),
                     "campaign_id": dims.get("campaign_id"),
