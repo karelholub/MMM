@@ -112,6 +112,10 @@ def create_router(
 ) -> APIRouter:
     router = APIRouter(tags=["settings"])
 
+    def _settings_journeys(db: Any, limit: int = 10000) -> list[dict]:
+        journeys = ensure_journeys_loaded_fn(db)
+        return journeys[: max(1, int(limit or 1))]
+
     @router.get("/api/settings")
     def get_settings(_ctx=Depends(require_permission_dependency("settings.view"))):
         return get_settings_obj()
@@ -276,11 +280,10 @@ def create_router(
 
     @router.get("/api/taxonomy/overview")
     def get_taxonomy_overview(db=Depends(get_db_dependency)):
-        from app.services_conversions import load_journeys_from_db
         from app.services_taxonomy_decisions import build_taxonomy_overview
         from app.services_taxonomy_suggestions import generate_taxonomy_suggestions
 
-        journeys = load_journeys_from_db(db, limit=10000)
+        journeys = _settings_journeys(db)
         suggestions = generate_taxonomy_suggestions(journeys, limit=8)
         return build_taxonomy_overview(
             journeys,
@@ -289,10 +292,9 @@ def create_router(
 
     @router.post("/api/taxonomy/preview")
     def preview_taxonomy(payload: Dict[str, Any], db=Depends(get_db_dependency)):
-        from app.services_conversions import load_journeys_from_db
         from app.services_taxonomy_decisions import build_taxonomy_preview
 
-        journeys = load_journeys_from_db(db, limit=10000)
+        journeys = _settings_journeys(db)
         draft_taxonomy = _parse_taxonomy_payload(payload)
         invalid_rules = [
             rule.name or rule.channel or f"Rule {idx + 1}"
@@ -335,10 +337,9 @@ def create_router(
 
     @router.get("/api/taxonomy/unknown-share")
     def get_unknown_share(limit: int = 20, db=Depends(get_db_dependency)):
-        from app.services_conversions import load_journeys_from_db
         from app.services_taxonomy import compute_unknown_share
 
-        journeys = load_journeys_from_db(db, limit=10000)
+        journeys = _settings_journeys(db)
         if not journeys:
             return {
                 "total_touchpoints": 0,
@@ -367,10 +368,9 @@ def create_router(
 
     @router.get("/api/taxonomy/coverage")
     def get_taxonomy_coverage(db=Depends(get_db_dependency)):
-        from app.services_conversions import load_journeys_from_db
         from app.services_taxonomy import compute_taxonomy_coverage
 
-        journeys = load_journeys_from_db(db, limit=10000)
+        journeys = _settings_journeys(db)
         if not journeys:
             return {
                 "channel_distribution": {},
@@ -383,18 +383,16 @@ def create_router(
 
     @router.get("/api/taxonomy/suggestions")
     def get_taxonomy_suggestions(limit: int = 12, db=Depends(get_db_dependency)):
-        from app.services_conversions import load_journeys_from_db
         from app.services_taxonomy_suggestions import generate_taxonomy_suggestions
 
-        journeys = load_journeys_from_db(db, limit=10000)
+        journeys = _settings_journeys(db)
         return generate_taxonomy_suggestions(journeys, limit=max(1, min(limit, 30)))
 
     @router.get("/api/taxonomy/channel-confidence")
     def get_channel_confidence(channel: str, db=Depends(get_db_dependency)):
-        from app.services_conversions import load_journeys_from_db
         from app.services_taxonomy import compute_channel_confidence
 
-        journeys = load_journeys_from_db(db, limit=10000)
+        journeys = _settings_journeys(db)
         if not journeys:
             return {
                 "mean_confidence": 0.0,
@@ -407,10 +405,9 @@ def create_router(
 
     @router.post("/api/taxonomy/compute-dq")
     def compute_taxonomy_dq(db=Depends(get_db_dependency)):
-        from app.services_conversions import load_journeys_from_db
         from app.services_taxonomy import persist_taxonomy_dq_snapshots
 
-        journeys = load_journeys_from_db(db, limit=10000)
+        journeys = _settings_journeys(db)
         if not journeys:
             return {"computed": 0, "message": "No journeys found"}
         snapshots = persist_taxonomy_dq_snapshots(db, journeys)

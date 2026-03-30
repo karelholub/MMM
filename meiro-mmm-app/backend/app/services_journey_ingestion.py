@@ -228,6 +228,21 @@ def _extract_customer_id_from_event(event: Dict[str, Any], fallback_idx: int) ->
     return str(customer_id or f"anon-event-{fallback_idx}")
 
 
+def extract_customer_ids_from_meiro_events(raw_events: List[Any]) -> List[str]:
+    profile_ids: List[str] = []
+    seen: Set[str] = set()
+    for idx, item in enumerate(raw_events):
+        event = item.get("event_payload") if isinstance(item, dict) and isinstance(item.get("event_payload"), dict) else item
+        if not isinstance(event, dict):
+            continue
+        profile_id = _extract_customer_id_from_event(event, idx).strip()
+        if not profile_id or profile_id in seen:
+            continue
+        seen.add(profile_id)
+        profile_ids.append(profile_id)
+    return profile_ids
+
+
 def _extract_event_timestamp(event: Dict[str, Any]) -> Optional[str]:
     return _candidate_timestamp(
         event.get("ts"),
@@ -299,10 +314,12 @@ def rebuild_profiles_from_meiro_events(
     raw_events: List[Any],
     *,
     dedup_config: Optional[Dict[str, Any]] = None,
+    only_profile_ids: Optional[Set[str] | List[str]] = None,
 ) -> List[Dict[str, Any]]:
     ingest_cfg = _normalize_meiro_dedup_config(dedup_config)
     grouped: Dict[str, Dict[str, Any]] = {}
     seen_event_keys: Set[str] = set()
+    profile_filter = {str(item).strip() for item in (only_profile_ids or []) if str(item).strip()} or None
     for idx, item in enumerate(raw_events):
         event = item
         if isinstance(item, dict) and isinstance(item.get("event_payload"), dict):
@@ -318,6 +335,8 @@ def rebuild_profiles_from_meiro_events(
             continue
         seen_event_keys.add(event_key)
         customer_id = _extract_customer_id_from_event(event, idx)
+        if profile_filter is not None and customer_id not in profile_filter:
+            continue
         journey = grouped.setdefault(
             customer_id,
             {

@@ -11,6 +11,7 @@ from app.modules.attribution.schemas import (
     LoadSampleRequest,
 )
 from app.services_conversions import filter_journeys_by_quality
+from app.services_meiro_import import import_journeys_from_cdp_source
 from app.services_meiro_quarantine import create_quarantine_run, get_quarantine_run, update_quarantine_records
 
 
@@ -186,7 +187,7 @@ def create_router(
         result = validate_and_normalize_fn(data)
         valid = result["valid_journeys"]
         summary = result["import_summary"]
-        persist_journeys_fn(db, valid, replace=True)
+        persist_journeys_fn(db, valid, replace=True, import_source="upload")
         refresh_journey_aggregates_fn(db)
         save_last_import_result_fn(result)
         errs = [i for i in result.get("validation_items", []) if i.get("severity") == "error"]
@@ -351,7 +352,7 @@ def create_router(
         persisted_count = len(existing_journeys)
         if persist_to_attribution:
             merged_journeys = [*existing_journeys, *journeys]
-            persist_journeys_fn(db, merged_journeys, replace=True)
+            persist_journeys_fn(db, merged_journeys, replace=True, import_source="meiro_quarantine_reprocess")
             refresh_journey_aggregates_fn(db)
             persisted_count = len(merged_journeys)
             update_quarantine_records(
@@ -487,7 +488,7 @@ def create_router(
         result = validate_and_normalize_fn(data)
         valid = result["valid_journeys"]
         summary = result["import_summary"]
-        persist_journeys_fn(db, valid, replace=True)
+        persist_journeys_fn(db, valid, replace=True, import_source="upload")
         refresh_journey_aggregates_fn(db)
         save_last_import_result_fn(result)
         errs = [i for i in result.get("validation_items", []) if i.get("severity") == "error"]
@@ -525,156 +526,25 @@ def create_router(
     def import_journeys_from_cdp(req: Any = Body(default=None), db=Depends(get_db_dependency)):
         if req is None:
             req = from_cdp_request_factory()
-        data_dir = get_data_dir_obj()
-        cdp_json_path = data_dir / "meiro_cdp_profiles.json"
-        cdp_path = data_dir / "meiro_cdp.csv"
-        replay_context_path = data_dir / "meiro_replay_context.json"
-        replay_context: Dict[str, Any] = {}
-        if replay_context_path.exists():
-            try:
-                replay_context = json.loads(replay_context_path.read_text(encoding="utf-8"))
-            except Exception:
-                replay_context = {}
-        replay_context_active = bool(replay_context)
-        saved = get_mapping_fn()
-        base = attribution_mapping_config_cls(
-            touchpoint_attr=saved.get("touchpoint_attr", "touchpoints"),
-            value_attr=saved.get("value_attr", "conversion_value"),
-            id_attr=saved.get("id_attr", "customer_id"),
-            channel_field=saved.get("channel_field", "channel"),
-            timestamp_field=saved.get("timestamp_field", "timestamp"),
-            source_field=saved.get("source_field", "source"),
-            medium_field=saved.get("medium_field", "medium"),
-            campaign_field=saved.get("campaign_field", "campaign"),
-            currency_field=saved.get("currency_field", "currency"),
+        return import_journeys_from_cdp_source(
+            req=req,
+            db=db,
+            data_dir=get_data_dir_obj(),
+            get_mapping_fn=get_mapping_fn,
+            attribution_mapping_config_cls=attribution_mapping_config_cls,
+            get_pull_config_fn=get_pull_config_fn,
+            get_settings_obj=get_settings_obj,
+            canonicalize_meiro_profiles_fn=canonicalize_meiro_profiles_fn,
+            get_default_config_id_fn=get_default_config_id_fn,
+            get_model_config_fn=get_model_config_fn,
+            apply_model_config_fn=apply_model_config_fn,
+            create_quarantine_run_fn=create_quarantine_run,
+            persist_journeys_fn=persist_journeys_fn,
+            refresh_journey_aggregates_fn=refresh_journey_aggregates_fn,
+            append_import_run_fn=append_import_run_fn,
+            set_active_journey_source_fn=set_active_journey_source_fn,
+            journey_revenue_value_fn=journey_revenue_value_fn,
         )
-        mapping = base
-        if getattr(req, "mapping", None):
-            mapping = attribution_mapping_config_cls(
-                touchpoint_attr=req.mapping.touchpoint_attr or base.touchpoint_attr,
-                value_attr=req.mapping.value_attr or base.value_attr,
-                id_attr=req.mapping.id_attr or base.id_attr,
-                channel_field=req.mapping.channel_field or base.channel_field,
-                timestamp_field=req.mapping.timestamp_field or base.timestamp_field,
-                source_field=req.mapping.source_field or base.source_field,
-                medium_field=req.mapping.medium_field or base.medium_field,
-                campaign_field=req.mapping.campaign_field or base.campaign_field,
-                currency_field=req.mapping.currency_field or base.currency_field,
-            )
-
-        source_label = "meiro_events_replay" if str(replay_context.get("archive_source") or "") == "events" else "meiro_webhook"
-        if cdp_json_path.exists():
-            with open(cdp_json_path) as fh:
-                profiles = json.load(fh)
-        elif cdp_path.exists():
-            df = pd.read_csv(cdp_path)
-            profiles = df.to_dict(orient="records")
-            source_label = "meiro_pull"
-        else:
-            append_import_run_fn("meiro_webhook", 0, "error", error="No CDP data found. Fetch from Meiro CDP first.")
-            raise HTTPException(status_code=404, detail="No CDP data found. Fetch from Meiro CDP first.")
-
-        try:
-            pull_cfg = get_pull_config_fn()
-            settings = get_settings_obj()
-            result = canonicalize_meiro_profiles_fn(
-                profiles,
-                mapping=mapping.model_dump(),
-                revenue_config=(settings.revenue_config.model_dump() if hasattr(settings.revenue_config, "model_dump") else settings.revenue_config),
-                dedup_config=pull_cfg,
-            )
-            journeys = result["valid_journeys"]
-        except Exception as exc:
-            if replay_context_active and replay_context_path.exists():
-                try:
-                    replay_context_path.unlink()
-                except Exception:
-                    pass
-            append_import_run_fn(source_label, 0, "error", error=str(exc))
-            raise
-
-        effective_config_id = getattr(req, "config_id", None) or get_default_config_id_fn()
-        if effective_config_id:
-            cfg = get_model_config_fn(db, effective_config_id)
-            if cfg:
-                journeys = apply_model_config_fn(journeys, cfg.config_json or {})
-
-        quarantine_records = result.get("quarantine_records") or []
-        cleaning_report = ((result.get("import_summary") or {}).get("cleaning_report") or {})
-        if quarantine_records:
-            create_quarantine_run(
-                source=source_label,
-                import_note=getattr(req, "import_note", None),
-                parser_version=result.get("schema_version"),
-                summary=cleaning_report,
-                records=quarantine_records,
-            )
-
-        persist_journeys_fn(db, journeys, replace=True)
-        refresh_journey_aggregates_fn(db)
-        converted = sum(
-            1
-            for j in journeys
-            if bool(j.get("conversions")) or bool(j.get("converted", False))
-        )
-        ch_set = {tp.get("channel", "unknown") for j in journeys for tp in j.get("touchpoints", [])}
-        summary = result.get("import_summary") or {}
-        pull_cfg = get_pull_config_fn()
-        validation_summary = {
-            "cleaning_report": cleaning_report,
-            "top_quarantine_reasons": cleaning_report.get("top_unresolved_patterns") or [],
-        }
-        if replay_context:
-            validation_summary["replay_context"] = replay_context
-            if replay_context.get("event_reconstruction_diagnostics"):
-                validation_summary["event_reconstruction_diagnostics"] = replay_context.get("event_reconstruction_diagnostics")
-        config_snapshot = {
-            "mapping_preset": "saved",
-            "schema_version": "1.0",
-            "dedup_interval_minutes": pull_cfg.get("dedup_interval_minutes"),
-            "dedup_mode": pull_cfg.get("dedup_mode"),
-            "primary_dedup_key": pull_cfg.get("primary_dedup_key"),
-            "fallback_dedup_keys": pull_cfg.get("fallback_dedup_keys"),
-            "strict_ingest": pull_cfg.get("strict_ingest"),
-            "timestamp_fallback_policy": pull_cfg.get("timestamp_fallback_policy"),
-            "value_fallback_policy": pull_cfg.get("value_fallback_policy"),
-            "currency_fallback_policy": pull_cfg.get("currency_fallback_policy"),
-        }
-        if replay_context:
-            config_snapshot["replay_context"] = replay_context
-        append_import_run_fn(
-            source_label,
-            len(journeys),
-            "success",
-            total=int(summary.get("total", len(journeys)) or len(journeys)),
-            valid=len(journeys),
-            invalid=len(quarantine_records),
-            converted=converted,
-            channels_detected=sorted(ch_set),
-            validation_summary=validation_summary,
-            config_snapshot=config_snapshot,
-            preview_rows=[
-                {
-                    "customer_id": j.get("customer_id", "?"),
-                    "touchpoints": len(j.get("touchpoints", [])),
-                    "value": journey_revenue_value_fn(j),
-                }
-                for j in journeys[:20]
-            ],
-            import_note=getattr(req, "import_note", None),
-        )
-        if replay_context_active and replay_context_path.exists():
-            try:
-                replay_context_path.unlink()
-            except Exception:
-                pass
-        set_active_journey_source_fn("meiro")
-        return {
-            "count": len(journeys),
-            "message": f"Parsed {len(journeys)} journeys from CDP data",
-            "import_summary": summary,
-            "quarantine_count": len(quarantine_records),
-        }
 
     @router.post("/api/attribution/journeys/load-sample")
     def load_sample_journeys(req: LoadSampleRequest = Body(default=LoadSampleRequest()), db=Depends(get_db_dependency)):

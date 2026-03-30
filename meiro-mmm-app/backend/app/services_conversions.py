@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import hashlib
+import uuid
 
 import pandas as pd
 from sqlalchemy.orm import Session
@@ -255,36 +256,87 @@ def _is_v2_journey(j: Dict[str, Any]) -> bool:
     return "_schema" in j or (j.get("customer") and isinstance(j["customer"], dict) and "id" in j.get("customer", {}))
 
 
+def _journey_identity(journey: Dict[str, Any], *, idx: int) -> Dict[str, Optional[str]]:
+    if _is_v2_journey(journey):
+        customer = journey.get("customer") or {}
+        profile_id = str(customer.get("id", f"anon-{idx}"))
+        conversions = journey.get("conversions") or []
+        return {
+            "profile_id": profile_id,
+            "conversion_id": str(journey.get("journey_id") or f"{profile_id}-{idx}"),
+            "kpi_type": journey.get("kpi_type") or (conversions[0].get("name") if conversions else None),
+        }
+    profile_id = str(journey.get("customer_id") or journey.get("profile_id") or journey.get("id") or f"anon-{idx}")
+    return {
+        "profile_id": profile_id,
+        "conversion_id": str(
+            journey.get("conversion_id")
+            or journey.get("order_id")
+            or journey.get("transaction_id")
+            or f"{profile_id}-{idx}"
+        ),
+        "kpi_type": journey.get("kpi_type"),
+    }
+
+
 def persist_journeys_as_conversion_paths(
     db: Session,
     journeys: List[Dict[str, Any]],
     conversion_key: Optional[str] = None,
     replace: bool = True,
+    replace_profile_ids: Optional[List[str]] = None,
+    import_source: Optional[str] = None,
+    import_batch_id: Optional[str] = None,
+    source_snapshot_id: Optional[str] = None,
 ) -> int:
     """Persist journeys (v1 or internal v2) into ConversionPath. Stores path_json as-is."""
-    if not journeys:
-        return 0
+    effective_import_batch_id = str(import_batch_id or uuid.uuid4())
+    normalized_replace_profile_ids = [
+        str(profile_id).strip()
+        for profile_id in (replace_profile_ids or [])
+        if str(profile_id).strip()
+    ]
 
     if replace:
         q = db.query(ConversionPath)
         if conversion_key is not None:
             q = q.filter(ConversionPath.conversion_key == conversion_key)
+        if normalized_replace_profile_ids:
+            q = q.filter(ConversionPath.profile_id.in_(normalized_replace_profile_ids))
         q.delete(synchronize_session=False)
+        db.commit()
+    else:
+        candidate_conversion_ids = {
+            str((_journey_identity(journey, idx=idx).get("conversion_id") or ""))
+            for idx, journey in enumerate(journeys)
+        }
+        existing_query = db.query(ConversionPath.conversion_id)
+        if conversion_key is not None:
+            existing_query = existing_query.filter(ConversionPath.conversion_key == conversion_key)
+        existing_conversion_ids = {
+            str(row[0])
+            for row in existing_query.filter(ConversionPath.conversion_id.in_(candidate_conversion_ids)).all()
+        }
+        journeys = [
+            journey
+            for idx, journey in enumerate(journeys)
+            if str((_journey_identity(journey, idx=idx).get("conversion_id") or "")) not in existing_conversion_ids
+        ]
+    if not journeys:
+        return 0
 
     now = datetime.utcnow()
     inserted = 0
+    seen_conversion_ids = set()
     for idx, j in enumerate(journeys):
-        if _is_v2_journey(j):
-            cust = j.get("customer") or {}
-            profile_id = str(cust.get("id", f"anon-{idx}"))
-            conv_id = str(j.get("journey_id") or f"{profile_id}-{idx}")
-            convs = j.get("conversions") or []
-            kpi_type = j.get("kpi_type") or (convs[0].get("name") if convs else None)
-        else:
-            profile_id = str(j.get("customer_id") or j.get("profile_id") or j.get("id") or f"anon-{idx}")
-            conv_id = str(j.get("conversion_id") or j.get("order_id") or j.get("transaction_id") or f"{profile_id}-{idx}")
-            kpi_type = j.get("kpi_type")
+        identity = _journey_identity(j, idx=idx)
+        profile_id = str(identity.get("profile_id") or f"anon-{idx}")
+        conv_id = str(identity.get("conversion_id") or f"{profile_id}-{idx}")
+        kpi_type = identity.get("kpi_type")
         effective_key = conversion_key or (kpi_type if isinstance(kpi_type, str) else None)
+        if conv_id in seen_conversion_ids:
+            continue
+        seen_conversion_ids.add(conv_id)
 
         bounds = _journey_time_bounds(j)
         first_ts = bounds["first"] or now
@@ -304,6 +356,10 @@ def persist_journeys_as_conversion_paths(
             length=length,
             first_touch_ts=first_ts,
             last_touch_ts=last_ts,
+            import_batch_id=effective_import_batch_id,
+            import_source=(str(import_source).strip() or None) if import_source is not None else None,
+            source_snapshot_id=(str(source_snapshot_id).strip() or None) if source_snapshot_id is not None else None,
+            imported_at=now,
         )
         db.add(row)
         inserted += 1

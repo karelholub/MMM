@@ -381,6 +381,75 @@ class ConversionPath(Base):
     length = Column(Integer, nullable=False)
     first_touch_ts = Column(DateTime, nullable=False)
     last_touch_ts = Column(DateTime, nullable=False)
+    import_batch_id = Column(String(36), nullable=True, index=True)
+    import_source = Column(String(32), nullable=True, index=True)
+    source_snapshot_id = Column(String(36), nullable=True, index=True)
+    imported_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
+class MeiroRawBatch(Base):
+    __tablename__ = "meiro_raw_batches"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    batch_id = Column(String(36), nullable=False, unique=True, index=True)
+    source_kind = Column(String(16), nullable=False, index=True)  # profiles/events
+    ingestion_channel = Column(String(32), nullable=False, index=True)  # webhook/pull/replay
+    received_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    parser_version = Column(String(64), nullable=True, index=True)
+    payload_shape = Column(String(16), nullable=True)
+    replace = Column(Boolean, nullable=False, default=False)
+    records_count = Column(Integer, nullable=False, default=0)
+    payload_json = Column(JSON, nullable=False)
+    metadata_json = Column(JSON, nullable=True)
+
+    __table_args__ = (
+        Index("ix_meiro_raw_batches_source_received", "source_kind", "received_at"),
+    )
+
+
+class MeiroReplayRun(Base):
+    __tablename__ = "meiro_replay_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(String(36), nullable=False, unique=True, index=True)
+    scope = Column(String(16), nullable=False, index=True)  # auto/manual
+    status = Column(String(32), nullable=False, index=True)  # success/skipped/blocked/error
+    trigger = Column(String(32), nullable=True, index=True)
+    archive_source = Column(String(16), nullable=True, index=True)  # profiles/events
+    replay_mode = Column(String(32), nullable=True, index=True)
+    reason = Column(Text, nullable=True)
+    started_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    completed_at = Column(DateTime, nullable=True, index=True)
+    latest_event_batch_db_id = Column(Integer, nullable=True, index=True)
+    archive_entries_seen = Column(Integer, nullable=True)
+    archive_entries_used = Column(Integer, nullable=True)
+    profiles_reconstructed = Column(Integer, nullable=True)
+    quarantine_count = Column(Integer, nullable=True)
+    persisted_count = Column(Integer, nullable=True)
+    result_json = Column(JSON, nullable=True)
+
+    __table_args__ = (
+        Index("ix_meiro_replay_runs_scope_started", "scope", "started_at"),
+    )
+
+
+class MeiroReplaySnapshot(Base):
+    __tablename__ = "meiro_replay_snapshots"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    snapshot_id = Column(String(36), nullable=False, unique=True, index=True)
+    source_kind = Column(String(16), nullable=False, index=True)  # profiles/events
+    replay_mode = Column(String(32), nullable=True, index=True)
+    latest_event_batch_db_id = Column(Integer, nullable=True, index=True)
+    archive_entries_used = Column(Integer, nullable=True)
+    profiles_count = Column(Integer, nullable=False, default=0)
+    profiles_json = Column(JSON, nullable=False)
+    context_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        Index("ix_meiro_replay_snapshots_source_created", "source_kind", "created_at"),
+    )
 
 
 class PathAggregate(Base):

@@ -16,6 +16,7 @@ import hashlib
 import secrets
 import requests
 import logging
+import threading
 from datetime import date, datetime, timedelta, timezone
 from sqlalchemy import func
 
@@ -77,7 +78,15 @@ from app.services_data_sources_readiness import build_data_sources_readiness
 from app.services_import_health import build_import_health
 from app.services_journey_readiness import build_journey_readiness
 from app.services_meiro_readiness import build_meiro_readiness
+from app.services_meiro_quarantine import create_quarantine_run
+from app.services_meiro_raw_batches import record_meiro_raw_batch
+from app.services_meiro_import import import_journeys_from_cdp_source
 from app.services_kpi_decisions import build_kpi_overview, build_kpi_suggestions
+from app.services_journey_cache import (
+    get_journey_cache_status,
+    invalidate_journey_cache,
+    load_cached_journeys,
+)
 from app.services_model_config_suggestions import suggest_model_config_from_journeys
 from app.services_journey_settings import (
     activate_journey_settings_version,
@@ -113,6 +122,7 @@ from app.services_journey_ingestion import (
     MEIRO_PARSER_VERSION,
     canonicalize_meiro_profiles,
     detect_schema,
+    extract_customer_ids_from_meiro_events,
     rebuild_profiles_from_meiro_events,
     validate_and_normalize,
 )
@@ -347,6 +357,30 @@ def _ensure_journey_paths_columns():
         logger.debug("Journey paths column check skipped: %s", e)
 
 
+def _ensure_conversion_path_columns():
+    """Ensure import metadata columns exist on conversion_paths for local SQLite dev DBs."""
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            for stmt in (
+                "ALTER TABLE conversion_paths ADD COLUMN import_batch_id VARCHAR(36)",
+                "ALTER TABLE conversion_paths ADD COLUMN import_source VARCHAR(32)",
+                "ALTER TABLE conversion_paths ADD COLUMN source_snapshot_id VARCHAR(36)",
+                "ALTER TABLE conversion_paths ADD COLUMN imported_at TIMESTAMP",
+                "CREATE INDEX IF NOT EXISTS ix_conversion_paths_import_batch_id ON conversion_paths (import_batch_id)",
+                "CREATE INDEX IF NOT EXISTS ix_conversion_paths_import_source ON conversion_paths (import_source)",
+                "CREATE INDEX IF NOT EXISTS ix_conversion_paths_source_snapshot_id ON conversion_paths (source_snapshot_id)",
+                "CREATE INDEX IF NOT EXISTS ix_conversion_paths_imported_at ON conversion_paths (imported_at)",
+            ):
+                try:
+                    conn.execute(text(stmt))
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+    except Exception as e:
+        logger.debug("Conversion path column check skipped: %s", e)
+
+
 def _ensure_user_auth_columns():
     """Ensure local credential auth columns exist for SQLite/dev databases."""
     try:
@@ -372,6 +406,7 @@ if "sqlite" in (os.getenv("DATABASE_URL") or "").lower() or not os.getenv("DATAB
         _ensure_alert_tables_columns()
         _ensure_journey_definition_columns()
         _ensure_journey_paths_columns()
+        _ensure_conversion_path_columns()
         _ensure_user_auth_columns()
     except Exception:
         pass
@@ -429,6 +464,9 @@ except Exception:
     pass
 
 app = FastAPI(title="Meiro Attribution Dashboard API", version="0.3.0")
+MEIRO_AUTO_REPLAY_RUNNER: Dict[str, Any] = {}
+MEIRO_AUTO_REPLAY_THREAD: Optional[threading.Thread] = None
+MEIRO_AUTO_REPLAY_STOP = threading.Event()
 
 SESSION_COOKIE_SECURE = (os.getenv("SESSION_COOKIE_SECURE", "1").strip() != "0")
 SESSION_COOKIE_SAMESITE = (os.getenv("SESSION_COOKIE_SAMESITE", "lax").strip().lower() or "lax")
@@ -467,6 +505,45 @@ def _internal_db_session():
         close = getattr(resource, "close", None)
         if callable(close):
             close()
+
+
+def _start_meiro_auto_replay_worker() -> None:
+    global MEIRO_AUTO_REPLAY_THREAD
+    if os.getenv("MEIRO_AUTO_REPLAY_WORKER_ENABLED", "1").strip().lower() in {"0", "false", "no", "off"}:
+        logger.info("Meiro auto-replay worker disabled by environment.")
+        return
+    if MEIRO_AUTO_REPLAY_THREAD and MEIRO_AUTO_REPLAY_THREAD.is_alive():
+        return
+
+    def _worker() -> None:
+        logger.info("Meiro auto-replay worker started.")
+        while not MEIRO_AUTO_REPLAY_STOP.wait(60):
+            runner = MEIRO_AUTO_REPLAY_RUNNER.get("run")
+            if not callable(runner):
+                continue
+            try:
+                with _internal_db_session() as db:
+                    runner(db, trigger="interval")
+            except Exception as exc:
+                logger.warning("Meiro auto-replay worker tick failed: %s", exc, exc_info=True)
+
+    MEIRO_AUTO_REPLAY_STOP.clear()
+    MEIRO_AUTO_REPLAY_THREAD = threading.Thread(
+        target=_worker,
+        name="meiro-auto-replay",
+        daemon=True,
+    )
+    MEIRO_AUTO_REPLAY_THREAD.start()
+
+
+@app.on_event("startup")
+def _on_startup_start_meiro_auto_replay_worker() -> None:
+    _start_meiro_auto_replay_worker()
+
+
+@app.on_event("shutdown")
+def _on_shutdown_stop_meiro_auto_replay_worker() -> None:
+    MEIRO_AUTO_REPLAY_STOP.set()
 
 
 @app.middleware("http")
@@ -547,6 +624,7 @@ class FromCDPRequest(BaseModel):
     mapping: Optional[AttributionMappingConfig] = None
     config_id: Optional[str] = None
     import_note: Optional[str] = None
+    replay_snapshot_id: Optional[str] = None
 
 
 # ==================== In-memory State ====================
@@ -560,7 +638,6 @@ EXPENSE_AUDIT_LOG: List[ExpenseChangeEvent] = []
 IMPORT_SYNC_STATE: Dict[str, Dict[str, Any]] = {}  # source -> { last_success_at, last_attempt_at, status, last_error, action_hint, records_imported, platform_total, period_start, period_end }
 SYNC_IN_PROGRESS: set = set()  # source names currently syncing
 
-JOURNEYS: List[Dict] = []  # Current loaded journeys
 ATTRIBUTION_RESULTS: Dict[str, Any] = {}  # Cached attribution results
 # Lightweight in-memory cache for path archetypes, keyed by view state.
 PATH_ARCHETYPES_CACHE: Dict[tuple, Dict[str, Any]] = {}
@@ -850,15 +927,15 @@ def _save_settings() -> None:
 
 
 def _replace_settings(new_settings: Settings) -> Settings:
-    global SETTINGS, JOURNEYS
+    global SETTINGS
     SETTINGS = new_settings
-    JOURNEYS = []
+    invalidate_journey_cache()
     _save_settings()
     return SETTINGS
 
 
 def _replace_revenue_config(payload: RevenueConfig) -> Dict[str, Any]:
-    global SETTINGS, JOURNEYS
+    global SETTINGS
     SETTINGS = Settings(
         attribution=SETTINGS.attribution,
         mmm=SETTINGS.mmm,
@@ -867,7 +944,7 @@ def _replace_revenue_config(payload: RevenueConfig) -> Dict[str, Any]:
         ads_governance=getattr(SETTINGS, "ads_governance", AdsGovernanceSettings()),
         revenue_config=RevenueConfig(**normalize_revenue_config(payload.model_dump())),
     )
-    JOURNEYS = []
+    invalidate_journey_cache()
     _save_settings()
     return normalize_revenue_config(SETTINGS.revenue_config.model_dump())
 
@@ -1014,10 +1091,29 @@ def _attach_scope_confidence(
 
 
 def _ensure_journeys_loaded(db: Any) -> List[Dict[str, Any]]:
-    global JOURNEYS
-    if not JOURNEYS:
-        JOURNEYS = load_journeys_from_db(db)
-    return JOURNEYS or []
+    return load_cached_journeys(db, loader_fn=load_journeys_from_db, limit=50000)
+
+
+def _persist_journeys_and_invalidate_cache(
+    db: Any,
+    journeys: List[Dict[str, Any]],
+    replace: bool = True,
+    replace_profile_ids: Optional[List[str]] = None,
+    import_source: Optional[str] = None,
+    import_batch_id: Optional[str] = None,
+    source_snapshot_id: Optional[str] = None,
+) -> int:
+    inserted = persist_journeys_as_conversion_paths(
+        db,
+        journeys,
+        replace=replace,
+        replace_profile_ids=replace_profile_ids,
+        import_source=import_source,
+        import_batch_id=import_batch_id,
+        source_snapshot_id=source_snapshot_id,
+    )
+    invalidate_journey_cache()
+    return inserted
 
 
 def _build_overview_attention_queue(db: Any) -> List[Dict[str, Any]]:
@@ -1210,10 +1306,6 @@ EXPENSES = {
     ),
 }
 
-# Do not preload sample journeys into the shared in-memory cache.
-# Runtime views should resolve from the persisted active dataset instead.
-JOURNEYS = []
-
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
@@ -1301,11 +1393,9 @@ def attribution_preview(
     db=Depends(get_db),
 ) -> AttributionPreviewResponse:
     """Return a lightweight preview of how attribution defaults would impact journeys."""
-    global JOURNEYS
-    if not JOURNEYS:
-        JOURNEYS = load_journeys_from_db(db, limit=50000)
+    journeys = load_cached_journeys(db, loader_fn=load_journeys_from_db, limit=50000)
 
-    if not JOURNEYS:
+    if not journeys:
         reason = "Preview unavailable (no journeys loaded)"
         return AttributionPreviewResponse(
             previewAvailable=False,
@@ -1370,8 +1460,8 @@ def attribution_preview(
         quality_direction = "loosen"
 
     quality_impact = 0
-    eligible_journeys = len(filter_journeys_by_quality(JOURNEYS, proposed_quality))
-    for journey in JOURNEYS:
+    eligible_journeys = len(filter_journeys_by_quality(journeys, proposed_quality))
+    for journey in journeys:
         q_score = journey_quality_score(journey)
         baseline_quality_allowed = q_score >= baseline_quality
         proposed_quality_allowed = q_score >= proposed_quality
@@ -1391,7 +1481,7 @@ def attribution_preview(
 
     converted_direction = "none"
     converted_impact = 0
-    converted_false_count = sum(1 for journey in JOURNEYS if not journey.get("converted", True))
+    converted_false_count = sum(1 for journey in journeys if not journey.get("converted", True))
 
     if baseline.use_converted_flag and not proposed.use_converted_flag:
         converted_direction = "more_included"
@@ -1402,7 +1492,7 @@ def attribution_preview(
 
     return AttributionPreviewResponse(
         previewAvailable=True,
-        totalJourneys=len(JOURNEYS),
+        totalJourneys=len(journeys),
         eligibleJourneys=eligible_journeys,
         windowImpactCount=window_impact,
         windowDirection=window_direction,
@@ -1413,7 +1503,7 @@ def attribution_preview(
         decision=build_attribution_preview_decision(
             preview_available=True,
             reason=None,
-            total_journeys=len(JOURNEYS),
+            total_journeys=len(journeys),
             eligible_journeys=eligible_journeys,
             window_impact_count=window_impact,
             window_direction=window_direction,
@@ -1433,10 +1523,7 @@ def attribution_defaults_overview(
     db=Depends(get_db),
 ) -> AttributionDefaultsOverviewResponse:
     """Return dependency readiness and resolved inputs for attribution defaults."""
-    global JOURNEYS
-    if not JOURNEYS:
-        JOURNEYS = load_journeys_from_db(db, limit=50000)
-    journeys = JOURNEYS or []
+    journeys = load_cached_journeys(db, loader_fn=load_journeys_from_db, limit=50000)
     overview = build_attribution_defaults_overview(
         db=db,
         journeys=journeys,
@@ -1460,12 +1547,10 @@ def nba_preview(
     db=Depends(get_db),
 ) -> NBAPreviewResponse:
     """Return estimated impact metrics for proposed NBA thresholds."""
-    global JOURNEYS
-    if not JOURNEYS:
-        JOURNEYS = load_journeys_from_db(db, limit=50000)
+    journeys = load_cached_journeys(db, loader_fn=load_journeys_from_db, limit=50000)
 
     summary = build_nba_preview_summary(
-        journeys=JOURNEYS or [],
+        journeys=journeys,
         settings=payload.settings,
         level=payload.level or "channel",
     )
@@ -1492,11 +1577,9 @@ def mmm_defaults_preview(
     db=Depends(get_db),
 ) -> MMMDefaultsPreviewResponse:
     """Return readiness and impact context for MMM default aggregation frequency."""
-    global JOURNEYS
-    if not JOURNEYS:
-        JOURNEYS = load_journeys_from_db(db, limit=50000)
+    journeys = load_cached_journeys(db, loader_fn=load_journeys_from_db, limit=50000)
     preview = build_mmm_defaults_preview(
-        journeys=JOURNEYS or [],
+        journeys=journeys,
         settings=payload.settings,
     )
     return MMMDefaultsPreviewResponse(
@@ -1516,11 +1599,9 @@ def nba_test(
     db=Depends(get_db),
 ) -> NBATestResponse:
     """Return recommendations for a specific prefix using proposed settings."""
-    global JOURNEYS
-    if not JOURNEYS:
-        JOURNEYS = load_journeys_from_db(db, limit=50000)
+    journeys = load_cached_journeys(db, loader_fn=load_journeys_from_db, limit=50000)
 
-    if not JOURNEYS:
+    if not journeys:
         reason = "Recommendations unavailable (no journeys loaded)"
         return NBATestResponse(
             previewAvailable=False,
@@ -1541,11 +1622,11 @@ def nba_test(
     requested_level = (payload.level or "channel").lower()
     use_level = (
         "campaign"
-        if requested_level == "campaign" and has_any_campaign(JOURNEYS)
+        if requested_level == "campaign" and has_any_campaign(journeys)
         else "channel"
     )
     normalized_prefix = payload.path_prefix.strip()
-    nba_raw = compute_next_best_action(JOURNEYS, level=use_level)
+    nba_raw = compute_next_best_action(journeys, level=use_level)
 
     if normalized_prefix not in nba_raw and normalized_prefix != "":
         # Allow simple comma-separated prefixes to be normalized via _step_string
@@ -1613,10 +1694,11 @@ def nba_test(
 
 @app.get("/api/health")
 def health():
+    journey_cache = get_journey_cache_status()
     return {
         "status": "ok",
         **engine_info(),
-        "journeys_loaded": len(JOURNEYS),
+        "journeys_loaded": journey_cache["cached_count"],
         "attribution_models": ATTRIBUTION_MODELS,
     }
 
@@ -1696,102 +1778,28 @@ def import_journeys_from_cdp(
     db=Depends(get_db),
 ):
     """Parse loaded CDP profiles into attribution journeys using configurable mapping."""
-    global JOURNEYS
-    cdp_json_path = DATA_DIR / "meiro_cdp_profiles.json"
-    cdp_path = DATA_DIR / "meiro_cdp.csv"
-
-    saved = get_mapping()
-    base = AttributionMappingConfig(
-        touchpoint_attr=saved.get("touchpoint_attr", "touchpoints"),
-        value_attr=saved.get("value_attr", "conversion_value"),
-        id_attr=saved.get("id_attr", "customer_id"),
-        channel_field=saved.get("channel_field", "channel"),
-        timestamp_field=saved.get("timestamp_field", "timestamp"),
-        source_field=saved.get("source_field", "source"),
-        medium_field=saved.get("medium_field", "medium"),
-        campaign_field=saved.get("campaign_field", "campaign"),
-        currency_field=saved.get("currency_field", "currency"),
+    return import_journeys_from_cdp_source(
+        req=req,
+        db=db,
+        data_dir=DATA_DIR,
+        get_mapping_fn=get_mapping,
+        attribution_mapping_config_cls=AttributionMappingConfig,
+        get_pull_config_fn=get_pull_config,
+        get_settings_obj=lambda: SETTINGS,
+        canonicalize_meiro_profiles_fn=canonicalize_meiro_profiles,
+        get_default_config_id_fn=get_default_config_id,
+        get_model_config_fn=lambda current_db, cfg_id: current_db.get(ORMModelConfig, cfg_id),
+        apply_model_config_fn=apply_model_config_to_journeys,
+        create_quarantine_run_fn=create_quarantine_run,
+        persist_journeys_fn=_persist_journeys_and_invalidate_cache,
+        refresh_journey_aggregates_fn=_refresh_journey_aggregates_after_import,
+        append_import_run_fn=_append_import_run,
+        set_active_journey_source_fn=_set_active_journey_source,
+        journey_revenue_value_fn=journey_revenue_value,
     )
-    mapping = base
-    if req.mapping:
-        mapping = AttributionMappingConfig(
-            touchpoint_attr=req.mapping.touchpoint_attr or base.touchpoint_attr,
-            value_attr=req.mapping.value_attr or base.value_attr,
-            id_attr=req.mapping.id_attr or base.id_attr,
-            channel_field=req.mapping.channel_field or base.channel_field,
-            timestamp_field=req.mapping.timestamp_field or base.timestamp_field,
-            source_field=req.mapping.source_field or base.source_field,
-            medium_field=req.mapping.medium_field or base.medium_field,
-            campaign_field=req.mapping.campaign_field or base.campaign_field,
-            currency_field=req.mapping.currency_field or base.currency_field,
-        )
-
-    source_label = "meiro_webhook"
-    if cdp_json_path.exists():
-        with open(cdp_json_path) as f:
-            profiles = json.load(f)
-    elif cdp_path.exists():
-        df = pd.read_csv(cdp_path)
-        profiles = df.to_dict(orient="records")
-        source_label = "meiro_pull"
-    else:
-        _append_import_run("meiro_webhook", 0, "error", error="No CDP data found. Fetch from Meiro CDP first.")
-        raise HTTPException(status_code=404, detail="No CDP data found. Fetch from Meiro CDP first.")
-
-    try:
-        pull_cfg = get_pull_config()
-        result = canonicalize_meiro_profiles(
-            profiles,
-            mapping=mapping.model_dump(),
-            revenue_config=(SETTINGS.revenue_config.model_dump() if hasattr(SETTINGS.revenue_config, "model_dump") else SETTINGS.revenue_config),
-            dedup_config=pull_cfg,
-        )
-        journeys = result["valid_journeys"]
-    except Exception as e:
-        _append_import_run(source_label, 0, "error", error=str(e))
-        raise
-
-    effective_config_id = req.config_id or get_default_config_id()
-    if effective_config_id:
-        cfg = db.get(ORMModelConfig, effective_config_id)
-        if cfg:
-            journeys = apply_model_config_to_journeys(journeys, cfg.config_json or {})
-
-    persist_journeys_as_conversion_paths(db, journeys, replace=True)
-    _refresh_journey_aggregates_after_import(db)
-    JOURNEYS = []
-    converted = sum(1 for j in journeys if j.get("converted", True))
-    ch_set = set()
-    for j in journeys:
-        for tp in j.get("touchpoints", []):
-            ch_set.add(tp.get("channel", "unknown"))
-    _append_import_run(
-        source_label, len(journeys), "success",
-        total=len(journeys), valid=len(journeys), converted=converted, channels_detected=sorted(ch_set),
-        config_snapshot={
-            "mapping_preset": "saved",
-            "schema_version": "1.0",
-            "dedup_interval_minutes": pull_cfg.get("dedup_interval_minutes"),
-            "dedup_mode": pull_cfg.get("dedup_mode"),
-            "primary_dedup_key": pull_cfg.get("primary_dedup_key"),
-            "fallback_dedup_keys": pull_cfg.get("fallback_dedup_keys"),
-        },
-        preview_rows=[
-            {
-                "customer_id": j.get("customer_id", "?"),
-                "touchpoints": len(j.get("touchpoints", [])),
-                "value": journey_revenue_value(j),
-            }
-            for j in journeys[:20]
-        ],
-        import_note=req.import_note,
-    )
-    _set_active_journey_source("meiro")
-    return {"count": len(journeys), "message": f"Parsed {len(journeys)} journeys from CDP data"}
 
 def load_sample_journeys(req: LoadSampleRequest = Body(default=LoadSampleRequest()), db=Depends(get_db)):
     """Load the built-in sample conversion paths. Validates and normalizes."""
-    global JOURNEYS
     sample_file = SAMPLE_DIR / "sample-conversion-paths.json"
     if not sample_file.exists():
         _append_import_run("sample", 0, "error", "Sample data not found")
@@ -1806,9 +1814,9 @@ def load_sample_journeys(req: LoadSampleRequest = Body(default=LoadSampleRequest
     result = validate_and_normalize(raw_list)
     valid = result["valid_journeys"]
     summary = result["import_summary"]
-    persist_journeys_as_conversion_paths(db, valid, replace=True)
+    persist_journeys_as_conversion_paths(db, valid, replace=True, import_source="sample")
     _refresh_journey_aggregates_after_import(db)
-    JOURNEYS = []
+    invalidate_journey_cache()
     _save_last_import_result(result)
     errs = [i for i in result.get("validation_items", []) if i.get("severity") == "error"]
     warns = [i for i in result.get("validation_items", []) if i.get("severity") == "warning"]
@@ -2511,7 +2519,7 @@ app.include_router(
         journey_source_availability_fn=_journey_source_availability,
         latest_upload_file_obj=LATEST_UPLOAD_FILE,
         validate_and_normalize_fn=validate_and_normalize,
-        persist_journeys_fn=persist_journeys_as_conversion_paths,
+        persist_journeys_fn=_persist_journeys_and_invalidate_cache,
         refresh_journey_aggregates_fn=_refresh_journey_aggregates_after_import,
         save_last_import_result_fn=_save_last_import_result,
         load_last_import_result_fn=_load_last_import_result,
@@ -2596,12 +2604,15 @@ app.include_router(
         attribution_mapping_config_cls=AttributionMappingConfig,
         canonicalize_meiro_profiles_fn=canonicalize_meiro_profiles,
         rebuild_profiles_from_meiro_events_fn=rebuild_profiles_from_meiro_events,
-        persist_journeys_fn=persist_journeys_as_conversion_paths,
+        extract_customer_ids_from_meiro_events_fn=extract_customer_ids_from_meiro_events,
+        persist_journeys_fn=_persist_journeys_and_invalidate_cache,
         refresh_journey_aggregates_fn=_refresh_journey_aggregates_after_import,
         append_import_run_fn=_append_import_run,
         set_active_journey_source_fn=_set_active_journey_source,
-        set_journeys_cache_fn=lambda journeys: globals().__setitem__("JOURNEYS", journeys),
+        set_journeys_cache_fn=lambda _journeys: None,
         get_journeys_revenue_value_fn=journey_revenue_value,
+        record_meiro_raw_batch_fn=record_meiro_raw_batch,
+        register_auto_replay_runner_fn=lambda runner: MEIRO_AUTO_REPLAY_RUNNER.__setitem__("run", runner),
     )
 )
 

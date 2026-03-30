@@ -385,6 +385,11 @@ def get_auto_replay_state() -> Dict[str, Any]:
     raw = _load().get("auto_replay_state", {})
     if not isinstance(raw, dict):
         raw = {}
+    last_event_batch_db_id_seen_raw = raw.get("last_event_batch_db_id_seen")
+    try:
+        last_event_batch_db_id_seen = int(last_event_batch_db_id_seen_raw) if last_event_batch_db_id_seen_raw is not None else None
+    except Exception:
+        last_event_batch_db_id_seen = None
     return {
         "last_attempted_at": raw.get("last_attempted_at"),
         "last_completed_at": raw.get("last_completed_at"),
@@ -393,6 +398,7 @@ def get_auto_replay_state() -> Dict[str, Any]:
         "last_trigger": raw.get("last_trigger"),
         "last_archive_entries_seen": int(raw.get("last_archive_entries_seen") or 0),
         "last_archive_received_at": raw.get("last_archive_received_at"),
+        "last_event_batch_db_id_seen": last_event_batch_db_id_seen,
         "last_result_summary": raw.get("last_result_summary") if isinstance(raw.get("last_result_summary"), dict) else {},
     }
 
@@ -404,6 +410,27 @@ def update_auto_replay_state(patch: Dict[str, Any]) -> Dict[str, Any]:
     d["auto_replay_state"] = merged
     _save(d)
     return get_auto_replay_state()
+
+
+def append_auto_replay_history(entry: Dict[str, Any], max_items: int = 100) -> list[Dict[str, Any]]:
+    d = _load()
+    history = d.get("auto_replay_history")
+    if not isinstance(history, list):
+        history = []
+    history.append(entry)
+    keep = max(1, min(1000, int(max_items)))
+    d["auto_replay_history"] = history[-keep:]
+    _save(d)
+    return list(reversed(d["auto_replay_history"]))
+
+
+def get_auto_replay_history(limit: int = 25) -> list[Dict[str, Any]]:
+    d = _load()
+    history = d.get("auto_replay_history")
+    if not isinstance(history, list):
+        return []
+    keep = max(1, min(1000, int(limit)))
+    return list(reversed(history[-keep:]))
 
 
 def _normalize_pull_config(raw: Any) -> Dict[str, Any]:
