@@ -55,6 +55,12 @@ from app.services_meiro_raw_batches import (
     list_meiro_raw_batches,
     rebuild_profiles_from_meiro_profile_batches,
 )
+from app.services_meiro_event_profile_state import (
+    list_meiro_event_profile_state,
+    upsert_meiro_event_profile_state,
+)
+from app.services_meiro_event_facts import list_meiro_event_facts, upsert_meiro_event_facts
+from app.services_meiro_profile_facts import list_meiro_profile_facts, upsert_meiro_profile_facts
 from app.services_meiro_replay_runs import list_meiro_replay_runs, record_meiro_replay_run
 from app.services_meiro_replay_snapshots import create_meiro_replay_snapshot
 from app.utils.taxonomy import load_taxonomy
@@ -666,6 +672,9 @@ def create_router(
         since: Optional[str] = None,
         until: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
+        facts = list_meiro_profile_facts(db, limit=limit)
+        if facts and after_db_id is None and since is None and until is None:
+            return facts
         profiles = rebuild_profiles_from_meiro_profile_batches(
             db,
             limit=limit,
@@ -734,6 +743,9 @@ def create_router(
     def _flatten_event_archive_entries(entries: List[Dict[str, Any]]) -> List[Any]:
         return [event for entry in reversed(entries) for event in (entry.get("events") or [])]
 
+    def _any_replace_batches(entries: List[Dict[str, Any]]) -> bool:
+        return any(bool(entry.get("replace")) for entry in entries)
+
     def _rebuild_profiles_from_event_archive(
         db: Any,
         *,
@@ -746,6 +758,16 @@ def create_router(
     ) -> List[Dict[str, Any]]:
         profile_ids = [str(item).strip() for item in (only_profile_ids or []) if str(item).strip()]
         if profile_ids:
+            fact_events = list_meiro_event_facts(db, profile_ids=profile_ids)
+            if fact_events:
+                return rebuild_profiles_from_meiro_events_fn(
+                    fact_events,
+                    dedup_config=get_pull_config(),
+                    only_profile_ids=profile_ids,
+                )
+            state_profiles = list_meiro_event_profile_state(db, profile_ids=profile_ids)
+            if state_profiles:
+                return state_profiles
             source_entries = _get_event_archive_entries(db, limit=None, since=since, until=until)
         elif source_entries is None:
             source_entries = _get_event_archive_entries(
@@ -782,19 +804,22 @@ def create_router(
         replay_scope: Dict[str, Any] = {"incremental": False, "replace_profile_ids": []}
         if use_event_archive and incremental_after_db_id is not None and replay_mode != "date_range":
             archive_entries = _get_event_archive_entries(db, limit=None, after_db_id=incremental_after_db_id)
-            replace_profile_ids = extract_customer_ids_from_meiro_events_fn(_flatten_event_archive_entries(archive_entries))
-            archived_profiles = _rebuild_profiles_from_event_archive(
-                db,
-                only_profile_ids=replace_profile_ids,
-                since=date_from,
-                until=date_to,
-            )
-            replay_scope = {
-                "incremental": True,
-                "replace_profile_ids": replace_profile_ids,
-                "after_db_id": incremental_after_db_id,
-            }
-            return archive_entries, archived_profiles, True, replay_scope
+            if _any_replace_batches(archive_entries):
+                incremental_after_db_id = None
+            else:
+                replace_profile_ids = extract_customer_ids_from_meiro_events_fn(_flatten_event_archive_entries(archive_entries))
+                archived_profiles = _rebuild_profiles_from_event_archive(
+                    db,
+                    only_profile_ids=replace_profile_ids,
+                    since=date_from,
+                    until=date_to,
+                )
+                replay_scope = {
+                    "incremental": True,
+                    "replace_profile_ids": replace_profile_ids,
+                    "after_db_id": incremental_after_db_id,
+                }
+                return archive_entries, archived_profiles, True, replay_scope
         if replay_mode == "all":
             if use_event_archive:
                 archive_entries = _get_event_archive_entries(db, limit=None)
@@ -1414,7 +1439,7 @@ def create_router(
                     "profiles": profiles,
                 }
             )
-            record_meiro_raw_batch_fn(
+            raw_batch = record_meiro_raw_batch_fn(
                 db,
                 source_kind="profiles",
                 ingestion_channel="webhook",
@@ -1435,6 +1460,12 @@ def create_router(
                     "ip": request.client.host if request.client else None,
                     "user_agent": (request.headers.get("user-agent") or "")[:256] or None,
                 },
+            )
+            upsert_meiro_profile_facts(
+                db,
+                profiles=profiles,
+                raw_batch_db_id=(int(raw_batch.id) if getattr(raw_batch, "id", None) is not None else None),
+                reset=bool(replace),
             )
             append_webhook_event(
                 {
@@ -1583,7 +1614,7 @@ def create_router(
                     "events": events,
                 }
             )
-            record_meiro_raw_batch_fn(
+            raw_batch = record_meiro_raw_batch_fn(
                 db,
                 source_kind="events",
                 ingestion_channel="webhook",
@@ -1605,7 +1636,19 @@ def create_router(
                     "user_agent": (request.headers.get("user-agent") or "")[:256] or None,
                 },
             )
+            upsert_meiro_event_facts(
+                db,
+                raw_events=events,
+                raw_batch_db_id=(int(raw_batch.id) if getattr(raw_batch, "id", None) is not None else None),
+                reset=bool(replace),
+            )
             rebuilt_profiles = rebuild_profiles_from_meiro_events_fn(events, dedup_config=get_pull_config())
+            upsert_meiro_event_profile_state(
+                db,
+                profiles=rebuilt_profiles,
+                latest_event_batch_db_id=(int(raw_batch.id) if getattr(raw_batch, "id", None) is not None else None),
+                reset=bool(replace),
+            )
             payload_analysis = _analyze_payload(rebuilt_profiles)
             append_webhook_event(
                 {

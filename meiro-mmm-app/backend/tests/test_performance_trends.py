@@ -216,6 +216,35 @@ def test_build_channel_summary_exposes_outcomes_and_notes():
     assert out["notes"]
 
 
+def test_build_channel_summary_keeps_visit_rows_when_conversion_key_has_no_matches():
+    journeys = [
+        {
+            "converted": True,
+            "kpi_type": "conversion",
+            "conversion_value": 50.0,
+            "touchpoints": [{"timestamp": "2026-02-02T10:00:00Z", "channel": "google_ads"}],
+        },
+        {
+            "converted": False,
+            "touchpoints": [{"timestamp": "2026-02-01T10:00:00Z", "channel": "email"}],
+        },
+    ]
+    out = build_channel_summary_response(
+        journeys=journeys,
+        expenses=[],
+        date_from="2026-02-01",
+        date_to="2026-02-02",
+        compare=False,
+        conversion_key="form_submit",
+    )
+    assert out["items"]
+    by_channel = {row["channel"]: row for row in out["items"]}
+    assert by_channel["google_ads"]["current"]["visits"] == 1.0
+    assert by_channel["google_ads"]["current"]["conversions"] == 0.0
+    assert by_channel["email"]["current"]["visits"] == 1.0
+    assert by_channel["email"]["current"]["conversions"] == 0.0
+
+
 def test_build_channel_trend_supports_visits_for_all_touchpoints():
     journeys = [
         {
@@ -273,6 +302,35 @@ def test_build_campaign_summary_shape_and_notes():
     assert out["totals"]["current"]["spend"] == 30.0
     assert out["totals"]["current"]["revenue"] == 120.0
     assert "outcomes_current" in out["totals"]
+
+
+def test_build_campaign_summary_keeps_visit_rows_when_conversion_key_has_no_matches():
+    journeys = [
+        {
+            "converted": True,
+            "kpi_type": "conversion",
+            "conversion_value": 50.0,
+            "touchpoints": [{"timestamp": "2026-02-02T10:00:00Z", "channel": "google_ads", "campaign": "Brand"}],
+        },
+        {
+            "converted": False,
+            "touchpoints": [{"timestamp": "2026-02-01T10:00:00Z", "channel": "email", "campaign": "Newsletter"}],
+        },
+    ]
+    out = build_campaign_summary_response(
+        journeys=journeys,
+        expenses=[],
+        date_from="2026-02-01",
+        date_to="2026-02-02",
+        compare=False,
+        conversion_key="form_submit",
+    )
+    assert out["items"]
+    by_campaign = {row["campaign_id"]: row for row in out["items"]}
+    assert by_campaign["google_ads:Brand"]["current"]["visits"] == 1.0
+    assert by_campaign["google_ads:Brand"]["current"]["conversions"] == 0.0
+    assert by_campaign["email:Newsletter"]["current"]["visits"] == 1.0
+    assert by_campaign["email:Newsletter"]["current"]["conversions"] == 0.0
 
 
 def test_campaign_summary_spend_is_allocated_without_double_counting():
@@ -341,6 +399,9 @@ def test_trend_and_summary_respect_conversion_key_filter():
         compare=False,
         conversion_key="purchase",
     )
-    ids = {r["campaign_id"] for r in summary["items"]}
-    assert "google_ads:A" in ids
-    assert "google_ads:B" not in ids
+    rows = {r["campaign_id"]: r for r in summary["items"]}
+    assert "google_ads:A" in rows
+    assert "google_ads:B" in rows
+    assert rows["google_ads:A"]["current"]["conversions"] == 1.0
+    assert rows["google_ads:B"]["current"]["visits"] == 1.0
+    assert rows["google_ads:B"]["current"]["conversions"] == 0.0

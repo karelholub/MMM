@@ -213,10 +213,10 @@ def _collect_channel_rollups(
     dedupe_prev: set[str] = set()
 
     for journey in journeys or []:
+        matches_conversion_key = True
         if conversion_key:
             journey_key = str(journey.get("kpi_type") or journey.get("conversion_key") or "")
-            if journey_key != conversion_key:
-                continue
+            matches_conversion_key = journey_key == conversion_key
         touchpoints = journey.get("touchpoints") or []
         for tp in touchpoints:
             if not isinstance(tp, dict):
@@ -233,7 +233,9 @@ def _collect_channel_rollups(
             elif compare and prev_from <= day <= prev_to:
                 _add_metric_rollup(prev_store, channel, bucket, visits=1.0)
 
-        if not journey.get("converted", True):
+        if not matches_conversion_key:
+            continue
+        if not ((journey.get("conversions") or []) or journey.get("converted", False)):
             continue
         if not touchpoints:
             continue
@@ -305,10 +307,10 @@ def _collect_campaign_rollups(
         return f"{channel}:{campaign}" if campaign else channel
 
     for journey in journeys or []:
+        matches_conversion_key = True
         if conversion_key:
             journey_key = str(journey.get("kpi_type") or journey.get("conversion_key") or "")
-            if journey_key != conversion_key:
-                continue
+            matches_conversion_key = journey_key == conversion_key
         touchpoints = journey.get("touchpoints") or []
         for tp in touchpoints:
             if not isinstance(tp, dict):
@@ -338,7 +340,9 @@ def _collect_campaign_rollups(
             elif compare and prev_from <= day <= prev_to:
                 _add_metric_rollup(prev_store, c_key, bucket, visits=1.0)
 
-        if not journey.get("converted", True):
+        if not matches_conversion_key:
+            continue
+        if not ((journey.get("conversions") or []) or journey.get("converted", False)):
             continue
         if not touchpoints:
             continue

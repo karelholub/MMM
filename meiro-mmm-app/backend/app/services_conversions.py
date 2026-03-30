@@ -279,6 +279,57 @@ def _journey_identity(journey: Dict[str, Any], *, idx: int) -> Dict[str, Optiona
     }
 
 
+def conversion_path_payload(row: Any) -> Dict[str, Any]:
+    payload = getattr(row, "path_json", None)
+    return payload if isinstance(payload, dict) else {}
+
+
+def conversion_path_touchpoints(row: Any) -> List[Dict[str, Any]]:
+    touchpoints = conversion_path_payload(row).get("touchpoints") or []
+    if not isinstance(touchpoints, list):
+        return []
+    return [tp for tp in touchpoints if isinstance(tp, dict)]
+
+
+def conversion_path_is_converted(row: Any) -> bool:
+    conversion_key = getattr(row, "conversion_key", None)
+    if isinstance(conversion_key, str) and conversion_key.strip():
+        return True
+    payload = conversion_path_payload(row)
+    conversions = payload.get("conversions")
+    if isinstance(conversions, list) and conversions:
+        return True
+    return bool(payload.get("converted"))
+
+
+def conversion_path_outcome_summary(row: Any) -> Dict[str, Any]:
+    return journey_outcome_summary(conversion_path_payload(row))
+
+
+def conversion_path_revenue_value(
+    row: Any,
+    *,
+    revenue_config: Optional[Dict[str, Any]] = None,
+    dedupe_seen: Optional[set[str]] = None,
+) -> float:
+    payload = conversion_path_payload(row)
+    value = compute_payload_revenue_value(
+        payload,
+        revenue_config or get_revenue_config(),
+        dedupe_seen=dedupe_seen,
+        fallback_conversion_id=str(getattr(row, "conversion_id", "") or ""),
+    )
+    if abs(value) > 1e-9:
+        return float(value)
+    fallback_raw = payload.get("value")
+    if fallback_raw in (None, "", []):
+        fallback_raw = payload.get("conversion_value")
+    try:
+        return float(fallback_raw or 0.0)
+    except Exception:
+        return 0.0
+
+
 def persist_journeys_as_conversion_paths(
     db: Session,
     journeys: List[Dict[str, Any]],
@@ -445,22 +496,21 @@ def load_journeys_from_db(
     dedupe_seen = set()
     journeys: List[Dict[str, Any]] = []
     for r in rows:
-        payload = r.path_json
-        if isinstance(payload, dict):
+        payload = conversion_path_payload(r)
+        if payload:
             legacy = v2_to_legacy(payload)
             entries = extract_revenue_entries(
                 payload,
                 revenue_config,
                 fallback_conversion_id=str(getattr(r, "conversion_id", "") or ""),
             )
-            revenue_value = compute_payload_revenue_value(
-                payload,
-                revenue_config,
+            revenue_value = conversion_path_revenue_value(
+                r,
+                revenue_config=revenue_config,
                 dedupe_seen=dedupe_seen,
-                fallback_conversion_id=str(getattr(r, "conversion_id", "") or ""),
             )
             legacy["conversion_value"] = float(revenue_value)
             legacy["_revenue_entries"] = entries
-            legacy["conversion_outcome"] = journey_outcome_summary(legacy)
+            legacy["conversion_outcome"] = conversion_path_outcome_summary(r)
             journeys.append(legacy)
     return journeys

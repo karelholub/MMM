@@ -11,6 +11,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .models_config_dq import ConversionPath, FunnelDefinition, JourneyDefinition, JourneyTransitionDaily
+from .services_conversions import conversion_path_payload
 from .services_journey_aggregates import STEP_ORGANIC_LANDING, STEP_PAID_LANDING
 
 
@@ -110,6 +111,20 @@ def _from_step_label(channel: str) -> str:
     if ch in {"paid", "paid_search", "paid_social", "display", "affiliate"}:
         return STEP_PAID_LANDING
     return STEP_ORGANIC_LANDING
+
+
+def _last_touchpoint_campaign_id(payload: Dict[str, Any]) -> Optional[str]:
+    touchpoints = payload.get("touchpoints") or []
+    if not isinstance(touchpoints, list) or not touchpoints:
+        return None
+    last_touchpoint = touchpoints[-1] if isinstance(touchpoints[-1], dict) else {}
+    candidate = last_touchpoint.get("campaign") if isinstance(last_touchpoint, dict) else None
+    if isinstance(candidate, dict):
+        candidate = candidate.get("id") or candidate.get("name")
+    elif candidate in (None, "", []):
+        candidate = last_touchpoint.get("campaign_id") or last_touchpoint.get("campaign_name")
+    value = str(candidate or "").strip()
+    return value or None
 
 
 def _extract_steps_with_ts(path_payload: Dict[str, Any], conversion_ts: datetime) -> List[Tuple[str, datetime]]:
@@ -255,7 +270,7 @@ def _compute_results_from_raw(
     by_channel: Dict[str, int] = {}
 
     for row in rows:
-        payload = row.path_json if isinstance(row.path_json, dict) else {}
+        payload = conversion_path_payload(row)
         payload_device = str(payload.get("device") or "").strip()
         payload_country = str(payload.get("country") or "").strip().upper()
         if device and payload_device and payload_device != device:
@@ -273,15 +288,7 @@ def _compute_results_from_raw(
             if channel_group == "organic" and first != STEP_ORGANIC_LANDING:
                 continue
         if campaign_id:
-            tps = payload.get("touchpoints") or []
-            last_campaign = None
-            if isinstance(tps, list) and tps:
-                cand = tps[-1].get("campaign") if isinstance(tps[-1], dict) else None
-                if isinstance(cand, dict):
-                    last_campaign = cand.get("id") or cand.get("name")
-                else:
-                    last_campaign = cand
-            if str(last_campaign or "") != campaign_id:
+            if _last_touchpoint_campaign_id(payload) != campaign_id:
                 continue
 
         matched_idx = -1
@@ -581,7 +588,7 @@ def _cohort_metrics_for_step(
     error_true = 0
 
     for row in rows:
-        payload = row.path_json if isinstance(row.path_json, dict) else {}
+        payload = conversion_path_payload(row)
         payload_device = str(payload.get("device") or "").strip().lower()
         payload_country = str(payload.get("country") or "").strip().upper()
         if device and payload_device and payload_device != device.lower():
@@ -599,15 +606,7 @@ def _cohort_metrics_for_step(
             if channel_group == "organic" and first != STEP_ORGANIC_LANDING:
                 continue
         if campaign_id:
-            tps = payload.get("touchpoints") or []
-            last_campaign = None
-            if isinstance(tps, list) and tps:
-                cand = tps[-1].get("campaign") if isinstance(tps[-1], dict) else None
-                if isinstance(cand, dict):
-                    last_campaign = cand.get("id") or cand.get("name")
-                else:
-                    last_campaign = cand
-            if str(last_campaign or "") != campaign_id:
+            if _last_touchpoint_campaign_id(payload) != campaign_id:
                 continue
 
         matched_idx = -1

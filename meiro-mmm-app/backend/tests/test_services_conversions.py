@@ -5,6 +5,10 @@ from app.db import Base
 from app.models_config_dq import ConversionPath
 from app.services_conversions import (
     classify_journey_interaction,
+    conversion_path_is_converted,
+    conversion_path_payload,
+    conversion_path_revenue_value,
+    conversion_path_touchpoints,
     filter_journeys_by_quality,
     filter_journeys_by_windows,
     persist_journeys_as_conversion_paths,
@@ -243,3 +247,37 @@ def test_persist_journeys_as_conversion_paths_replaces_only_selected_profiles():
 
     assert inserted == 0
     assert [row.profile_id for row in rows] == ["cust-2"]
+
+
+def test_conversion_path_helpers_normalize_payload_touchpoints_and_conversion_state():
+    row = ConversionPath(
+        conversion_id="conv-1",
+        profile_id="cust-1",
+        conversion_key=None,
+        path_json={
+            "converted": True,
+            "touchpoints": [
+                {"channel": "google_ads", "timestamp": "2026-03-01T00:00:00Z"},
+                "bad-row",
+            ],
+        },
+    )
+
+    assert conversion_path_payload(row)["converted"] is True
+    assert conversion_path_touchpoints(row) == [{"channel": "google_ads", "timestamp": "2026-03-01T00:00:00Z"}]
+    assert conversion_path_is_converted(row) is True
+
+
+def test_conversion_path_revenue_value_falls_back_to_legacy_conversion_value():
+    row = ConversionPath(
+        conversion_id="conv-legacy",
+        profile_id="cust-1",
+        conversion_key="purchase",
+        path_json={
+            "converted": True,
+            "conversion_value": 42.5,
+            "touchpoints": [{"channel": "direct", "timestamp": "2026-03-01T00:00:00Z"}],
+        },
+    )
+
+    assert conversion_path_revenue_value(row, revenue_config={"mode": "sum"}) == 42.5

@@ -89,3 +89,15 @@ def test_pull_config_normalizes_auto_replay_settings(monkeypatch, tmp_path):
     assert cfg["auto_replay_interval_minutes"] == 22
     assert cfg["auto_replay_require_mapping_approval"] is True
     assert cfg["auto_replay_quarantine_spike_threshold_pct"] == 55
+
+
+def test_auto_replay_history_is_persisted(monkeypatch, tmp_path):
+    config_path = tmp_path / "meiro_config.json"
+    monkeypatch.setattr(meiro_config, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
+
+    meiro_config.append_auto_replay_history({"at": "2026-03-27T10:00:00Z", "status": "success"})
+    meiro_config.append_auto_replay_history({"at": "2026-03-27T10:05:00Z", "status": "blocked"})
+
+    history = meiro_config.get_auto_replay_history(limit=10)
+    assert [item["status"] for item in history] == ["blocked", "success"]

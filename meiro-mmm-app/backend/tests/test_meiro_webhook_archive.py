@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from app.db import SessionLocal
 from app.main import app
 from app.modules.meiro_integration import router as meiro_router
-from app.models_config_dq import ConversionPath, MeiroRawBatch, MeiroReplayRun
+from app.models_config_dq import ConversionPath, MeiroEventFact, MeiroEventProfileState, MeiroProfileFact, MeiroRawBatch, MeiroReplayRun
 from app.services_conversions import persist_journeys_as_conversion_paths
 from app.utils import meiro_config
 
@@ -12,6 +12,9 @@ def _clear_meiro_raw_batches() -> None:
     db = SessionLocal()
     try:
         db.query(MeiroRawBatch).delete()
+        db.query(MeiroEventFact).delete()
+        db.query(MeiroEventProfileState).delete()
+        db.query(MeiroProfileFact).delete()
         db.commit()
     finally:
         db.close()
@@ -43,6 +46,33 @@ def _clear_conversion_paths() -> None:
     db = SessionLocal()
     try:
         db.query(ConversionPath).delete()
+        db.commit()
+    finally:
+        db.close()
+
+
+def _clear_meiro_event_profile_state() -> None:
+    db = SessionLocal()
+    try:
+        db.query(MeiroEventProfileState).delete()
+        db.commit()
+    finally:
+        db.close()
+
+
+def _clear_meiro_event_facts() -> None:
+    db = SessionLocal()
+    try:
+        db.query(MeiroEventFact).delete()
+        db.commit()
+    finally:
+        db.close()
+
+
+def _clear_meiro_profile_facts() -> None:
+    db = SessionLocal()
+    try:
+        db.query(MeiroProfileFact).delete()
         db.commit()
     finally:
         db.close()
@@ -226,6 +256,68 @@ def test_profiles_webhook_persists_db_raw_batch(monkeypatch, tmp_path):
     assert batch.payload_json["profiles"][0]["customer_id"] == "cust-profile-1"
 
 
+def test_profiles_webhook_updates_canonical_profile_facts_incrementally(monkeypatch, tmp_path):
+    monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(meiro_config, "CONFIG_PATH", tmp_path / "meiro_config.json")
+    monkeypatch.setattr(meiro_config, "WEBHOOK_ARCHIVE_PATH", tmp_path / "meiro_webhook_archive.jsonl")
+    monkeypatch.setattr(meiro_config, "EVENT_ARCHIVE_PATH", tmp_path / "meiro_event_archive.jsonl")
+
+    _clear_meiro_raw_batches()
+    _clear_meiro_replay_runs()
+    _clear_meiro_profile_facts()
+    client = TestClient(app)
+
+    first = client.post(
+        "/api/connectors/meiro/profiles",
+        json={
+            "profiles": [
+                {
+                    "customer_id": "cust-profile-state-1",
+                    "touchpoints": [{"timestamp": "2026-03-28T09:00:00Z", "channel": "google_ads"}],
+                }
+            ],
+            "replace": False,
+        },
+    )
+    second = client.post(
+        "/api/connectors/meiro/profiles",
+        json={
+            "profiles": [
+                {
+                    "customer_id": "cust-profile-state-2",
+                    "touchpoints": [{"timestamp": "2026-03-28T09:05:00Z", "channel": "email"}],
+                }
+            ],
+            "replace": False,
+        },
+    )
+    replaced = client.post(
+        "/api/connectors/meiro/profiles",
+        json={
+            "profiles": [
+                {
+                    "customer_id": "cust-profile-state-3",
+                    "touchpoints": [{"timestamp": "2026-03-28T09:10:00Z", "channel": "direct"}],
+                }
+            ],
+            "replace": True,
+        },
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert replaced.status_code == 200
+
+    db = SessionLocal()
+    try:
+        facts = db.query(MeiroProfileFact).order_by(MeiroProfileFact.profile_id.asc()).all()
+        assert [fact.profile_id for fact in facts] == ["cust-profile-state-3"]
+        assert facts[0].raw_batch_db_id is not None
+        assert facts[0].profile_json["customer_id"] == "cust-profile-state-3"
+    finally:
+        db.close()
+
+
 def test_events_webhook_persists_db_raw_batch(monkeypatch, tmp_path):
     monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(meiro_config, "CONFIG_PATH", tmp_path / "meiro_config.json")
@@ -259,6 +351,150 @@ def test_events_webhook_persists_db_raw_batch(monkeypatch, tmp_path):
     assert batch.ingestion_channel == "webhook"
     assert batch.records_count == 1
     assert batch.payload_json["events"][0]["event_id"] == "evt-db-1"
+
+
+def test_events_webhook_updates_event_profile_state_incrementally(monkeypatch, tmp_path):
+    monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(meiro_config, "CONFIG_PATH", tmp_path / "meiro_config.json")
+    monkeypatch.setattr(meiro_config, "WEBHOOK_ARCHIVE_PATH", tmp_path / "meiro_webhook_archive.jsonl")
+    monkeypatch.setattr(meiro_config, "EVENT_ARCHIVE_PATH", tmp_path / "meiro_event_archive.jsonl")
+
+    _clear_meiro_raw_batches()
+    _clear_meiro_replay_runs()
+    _clear_meiro_event_profile_state()
+    client = TestClient(app)
+
+    first = client.post(
+        "/api/connectors/meiro/events",
+        json={
+            "events": [
+                {
+                    "event_id": "evt-state-touch",
+                    "event_payload": {
+                        "event_id": "evt-state-touch",
+                        "customer_id": "cust-state-1",
+                        "timestamp": "2026-03-28T10:00:00Z",
+                        "event_name": "page_view",
+                        "source": "google",
+                        "medium": "cpc",
+                        "campaign": "brand",
+                    },
+                }
+            ]
+        },
+    )
+    second = client.post(
+        "/api/connectors/meiro/events",
+        json={
+            "events": [
+                {
+                    "event_id": "evt-state-conv",
+                    "event_payload": {
+                        "event_id": "evt-state-conv",
+                        "customer_id": "cust-state-1",
+                        "timestamp": "2026-03-28T10:05:00Z",
+                        "event_name": "purchase",
+                        "conversion_id": "conv-state-1",
+                        "value": 50.0,
+                        "currency": "EUR",
+                    },
+                }
+            ]
+        },
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+
+    db = SessionLocal()
+    try:
+        state = db.query(MeiroEventProfileState).filter(MeiroEventProfileState.profile_id == "cust-state-1").one()
+        assert len(state.profile_json["touchpoints"]) == 1
+        assert len(state.profile_json["conversions"]) == 1
+        assert state.latest_event_batch_db_id is not None
+    finally:
+        db.close()
+
+
+def test_events_webhook_updates_canonical_event_facts_incrementally(monkeypatch, tmp_path):
+    monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(meiro_config, "CONFIG_PATH", tmp_path / "meiro_config.json")
+    monkeypatch.setattr(meiro_config, "WEBHOOK_ARCHIVE_PATH", tmp_path / "meiro_webhook_archive.jsonl")
+    monkeypatch.setattr(meiro_config, "EVENT_ARCHIVE_PATH", tmp_path / "meiro_event_archive.jsonl")
+
+    _clear_meiro_raw_batches()
+    _clear_meiro_replay_runs()
+    _clear_meiro_event_facts()
+    client = TestClient(app)
+
+    first = client.post(
+        "/api/connectors/meiro/events",
+        json={
+            "events": [
+                {
+                    "event_id": "evt-fact-touch",
+                    "event_payload": {
+                        "event_id": "evt-fact-touch",
+                        "customer_id": "cust-fact-1",
+                        "timestamp": "2026-03-28T10:00:00Z",
+                        "event_name": "page_view",
+                        "source": "google",
+                    },
+                }
+            ]
+        },
+    )
+    second = client.post(
+        "/api/connectors/meiro/events",
+        json={
+            "events": [
+                {
+                    "event_id": "evt-fact-conv",
+                    "event_payload": {
+                        "event_id": "evt-fact-conv",
+                        "customer_id": "cust-fact-1",
+                        "timestamp": "2026-03-28T10:05:00Z",
+                        "event_name": "purchase",
+                        "conversion_id": "conv-fact-1",
+                        "value": 50.0,
+                        "currency": "EUR",
+                    },
+                }
+            ]
+        },
+    )
+    replaced = client.post(
+        "/api/connectors/meiro/events",
+        json={
+            "replace": True,
+            "events": [
+                {
+                    "event_id": "evt-fact-reset",
+                    "event_payload": {
+                        "event_id": "evt-fact-reset",
+                        "customer_id": "cust-fact-2",
+                        "timestamp": "2026-03-28T11:00:00Z",
+                        "event_name": "page_view",
+                        "source": "meta",
+                    },
+                }
+            ]
+        },
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert replaced.status_code == 200
+
+    db = SessionLocal()
+    try:
+        facts = db.query(MeiroEventFact).order_by(MeiroEventFact.event_uid.asc()).all()
+        assert len(facts) == 1
+        assert facts[0].profile_id == "cust-fact-2"
+        assert facts[0].event_uid == "evt-fact-reset"
+        assert facts[0].raw_batch_db_id is not None
+    finally:
+        db.close()
 
 
 def test_event_archive_endpoints_prefer_db_batches_when_json_archive_is_unavailable(monkeypatch, tmp_path):

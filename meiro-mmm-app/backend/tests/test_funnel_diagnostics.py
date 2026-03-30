@@ -253,3 +253,105 @@ def test_funnel_diagnostics_insufficient_when_step_not_found():
         assert out[0]["evidence"]
     finally:
         db.close()
+
+
+def test_funnel_diagnostics_campaign_filter_matches_nested_campaign_id():
+    db = _unit_db_session()
+    try:
+        jd = JourneyDefinition(
+            id="jd-3",
+            name="J3",
+            conversion_kpi_id="purchase",
+            lookback_window_days=30,
+            mode_default="conversion_only",
+            created_by="test",
+            updated_by="test",
+            is_archived=False,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        funnel = FunnelDefinition(
+            id="f-3",
+            journey_definition_id="jd-3",
+            workspace_id="default",
+            user_id="u1",
+            name="Campaign filtered funnel",
+            steps_json=[
+                "Paid Landing",
+                "Product View / Content View",
+                "Purchase / Lead Won (conversion)",
+            ],
+            counting_method="ordered",
+            window_days=30,
+            is_archived=False,
+            created_by="test",
+            updated_by="test",
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        db.add(jd)
+        db.add(funnel)
+        db.add_all(
+            [
+                ConversionPath(
+                    conversion_id="target",
+                    profile_id="u1",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2026, 2, 10, 13, 0, 0),
+                        path_json={
+                            "touchpoints": [
+                                {"ts": "2026-02-10T10:00:00Z", "channel": "paid", "event_name": "landing"},
+                                {
+                                    "ts": "2026-02-10T10:10:00Z",
+                                    "channel": "paid",
+                                    "event_name": "page_view",
+                                    "campaign": {"id": "cmp-target", "name": "Target"},
+                                },
+                            ],
+                        "conversions": [{"id": "cv-target", "name": "purchase", "value": 100.0}],
+                    },
+                    path_hash="target",
+                    length=2,
+                    first_touch_ts=datetime(2026, 2, 10, 10, 0, 0),
+                    last_touch_ts=datetime(2026, 2, 10, 10, 10, 0),
+                ),
+                ConversionPath(
+                    conversion_id="other",
+                    profile_id="u2",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2026, 2, 10, 14, 0, 0),
+                        path_json={
+                            "touchpoints": [
+                                {"ts": "2026-02-10T11:00:00Z", "channel": "paid", "event_name": "landing"},
+                                {
+                                    "ts": "2026-02-10T11:10:00Z",
+                                    "channel": "paid",
+                                    "event_name": "page_view",
+                                    "campaign": {"id": "cmp-other", "name": "Other"},
+                                },
+                            ],
+                        "conversions": [{"id": "cv-other", "name": "purchase", "value": 100.0}],
+                    },
+                    path_hash="other",
+                    length=2,
+                    first_touch_ts=datetime(2026, 2, 10, 11, 0, 0),
+                    last_touch_ts=datetime(2026, 2, 10, 11, 10, 0),
+                ),
+            ]
+        )
+        db.commit()
+
+        out = get_funnel_diagnostics(
+            db,
+            funnel=funnel,
+            journey_definition=jd,
+            step="Paid Landing",
+            date_from=date(2026, 2, 10),
+            date_to=date(2026, 2, 10),
+            campaign_id="cmp-target",
+        )
+
+        assert out
+        assert any("1 reached, 1 advanced" in " ".join(item.get("evidence", [])) for item in out)
+    finally:
+        db.close()

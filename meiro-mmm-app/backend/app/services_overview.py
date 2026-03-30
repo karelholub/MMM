@@ -17,8 +17,13 @@ from sqlalchemy.orm import Session
 
 from .models_config_dq import ConversionPath
 from .models_overview_alerts import AlertEvent, AlertRule
+from .services_conversions import (
+    conversion_path_is_converted as _conversion_path_is_converted,
+    conversion_path_payload,
+    conversion_path_revenue_value,
+    conversion_path_touchpoints,
+)
 from .services_metrics import delta_pct, journey_outcome_summary
-from .services_revenue_config import compute_payload_revenue_value, get_revenue_config
 
 
 # ---------------------------------------------------------------------------
@@ -35,19 +40,6 @@ def _parse_dt(s: Optional[str]):
         return dt
     except Exception:
         return None
-
-
-def _conversion_path_is_converted(row: Any) -> bool:
-    conversion_key = getattr(row, "conversion_key", None)
-    if isinstance(conversion_key, str) and conversion_key.strip():
-        return True
-    payload = getattr(row, "path_json", None) or {}
-    if not isinstance(payload, dict):
-        return False
-    conversions = payload.get("conversions")
-    if isinstance(conversions, list) and conversions:
-        return True
-    return bool(payload.get("converted"))
 
 
 def _overview_path_type(payload: Dict[str, Any]) -> str:
@@ -151,7 +143,6 @@ def _conversions_and_revenue_from_paths(
     conversion_key: Optional[str],
 ) -> Tuple[int, float, List[Dict[str, Any]]]:
     """Returns (conversions_count, total_revenue, daily_series for sparkline)."""
-    revenue_config = get_revenue_config()
     dedupe_seen = set()
     q = db.query(ConversionPath).filter(ConversionPath.conversion_ts >= date_from, ConversionPath.conversion_ts <= date_to)
     if conversion_key:
@@ -162,13 +153,7 @@ def _conversions_and_revenue_from_paths(
     for r in rows:
         if not _conversion_path_is_converted(r):
             continue
-        payload = r.path_json or {}
-        val = compute_payload_revenue_value(
-            payload,
-            revenue_config,
-            dedupe_seen=dedupe_seen,
-            fallback_conversion_id=str(getattr(r, "conversion_id", "") or ""),
-        )
+        val = conversion_path_revenue_value(r, dedupe_seen=dedupe_seen)
         total_value += val
         d = r.conversion_ts.date().isoformat() if hasattr(r.conversion_ts, "date") else str(r.conversion_ts)[:10]
         if d not in daily:
@@ -193,9 +178,7 @@ def _aggregate_outcomes_from_paths(
     for row in rows:
         if not _conversion_path_is_converted(row):
             continue
-        payload = row.path_json or {}
-        if isinstance(payload, dict):
-            _merge_outcomes(totals, payload)
+        _merge_outcomes(totals, conversion_path_payload(row))
     return totals
 
 
@@ -271,7 +254,6 @@ def _series_from_conversion_paths(
     grain: str,
     conversion_key: Optional[str] = None,
 ) -> Dict[str, Any]:
-    revenue_config = get_revenue_config()
     dedupe_seen = set()
     q = db.query(ConversionPath).filter(
         ConversionPath.conversion_ts >= start,
@@ -287,13 +269,7 @@ def _series_from_conversion_paths(
     for row in rows:
         if not _conversion_path_is_converted(row):
             continue
-        payload = row.path_json or {}
-        value = _payload_revenue_value(
-            payload,
-            revenue_config,
-            dedupe_seen=dedupe_seen,
-            fallback_conversion_id=str(getattr(row, "conversion_id", "") or ""),
-        )
+        value = conversion_path_revenue_value(row, dedupe_seen=dedupe_seen)
         total_revenue += value
         conversion_count += 1
         key = _bucket_key(row.conversion_ts, grain)
@@ -322,10 +298,7 @@ def _series_from_visits(
     )
     rows = q.all()
     for row in rows:
-        payload = row.path_json or {}
-        for tp in payload.get("touchpoints") or []:
-            if not isinstance(tp, dict):
-                continue
+        for tp in conversion_path_touchpoints(row):
             ts = _as_datetime(tp.get("timestamp") or tp.get("ts"))
             if ts is None or ts < start or ts > end:
                 continue
@@ -880,7 +853,6 @@ def get_overview_drivers(
     Top drivers: by_channel (spend, conversions, revenue, delta), by_campaign (top N), biggest_movers.
     Uses ConversionPath + expenses only; does not block on MMM.
     """
-    revenue_config = get_revenue_config()
     dedupe_seen_current = set()
     dedupe_seen_prev = set()
 
@@ -914,16 +886,9 @@ def get_overview_drivers(
     for r in rows:
         if not _conversion_path_is_converted(r):
             continue
-        payload = r.path_json or {}
-        outcome = journey_outcome_summary(payload)
-        path_type = _overview_path_type(payload)
-        val = compute_payload_revenue_value(
-            payload,
-            revenue_config,
-            dedupe_seen=dedupe_seen_current,
-            fallback_conversion_id=str(getattr(r, "conversion_id", "") or ""),
-        )
-        tps = payload.get("touchpoints") or []
+        payload = conversion_path_payload(r)
+        val = conversion_path_revenue_value(r, dedupe_seen=dedupe_seen_current)
+        tps = conversion_path_touchpoints(r)
         for idx, tp in enumerate(tps):
             ch = tp.get("channel", "unknown") if isinstance(tp, dict) else "unknown"
             ch_rev[ch] = ch_rev.get(ch, 0) + val / max(len(tps), 1)
@@ -953,14 +918,8 @@ def get_overview_drivers(
     for r in prev_rows:
         if not _conversion_path_is_converted(r):
             continue
-        payload = r.path_json or {}
-        val = compute_payload_revenue_value(
-            payload,
-            revenue_config,
-            dedupe_seen=dedupe_seen_prev,
-            fallback_conversion_id=str(getattr(r, "conversion_id", "") or ""),
-        )
-        tps = payload.get("touchpoints") or []
+        tps = conversion_path_touchpoints(r)
+        val = conversion_path_revenue_value(r, dedupe_seen=dedupe_seen_prev)
         for tp in tps:
             ch = tp.get("channel", "unknown") if isinstance(tp, dict) else "unknown"
             prev_ch_rev[ch] = prev_ch_rev.get(ch, 0) + val / max(len(tps), 1)
@@ -980,9 +939,7 @@ def get_overview_drivers(
         ConversionPath.first_touch_ts <= dt_to,
     ).all()
     for r in visit_rows:
-        for tp in (r.path_json or {}).get("touchpoints") or []:
-            if not isinstance(tp, dict):
-                continue
+        for tp in conversion_path_touchpoints(r):
             ts = _parse_dt(tp.get("timestamp") or tp.get("ts"))
             if not ts or ts < dt_from or ts > dt_to:
                 continue
@@ -994,9 +951,7 @@ def get_overview_drivers(
         ConversionPath.first_touch_ts <= prev_to,
     ).all()
     for r in prev_visit_rows:
-        for tp in (r.path_json or {}).get("touchpoints") or []:
-            if not isinstance(tp, dict):
-                continue
+        for tp in conversion_path_touchpoints(r):
             ts = _parse_dt(tp.get("timestamp") or tp.get("ts"))
             if not ts or ts < prev_from or ts > prev_to:
                 continue
@@ -1064,30 +1019,6 @@ def _safe_div(numerator: float, denominator: float) -> float:
     return numerator / denominator
 
 
-def _payload_revenue_value(
-    payload: Dict[str, Any],
-    revenue_config: Dict[str, Any],
-    *,
-    dedupe_seen: Optional[set[str]] = None,
-    fallback_conversion_id: Optional[str] = None,
-) -> float:
-    value = compute_payload_revenue_value(
-        payload,
-        revenue_config,
-        dedupe_seen=dedupe_seen,
-        fallback_conversion_id=fallback_conversion_id,
-    )
-    if abs(value) > 1e-9:
-        return float(value)
-    fallback_raw = payload.get("value")
-    if fallback_raw in (None, "", []):
-        fallback_raw = payload.get("conversion_value")
-    try:
-        return float(fallback_raw or 0.0)
-    except Exception:
-        return 0.0
-
-
 def _aggregate_channel_metrics(
     db: Session,
     *,
@@ -1095,7 +1026,6 @@ def _aggregate_channel_metrics(
     dt_to: datetime,
     conversion_key: Optional[str] = None,
 ) -> Dict[str, Dict[str, float]]:
-    revenue_config = get_revenue_config()
     dedupe_seen = set()
     metrics: Dict[str, Dict[str, float]] = {}
     query_from = dt_from.replace(tzinfo=None) if dt_from.tzinfo is not None else dt_from
@@ -1109,21 +1039,9 @@ def _aggregate_channel_metrics(
         q = q.filter(ConversionPath.conversion_key == conversion_key)
     rows = q.order_by(ConversionPath.conversion_ts.desc()).all()
     for row in rows:
-        payload = row.path_json or {}
-        if not isinstance(payload, dict):
-            payload = {}
-        touchpoints = payload.get("touchpoints") or []
-        if not isinstance(touchpoints, list):
-            touchpoints = []
-        value = compute_payload_revenue_value(
-            payload,
-            revenue_config,
-            dedupe_seen=dedupe_seen,
-            fallback_conversion_id=str(getattr(row, "conversion_id", "") or ""),
-        )
+        touchpoints = conversion_path_touchpoints(row)
+        value = conversion_path_revenue_value(row, dedupe_seen=dedupe_seen)
         for idx, tp in enumerate(touchpoints):
-            if not isinstance(tp, dict):
-                continue
             channel = _touchpoint_channel(tp)
             entry = metrics.setdefault(channel, {"visits": 0.0, "conversions": 0.0, "revenue": 0.0})
             entry["visits"] += 1.0
@@ -1140,7 +1058,6 @@ def _aggregate_daily_channel_revenue(
     dt_to: datetime,
     conversion_key: Optional[str] = None,
 ) -> Dict[str, Dict[str, float]]:
-    revenue_config = get_revenue_config()
     dedupe_seen = set()
     out: Dict[str, Dict[str, float]] = {}
     query_from = dt_from.replace(tzinfo=None) if dt_from.tzinfo is not None else dt_from
@@ -1155,25 +1072,16 @@ def _aggregate_daily_channel_revenue(
     for row in rows:
         if not _conversion_path_is_converted(row):
             continue
-        payload = row.path_json or {}
-        if not isinstance(payload, dict):
-            payload = {}
-        touchpoints = payload.get("touchpoints") or []
-        if not isinstance(touchpoints, list) or not touchpoints:
+        touchpoints = conversion_path_touchpoints(row)
+        if not touchpoints:
             continue
-        last_tp = touchpoints[-1] if isinstance(touchpoints[-1], dict) else {}
-        channel = _touchpoint_channel(last_tp if isinstance(last_tp, dict) else {})
+        channel = _touchpoint_channel(touchpoints[-1])
         ts = _as_datetime(getattr(row, "conversion_ts", None))
         if ts is None:
             continue
         day = ts.date().isoformat()
         entry = out.setdefault(channel, {})
-        entry[day] = entry.get(day, 0.0) + _payload_revenue_value(
-            payload,
-            revenue_config,
-            dedupe_seen=dedupe_seen,
-            fallback_conversion_id=str(getattr(row, "conversion_id", "") or ""),
-        )
+        entry[day] = entry.get(day, 0.0) + conversion_path_revenue_value(row, dedupe_seen=dedupe_seen)
     return out
 
 
@@ -1321,7 +1229,6 @@ def get_overview_funnels(
     limit: int = 5,
 ) -> Dict[str, Any]:
     dt_from, dt_to = _normalize_period_bounds(date_from, date_to)
-    revenue_config = get_revenue_config()
     dedupe_seen = set()
 
     q = db.query(ConversionPath).filter(
@@ -1339,18 +1246,11 @@ def get_overview_funnels(
     for row in rows:
         if not _conversion_path_is_converted(row):
             continue
-        payload = row.path_json or {}
-        if not isinstance(payload, dict):
-            payload = {}
+        payload = conversion_path_payload(row)
         _merge_outcomes(outcomes, payload)
         steps = _path_steps_from_payload(payload)
         path_key = " > ".join(steps)
-        revenue = _payload_revenue_value(
-            payload,
-            revenue_config,
-            dedupe_seen=dedupe_seen,
-            fallback_conversion_id=str(getattr(row, "conversion_id", "") or ""),
-        )
+        revenue = conversion_path_revenue_value(row, dedupe_seen=dedupe_seen)
         latency_days = None
         first_ts = _as_datetime(getattr(row, "first_touch_ts", None))
         conversion_ts = _as_datetime(getattr(row, "conversion_ts", None))

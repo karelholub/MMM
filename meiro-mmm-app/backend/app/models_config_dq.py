@@ -452,6 +452,55 @@ class MeiroReplaySnapshot(Base):
     )
 
 
+class MeiroEventProfileState(Base):
+    __tablename__ = "meiro_event_profile_state"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    profile_id = Column(String(128), nullable=False, unique=True, index=True)
+    latest_event_batch_db_id = Column(Integer, nullable=True, index=True)
+    source_snapshot_id = Column(String(36), nullable=True, index=True)
+    profile_json = Column(JSON, nullable=False)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        Index("ix_meiro_event_profile_state_batch_updated", "latest_event_batch_db_id", "updated_at"),
+    )
+
+
+class MeiroEventFact(Base):
+    __tablename__ = "meiro_event_facts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    event_uid = Column(String(128), nullable=False, unique=True, index=True)
+    profile_id = Column(String(128), nullable=False, index=True)
+    raw_batch_db_id = Column(Integer, nullable=True, index=True)
+    source_snapshot_id = Column(String(36), nullable=True, index=True)
+    event_ts = Column(DateTime, nullable=True, index=True)
+    event_name = Column(String(128), nullable=True, index=True)
+    event_json = Column(JSON, nullable=False)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        Index("ix_meiro_event_facts_profile_event_ts", "profile_id", "event_ts"),
+        Index("ix_meiro_event_facts_batch_profile", "raw_batch_db_id", "profile_id"),
+    )
+
+
+class MeiroProfileFact(Base):
+    __tablename__ = "meiro_profile_facts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    profile_id = Column(String(128), nullable=False, unique=True, index=True)
+    raw_batch_db_id = Column(Integer, nullable=True, index=True)
+    source_snapshot_id = Column(String(36), nullable=True, index=True)
+    profile_json = Column(JSON, nullable=False)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        Index("ix_meiro_profile_facts_batch_updated", "raw_batch_db_id", "updated_at"),
+    )
+
+
 class PathAggregate(Base):
     __tablename__ = "path_aggregates"
 

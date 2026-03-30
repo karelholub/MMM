@@ -6,13 +6,18 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from sqlalchemy.orm import Session
 
 from app.models_config_dq import ConversionPath
+from app.services_conversions import (
+    conversion_path_is_converted,
+    conversion_path_payload,
+    conversion_path_revenue_value,
+    conversion_path_touchpoints,
+)
 from app.services_journey_aggregates import (
     STEP_ADD_TO_CART,
     STEP_CHECKOUT,
     STEP_CONTENT_VIEW,
     map_touchpoint_step,
 )
-from app.services_metrics import journey_revenue_value
 
 
 def _to_utc_dt(value: Any) -> Optional[datetime]:
@@ -69,13 +74,6 @@ def _dimension_key(tp: Dict[str, Any], scope_type: str) -> str:
     return channel
 
 
-def _payload_converted(payload: Dict[str, Any]) -> bool:
-    if "conversions" in payload:
-        conversions = payload.get("conversions") or []
-        return isinstance(conversions, list) and len(conversions) > 0
-    return bool(payload.get("converted"))
-
-
 def _empty_diag() -> Dict[str, Any]:
     return {
         "roles": {
@@ -123,8 +121,8 @@ def build_scope_diagnostics(
     dedupe_seen: set[str] = set()
 
     for row in rows:
-        payload = row.path_json or {}
-        touchpoints = [tp for tp in (payload.get("touchpoints") or []) if isinstance(tp, dict)]
+        payload = conversion_path_payload(row)
+        touchpoints = conversion_path_touchpoints(row)
         if not touchpoints:
             continue
 
@@ -158,10 +156,10 @@ def build_scope_diagnostics(
             diag = out.setdefault(dim, _empty_diag())
             diag["funnel"]["checkout_journeys"] += 1
 
-        converted = _payload_converted(payload)
+        converted = conversion_path_is_converted(row)
         conv_ts = _to_utc_dt(getattr(row, "conversion_ts", None))
         if converted and conv_ts is not None and start <= conv_ts <= end:
-            value = journey_revenue_value(payload, dedupe_seen=dedupe_seen)
+            value = conversion_path_revenue_value(row, dedupe_seen=dedupe_seen)
             for dim in dims_any:
                 diag = out.setdefault(dim, _empty_diag())
                 diag["funnel"]["converted_journeys"] += 1
