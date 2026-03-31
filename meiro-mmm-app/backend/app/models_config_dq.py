@@ -604,6 +604,7 @@ class JourneyPathDaily(Base):
     p50_time_to_convert_sec = Column(Float, nullable=True)
     p90_time_to_convert_sec = Column(Float, nullable=True)
     channel_group = Column(String(128), nullable=True)
+    last_touch_channel = Column(String(128), nullable=True)
     campaign_id = Column(String(128), nullable=True)
     device = Column(String(64), nullable=True)
     country = Column(String(64), nullable=True)
@@ -626,6 +627,9 @@ class JourneyTransitionDaily(Base):
     to_step = Column(Text, nullable=False)
     count_transitions = Column(Integer, nullable=False, default=0)
     count_profiles = Column(Integer, nullable=False, default=0)
+    avg_time_between_sec = Column(Float, nullable=True)
+    p50_time_between_sec = Column(Float, nullable=True)
+    p90_time_between_sec = Column(Float, nullable=True)
     channel_group = Column(String(128), nullable=True)
     campaign_id = Column(String(128), nullable=True)
     device = Column(String(64), nullable=True)
@@ -636,6 +640,122 @@ class JourneyTransitionDaily(Base):
     __table_args__ = (
         Index("ix_journey_transitions_daily_def_date", "journey_definition_id", "date"),
         Index("ix_journey_transitions_daily_def_date_from", "journey_definition_id", "date", "from_step"),
+    )
+
+
+class ChannelPerformanceDaily(Base):
+    __tablename__ = "channel_performance_daily"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(Date, nullable=False)
+    channel = Column(String(128), nullable=False)
+    conversion_key = Column(String(128), nullable=True)
+    visits_total = Column(Integer, nullable=False, default=0)
+    count_conversions = Column(Integer, nullable=False, default=0)
+    gross_conversions_total = Column(Float, nullable=False, default=0.0)
+    net_conversions_total = Column(Float, nullable=False, default=0.0)
+    gross_revenue_total = Column(Float, nullable=False, default=0.0)
+    net_revenue_total = Column(Float, nullable=False, default=0.0)
+    view_through_conversions_total = Column(Float, nullable=False, default=0.0)
+    click_through_conversions_total = Column(Float, nullable=False, default=0.0)
+    mixed_path_conversions_total = Column(Float, nullable=False, default=0.0)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_channel_performance_daily_date_channel", "date", "channel"),
+        Index("ix_channel_performance_daily_date_channel_conversion", "date", "channel", "conversion_key"),
+    )
+
+
+class ConversionScopeDiagnosticFact(Base):
+    __tablename__ = "conversion_scope_diagnostic_facts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversion_id = Column(String(128), nullable=False)
+    profile_id = Column(String(128), nullable=False, index=True)
+    conversion_key = Column(String(128), nullable=True, index=True)
+    scope_type = Column(String(32), nullable=False)
+    scope_key = Column(String(255), nullable=False)
+    scope_channel = Column(String(128), nullable=False)
+    scope_campaign = Column(String(255), nullable=True)
+    first_touch_ts = Column(DateTime, nullable=False)
+    last_touch_ts = Column(DateTime, nullable=False)
+    conversion_ts = Column(DateTime, nullable=False)
+    touch_journeys = Column(Integer, nullable=False, default=0)
+    content_journeys = Column(Integer, nullable=False, default=0)
+    checkout_journeys = Column(Integer, nullable=False, default=0)
+    converted_journeys = Column(Integer, nullable=False, default=0)
+    first_touch_conversions = Column(Integer, nullable=False, default=0)
+    last_touch_conversions = Column(Integer, nullable=False, default=0)
+    assist_conversions = Column(Integer, nullable=False, default=0)
+    first_touch_revenue = Column(Float, nullable=False, default=0.0)
+    last_touch_revenue = Column(Float, nullable=False, default=0.0)
+    assist_revenue = Column(Float, nullable=False, default=0.0)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_conversion_scope_diag_scope_window", "scope_type", "scope_key", "first_touch_ts", "last_touch_ts"),
+        Index("ix_conversion_scope_diag_conversion", "conversion_id", "scope_type", "scope_key", unique=True),
+        Index("ix_conversion_scope_diag_channel_window", "scope_type", "scope_channel", "first_touch_ts", "last_touch_ts"),
+    )
+
+
+class ConversionDataQualityFact(Base):
+    __tablename__ = "conversion_data_quality_facts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversion_id = Column(String(128), nullable=False, unique=True)
+    profile_id = Column(String(128), nullable=True, index=True)
+    conversion_key = Column(String(128), nullable=True, index=True)
+    conversion_ts = Column(DateTime, nullable=False, index=True)
+    missing_profile = Column(Boolean, nullable=False, default=False)
+    missing_timestamp = Column(Boolean, nullable=False, default=False)
+    missing_channel = Column(Boolean, nullable=False, default=False)
+    has_non_direct_touchpoint = Column(Boolean, nullable=False, default=False)
+    used_inferred_mapping = Column(Boolean, nullable=False, default=False)
+    touchpoint_count = Column(Integer, nullable=False, default=0)
+    unknown_channel_touchpoints = Column(Integer, nullable=False, default=0)
+    unresolved_source_medium_touchpoints = Column(Integer, nullable=False, default=0)
+    revenue_entry_count = Column(Integer, nullable=False, default=0)
+    defaulted_revenue_entry_count = Column(Integer, nullable=False, default=0)
+    raw_zero_revenue_entry_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_conversion_dq_facts_conversion_ts", "conversion_ts"),
+        Index("ix_conversion_dq_facts_profile_ts", "profile_id", "conversion_ts"),
+    )
+
+
+class JourneyExampleFact(Base):
+    __tablename__ = "journey_example_facts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(Date, nullable=False)
+    journey_definition_id = Column(String(36), ForeignKey("journey_definitions.id", ondelete="CASCADE"), nullable=False)
+    conversion_id = Column(String(128), nullable=False)
+    profile_id = Column(String(128), nullable=False)
+    conversion_key = Column(String(128), nullable=True)
+    conversion_ts = Column(DateTime, nullable=False)
+    path_hash = Column(Text, nullable=False)
+    steps_json = Column(JSON, nullable=False)
+    touchpoints_count = Column(Integer, nullable=False, default=0)
+    conversion_value = Column(Float, nullable=False, default=0.0)
+    channel_group = Column(String(128), nullable=True)
+    campaign_id = Column(String(128), nullable=True)
+    device = Column(String(64), nullable=True)
+    country = Column(String(64), nullable=True)
+    touchpoints_preview_json = Column(JSON, nullable=False, default=list)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_journey_example_facts_def_date", "journey_definition_id", "date"),
+        Index("ix_journey_example_facts_def_date_hash", "journey_definition_id", "date", "path_hash"),
+        Index("ix_journey_example_facts_def_conversion", "journey_definition_id", "conversion_id", unique=True),
     )
 
 

@@ -5,8 +5,10 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
 from app.models_config_dq import (
+    ChannelPerformanceDaily,
     ConversionPath,
     JourneyDefinition,
+    JourneyExampleFact,
     JourneyPathDaily,
     JourneyTransitionDaily,
 )
@@ -136,17 +138,34 @@ def test_run_daily_journey_aggregates_writes_paths_and_transitions_and_backfills
             .filter(JourneyTransitionDaily.journey_definition_id == "def-1")
             .all()
         )
+        channel_rows = db.query(ChannelPerformanceDaily).all()
+        example_rows = db.query(JourneyExampleFact).all()
         assert len(path_rows) >= 2
         assert len(transition_rows) >= 1
+        assert channel_rows
+        assert example_rows
         assert any(r.from_step in {STEP_PAID_LANDING, STEP_ORGANIC_LANDING} for r in transition_rows)
+        assert any(float(r.avg_time_between_sec or 0.0) > 0.0 for r in transition_rows)
+        assert any(float(r.p50_time_between_sec or 0.0) > 0.0 for r in transition_rows)
         assert any(float(r.gross_conversions_total or 0.0) >= 1.0 for r in path_rows)
         assert any(float(r.net_conversions_total or 0.0) >= 1.0 for r in path_rows)
         assert round(sum(float(r.gross_revenue_total or 0.0) for r in path_rows), 2) == 200.0
+        paid_row = next(r for r in channel_rows if r.date == day1.date() and r.channel == "google_ads" and r.conversion_key is None)
+        assert paid_row.visits_total >= 1
+        assert float(paid_row.gross_revenue_total or 0.0) == 120.0
+        keyed_row = next(r for r in channel_rows if r.date == day1.date() and r.channel == "google_ads" and r.conversion_key == "purchase")
+        assert keyed_row.visits_total == 0
+        assert keyed_row.count_conversions == 1
+        example_row = next(r for r in example_rows if r.conversion_id == "c1")
+        assert example_row.path_hash
+        assert example_row.touchpoints_count == 4
 
         # Simulate data loss for day1 aggregates; rerun should backfill missing day1.
         day1_date = date(2026, 2, 8)
         db.query(JourneyPathDaily).filter(JourneyPathDaily.date == day1_date).delete(synchronize_session=False)
         db.query(JourneyTransitionDaily).filter(JourneyTransitionDaily.date == day1_date).delete(synchronize_session=False)
+        db.query(ChannelPerformanceDaily).filter(ChannelPerformanceDaily.date == day1_date).delete(synchronize_session=False)
+        db.query(JourneyExampleFact).filter(JourneyExampleFact.date == day1_date).delete(synchronize_session=False)
         db.commit()
 
         out2 = run_daily_journey_aggregates(db, as_of_date=date(2026, 2, 10), reprocess_days=1)
@@ -157,5 +176,7 @@ def test_run_daily_journey_aggregates_writes_paths_and_transitions_and_backfills
             .count()
         )
         assert restored > 0
+        assert db.query(ChannelPerformanceDaily).filter(ChannelPerformanceDaily.date == day1_date).count() > 0
+        assert db.query(JourneyExampleFact).filter(JourneyExampleFact.date == day1_date).count() > 0
     finally:
         db.close()

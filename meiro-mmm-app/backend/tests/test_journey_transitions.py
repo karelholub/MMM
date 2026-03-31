@@ -36,6 +36,9 @@ def _seed(db):
             to_step="Product View / Content View",
             count_transitions=100,
             count_profiles=80,
+            avg_time_between_sec=3600.0,
+            p50_time_between_sec=3000.0,
+            p90_time_between_sec=5400.0,
             channel_group="paid",
             campaign_id="cmp-1",
             device="mobile",
@@ -50,6 +53,9 @@ def _seed(db):
             to_step="Add to Cart / Form Start",
             count_transitions=80,
             count_profiles=70,
+            avg_time_between_sec=2400.0,
+            p50_time_between_sec=1800.0,
+            p90_time_between_sec=4200.0,
             channel_group="paid",
             campaign_id="cmp-1",
             device="mobile",
@@ -64,6 +70,9 @@ def _seed(db):
             to_step="Checkout / Form Submit",
             count_transitions=60,
             count_profiles=50,
+            avg_time_between_sec=1800.0,
+            p50_time_between_sec=1500.0,
+            p90_time_between_sec=2700.0,
             channel_group="paid",
             campaign_id="cmp-1",
             device="mobile",
@@ -78,6 +87,9 @@ def _seed(db):
             to_step="Purchase / Lead Won (conversion)",
             count_transitions=50,
             count_profiles=45,
+            avg_time_between_sec=1200.0,
+            p50_time_between_sec=900.0,
+            p90_time_between_sec=1800.0,
             channel_group="paid",
             campaign_id="cmp-1",
             device="mobile",
@@ -92,6 +104,9 @@ def _seed(db):
             to_step="Rare Step B",
             count_transitions=2,
             count_profiles=2,
+            avg_time_between_sec=600.0,
+            p50_time_between_sec=600.0,
+            p90_time_between_sec=600.0,
             channel_group="paid",
             campaign_id="cmp-1",
             device="mobile",
@@ -134,6 +149,8 @@ def test_list_transitions_response_shape_and_filters():
             assert "source" in out["edges"][0]
             assert "target" in out["edges"][0]
             assert "value" in out["edges"][0]
+            assert "avg_time_between_sec" in out["edges"][0]
+            assert out["edges"][0]["avg_time_between_sec"] is not None
     finally:
         db.close()
 

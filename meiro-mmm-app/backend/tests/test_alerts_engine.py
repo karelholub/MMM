@@ -11,12 +11,14 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
+from app.models_config_dq import ChannelPerformanceDaily, ConversionPath
 from app.models_overview_alerts import AlertEvent, AlertRule, MetricSnapshot
 from app.services_alerts_engine import (
     make_fingerprint,
     period_id_for_schedule,
     _zscore,
     get_kpi_series_for_baseline,
+    get_current_kpi_from_paths_and_expenses,
     evaluate_anomaly_kpi,
     evaluate_data_freshness,
     evaluate_threshold,
@@ -352,6 +354,87 @@ def test_evaluate_threshold_with_snapshot(db_session, fixed_now):
     assert triggered is True
     assert context["observed"] == 3.0
     assert context["operator"] == "<"
+
+
+def test_get_current_kpi_from_paths_and_expenses_prefers_channel_facts_for_full_day_window(db_session):
+    now = datetime(2024, 2, 15, 23, 59, 59, 999999)
+    db_session.add(
+        ChannelPerformanceDaily(
+            date=now.date(),
+            channel="paid_social",
+            conversion_key=None,
+            visits_total=20.0,
+            count_conversions=5,
+            gross_conversions_total=5.0,
+            net_conversions_total=5.0,
+            gross_revenue_total=250.0,
+            net_revenue_total=250.0,
+            view_through_conversions_total=0.0,
+            click_through_conversions_total=5.0,
+            mixed_path_conversions_total=0.0,
+        )
+    )
+    db_session.add(
+        ConversionPath(
+            conversion_id="conv-raw-full-day",
+            profile_id="profile-1",
+            conversion_key="purchase",
+            conversion_ts=datetime(2024, 2, 15, 14, 0, 0),
+            path_json={
+                "converted": True,
+                "conversion_value": 10.0,
+                "touchpoints": [{"channel": "paid_social"}],
+            },
+            path_hash="hash-raw-full-day",
+            length=1,
+            first_touch_ts=datetime(2024, 2, 15, 13, 30, 0),
+            last_touch_ts=datetime(2024, 2, 15, 13, 30, 0),
+        )
+    )
+    db_session.commit()
+
+    assert get_current_kpi_from_paths_and_expenses(db_session, "default", "conversions", now) == 5.0
+    assert get_current_kpi_from_paths_and_expenses(db_session, "default", "revenue", now) == 250.0
+
+
+def test_get_current_kpi_from_paths_and_expenses_falls_back_to_paths_for_partial_day_window(db_session, fixed_now):
+    db_session.add(
+        ChannelPerformanceDaily(
+            date=fixed_now.date(),
+            channel="paid_social",
+            conversion_key=None,
+            visits_total=20.0,
+            count_conversions=5,
+            gross_conversions_total=5.0,
+            net_conversions_total=5.0,
+            gross_revenue_total=250.0,
+            net_revenue_total=250.0,
+            view_through_conversions_total=0.0,
+            click_through_conversions_total=5.0,
+            mixed_path_conversions_total=0.0,
+        )
+    )
+    db_session.add(
+        ConversionPath(
+            conversion_id="conv-raw-partial-day",
+            profile_id="profile-1",
+            conversion_key="purchase",
+            conversion_ts=datetime(2024, 2, 15, 14, 0, 0),
+            path_json={
+                "converted": True,
+                "conversion_value": 10.0,
+                "touchpoints": [{"channel": "paid_social"}],
+            },
+            path_hash="hash-raw-partial-day",
+            length=1,
+            first_touch_ts=datetime(2024, 2, 15, 13, 30, 0),
+            last_touch_ts=datetime(2024, 2, 15, 13, 30, 0),
+        )
+    )
+    db_session.commit()
+
+    assert get_current_kpi_from_paths_and_expenses(db_session, "default", "conversions", fixed_now) == 1.0
+    assert get_current_kpi_from_paths_and_expenses(db_session, "default", "revenue", fixed_now) == 10.0
 
 
 # ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
-from app.models_config_dq import ConversionPath, JourneyDefinition, JourneyPathDaily
+from app.models_config_dq import ChannelPerformanceDaily, ConversionPath, JourneyDefinition, JourneyPathDaily
 from app.main import app
 from app.services_overview import get_overview_drivers, get_overview_funnels
 from app.services_overview import get_overview_summary
@@ -501,5 +501,200 @@ def test_overview_summary_prefers_daily_aggregates_when_single_definition_exists
         assert out["outcomes"]["current"]["gross_conversions"] == 3.0
         assert out["outcomes"]["current"]["net_conversions"] == 2.0
         assert out["outcomes"]["previous"]["gross_value"] == 120.0
+    finally:
+        db.close()
+
+
+def test_overview_summary_prefers_channel_facts_when_available():
+    db = _unit_db_session()
+    try:
+        db.add_all(
+            [
+                ChannelPerformanceDaily(
+                    date=datetime(2024, 2, 10).date(),
+                    channel="google_ads",
+                    conversion_key=None,
+                    visits_total=5,
+                    count_conversions=2,
+                    gross_conversions_total=2.0,
+                    net_conversions_total=1.0,
+                    gross_revenue_total=250.0,
+                    net_revenue_total=200.0,
+                    click_through_conversions_total=1.0,
+                    view_through_conversions_total=0.0,
+                    mixed_path_conversions_total=0.0,
+                    created_at=datetime(2024, 2, 10, 0, 0),
+                    updated_at=datetime(2024, 2, 10, 0, 0),
+                ),
+                ChannelPerformanceDaily(
+                    date=datetime(2024, 2, 8).date(),
+                    channel="google_ads",
+                    conversion_key=None,
+                    visits_total=4,
+                    count_conversions=1,
+                    gross_conversions_total=1.0,
+                    net_conversions_total=1.0,
+                    gross_revenue_total=100.0,
+                    net_revenue_total=100.0,
+                    click_through_conversions_total=1.0,
+                    view_through_conversions_total=0.0,
+                    mixed_path_conversions_total=0.0,
+                    created_at=datetime(2024, 2, 8, 0, 0),
+                    updated_at=datetime(2024, 2, 8, 0, 0),
+                ),
+            ]
+        )
+        db.commit()
+
+        out = get_overview_summary(
+            db,
+            date_from="2024-02-10",
+            date_to="2024-02-15",
+            expenses={},
+        )
+
+        tiles = {tile["kpi_key"]: tile for tile in out["kpi_tiles"]}
+        assert tiles["visits"]["value"] == 5
+        assert tiles["conversions"]["value"] == 2
+        assert tiles["revenue"]["value"] == 250.0
+        assert tiles["net_revenue"]["value"] == 200.0
+    finally:
+        db.close()
+
+
+def test_overview_drivers_prefers_daily_aggregates_for_campaign_rollups():
+    db = _unit_db_session()
+    try:
+        definition = JourneyDefinition(
+            id="def-drivers",
+            name="Drivers Journey",
+            conversion_kpi_id="purchase",
+            lookback_window_days=30,
+            mode_default="conversion_only",
+            created_by="test",
+            updated_by="test",
+            is_archived=False,
+            created_at=datetime(2024, 2, 1, 0, 0),
+            updated_at=datetime(2024, 2, 1, 0, 0),
+        )
+        db.add(definition)
+        db.add_all(
+            [
+                JourneyPathDaily(
+                    date=datetime(2024, 2, 10).date(),
+                    journey_definition_id="def-drivers",
+                    path_hash="campaign-a",
+                    path_steps=["Paid Landing", "Purchase / Lead Won (conversion)"],
+                    path_length=2,
+                    count_journeys=2,
+                    count_conversions=2,
+                    gross_conversions_total=2.0,
+                    net_conversions_total=2.0,
+                    gross_revenue_total=500.0,
+                    net_revenue_total=450.0,
+                    click_through_conversions_total=2.0,
+                    view_through_conversions_total=0.0,
+                    mixed_path_conversions_total=0.0,
+                    channel_group="paid",
+                    campaign_id="Spring",
+                    created_at=datetime(2024, 2, 10, 0, 0),
+                    updated_at=datetime(2024, 2, 10, 0, 0),
+                ),
+                JourneyPathDaily(
+                    date=datetime(2024, 2, 8).date(),
+                    journey_definition_id="def-drivers",
+                    path_hash="campaign-prev",
+                    path_steps=["Paid Landing", "Purchase / Lead Won (conversion)"],
+                    path_length=2,
+                    count_journeys=1,
+                    count_conversions=1,
+                    gross_conversions_total=1.0,
+                    net_conversions_total=1.0,
+                    gross_revenue_total=100.0,
+                    net_revenue_total=100.0,
+                    click_through_conversions_total=1.0,
+                    view_through_conversions_total=0.0,
+                    mixed_path_conversions_total=0.0,
+                    channel_group="paid",
+                    campaign_id="Spring",
+                    created_at=datetime(2024, 2, 8, 0, 0),
+                    updated_at=datetime(2024, 2, 8, 0, 0),
+                ),
+            ]
+        )
+        db.commit()
+
+        out = get_overview_drivers(
+            db,
+            date_from="2024-02-10",
+            date_to="2024-02-15",
+            expenses=[],
+            top_campaigns_n=5,
+            conversion_key="purchase",
+        )
+
+        assert out["by_campaign"][0]["campaign"] == "Spring"
+        assert out["by_campaign"][0]["revenue"] == 500.0
+        assert out["by_campaign"][0]["conversions"] == 2
+        assert out["by_campaign"][0]["delta_revenue_pct"] == 400.0
+        assert out["by_campaign"][0]["outcomes"]["net_value"] == 450.0
+    finally:
+        db.close()
+
+
+def test_overview_drivers_prefers_channel_facts_for_by_channel():
+    db = _unit_db_session()
+    try:
+        db.add_all(
+            [
+                ChannelPerformanceDaily(
+                    date=datetime(2024, 2, 10).date(),
+                    channel="google_ads",
+                    conversion_key=None,
+                    visits_total=5,
+                    count_conversions=2,
+                    gross_conversions_total=2.0,
+                    net_conversions_total=1.0,
+                    gross_revenue_total=250.0,
+                    net_revenue_total=200.0,
+                    click_through_conversions_total=1.0,
+                    view_through_conversions_total=0.0,
+                    mixed_path_conversions_total=0.0,
+                    created_at=datetime(2024, 2, 10, 0, 0),
+                    updated_at=datetime(2024, 2, 10, 0, 0),
+                ),
+                ChannelPerformanceDaily(
+                    date=datetime(2024, 2, 8).date(),
+                    channel="google_ads",
+                    conversion_key=None,
+                    visits_total=4,
+                    count_conversions=1,
+                    gross_conversions_total=1.0,
+                    net_conversions_total=1.0,
+                    gross_revenue_total=100.0,
+                    net_revenue_total=100.0,
+                    click_through_conversions_total=1.0,
+                    view_through_conversions_total=0.0,
+                    mixed_path_conversions_total=0.0,
+                    created_at=datetime(2024, 2, 8, 0, 0),
+                    updated_at=datetime(2024, 2, 8, 0, 0),
+                ),
+            ]
+        )
+        db.commit()
+
+        out = get_overview_drivers(
+            db,
+            date_from="2024-02-10",
+            date_to="2024-02-15",
+            expenses=[],
+            top_campaigns_n=5,
+        )
+
+        by_channel = {row["channel"]: row for row in out["by_channel"]}
+        assert by_channel["google_ads"]["visits"] == 5
+        assert by_channel["google_ads"]["conversions"] == 2
+        assert by_channel["google_ads"]["revenue"] == 250.0
+        assert by_channel["google_ads"]["outcomes"]["net_value"] == 200.0
     finally:
         db.close()

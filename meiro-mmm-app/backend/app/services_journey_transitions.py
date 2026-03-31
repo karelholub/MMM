@@ -43,6 +43,9 @@ def _aggregate_edges(
             JourneyTransitionDaily.to_step.label("to_step"),
             func.sum(JourneyTransitionDaily.count_transitions).label("count_transitions"),
             func.sum(JourneyTransitionDaily.count_profiles).label("count_profiles"),
+            func.sum(JourneyTransitionDaily.avg_time_between_sec * JourneyTransitionDaily.count_transitions).label("weighted_avg_time_between_sec"),
+            func.sum(JourneyTransitionDaily.p50_time_between_sec * JourneyTransitionDaily.count_transitions).label("weighted_p50_time_between_sec"),
+            func.sum(JourneyTransitionDaily.p90_time_between_sec * JourneyTransitionDaily.count_transitions).label("weighted_p90_time_between_sec"),
         )
         .filter(
             JourneyTransitionDaily.journey_definition_id == journey_definition_id,
@@ -66,6 +69,21 @@ def _aggregate_edges(
             "to_step": str(r.to_step),
             "count_transitions": int(r.count_transitions or 0),
             "count_profiles": int(r.count_profiles or 0),
+            "avg_time_between_sec": (
+                round(float(r.weighted_avg_time_between_sec or 0.0) / float(r.count_transitions or 1), 2)
+                if int(r.count_transitions or 0) > 0 and r.weighted_avg_time_between_sec is not None
+                else None
+            ),
+            "p50_time_between_sec": (
+                round(float(r.weighted_p50_time_between_sec or 0.0) / float(r.count_transitions or 1), 2)
+                if int(r.count_transitions or 0) > 0 and r.weighted_p50_time_between_sec is not None
+                else None
+            ),
+            "p90_time_between_sec": (
+                round(float(r.weighted_p90_time_between_sec or 0.0) / float(r.count_transitions or 1), 2)
+                if int(r.count_transitions or 0) > 0 and r.weighted_p90_time_between_sec is not None
+                else None
+            ),
         }
         for r in rows
         if int(r.count_transitions or 0) > 0
@@ -139,7 +157,7 @@ def list_transitions_for_journey_definition(
     keep_nodes: Set[str] = set(nodes_sorted[:max_nodes])
     grouped_to_other = len(nodes_sorted) > len(keep_nodes)
 
-    remapped: Dict[Tuple[str, str], Dict[str, int]] = {}
+    remapped: Dict[Tuple[str, str], Dict[str, float]] = {}
     for e in edges_filtered:
         src = e["from_step"] if e["from_step"] in keep_nodes else (OTHER_STEP if group_other else "")
         tgt = e["to_step"] if e["to_step"] in keep_nodes else (OTHER_STEP if group_other else "")
@@ -148,17 +166,36 @@ def list_transitions_for_journey_definition(
         if src == tgt:
             continue
         key = (src, tgt)
-        bucket = remapped.setdefault(key, {"count_transitions": 0, "count_profiles": 0})
+        bucket = remapped.setdefault(
+            key,
+            {
+                "count_transitions": 0.0,
+                "count_profiles": 0.0,
+                "weighted_avg_time_between_sec": 0.0,
+                "weighted_p50_time_between_sec": 0.0,
+                "weighted_p90_time_between_sec": 0.0,
+                "timing_weight": 0.0,
+            },
+        )
         bucket["count_transitions"] += e["count_transitions"]
         bucket["count_profiles"] += e["count_profiles"]
+        if e.get("avg_time_between_sec") is not None:
+            weight = float(e["count_transitions"] or 0.0)
+            bucket["weighted_avg_time_between_sec"] += float(e["avg_time_between_sec"]) * weight
+            bucket["weighted_p50_time_between_sec"] += float(e["p50_time_between_sec"] or 0.0) * weight
+            bucket["weighted_p90_time_between_sec"] += float(e["p90_time_between_sec"] or 0.0) * weight
+            bucket["timing_weight"] += weight
 
     final_edges = [
         {
             "source": src,
             "target": tgt,
-            "value": vals["count_transitions"],
-            "count_transitions": vals["count_transitions"],
-            "count_profiles": vals["count_profiles"],
+            "value": int(vals["count_transitions"]),
+            "count_transitions": int(vals["count_transitions"]),
+            "count_profiles": int(vals["count_profiles"]),
+            "avg_time_between_sec": round(vals["weighted_avg_time_between_sec"] / vals["timing_weight"], 2) if vals["timing_weight"] > 0 else None,
+            "p50_time_between_sec": round(vals["weighted_p50_time_between_sec"] / vals["timing_weight"], 2) if vals["timing_weight"] > 0 else None,
+            "p90_time_between_sec": round(vals["weighted_p90_time_between_sec"] / vals["timing_weight"], 2) if vals["timing_weight"] > 0 else None,
         }
         for (src, tgt), vals in remapped.items()
         if vals["count_transitions"] >= min_count

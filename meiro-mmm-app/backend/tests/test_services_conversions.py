@@ -2,7 +2,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
-from app.models_config_dq import ConversionPath
+from app.models_config_dq import ConversionDataQualityFact, ConversionPath, ConversionScopeDiagnosticFact
 from app.services_conversions import (
     classify_journey_interaction,
     conversion_path_is_converted,
@@ -154,6 +154,12 @@ def test_persist_journeys_as_conversion_paths_stamps_import_metadata():
     assert row.import_batch_id == "batch-123"
     assert row.source_snapshot_id == "snapshot-123"
     assert row.imported_at is not None
+    facts = db.query(ConversionScopeDiagnosticFact).filter(ConversionScopeDiagnosticFact.conversion_id == row.conversion_id).all()
+    assert facts
+    assert {fact.scope_type for fact in facts} == {"channel", "campaign"}
+    dq_fact = db.query(ConversionDataQualityFact).filter(ConversionDataQualityFact.conversion_id == row.conversion_id).one()
+    assert dq_fact.touchpoint_count == 1
+    assert dq_fact.missing_profile is False
 
 
 def test_persist_journeys_as_conversion_paths_append_mode_skips_existing_conversion_ids():

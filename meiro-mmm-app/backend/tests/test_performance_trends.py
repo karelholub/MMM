@@ -1,10 +1,18 @@
+from datetime import datetime
+
 from app.services_performance_trends import (
+    build_campaign_aggregate_overlay,
     build_campaign_summary_response,
     build_campaign_trend_response,
+    build_channel_aggregate_overlay,
     build_channel_summary_response,
     build_channel_trend_response,
     resolve_period_windows,
 )
+from app.db import Base
+from app.models_config_dq import ChannelPerformanceDaily, JourneyDefinition, JourneyPathDaily
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 
 def test_resolve_period_windows_previous_and_grain_auto():
@@ -159,6 +167,130 @@ def test_build_channel_summary_uses_same_source_rollups():
     assert out["totals"]["current"]["spend"] == 100.0
     assert out["totals"]["current"]["visits"] == 2.0
     assert out["totals"]["current"]["revenue"] == 150.0
+
+
+def test_build_channel_aggregate_overlay_uses_unfiltered_visits_and_keyed_conversions():
+    db = _unit_db_session()
+    try:
+        db.add_all(
+            [
+                ChannelPerformanceDaily(
+                    date=datetime(2026, 2, 1).date(),
+                    channel="google_ads",
+                    conversion_key=None,
+                    visits_total=5,
+                    count_conversions=2,
+                    gross_conversions_total=2.0,
+                    net_conversions_total=1.0,
+                    gross_revenue_total=250.0,
+                    net_revenue_total=200.0,
+                    click_through_conversions_total=1.0,
+                    view_through_conversions_total=0.0,
+                    mixed_path_conversions_total=0.0,
+                    created_at=datetime(2026, 2, 1, 0, 0),
+                    updated_at=datetime(2026, 2, 1, 0, 0),
+                ),
+                ChannelPerformanceDaily(
+                    date=datetime(2026, 2, 1).date(),
+                    channel="google_ads",
+                    conversion_key="purchase",
+                    visits_total=0,
+                    count_conversions=1,
+                    gross_conversions_total=1.0,
+                    net_conversions_total=1.0,
+                    gross_revenue_total=120.0,
+                    net_revenue_total=100.0,
+                    click_through_conversions_total=1.0,
+                    view_through_conversions_total=0.0,
+                    mixed_path_conversions_total=0.0,
+                    created_at=datetime(2026, 2, 1, 0, 0),
+                    updated_at=datetime(2026, 2, 1, 0, 0),
+                ),
+            ]
+        )
+        db.commit()
+
+        overlay = build_channel_aggregate_overlay(
+            db,
+            date_from="2026-02-01",
+            date_to="2026-02-02",
+            timezone="UTC",
+            compare=False,
+            conversion_key="purchase",
+        )
+
+        assert overlay is not None
+        assert overlay["current_store"]["google_ads"]["2026-02-01"]["visits"] == 5.0
+        assert overlay["current_store"]["google_ads"]["2026-02-01"]["conversions"] == 1.0
+        assert overlay["current_store"]["google_ads"]["2026-02-01"]["revenue"] == 120.0
+        assert overlay["current_outcomes"]["google_ads"]["net_revenue"] == 100.0
+    finally:
+        db.close()
+
+
+def test_build_channel_summary_supports_aggregate_overlay():
+    overlay = {
+        "current_store": {"google_ads": {"2026-02-01": {"visits": 5.0, "conversions": 2.0, "revenue": 250.0}}},
+        "previous_store": {},
+        "current_outcomes": {
+            "google_ads": {
+                "gross_conversions": 2.0,
+                "net_conversions": 1.0,
+                "gross_revenue": 250.0,
+                "net_revenue": 200.0,
+                "refunded_value": 0.0,
+                "cancelled_value": 0.0,
+                "invalid_leads": 0.0,
+                "valid_leads": 1.0,
+                "click_through_conversions": 1.0,
+                "view_through_conversions": 0.0,
+                "mixed_path_conversions": 0.0,
+            }
+        },
+        "previous_outcomes": {},
+    }
+    expenses = [{"channel": "google_ads", "service_period_start": "2026-02-01T08:00:00Z", "amount": 40.0}]
+
+    out = build_channel_summary_response(
+        journeys=[],
+        expenses=expenses,
+        date_from="2026-02-01",
+        date_to="2026-02-01",
+        compare=False,
+        aggregate_overlay=overlay,
+    )
+
+    row = out["items"][0]
+    assert row["channel"] == "google_ads"
+    assert row["current"]["visits"] == 5.0
+    assert row["current"]["conversions"] == 2.0
+    assert row["current"]["revenue"] == 250.0
+    assert row["current"]["spend"] == 40.0
+    assert row["outcomes"]["current"]["net_revenue"] == 200.0
+
+
+def test_build_channel_trend_supports_aggregate_overlay():
+    overlay = {
+        "current_store": {"google_ads": {"2026-02-01": {"visits": 5.0, "conversions": 2.0, "revenue": 250.0}}},
+        "previous_store": {"google_ads": {"2026-01-31": {"visits": 4.0, "conversions": 1.0, "revenue": 100.0}}},
+        "current_outcomes": {},
+        "previous_outcomes": {},
+    }
+
+    out = build_channel_trend_response(
+        journeys=[],
+        expenses=[],
+        date_from="2026-02-01",
+        date_to="2026-02-01",
+        timezone="UTC",
+        kpi_key="revenue",
+        grain="daily",
+        compare=True,
+        aggregate_overlay=overlay,
+    )
+
+    assert out["series"] == [{"ts": "2026-02-01", "channel": "google_ads", "value": 250.0}]
+    assert out["series_prev"] == [{"ts": "2026-01-31", "channel": "google_ads", "value": 100.0}]
 
 
 def test_build_channel_summary_exposes_outcomes_and_notes():
@@ -405,3 +537,180 @@ def test_trend_and_summary_respect_conversion_key_filter():
     assert rows["google_ads:A"]["current"]["conversions"] == 1.0
     assert rows["google_ads:B"]["current"]["visits"] == 1.0
     assert rows["google_ads:B"]["current"]["conversions"] == 0.0
+
+
+def _unit_db_session():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine)()
+
+
+def test_build_campaign_aggregate_overlay_uses_last_touch_channel_and_campaign():
+    db = _unit_db_session()
+    try:
+        db.add(
+            JourneyDefinition(
+                id="jd-campaign",
+                name="Campaign Journey",
+                conversion_kpi_id="purchase",
+                lookback_window_days=30,
+                mode_default="conversion_only",
+                created_by="test",
+                updated_by="test",
+                is_archived=False,
+                created_at=datetime(2026, 2, 1, 0, 0),
+                updated_at=datetime(2026, 2, 1, 0, 0),
+            )
+        )
+        db.add(
+            JourneyPathDaily(
+                date=datetime(2026, 2, 1).date(),
+                journey_definition_id="jd-campaign",
+                path_hash="path-1",
+                path_steps=["Paid Landing", "Purchase / Lead Won (conversion)"],
+                path_length=2,
+                count_journeys=2,
+                count_conversions=2,
+                gross_conversions_total=2.0,
+                net_conversions_total=1.0,
+                gross_revenue_total=250.0,
+                net_revenue_total=200.0,
+                click_through_conversions_total=1.0,
+                view_through_conversions_total=0.0,
+                mixed_path_conversions_total=0.0,
+                channel_group="paid",
+                last_touch_channel="meta_ads",
+                campaign_id="Spring",
+                created_at=datetime(2026, 2, 1, 0, 0),
+                updated_at=datetime(2026, 2, 1, 0, 0),
+            )
+        )
+        db.commit()
+
+        overlay = build_campaign_aggregate_overlay(
+            db,
+            date_from="2026-02-01",
+            date_to="2026-02-02",
+            timezone="UTC",
+            compare=False,
+        )
+
+        assert overlay is not None
+        assert overlay["current_store"]["meta_ads:Spring"]["2026-02-01"]["conversions"] == 2.0
+        assert overlay["current_store"]["meta_ads:Spring"]["2026-02-01"]["revenue"] == 250.0
+        assert overlay["current_outcomes"]["meta_ads:Spring"]["net_revenue"] == 200.0
+    finally:
+        db.close()
+
+
+def test_build_campaign_summary_supports_aggregate_overlay():
+    journeys = [
+        {
+            "converted": False,
+            "touchpoints": [{"timestamp": "2026-02-01T10:00:00Z", "channel": "meta_ads", "campaign": "Spring"}],
+        }
+    ]
+    overlay = {
+        "current_store": {"meta_ads:Spring": {"2026-02-01": {"conversions": 2.0, "revenue": 250.0}}},
+        "previous_store": {},
+        "current_outcomes": {
+            "meta_ads:Spring": {
+                "gross_conversions": 2.0,
+                "net_conversions": 1.0,
+                "gross_revenue": 250.0,
+                "net_revenue": 200.0,
+                "refunded_value": 0.0,
+                "cancelled_value": 0.0,
+                "invalid_leads": 0.0,
+                "valid_leads": 1.0,
+                "click_through_conversions": 1.0,
+                "view_through_conversions": 0.0,
+                "mixed_path_conversions": 0.0,
+            }
+        },
+        "previous_outcomes": {},
+        "meta": {
+            "meta_ads:Spring": {
+                "campaign_id": "meta_ads:Spring",
+                "campaign_name": "Spring",
+                "channel": "meta_ads",
+                "platform": None,
+            }
+        },
+    }
+    expenses = [{"channel": "meta_ads", "service_period_start": "2026-02-01T08:00:00Z", "amount": 40.0}]
+
+    out = build_campaign_summary_response(
+        journeys=journeys,
+        expenses=expenses,
+        date_from="2026-02-01",
+        date_to="2026-02-01",
+        compare=False,
+        aggregate_overlay=overlay,
+    )
+
+    row = out["items"][0]
+    assert row["campaign_id"] == "meta_ads:Spring"
+    assert row["current"]["visits"] == 1.0
+    assert row["current"]["conversions"] == 2.0
+    assert row["current"]["revenue"] == 250.0
+    assert row["current"]["spend"] == 40.0
+    assert row["outcomes"]["current"]["net_revenue"] == 200.0
+
+
+def test_build_campaign_trend_supports_aggregate_overlay():
+    journeys = [
+        {
+            "converted": False,
+            "touchpoints": [{"timestamp": "2026-02-01T10:00:00Z", "channel": "meta_ads", "campaign": "Spring"}],
+        }
+    ]
+    overlay = {
+        "current_store": {"meta_ads:Spring": {"2026-02-01": {"conversions": 2.0, "revenue": 250.0}}},
+        "previous_store": {"meta_ads:Spring": {"2026-01-31": {"conversions": 1.0, "revenue": 100.0}}},
+        "current_outcomes": {},
+        "previous_outcomes": {},
+        "meta": {
+            "meta_ads:Spring": {
+                "campaign_id": "meta_ads:Spring",
+                "campaign_name": "Spring",
+                "channel": "meta_ads",
+                "platform": None,
+            }
+        },
+    }
+
+    out = build_campaign_trend_response(
+        journeys=journeys,
+        expenses=[],
+        date_from="2026-02-01",
+        date_to="2026-02-01",
+        timezone="UTC",
+        kpi_key="revenue",
+        grain="daily",
+        compare=True,
+        aggregate_overlay=overlay,
+    )
+
+    current_values = [r for r in out["series"] if r["campaign_id"] == "meta_ads:Spring" and r["value"] is not None]
+    previous_values = [r for r in out["series_prev"] if r["campaign_id"] == "meta_ads:Spring" and r["value"] is not None]
+    assert current_values == [
+        {
+            "ts": "2026-02-01",
+            "campaign_id": "meta_ads:Spring",
+            "campaign_name": "Spring",
+            "channel": "meta_ads",
+            "platform": None,
+            "value": 250.0,
+        }
+    ]
+    assert previous_values == [
+        {
+            "ts": "2026-01-31",
+            "campaign_id": "meta_ads:Spring",
+            "campaign_name": "Spring",
+            "channel": "meta_ads",
+            "platform": None,
+            "value": 100.0,
+        }
+    ]

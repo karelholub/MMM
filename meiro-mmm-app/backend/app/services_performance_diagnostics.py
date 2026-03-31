@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from sqlalchemy.orm import Session
 
-from app.models_config_dq import ConversionPath
+from app.models_config_dq import ConversionPath, ConversionScopeDiagnosticFact
 from app.services_conversions import (
     conversion_path_is_converted,
     conversion_path_payload,
@@ -93,6 +93,78 @@ def _empty_diag() -> Dict[str, Any]:
     }
 
 
+def _finalize_diag(diag: Dict[str, Any]) -> None:
+    roles = diag["roles"]
+    funnel = diag["funnel"]
+    for key in ("first_touch_revenue", "last_touch_revenue", "assist_revenue"):
+        roles[key] = round(float(roles[key]), 2)
+    touch = max(float(funnel["touch_journeys"]), 1.0)
+    funnel["content_rate"] = round(float(funnel["content_journeys"]) / touch, 4)
+    funnel["checkout_rate"] = round(float(funnel["checkout_journeys"]) / touch, 4)
+    funnel["conversion_rate"] = round(float(funnel["converted_journeys"]) / touch, 4)
+
+
+def _aggregate_scope_diagnostics_from_facts(
+    *,
+    db: Session,
+    scope_type: str,
+    start: datetime,
+    end: datetime,
+    conversion_key: Optional[str],
+    channels: Optional[List[str]],
+) -> Optional[Dict[str, Dict[str, Any]]]:
+    allowed_channels = set(channels or [])
+    q = db.query(ConversionScopeDiagnosticFact).filter(
+        ConversionScopeDiagnosticFact.scope_type == scope_type,
+        ConversionScopeDiagnosticFact.last_touch_ts >= start,
+        ConversionScopeDiagnosticFact.first_touch_ts <= end,
+    )
+    if conversion_key:
+        q = q.filter(ConversionScopeDiagnosticFact.conversion_key == conversion_key)
+    if allowed_channels:
+        q = q.filter(ConversionScopeDiagnosticFact.scope_channel.in_(allowed_channels))
+    fact_rows = q.all()
+    if not fact_rows:
+        return None
+
+    raw_q = db.query(ConversionPath).filter(
+        ConversionPath.last_touch_ts >= start,
+        ConversionPath.first_touch_ts <= end,
+    )
+    if conversion_key:
+        raw_q = raw_q.filter(ConversionPath.conversion_key == conversion_key)
+    if allowed_channels:
+        raw_count = 0
+        for row in raw_q.all():
+            if any(str(tp.get("channel") or "unknown") in allowed_channels for tp in conversion_path_touchpoints(row)):
+                raw_count += 1
+    else:
+        raw_count = raw_q.count()
+    fact_count = len({str(row.conversion_id) for row in fact_rows})
+    if raw_count > fact_count:
+        return None
+
+    out: Dict[str, Dict[str, Any]] = {}
+    for row in fact_rows:
+        diag = out.setdefault(str(row.scope_key), _empty_diag())
+        roles = diag["roles"]
+        funnel = diag["funnel"]
+        roles["first_touch_conversions"] += int(row.first_touch_conversions or 0)
+        roles["last_touch_conversions"] += int(row.last_touch_conversions or 0)
+        roles["assist_conversions"] += int(row.assist_conversions or 0)
+        roles["first_touch_revenue"] += float(row.first_touch_revenue or 0.0)
+        roles["last_touch_revenue"] += float(row.last_touch_revenue or 0.0)
+        roles["assist_revenue"] += float(row.assist_revenue or 0.0)
+        funnel["touch_journeys"] += int(row.touch_journeys or 0)
+        funnel["content_journeys"] += int(row.content_journeys or 0)
+        funnel["checkout_journeys"] += int(row.checkout_journeys or 0)
+        funnel["converted_journeys"] += int(row.converted_journeys or 0)
+
+    for diag in out.values():
+        _finalize_diag(diag)
+    return out
+
+
 def build_scope_diagnostics(
     *,
     db: Session,
@@ -106,6 +178,16 @@ def build_scope_diagnostics(
         raise ValueError("scope_type must be channel or campaign")
     start = _parse_day_start(date_from)
     end = _parse_day_end(date_to)
+    fact_result = _aggregate_scope_diagnostics_from_facts(
+        db=db,
+        scope_type=scope_type,
+        start=start,
+        end=end,
+        conversion_key=conversion_key,
+        channels=channels,
+    )
+    if fact_result is not None:
+        return fact_result
     allowed_channels = set(channels or [])
     filter_channels = bool(allowed_channels)
 
@@ -183,12 +265,5 @@ def build_scope_diagnostics(
                     diag["roles"]["assist_revenue"] += share
 
     for diag in out.values():
-        roles = diag["roles"]
-        funnel = diag["funnel"]
-        for key in ("first_touch_revenue", "last_touch_revenue", "assist_revenue"):
-            roles[key] = round(float(roles[key]), 2)
-        touch = max(float(funnel["touch_journeys"]), 1.0)
-        funnel["content_rate"] = round(float(funnel["content_journeys"]) / touch, 4)
-        funnel["checkout_rate"] = round(float(funnel["checkout_journeys"]) / touch, 4)
-        funnel["conversion_rate"] = round(float(funnel["converted_journeys"]) / touch, 4)
+        _finalize_diag(diag)
     return out

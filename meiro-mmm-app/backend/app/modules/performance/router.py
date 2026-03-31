@@ -11,8 +11,10 @@ from app.services_overview import (
 )
 from app.services_performance_diagnostics import build_scope_diagnostics
 from app.services_performance_trends import (
+    build_campaign_aggregate_overlay,
     build_campaign_summary_response,
     build_campaign_trend_response,
+    build_channel_aggregate_overlay,
     build_channel_summary_response,
     build_channel_trend_response,
 )
@@ -215,6 +217,16 @@ def create_router(
                 compare=query_ctx.compare,
                 channels=query_ctx.channels,
                 conversion_key=query_ctx.conversion_key,
+                aggregate_overlay=build_channel_aggregate_overlay(
+                    db,
+                    date_from=query_ctx.date_from,
+                    date_to=query_ctx.date_to,
+                    timezone=query_ctx.timezone,
+                    compare=query_ctx.compare,
+                    channels=query_ctx.channels,
+                    conversion_key=query_ctx.conversion_key,
+                    grain=query_ctx.grain,
+                ),
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
@@ -262,6 +274,16 @@ def create_router(
             compare=query_ctx.compare,
             channels=query_ctx.channels,
             conversion_key=effective_conversion_key,
+            aggregate_overlay=build_channel_aggregate_overlay(
+                db,
+                date_from=query_ctx.date_from,
+                date_to=query_ctx.date_to,
+                timezone=query_ctx.timezone,
+                compare=query_ctx.compare,
+                channels=query_ctx.channels,
+                conversion_key=effective_conversion_key,
+                grain="daily",
+            ),
         )
         diagnostics = build_scope_diagnostics(
             db=db,
@@ -342,6 +364,15 @@ def create_router(
                 compare=query_ctx.compare,
                 channels=query_ctx.channels,
                 conversion_key=query_ctx.conversion_key,
+                aggregate_overlay=build_campaign_aggregate_overlay(
+                    db,
+                    date_from=query_ctx.date_from,
+                    date_to=query_ctx.date_to,
+                    timezone=query_ctx.timezone,
+                    compare=query_ctx.compare,
+                    channels=query_ctx.channels,
+                    conversion_key=query_ctx.conversion_key,
+                ),
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
@@ -389,6 +420,15 @@ def create_router(
             compare=query_ctx.compare,
             channels=query_ctx.channels,
             conversion_key=effective_conversion_key,
+            aggregate_overlay=build_campaign_aggregate_overlay(
+                db,
+                date_from=query_ctx.date_from,
+                date_to=query_ctx.date_to,
+                timezone=query_ctx.timezone,
+                compare=query_ctx.compare,
+                channels=query_ctx.channels,
+                conversion_key=effective_conversion_key,
+            ),
         )
         diagnostics = build_scope_diagnostics(
             db=db,

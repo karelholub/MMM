@@ -178,8 +178,15 @@ def _compute_results_from_transitions(
     if len(steps) < 2:
         return None
     pair_counts: List[int] = []
+    time_between: List[Dict[str, Any]] = []
     for src, tgt in zip(steps, steps[1:]):
-        q = db.query(func.sum(JourneyTransitionDaily.count_profiles)).filter(
+        q = db.query(
+            func.sum(JourneyTransitionDaily.count_profiles),
+            func.sum(JourneyTransitionDaily.count_transitions),
+            func.sum(JourneyTransitionDaily.avg_time_between_sec * JourneyTransitionDaily.count_transitions),
+            func.sum(JourneyTransitionDaily.p50_time_between_sec * JourneyTransitionDaily.count_transitions),
+            func.sum(JourneyTransitionDaily.p90_time_between_sec * JourneyTransitionDaily.count_transitions),
+        ).filter(
             JourneyTransitionDaily.journey_definition_id == journey_definition_id,
             JourneyTransitionDaily.date >= date_from,
             JourneyTransitionDaily.date <= date_to,
@@ -194,8 +201,24 @@ def _compute_results_from_transitions(
             q = q.filter(JourneyTransitionDaily.country == country)
         if campaign_id:
             q = q.filter(JourneyTransitionDaily.campaign_id == campaign_id)
-        c = int(q.scalar() or 0)
+        row = q.first()
+        c = int((row[0] if row else 0) or 0)
         pair_counts.append(c)
+        timing_weight = float((row[1] if row else 0.0) or 0.0)
+        if timing_weight > 0:
+            avg_sec = float((row[2] if row else 0.0) or 0.0) / timing_weight
+            p50_sec = float((row[3] if row else 0.0) or 0.0) / timing_weight
+            p90_sec = float((row[4] if row else 0.0) or 0.0) / timing_weight
+            time_between.append(
+                {
+                    "from_step": src,
+                    "to_step": tgt,
+                    "count": int(timing_weight),
+                    "avg_sec": round(avg_sec, 2),
+                    "p50_sec": round(p50_sec, 2),
+                    "p90_sec": round(p90_sec, 2),
+                }
+            )
     if not pair_counts or max(pair_counts) <= 0:
         return None
 
@@ -236,7 +259,7 @@ def _compute_results_from_transitions(
 
     return {
         "step_counts": step_counts,
-        "time_between": [],  # transitions aggregates do not store timings
+        "time_between": time_between,
         "breakdown_device": device_breakdown,
         "breakdown_channel_group": channel_breakdown,
         "source": "aggregates",
@@ -407,7 +430,7 @@ def get_funnel_results(
         source = "raw"
         used_raw = True
         warning = "Transitions aggregates unavailable for this funnel/date range. Results computed from raw conversion paths."
-    else:
+    elif not agg.get("time_between"):
         raw_timing = _compute_results_from_raw(
             db,
             journey_definition=journey_definition,

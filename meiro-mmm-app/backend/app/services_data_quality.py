@@ -12,6 +12,7 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from .models_config_dq import (
+    ConversionDataQualityFact,
     ConversionPath,
     DQSnapshot,
     DQAlertRule,
@@ -231,14 +232,111 @@ def compute_journeys_completeness(journeys: List[Dict[str, Any]]) -> List[Tuple[
     return metrics
 
 
+def _compute_journeys_completeness_from_facts(
+    db: Session,
+    *,
+    limit: int = 10000,
+) -> Optional[List[Tuple[str, str, float, Dict[str, Any]]]]:
+    rows = (
+        db.query(ConversionDataQualityFact)
+        .order_by(ConversionDataQualityFact.conversion_ts.desc())
+        .limit(limit)
+        .all()
+    )
+    if not rows:
+        return None
+
+    raw_count = (
+        db.query(ConversionPath.id)
+        .order_by(ConversionPath.conversion_ts.desc())
+        .limit(limit)
+        .count()
+    )
+    if raw_count > len(rows):
+        return None
+
+    n = len(rows)
+    missing_profile = sum(1 for row in rows if bool(row.missing_profile))
+    missing_ts = sum(1 for row in rows if bool(row.missing_timestamp))
+    missing_channel = sum(1 for row in rows if bool(row.missing_channel))
+    unknown_channel = sum(int(row.unknown_channel_touchpoints or 0) for row in rows)
+    attrib_eligible = sum(1 for row in rows if bool(row.has_non_direct_touchpoint))
+    total_touchpoints = sum(int(row.touchpoint_count or 0) for row in rows)
+    unresolved_source_medium_touchpoints = sum(int(row.unresolved_source_medium_touchpoints or 0) for row in rows)
+    total_revenue_entries = sum(int(row.revenue_entry_count or 0) for row in rows)
+    defaulted_revenue_entries = sum(int(row.defaulted_revenue_entry_count or 0) for row in rows)
+    raw_zero_revenue_entries = sum(int(row.raw_zero_revenue_entry_count or 0) for row in rows)
+    journeys_using_inferred_mappings = sum(1 for row in rows if bool(row.used_inferred_mapping))
+
+    profile_counts: Dict[str, int] = {}
+    for row in rows:
+        profile_id = str(row.profile_id or "").strip()
+        if not profile_id:
+            continue
+        profile_counts[profile_id] = profile_counts.get(profile_id, 0) + 1
+    duplicate_ids = sum(count - 1 for count in profile_counts.values() if count > 1)
+
+    metrics: List[Tuple[str, str, float, Dict[str, Any]]] = []
+
+    def pct(x: int) -> float:
+        return float(x) / float(n) * 100.0 if n else 0.0
+
+    def pct_of_touchpoints(x: int) -> float:
+        return float(x) / float(total_touchpoints) * 100.0 if total_touchpoints else 0.0
+
+    def pct_of_revenue_entries(x: int) -> float:
+        return float(x) / float(total_revenue_entries) * 100.0 if total_revenue_entries else 0.0
+
+    metrics.append(("journeys", "missing_profile_pct", pct(missing_profile), {"missing": missing_profile, "total": n}))
+    metrics.append(("journeys", "missing_timestamp_pct", pct(missing_ts), {"missing": missing_ts, "total": n}))
+    metrics.append(("journeys", "missing_channel_pct", pct(missing_channel), {"missing": missing_channel, "total": n}))
+    metrics.append(("journeys", "duplicate_id_pct", pct(duplicate_ids), {"duplicates": duplicate_ids, "total": n}))
+    metrics.append(("journeys", "unknown_channel_share_pct", pct(unknown_channel), {"unknown_channel_events": unknown_channel, "total_journeys": n}))
+    metrics.append(("journeys", "conversion_attributable_pct", pct(attrib_eligible), {"attrib_eligible": attrib_eligible, "total": n}))
+    metrics.append((
+        "journeys",
+        "defaulted_conversion_value_pct",
+        pct_of_revenue_entries(defaulted_revenue_entries),
+        {"defaulted": defaulted_revenue_entries, "total_revenue_entries": total_revenue_entries},
+    ))
+    metrics.append((
+        "journeys",
+        "raw_zero_conversion_value_pct",
+        pct_of_revenue_entries(raw_zero_revenue_entries),
+        {"raw_zero": raw_zero_revenue_entries, "total_revenue_entries": total_revenue_entries},
+    ))
+    metrics.append((
+        "journeys",
+        "unresolved_source_medium_touchpoint_pct",
+        pct_of_touchpoints(unresolved_source_medium_touchpoints),
+        {"unresolved_touchpoints": unresolved_source_medium_touchpoints, "total_touchpoints": total_touchpoints},
+    ))
+    metrics.append((
+        "journeys",
+        "inferred_mapping_journey_pct",
+        pct(journeys_using_inferred_mappings),
+        {"journeys_using_inferred_mappings": journeys_using_inferred_mappings, "total": n},
+    ))
+    return metrics
+
+
 def compute_dq_snapshots(db: Session, journeys_override: Optional[List[Dict[str, Any]]] = None, include_taxonomy: bool = True) -> List[DQSnapshot]:
     """Compute and persist DQ snapshots for the current time bucket."""
     ts_bucket = _now().replace(minute=0, second=0, microsecond=0)
     metrics: List[Tuple[str, str, float, Dict[str, Any]]] = []
 
     metrics.extend(compute_freshness())
-    journeys = journeys_override if journeys_override is not None else _load_journeys(db)
-    metrics.extend(compute_journeys_completeness(journeys))
+    journeys: Optional[List[Dict[str, Any]]] = None
+    if journeys_override is not None:
+        journeys = journeys_override
+        metrics.extend(compute_journeys_completeness(journeys))
+    else:
+        fact_metrics = _compute_journeys_completeness_from_facts(db)
+        if fact_metrics is not None:
+            metrics.extend(fact_metrics)
+        else:
+            journeys = _load_journeys(db)
+            metrics.extend(compute_journeys_completeness(journeys))
 
     snapshots: List[DQSnapshot] = []
     for source, metric_key, metric_value, meta in metrics:
@@ -253,15 +351,18 @@ def compute_dq_snapshots(db: Session, journeys_override: Optional[List[Dict[str,
         snapshots.append(snap)
     
     # Add taxonomy-specific DQ metrics
-    if include_taxonomy and journeys:
-        try:
-            from .services_taxonomy import persist_taxonomy_dq_snapshots
-            taxonomy_snapshots = persist_taxonomy_dq_snapshots(db, journeys)
-            snapshots.extend(taxonomy_snapshots)
-        except Exception as e:
-            # Don't fail entire DQ computation if taxonomy fails
-            import logging
-            logging.getLogger(__name__).error(f"Failed to compute taxonomy DQ snapshots: {e}")
+    if include_taxonomy:
+        if journeys is None:
+            journeys = _load_journeys(db)
+        if journeys:
+            try:
+                from .services_taxonomy import persist_taxonomy_dq_snapshots
+                taxonomy_snapshots = persist_taxonomy_dq_snapshots(db, journeys)
+                snapshots.extend(taxonomy_snapshots)
+            except Exception as e:
+                # Don't fail entire DQ computation if taxonomy fails
+                import logging
+                logging.getLogger(__name__).error(f"Failed to compute taxonomy DQ snapshots: {e}")
     
     db.commit()
     return snapshots

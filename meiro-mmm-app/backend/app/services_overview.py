@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from .models_config_dq import ConversionPath, JourneyDefinition, JourneyPathDaily
+from .models_config_dq import ChannelPerformanceDaily, ConversionPath, JourneyDefinition, JourneyPathDaily
 from .models_overview_alerts import AlertEvent, AlertRule
 from .services_conversions import (
     conversion_path_is_converted as _conversion_path_is_converted,
@@ -136,6 +136,67 @@ def _expense_by_channel(
     return by_ch
 
 
+def _to_utc_naive(dt: Optional[datetime]) -> Optional[datetime]:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _is_full_utc_day_window(date_from: Optional[datetime], date_to: Optional[datetime]) -> bool:
+    start = _to_utc_naive(date_from)
+    end = _to_utc_naive(date_to)
+    if start is None or end is None or end < start:
+        return False
+    if start.time() != datetime.min.time():
+        return False
+    return end.time() == datetime.max.time()
+
+
+def _conversions_and_revenue_from_channel_facts(
+    db: Session,
+    date_from: datetime,
+    date_to: datetime,
+    conversion_key: Optional[str],
+) -> Optional[Tuple[int, float, List[Dict[str, Any]]]]:
+    if not _is_full_utc_day_window(date_from, date_to):
+        return None
+    rows = (
+        db.query(ChannelPerformanceDaily)
+        .filter(
+            ChannelPerformanceDaily.date >= _to_utc_naive(date_from).date(),
+            ChannelPerformanceDaily.date <= _to_utc_naive(date_to).date(),
+        )
+        .order_by(ChannelPerformanceDaily.date.asc())
+        .all()
+    )
+    if not rows:
+        return None
+    daily: Dict[str, Dict[str, Any]] = {}
+    total_value = 0.0
+    total_conversions = 0
+    for row in rows:
+        if conversion_key is None:
+            if row.conversion_key is not None:
+                continue
+        elif str(row.conversion_key or "") != conversion_key:
+            continue
+        day = row.date.isoformat()
+        conversions = int(round(float(row.count_conversions or 0.0)))
+        revenue = float(row.gross_revenue_total or 0.0)
+        if day not in daily:
+            daily[day] = {"date": day, "conversions": 0, "revenue": 0.0}
+        daily[day]["conversions"] += conversions
+        daily[day]["revenue"] += revenue
+        total_conversions += conversions
+        total_value += revenue
+    if not daily:
+        return None
+    series = sorted(daily.values(), key=lambda x: x["date"])
+    return total_conversions, total_value, series
+
+
 def _conversions_and_revenue_from_paths(
     db: Session,
     date_from: Optional[datetime],
@@ -143,6 +204,9 @@ def _conversions_and_revenue_from_paths(
     conversion_key: Optional[str],
 ) -> Tuple[int, float, List[Dict[str, Any]]]:
     """Returns (conversions_count, total_revenue, daily_series for sparkline)."""
+    aggregate = _conversions_and_revenue_from_channel_facts(db, date_from, date_to, conversion_key)
+    if aggregate is not None:
+        return aggregate
     dedupe_seen = set()
     q = db.query(ConversionPath).filter(ConversionPath.conversion_ts >= date_from, ConversionPath.conversion_ts <= date_to)
     if conversion_key:
@@ -180,6 +244,182 @@ def _aggregate_outcomes_from_paths(
             continue
         _merge_outcomes(totals, conversion_path_payload(row))
     return totals
+
+
+def _bucket_key_for_date(day: Any, grain: str) -> str:
+    if isinstance(day, datetime):
+        return _bucket_key(day, grain)
+    if grain == "hourly":
+        return f"{str(day)[:10]}T00:00:00"
+    if hasattr(day, "weekday"):
+        return (day - timedelta(days=day.weekday())).isoformat()
+    return str(day)[:10]
+
+
+def _series_from_channel_facts(
+    db: Session,
+    start: datetime,
+    end: datetime,
+    grain: str,
+    conversion_key: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    if grain == "hourly":
+        return None
+    rows = (
+        db.query(ChannelPerformanceDaily)
+        .filter(
+            ChannelPerformanceDaily.date >= start.date(),
+            ChannelPerformanceDaily.date <= end.date(),
+        )
+        .all()
+    )
+    if not rows:
+        return None
+
+    conv_map: Dict[str, float] = {}
+    rev_map: Dict[str, float] = {}
+    visit_map: Dict[str, float] = {}
+    total_revenue = 0.0
+    total_conversions = 0
+    total_visits = 0.0
+    observed_keys: Set[str] = set()
+
+    for row in rows:
+        bucket = _bucket_key_for_date(row.date, grain)
+        if row.conversion_key is None:
+            visits = float(row.visits_total or 0.0)
+            if visits:
+                visit_map[bucket] = visit_map.get(bucket, 0.0) + visits
+                total_visits += visits
+                observed_keys.add(bucket)
+            if conversion_key is not None:
+                continue
+        elif str(row.conversion_key or "") != conversion_key:
+            continue
+
+        conversions = float(row.count_conversions or 0.0)
+        revenue = float(row.gross_revenue_total or 0.0)
+        if conversions or revenue:
+            conv_map[bucket] = conv_map.get(bucket, 0.0) + conversions
+            rev_map[bucket] = rev_map.get(bucket, 0.0) + revenue
+            total_revenue += revenue
+            total_conversions += int(round(conversions))
+            observed_keys.add(bucket)
+
+    return {
+        "conversions_total": total_conversions,
+        "revenue_total": round(total_revenue, 2),
+        "visits_total": round(total_visits, 2),
+        "conversions_map": conv_map,
+        "revenue_map": rev_map,
+        "visits_map": visit_map,
+        "observed_points": len(observed_keys),
+    }
+
+
+def _aggregate_outcomes_from_channel_facts(
+    db: Session,
+    start: datetime,
+    end: datetime,
+    conversion_key: Optional[str] = None,
+) -> Optional[Dict[str, float]]:
+    rows = (
+        db.query(ChannelPerformanceDaily)
+        .filter(
+            ChannelPerformanceDaily.date >= start.date(),
+            ChannelPerformanceDaily.date <= end.date(),
+        )
+        .all()
+    )
+    if not rows:
+        return None
+    totals = _empty_outcomes()
+    for row in rows:
+        if conversion_key is None:
+            if row.conversion_key is not None:
+                continue
+        elif str(row.conversion_key or "") != conversion_key:
+            continue
+        totals["gross_conversions"] += float(row.gross_conversions_total or 0.0)
+        totals["net_conversions"] += float(row.net_conversions_total or 0.0)
+        totals["gross_value"] += float(row.gross_revenue_total or 0.0)
+        totals["net_value"] += float(row.net_revenue_total or 0.0)
+        totals["view_through_conversions"] += float(row.view_through_conversions_total or 0.0)
+        totals["click_through_conversions"] += float(row.click_through_conversions_total or 0.0)
+        totals["mixed_path_conversions"] += float(row.mixed_path_conversions_total or 0.0)
+    return totals
+
+
+def _aggregate_channel_metrics_from_facts(
+    db: Session,
+    *,
+    dt_from: datetime,
+    dt_to: datetime,
+    conversion_key: Optional[str] = None,
+) -> Optional[Tuple[Dict[str, Dict[str, float]], Dict[str, Dict[str, float]]]]:
+    rows = (
+        db.query(ChannelPerformanceDaily)
+        .filter(
+            ChannelPerformanceDaily.date >= dt_from.date(),
+            ChannelPerformanceDaily.date <= dt_to.date(),
+        )
+        .all()
+    )
+    if not rows:
+        return None
+    metrics: Dict[str, Dict[str, float]] = {}
+    outcomes: Dict[str, Dict[str, float]] = {}
+    for row in rows:
+        channel = str(row.channel or "unknown")
+        entry = metrics.setdefault(channel, {"visits": 0.0, "conversions": 0.0, "revenue": 0.0})
+        if row.conversion_key is None:
+            entry["visits"] += float(row.visits_total or 0.0)
+            if conversion_key is not None:
+                continue
+        elif str(row.conversion_key or "") != conversion_key:
+            continue
+        entry["conversions"] += float(row.count_conversions or 0.0)
+        entry["revenue"] += float(row.gross_revenue_total or 0.0)
+        outcome = outcomes.setdefault(channel, _empty_outcomes())
+        outcome["gross_conversions"] += float(row.gross_conversions_total or 0.0)
+        outcome["net_conversions"] += float(row.net_conversions_total or 0.0)
+        outcome["gross_value"] += float(row.gross_revenue_total or 0.0)
+        outcome["net_value"] += float(row.net_revenue_total or 0.0)
+        outcome["view_through_conversions"] += float(row.view_through_conversions_total or 0.0)
+        outcome["click_through_conversions"] += float(row.click_through_conversions_total or 0.0)
+        outcome["mixed_path_conversions"] += float(row.mixed_path_conversions_total or 0.0)
+    return metrics, outcomes
+
+
+def _aggregate_daily_channel_revenue_from_facts(
+    db: Session,
+    *,
+    dt_from: datetime,
+    dt_to: datetime,
+    conversion_key: Optional[str] = None,
+) -> Optional[Dict[str, Dict[str, float]]]:
+    rows = (
+        db.query(ChannelPerformanceDaily)
+        .filter(
+            ChannelPerformanceDaily.date >= dt_from.date(),
+            ChannelPerformanceDaily.date <= dt_to.date(),
+        )
+        .all()
+    )
+    if not rows:
+        return None
+    out: Dict[str, Dict[str, float]] = {}
+    for row in rows:
+        if conversion_key is None:
+            if row.conversion_key is not None:
+                continue
+        elif str(row.conversion_key or "") != conversion_key:
+            continue
+        channel = str(row.channel or "unknown")
+        day = row.date.isoformat()
+        out.setdefault(channel, {})
+        out[channel][day] = out[channel].get(day, 0.0) + float(row.gross_revenue_total or 0.0)
+    return out
 
 
 def _single_active_overview_definition_id(
@@ -655,6 +895,62 @@ def _overview_funnels_from_daily_aggregates(
     }
 
 
+def _campaign_rollups_from_daily_path_aggregates(
+    db: Session,
+    *,
+    dt_from: datetime,
+    dt_to: datetime,
+    prev_from: datetime,
+    prev_to: datetime,
+    conversion_key: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    definition_id = _single_active_overview_definition_id(db, conversion_key=conversion_key)
+    if not definition_id:
+        return None
+
+    rows = (
+        db.query(JourneyPathDaily)
+        .filter(
+            JourneyPathDaily.journey_definition_id == definition_id,
+            JourneyPathDaily.date >= prev_from.date(),
+            JourneyPathDaily.date <= dt_to.date(),
+        )
+        .all()
+    )
+    if not rows:
+        return None
+
+    current_revenue: Dict[str, float] = {}
+    current_conversions: Dict[str, int] = {}
+    current_outcomes: Dict[str, Dict[str, float]] = {}
+    previous_revenue: Dict[str, float] = {}
+
+    for row in rows:
+        campaign = str(row.campaign_id or "").strip() or "unknown"
+        if dt_from.date() <= row.date <= dt_to.date():
+            current_revenue[campaign] = current_revenue.get(campaign, 0.0) + float(row.gross_revenue_total or 0.0)
+            current_conversions[campaign] = current_conversions.get(campaign, 0) + int(row.count_conversions or 0)
+            outcome = current_outcomes.setdefault(campaign, _empty_outcomes())
+            outcome["gross_conversions"] += float(row.gross_conversions_total or 0.0)
+            outcome["net_conversions"] += float(row.net_conversions_total or 0.0)
+            outcome["gross_value"] += float(row.gross_revenue_total or 0.0)
+            outcome["net_value"] += float(row.net_revenue_total or 0.0)
+            outcome["view_through_conversions"] += float(row.view_through_conversions_total or 0.0)
+            outcome["click_through_conversions"] += float(row.click_through_conversions_total or 0.0)
+            outcome["mixed_path_conversions"] += float(row.mixed_path_conversions_total or 0.0)
+        elif prev_from.date() <= row.date <= prev_to.date():
+            previous_revenue[campaign] = previous_revenue.get(campaign, 0.0) + float(row.gross_revenue_total or 0.0)
+
+    if not current_revenue and not previous_revenue:
+        return None
+    return {
+        "current_revenue": current_revenue,
+        "current_conversions": current_conversions,
+        "current_outcomes": current_outcomes,
+        "previous_revenue": previous_revenue,
+    }
+
+
 def _confidence_from_quality(
     *,
     freshness_lag_min: Optional[float],
@@ -820,39 +1116,51 @@ def get_overview_summary(
     bucket_keys_prev = _bucket_keys_in_range(prev_from, prev_to, grain)
     expected_points = len(bucket_keys_current)
 
-    aggregate_definition_id = _single_active_overview_definition_id(db) if grain == "daily" else None
-    if aggregate_definition_id:
-        current_paths = _series_from_daily_path_aggregates(
-            db,
-            journey_definition_id=aggregate_definition_id,
-            start=dt_from,
-            end=dt_to,
-        )
-        prev_paths = _series_from_daily_path_aggregates(
-            db,
-            journey_definition_id=aggregate_definition_id,
-            start=prev_from,
-            end=prev_to,
-        )
-        current_outcomes = _aggregate_outcomes_from_daily_path_aggregates(
-            db,
-            journey_definition_id=aggregate_definition_id,
-            start=dt_from,
-            end=dt_to,
-        )
-        prev_outcomes = _aggregate_outcomes_from_daily_path_aggregates(
-            db,
-            journey_definition_id=aggregate_definition_id,
-            start=prev_from,
-            end=prev_to,
-        )
+    fact_current = _series_from_channel_facts(db, dt_from, dt_to, grain)
+    fact_prev = _series_from_channel_facts(db, prev_from, prev_to, grain)
+    fact_current_outcomes = _aggregate_outcomes_from_channel_facts(db, dt_from, dt_to)
+    fact_prev_outcomes = _aggregate_outcomes_from_channel_facts(db, prev_from, prev_to)
+    if fact_current is not None and fact_prev is not None and fact_current_outcomes is not None and fact_prev_outcomes is not None:
+        current_paths = fact_current
+        prev_paths = fact_prev
+        current_outcomes = fact_current_outcomes
+        prev_outcomes = fact_prev_outcomes
+        current_visits = fact_current
+        prev_visits = fact_prev
     else:
-        current_paths = _series_from_conversion_paths(db, dt_from, dt_to, grain)
-        prev_paths = _series_from_conversion_paths(db, prev_from, prev_to, grain)
-        current_outcomes = _aggregate_outcomes_from_paths(db, dt_from, dt_to, None)
-        prev_outcomes = _aggregate_outcomes_from_paths(db, prev_from, prev_to, None)
-    current_visits = _series_from_visits(db, dt_from, dt_to, grain)
-    prev_visits = _series_from_visits(db, prev_from, prev_to, grain)
+        aggregate_definition_id = _single_active_overview_definition_id(db) if grain == "daily" else None
+        if aggregate_definition_id:
+            current_paths = _series_from_daily_path_aggregates(
+                db,
+                journey_definition_id=aggregate_definition_id,
+                start=dt_from,
+                end=dt_to,
+            )
+            prev_paths = _series_from_daily_path_aggregates(
+                db,
+                journey_definition_id=aggregate_definition_id,
+                start=prev_from,
+                end=prev_to,
+            )
+            current_outcomes = _aggregate_outcomes_from_daily_path_aggregates(
+                db,
+                journey_definition_id=aggregate_definition_id,
+                start=dt_from,
+                end=dt_to,
+            )
+            prev_outcomes = _aggregate_outcomes_from_daily_path_aggregates(
+                db,
+                journey_definition_id=aggregate_definition_id,
+                start=prev_from,
+                end=prev_to,
+            )
+        else:
+            current_paths = _series_from_conversion_paths(db, dt_from, dt_to, grain)
+            prev_paths = _series_from_conversion_paths(db, prev_from, prev_to, grain)
+            current_outcomes = _aggregate_outcomes_from_paths(db, dt_from, dt_to, None)
+            prev_outcomes = _aggregate_outcomes_from_paths(db, prev_from, prev_to, None)
+        current_visits = _series_from_visits(db, dt_from, dt_to, grain)
+        prev_visits = _series_from_visits(db, prev_from, prev_to, grain)
     current_expenses = _series_from_expenses(expenses or {}, dt_from, dt_to, grain)
     prev_expenses = _series_from_expenses(expenses or {}, prev_from, prev_to, grain)
 
@@ -1133,17 +1441,30 @@ def get_overview_drivers(
     delta_days = max((dt_to - dt_from).days, 1)
     prev_to = dt_from - timedelta(days=1)
     prev_from = prev_to - timedelta(days=delta_days)
+    aggregate_campaign_rollups = _campaign_rollups_from_daily_path_aggregates(
+        db,
+        dt_from=dt_from,
+        dt_to=dt_to,
+        prev_from=prev_from,
+        prev_to=prev_to,
+        conversion_key=conversion_key,
+    )
 
     expense_by_channel = _expense_by_channel(expenses or {}, date_from, date_to, None)
     prev_expense = _expense_by_channel(expenses or {}, prev_from.strftime("%Y-%m-%d"), prev_to.strftime("%Y-%m-%d"), None)
 
-    q = db.query(ConversionPath).filter(
-        ConversionPath.conversion_ts >= dt_from,
-        ConversionPath.conversion_ts <= dt_to,
+    fact_current_channel_rollups = _aggregate_channel_metrics_from_facts(
+        db,
+        dt_from=dt_from,
+        dt_to=dt_to,
+        conversion_key=conversion_key,
     )
-    if conversion_key:
-        q = q.filter(ConversionPath.conversion_key == conversion_key)
-    rows = q.order_by(ConversionPath.conversion_ts.desc()).all()
+    fact_prev_channel_rollups = _aggregate_channel_metrics_from_facts(
+        db,
+        dt_from=prev_from,
+        dt_to=prev_to,
+        conversion_key=conversion_key,
+    )
 
     # Aggregate by channel from paths (revenue/conversions)
     ch_rev: Dict[str, float] = {}
@@ -1152,80 +1473,109 @@ def get_overview_drivers(
     camp_rev: Dict[str, float] = {}
     camp_conv: Dict[str, int] = {}
     camp_outcomes: Dict[str, Dict[str, float]] = {}
-    for r in rows:
-        if not _conversion_path_is_converted(r):
-            continue
-        payload = conversion_path_payload(r)
-        val = conversion_path_revenue_value(r, dedupe_seen=dedupe_seen_current)
-        tps = conversion_path_touchpoints(r)
-        for idx, tp in enumerate(tps):
-            ch = tp.get("channel", "unknown") if isinstance(tp, dict) else "unknown"
-            ch_rev[ch] = ch_rev.get(ch, 0) + val / max(len(tps), 1)
-            ch_conv[ch] = ch_conv.get(ch, 0) + (1 if idx == len(tps) - 1 else 0)  # last-touch count
-            metrics = ch_outcomes.setdefault(ch, _empty_outcomes())
-            _merge_outcomes(metrics, payload)
-        if tps:
-            last = tps[-1] if isinstance(tps[-1], dict) else {}
-            camp = last.get("campaign") or last.get("campaign_name") if isinstance(last, dict) else "unknown"
-            if isinstance(camp, dict):
-                camp = camp.get("name", "unknown")
-            camp = camp or "unknown"
-            camp_rev[camp] = camp_rev.get(camp, 0) + val
-            camp_conv[camp] = camp_conv.get(camp, 0) + 1
-            metrics = camp_outcomes.setdefault(camp, _empty_outcomes())
-            _merge_outcomes(metrics, payload)
+    need_current_channel_paths = fact_current_channel_rollups is None
+    need_previous_channel_paths = fact_prev_channel_rollups is None
+    need_current_campaign_paths = aggregate_campaign_rollups is None
+    need_previous_campaign_paths = aggregate_campaign_rollups is None
 
-    prev_rows = db.query(ConversionPath).filter(
-        ConversionPath.conversion_ts >= prev_from,
-        ConversionPath.conversion_ts <= prev_to,
-    ).order_by(ConversionPath.conversion_ts.desc()).all()
-    if conversion_key:
-        prev_rows = [r for r in prev_rows if r.conversion_key == conversion_key]
+    if need_current_channel_paths or need_current_campaign_paths:
+        q = db.query(ConversionPath).filter(
+            ConversionPath.conversion_ts >= dt_from,
+            ConversionPath.conversion_ts <= dt_to,
+        )
+        if conversion_key:
+            q = q.filter(ConversionPath.conversion_key == conversion_key)
+        rows = q.order_by(ConversionPath.conversion_ts.desc()).all()
+        for r in rows:
+            if not _conversion_path_is_converted(r):
+                continue
+            payload = conversion_path_payload(r)
+            val = conversion_path_revenue_value(r, dedupe_seen=dedupe_seen_current)
+            tps = conversion_path_touchpoints(r)
+            if need_current_channel_paths:
+                for idx, tp in enumerate(tps):
+                    ch = tp.get("channel", "unknown") if isinstance(tp, dict) else "unknown"
+                    ch_rev[ch] = ch_rev.get(ch, 0) + val / max(len(tps), 1)
+                    ch_conv[ch] = ch_conv.get(ch, 0) + (1 if idx == len(tps) - 1 else 0)  # last-touch count
+                    metrics = ch_outcomes.setdefault(ch, _empty_outcomes())
+                    _merge_outcomes(metrics, payload)
+            if need_current_campaign_paths and tps:
+                last = tps[-1] if isinstance(tps[-1], dict) else {}
+                camp = last.get("campaign") or last.get("campaign_name") if isinstance(last, dict) else "unknown"
+                if isinstance(camp, dict):
+                    camp = camp.get("name", "unknown")
+                camp = camp or "unknown"
+                camp_rev[camp] = camp_rev.get(camp, 0) + val
+                camp_conv[camp] = camp_conv.get(camp, 0) + 1
+                metrics = camp_outcomes.setdefault(camp, _empty_outcomes())
+                _merge_outcomes(metrics, payload)
+
     prev_ch_rev: Dict[str, float] = {}
     prev_ch_conv: Dict[str, int] = {}
     prev_camp_rev: Dict[str, float] = {}
-    for r in prev_rows:
-        if not _conversion_path_is_converted(r):
-            continue
-        tps = conversion_path_touchpoints(r)
-        val = conversion_path_revenue_value(r, dedupe_seen=dedupe_seen_prev)
-        for tp in tps:
-            ch = tp.get("channel", "unknown") if isinstance(tp, dict) else "unknown"
-            prev_ch_rev[ch] = prev_ch_rev.get(ch, 0) + val / max(len(tps), 1)
-        if tps:
-            last = tps[-1] if isinstance(tps[-1], dict) else {}
-            ch_last = last.get("channel", "unknown") if isinstance(last, dict) else "unknown"
-            prev_ch_conv[ch_last] = prev_ch_conv.get(ch_last, 0) + 1
-            camp = last.get("campaign") or last.get("campaign_name") or "unknown"
-            if isinstance(camp, dict):
-                camp = camp.get("name", "unknown")
-            prev_camp_rev[camp] = prev_camp_rev.get(camp, 0) + val
-
-    ch_visits: Dict[str, int] = {}
-    prev_ch_visits: Dict[str, int] = {}
-    visit_rows = db.query(ConversionPath).filter(
-        ConversionPath.last_touch_ts >= dt_from,
-        ConversionPath.first_touch_ts <= dt_to,
-    ).all()
-    for r in visit_rows:
-        for tp in conversion_path_touchpoints(r):
-            ts = _parse_dt(tp.get("timestamp") or tp.get("ts"))
-            if not ts or ts < dt_from or ts > dt_to:
+    if need_previous_channel_paths or need_previous_campaign_paths:
+        prev_q = db.query(ConversionPath).filter(
+            ConversionPath.conversion_ts >= prev_from,
+            ConversionPath.conversion_ts <= prev_to,
+        )
+        if conversion_key:
+            prev_q = prev_q.filter(ConversionPath.conversion_key == conversion_key)
+        prev_rows = prev_q.order_by(ConversionPath.conversion_ts.desc()).all()
+        for r in prev_rows:
+            if not _conversion_path_is_converted(r):
                 continue
-            ch = tp.get("channel", "unknown")
-            ch_visits[ch] = ch_visits.get(ch, 0) + 1
+            tps = conversion_path_touchpoints(r)
+            val = conversion_path_revenue_value(r, dedupe_seen=dedupe_seen_prev)
+            if need_previous_channel_paths:
+                for tp in tps:
+                    ch = tp.get("channel", "unknown") if isinstance(tp, dict) else "unknown"
+                    prev_ch_rev[ch] = prev_ch_rev.get(ch, 0) + val / max(len(tps), 1)
+                if tps:
+                    ch_last = tps[-1].get("channel", "unknown") if isinstance(tps[-1], dict) else "unknown"
+                    prev_ch_conv[ch_last] = prev_ch_conv.get(ch_last, 0) + 1
+            if need_previous_campaign_paths and tps:
+                last = tps[-1] if isinstance(tps[-1], dict) else {}
+                camp = last.get("campaign") or last.get("campaign_name") or "unknown"
+                if isinstance(camp, dict):
+                    camp = camp.get("name", "unknown")
+                prev_camp_rev[camp] = prev_camp_rev.get(camp, 0) + val
 
-    prev_visit_rows = db.query(ConversionPath).filter(
-        ConversionPath.last_touch_ts >= prev_from,
-        ConversionPath.first_touch_ts <= prev_to,
-    ).all()
-    for r in prev_visit_rows:
-        for tp in conversion_path_touchpoints(r):
-            ts = _parse_dt(tp.get("timestamp") or tp.get("ts"))
-            if not ts or ts < prev_from or ts > prev_to:
-                continue
-            ch = tp.get("channel", "unknown")
-            prev_ch_visits[ch] = prev_ch_visits.get(ch, 0) + 1
+    if fact_current_channel_rollups is not None and fact_prev_channel_rollups is not None:
+        current_metrics, current_fact_outcomes = fact_current_channel_rollups
+        previous_metrics, _previous_fact_outcomes = fact_prev_channel_rollups
+        ch_rev = {key: float(value.get("revenue", 0.0) or 0.0) for key, value in current_metrics.items()}
+        ch_conv = {key: int(value.get("conversions", 0.0) or 0.0) for key, value in current_metrics.items()}
+        ch_outcomes = current_fact_outcomes
+        prev_ch_rev = {key: float(value.get("revenue", 0.0) or 0.0) for key, value in previous_metrics.items()}
+        prev_ch_conv = {key: int(value.get("conversions", 0.0) or 0.0) for key, value in previous_metrics.items()}
+        ch_visits = {key: int(value.get("visits", 0.0) or 0.0) for key, value in current_metrics.items()}
+        prev_ch_visits = {key: int(value.get("visits", 0.0) or 0.0) for key, value in previous_metrics.items()}
+    else:
+        ch_visits: Dict[str, int] = {}
+        prev_ch_visits: Dict[str, int] = {}
+        visit_rows = db.query(ConversionPath).filter(
+            ConversionPath.last_touch_ts >= dt_from,
+            ConversionPath.first_touch_ts <= dt_to,
+        ).all()
+        for r in visit_rows:
+            for tp in conversion_path_touchpoints(r):
+                ts = _parse_dt(tp.get("timestamp") or tp.get("ts"))
+                if not ts or ts < dt_from or ts > dt_to:
+                    continue
+                ch = tp.get("channel", "unknown")
+                ch_visits[ch] = ch_visits.get(ch, 0) + 1
+
+        prev_visit_rows = db.query(ConversionPath).filter(
+            ConversionPath.last_touch_ts >= prev_from,
+            ConversionPath.first_touch_ts <= prev_to,
+        ).all()
+        for r in prev_visit_rows:
+            for tp in conversion_path_touchpoints(r):
+                ts = _parse_dt(tp.get("timestamp") or tp.get("ts"))
+                if not ts or ts < prev_from or ts > prev_to:
+                    continue
+                ch = tp.get("channel", "unknown")
+                prev_ch_visits[ch] = prev_ch_visits.get(ch, 0) + 1
 
     channels = sorted(set(expense_by_channel.keys()) | set(ch_rev.keys()) | set(ch_visits.keys()))
     by_channel = []
@@ -1252,6 +1602,11 @@ def get_overview_drivers(
         })
     by_channel.sort(key=lambda x: -x["revenue"])
 
+    if aggregate_campaign_rollups is not None:
+        camp_rev = dict(aggregate_campaign_rollups["current_revenue"])
+        camp_conv = dict(aggregate_campaign_rollups["current_conversions"])
+        camp_outcomes = dict(aggregate_campaign_rollups["current_outcomes"])
+        prev_camp_rev = dict(aggregate_campaign_rollups["previous_revenue"])
     campaigns_sorted = sorted(camp_rev.keys(), key=lambda c: -camp_rev[c])[:top_campaigns_n]
     by_campaign = [
         {
@@ -1295,6 +1650,14 @@ def _aggregate_channel_metrics(
     dt_to: datetime,
     conversion_key: Optional[str] = None,
 ) -> Dict[str, Dict[str, float]]:
+    fact_rollups = _aggregate_channel_metrics_from_facts(
+        db,
+        dt_from=dt_from,
+        dt_to=dt_to,
+        conversion_key=conversion_key,
+    )
+    if fact_rollups is not None:
+        return fact_rollups[0]
     dedupe_seen = set()
     metrics: Dict[str, Dict[str, float]] = {}
     query_from = dt_from.replace(tzinfo=None) if dt_from.tzinfo is not None else dt_from
@@ -1327,6 +1690,14 @@ def _aggregate_daily_channel_revenue(
     dt_to: datetime,
     conversion_key: Optional[str] = None,
 ) -> Dict[str, Dict[str, float]]:
+    fact_rollups = _aggregate_daily_channel_revenue_from_facts(
+        db,
+        dt_from=dt_from,
+        dt_to=dt_to,
+        conversion_key=conversion_key,
+    )
+    if fact_rollups is not None:
+        return fact_rollups
     dedupe_seen = set()
     out: Dict[str, Dict[str, float]] = {}
     query_from = dt_from.replace(tzinfo=None) if dt_from.tzinfo is not None else dt_from

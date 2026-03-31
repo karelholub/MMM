@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
-from .models_config_dq import ConversionPath, JourneyDefinition
+from .models_config_dq import ConversionPath, JourneyDefinition, JourneyExampleFact
 from .services_conversions import conversion_path_payload, conversion_path_revenue_value, conversion_path_touchpoints
 from .services_journey_aggregates import _build_journey_steps, _path_hash
 
@@ -28,13 +28,76 @@ def list_examples_for_journey_definition(
 ) -> Dict[str, Any]:
     start_dt = datetime.combine(date_from, dt_time.min)
     end_dt = datetime.combine(date_to + timedelta(days=1), dt_time.min)
-    query = (
+    fact_query = (
+        db.query(JourneyExampleFact)
+        .filter(
+            JourneyExampleFact.journey_definition_id == definition.id,
+            JourneyExampleFact.date >= date_from,
+            JourneyExampleFact.date <= date_to,
+        )
+        .order_by(JourneyExampleFact.conversion_ts.desc())
+    )
+    if definition.conversion_kpi_id:
+        fact_query = fact_query.filter(JourneyExampleFact.conversion_key == definition.conversion_kpi_id)
+
+    raw_query = (
         db.query(ConversionPath)
         .filter(ConversionPath.conversion_ts >= start_dt, ConversionPath.conversion_ts < end_dt)
         .order_by(ConversionPath.conversion_ts.desc())
     )
     if definition.conversion_kpi_id:
-        query = query.filter(ConversionPath.conversion_key == definition.conversion_kpi_id)
+        raw_query = raw_query.filter(ConversionPath.conversion_key == definition.conversion_kpi_id)
+
+    fact_count = fact_query.count()
+    raw_count = raw_query.count()
+    if fact_count >= raw_count and fact_count > 0:
+        items: List[Dict[str, Any]] = []
+        step_token = str(contains_step or "").strip().lower()
+        for row in fact_query.limit(max(50, int(limit) * 8)).all():
+            steps = [str(step) for step in (row.steps_json or [])]
+            if path_hash and str(row.path_hash or "") != path_hash:
+                continue
+            if step_token and not any(step_token in step.lower() for step in steps):
+                continue
+            if channel_group and (str(row.channel_group or "").lower() != channel_group.lower()):
+                continue
+            if campaign_id and str(row.campaign_id or "") != campaign_id:
+                continue
+            if device and str(row.device or "").lower() != device.lower():
+                continue
+            if country and str(row.country or "").lower() != country.lower():
+                continue
+            items.append(
+                {
+                    "conversion_id": row.conversion_id,
+                    "profile_id": row.profile_id,
+                    "conversion_key": row.conversion_key,
+                    "conversion_ts": row.conversion_ts.isoformat() if row.conversion_ts else None,
+                    "path_hash": row.path_hash,
+                    "steps": steps,
+                    "touchpoints_count": int(row.touchpoints_count or 0),
+                    "conversion_value": round(float(row.conversion_value or 0.0), 2),
+                    "dimensions": {
+                        "channel_group": row.channel_group,
+                        "campaign_id": row.campaign_id,
+                        "device": row.device,
+                        "country": row.country,
+                    },
+                    "touchpoints_preview": row.touchpoints_preview_json or [],
+                }
+            )
+            if len(items) >= limit:
+                break
+        return {
+            "items": items,
+            "total": len(items),
+            "date_from": date_from.isoformat(),
+            "date_to": date_to.isoformat(),
+            "path_hash": path_hash,
+            "contains_step": contains_step,
+        }
+
+    query = raw_query
 
     items: List[Dict[str, Any]] = []
     step_token = str(contains_step or "").strip().lower()

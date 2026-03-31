@@ -1,6 +1,17 @@
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.db import Base
 from app import services_data_quality
+from app.services_conversions import persist_journeys_as_conversion_paths
 from app.services_quality import ConfidenceComponents, score_confidence
 from app.utils.taxonomy import Taxonomy
+
+
+def _make_session():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine, autoflush=False, autocommit=False)()
 
 
 def test_compute_journeys_completeness_basic_counts(monkeypatch):
@@ -91,3 +102,43 @@ def test_score_confidence_ranges_and_labels():
     assert 0.0 <= score_low <= 100.0
     assert label_low == "low"
     assert score_low < score_high
+
+
+def test_compute_dq_snapshots_prefers_persisted_facts_when_taxonomy_disabled(monkeypatch):
+    db = _make_session()
+    try:
+        monkeypatch.setattr(services_data_quality, "load_taxonomy", Taxonomy.default)
+        persist_journeys_as_conversion_paths(
+            db,
+            [
+                {
+                    "customer_id": "c1",
+                    "conversion_id": "conv-1",
+                    "kpi_type": "purchase",
+                    "touchpoints": [
+                        {"channel": "google", "timestamp": "2024-01-01T00:00:00"},
+                        {"channel": "unknown", "timestamp": "2024-01-02T00:00:00", "source": "mystery", "medium": "weird"},
+                    ],
+                    "meta": {"parser": {"used_inferred_mapping": True}},
+                    "_revenue_entries": [{"default_applied": True, "raw_value_zero": False}],
+                    "converted": True,
+                    "conversion_value": 10.0,
+                }
+            ],
+            replace=True,
+            import_source="upload",
+        )
+
+        def _unexpected_load(_db):
+            raise AssertionError("_load_journeys should not be called when DQ facts are available")
+
+        monkeypatch.setattr(services_data_quality, "_load_journeys", _unexpected_load)
+
+        snapshots = services_data_quality.compute_dq_snapshots(db, include_taxonomy=False)
+        metrics = {snapshot.metric_key: snapshot.metric_value for snapshot in snapshots}
+
+        assert metrics["missing_profile_pct"] == 0.0
+        assert metrics["defaulted_conversion_value_pct"] == 100.0
+        assert metrics["inferred_mapping_journey_pct"] == 100.0
+    finally:
+        db.close()

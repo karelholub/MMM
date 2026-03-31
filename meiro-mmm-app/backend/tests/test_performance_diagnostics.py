@@ -4,7 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
-from app.models_config_dq import ConversionPath
+from app.models_config_dq import ConversionPath, ConversionScopeDiagnosticFact
 from app.services_performance_diagnostics import build_scope_diagnostics
 
 
@@ -37,6 +37,100 @@ def test_build_scope_diagnostics_for_channel_roles_and_funnel():
                 first_touch_ts=datetime(2026, 2, 1, 9, 0),
                 last_touch_ts=datetime(2026, 2, 5, 9, 0),
             )
+        )
+        db.commit()
+
+        out = build_scope_diagnostics(
+            db=db,
+            scope_type="channel",
+            date_from="2026-02-01",
+            date_to="2026-02-10",
+            conversion_key="purchase",
+            channels=None,
+        )
+
+        assert out["google_ads"]["roles"]["first_touch_conversions"] == 1
+        assert out["direct"]["roles"]["last_touch_conversions"] == 1
+        assert out["email"]["roles"]["assist_conversions"] == 1
+        assert out["email"]["funnel"]["content_journeys"] == 1
+        assert out["direct"]["funnel"]["checkout_journeys"] == 1
+        assert out["google_ads"]["funnel"]["converted_journeys"] == 1
+    finally:
+        db.close()
+
+
+def test_build_scope_diagnostics_prefers_persisted_scope_facts():
+    db = _unit_db_session()
+    try:
+        db.add_all(
+            [
+                ConversionScopeDiagnosticFact(
+                    conversion_id="conv-1",
+                    profile_id="p-1",
+                    conversion_key="purchase",
+                    scope_type="channel",
+                    scope_key="google_ads",
+                    scope_channel="google_ads",
+                    scope_campaign="Brand",
+                    first_touch_ts=datetime(2026, 2, 1, 9, 0),
+                    last_touch_ts=datetime(2026, 2, 5, 9, 0),
+                    conversion_ts=datetime(2026, 2, 5, 12, 0),
+                    touch_journeys=1,
+                    content_journeys=0,
+                    checkout_journeys=0,
+                    converted_journeys=1,
+                    first_touch_conversions=1,
+                    last_touch_conversions=0,
+                    assist_conversions=0,
+                    first_touch_revenue=100.0,
+                    last_touch_revenue=0.0,
+                    assist_revenue=0.0,
+                ),
+                ConversionScopeDiagnosticFact(
+                    conversion_id="conv-1",
+                    profile_id="p-1",
+                    conversion_key="purchase",
+                    scope_type="channel",
+                    scope_key="email",
+                    scope_channel="email",
+                    scope_campaign=None,
+                    first_touch_ts=datetime(2026, 2, 1, 9, 0),
+                    last_touch_ts=datetime(2026, 2, 5, 9, 0),
+                    conversion_ts=datetime(2026, 2, 5, 12, 0),
+                    touch_journeys=1,
+                    content_journeys=1,
+                    checkout_journeys=0,
+                    converted_journeys=1,
+                    first_touch_conversions=0,
+                    last_touch_conversions=0,
+                    assist_conversions=1,
+                    first_touch_revenue=0.0,
+                    last_touch_revenue=0.0,
+                    assist_revenue=100.0,
+                ),
+                ConversionScopeDiagnosticFact(
+                    conversion_id="conv-1",
+                    profile_id="p-1",
+                    conversion_key="purchase",
+                    scope_type="channel",
+                    scope_key="direct",
+                    scope_channel="direct",
+                    scope_campaign=None,
+                    first_touch_ts=datetime(2026, 2, 1, 9, 0),
+                    last_touch_ts=datetime(2026, 2, 5, 9, 0),
+                    conversion_ts=datetime(2026, 2, 5, 12, 0),
+                    touch_journeys=1,
+                    content_journeys=0,
+                    checkout_journeys=1,
+                    converted_journeys=1,
+                    first_touch_conversions=0,
+                    last_touch_conversions=1,
+                    assist_conversions=0,
+                    first_touch_revenue=0.0,
+                    last_touch_revenue=100.0,
+                    assist_revenue=0.0,
+                ),
+            ]
         )
         db.commit()
 

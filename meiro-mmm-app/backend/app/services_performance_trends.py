@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from sqlalchemy.orm import Session
+from .models_config_dq import ChannelPerformanceDaily, JourneyDefinition, JourneyPathDaily
 from app.services_metrics import (
     SUPPORTED_KPIS,
     journey_outcome_summary,
@@ -183,6 +185,206 @@ def _expense_fields(exp: Any) -> Tuple[Optional[str], Optional[str], float, str]
     return channel, start, amount, status
 
 
+def _single_active_journey_definition_id(db: Session, *, conversion_key: Optional[str] = None) -> Optional[str]:
+    query = (
+        db.query(JourneyDefinition)
+        .filter(JourneyDefinition.is_archived == False)  # noqa: E712
+        .order_by(JourneyDefinition.updated_at.desc())
+    )
+    if conversion_key:
+        query = query.filter(JourneyDefinition.conversion_kpi_id == conversion_key)
+    rows = query.limit(2).all()
+    if len(rows) != 1:
+        return None
+    return str(rows[0].id)
+
+
+def build_campaign_aggregate_overlay(
+    db: Session,
+    *,
+    date_from: str,
+    date_to: str,
+    timezone: str = "UTC",
+    compare: bool = True,
+    channels: Optional[List[str]] = None,
+    conversion_key: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    if (timezone or "UTC").upper() != "UTC":
+        return None
+    windows = resolve_period_windows(date_from, date_to, "daily")
+    resolved_grain = windows["current_period"]["grain"]
+    curr_from = _parse_date(windows["current_period"]["date_from"])
+    curr_to = _parse_date(windows["current_period"]["date_to"])
+    prev_from = _parse_date(windows["previous_period"]["date_from"])
+    prev_to = _parse_date(windows["previous_period"]["date_to"])
+    journey_definition_id = _single_active_journey_definition_id(db, conversion_key=conversion_key)
+    if not journey_definition_id:
+        return None
+
+    allowed_channels = set(channels or [])
+    filter_channels = bool(allowed_channels)
+    rows = (
+        db.query(JourneyPathDaily)
+        .filter(
+            JourneyPathDaily.journey_definition_id == journey_definition_id,
+            JourneyPathDaily.date >= (prev_from if compare else curr_from),
+            JourneyPathDaily.date <= curr_to,
+        )
+        .all()
+    )
+    if not rows:
+        return None
+
+    curr_store: Dict[str, Dict[str, Dict[str, float]]] = {}
+    prev_store: Dict[str, Dict[str, Dict[str, float]]] = {}
+    curr_outcomes: Dict[str, Dict[str, float]] = {}
+    prev_outcomes: Dict[str, Dict[str, float]] = {}
+    meta: Dict[str, Dict[str, Any]] = {}
+
+    def _campaign_key(channel: str, campaign: Optional[str]) -> str:
+        return f"{channel}:{campaign}" if campaign else channel
+
+    def _outcome_entry(target: Dict[str, Dict[str, float]], key: str) -> Dict[str, float]:
+        return target.setdefault(key, _empty_outcome_metrics())
+
+    for row in rows:
+        channel = str(row.last_touch_channel or "unknown")
+        if filter_channels and channel not in allowed_channels:
+            continue
+        campaign = str(row.campaign_id or "").strip() or None
+        key = _campaign_key(channel, campaign)
+        meta.setdefault(
+            key,
+            {
+                "campaign_id": key,
+                "campaign_name": campaign,
+                "channel": channel,
+                "platform": None,
+            },
+        )
+        bucket = _bucket_start(row.date, resolved_grain).isoformat()
+        target_store = curr_store if curr_from <= row.date <= curr_to else (prev_store if compare and prev_from <= row.date <= prev_to else None)
+        target_outcomes = curr_outcomes if curr_from <= row.date <= curr_to else (prev_outcomes if compare and prev_from <= row.date <= prev_to else None)
+        if target_store is None or target_outcomes is None:
+            continue
+        _add_metric_rollup(
+            target_store,
+            key,
+            bucket,
+            conversions=float(row.count_conversions or 0.0),
+            revenue=float(row.gross_revenue_total or 0.0),
+        )
+        outcome = _outcome_entry(target_outcomes, key)
+        outcome["gross_conversions"] += float(row.gross_conversions_total or 0.0)
+        outcome["net_conversions"] += float(row.net_conversions_total or 0.0)
+        outcome["gross_revenue"] += float(row.gross_revenue_total or 0.0)
+        outcome["net_revenue"] += float(row.net_revenue_total or 0.0)
+        outcome["click_through_conversions"] += float(row.click_through_conversions_total or 0.0)
+        outcome["view_through_conversions"] += float(row.view_through_conversions_total or 0.0)
+        outcome["mixed_path_conversions"] += float(row.mixed_path_conversions_total or 0.0)
+
+    if not curr_store and not prev_store:
+        return None
+    return {
+        "current_store": curr_store,
+        "previous_store": prev_store,
+        "current_outcomes": curr_outcomes,
+        "previous_outcomes": prev_outcomes,
+        "meta": meta,
+    }
+
+
+def build_channel_aggregate_overlay(
+    db: Session,
+    *,
+    date_from: str,
+    date_to: str,
+    timezone: str = "UTC",
+    compare: bool = True,
+    channels: Optional[List[str]] = None,
+    conversion_key: Optional[str] = None,
+    grain: str = "daily",
+) -> Optional[Dict[str, Any]]:
+    if (timezone or "UTC").upper() != "UTC":
+        return None
+    windows = resolve_period_windows(date_from, date_to, grain)
+    resolved_grain = windows["current_period"]["grain"]
+    curr_from = _parse_date(windows["current_period"]["date_from"])
+    curr_to = _parse_date(windows["current_period"]["date_to"])
+    prev_from = _parse_date(windows["previous_period"]["date_from"])
+    prev_to = _parse_date(windows["previous_period"]["date_to"])
+    allowed_channels = set(channels or [])
+    filter_channels = bool(allowed_channels)
+
+    rows = (
+        db.query(ChannelPerformanceDaily)
+        .filter(
+            ChannelPerformanceDaily.date >= (prev_from if compare else curr_from),
+            ChannelPerformanceDaily.date <= curr_to,
+        )
+        .all()
+    )
+    if not rows:
+        return None
+
+    curr_store: Dict[str, Dict[str, Dict[str, float]]] = {}
+    prev_store: Dict[str, Dict[str, Dict[str, float]]] = {}
+    curr_outcomes: Dict[str, Dict[str, float]] = {}
+    prev_outcomes: Dict[str, Dict[str, float]] = {}
+
+    for row in rows:
+        channel = str(row.channel or "unknown")
+        if filter_channels and channel not in allowed_channels:
+            continue
+        bucket = _bucket_start(row.date, resolved_grain).isoformat()
+        in_current = curr_from <= row.date <= curr_to
+        in_previous = compare and prev_from <= row.date <= prev_to
+        if not in_current and not in_previous:
+            continue
+        target_store = curr_store if in_current else prev_store
+        target_outcomes = curr_outcomes if in_current else prev_outcomes
+
+        if row.conversion_key is None:
+            _add_metric_rollup(
+                target_store,
+                channel,
+                bucket,
+                visits=float(row.visits_total or 0.0),
+            )
+            if conversion_key is not None:
+                continue
+
+        if conversion_key is None and row.conversion_key is not None:
+            continue
+        if conversion_key is not None and str(row.conversion_key or "") != conversion_key:
+            continue
+
+        _add_metric_rollup(
+            target_store,
+            channel,
+            bucket,
+            conversions=float(row.count_conversions or 0.0),
+            revenue=float(row.gross_revenue_total or 0.0),
+        )
+        outcome = target_outcomes.setdefault(channel, _empty_outcome_metrics())
+        outcome["gross_conversions"] += float(row.gross_conversions_total or 0.0)
+        outcome["net_conversions"] += float(row.net_conversions_total or 0.0)
+        outcome["gross_revenue"] += float(row.gross_revenue_total or 0.0)
+        outcome["net_revenue"] += float(row.net_revenue_total or 0.0)
+        outcome["view_through_conversions"] += float(row.view_through_conversions_total or 0.0)
+        outcome["click_through_conversions"] += float(row.click_through_conversions_total or 0.0)
+        outcome["mixed_path_conversions"] += float(row.mixed_path_conversions_total or 0.0)
+
+    if not curr_store and not prev_store:
+        return None
+    return {
+        "current_store": curr_store,
+        "previous_store": prev_store,
+        "current_outcomes": curr_outcomes,
+        "previous_outcomes": prev_outcomes,
+    }
+
+
 def _collect_channel_rollups(
     *,
     journeys: List[Dict[str, Any]],
@@ -196,6 +398,7 @@ def _collect_channel_rollups(
     compare: bool,
     channels: Optional[List[str]],
     conversion_key: Optional[str] = None,
+    aggregate_overlay: Optional[Dict[str, Any]] = None,
 ) -> Tuple[
     Dict[str, Dict[str, Dict[str, float]]],
     Dict[str, Dict[str, Dict[str, float]]],
@@ -212,53 +415,85 @@ def _collect_channel_rollups(
     dedupe_curr: set[str] = set()
     dedupe_prev: set[str] = set()
 
-    for journey in journeys or []:
-        matches_conversion_key = True
-        if conversion_key:
-            journey_key = str(journey.get("kpi_type") or journey.get("conversion_key") or "")
-            matches_conversion_key = journey_key == conversion_key
-        touchpoints = journey.get("touchpoints") or []
-        for tp in touchpoints:
-            if not isinstance(tp, dict):
+    if aggregate_overlay is None:
+        for journey in journeys or []:
+            matches_conversion_key = True
+            if conversion_key:
+                journey_key = str(journey.get("kpi_type") or journey.get("conversion_key") or "")
+                matches_conversion_key = journey_key == conversion_key
+            touchpoints = journey.get("touchpoints") or []
+            for tp in touchpoints:
+                if not isinstance(tp, dict):
+                    continue
+                channel = str(tp.get("channel") or "unknown")
+                if filter_channels and channel not in allowed_channels:
+                    continue
+                day = _local_date_from_ts(tp.get("timestamp") or tp.get("ts"), tz)
+                if day is None:
+                    continue
+                bucket = _bucket_start(day, resolved_grain).isoformat()
+                if curr_from <= day <= curr_to:
+                    _add_metric_rollup(curr_store, channel, bucket, visits=1.0)
+                elif compare and prev_from <= day <= prev_to:
+                    _add_metric_rollup(prev_store, channel, bucket, visits=1.0)
+
+            if not matches_conversion_key:
                 continue
-            channel = str(tp.get("channel") or "unknown")
+            if not ((journey.get("conversions") or []) or journey.get("converted", False)):
+                continue
+            if not touchpoints:
+                continue
+            last_tp = touchpoints[-1] if isinstance(touchpoints[-1], dict) else {}
+            channel = str(last_tp.get("channel") or "unknown")
             if filter_channels and channel not in allowed_channels:
                 continue
-            day = _local_date_from_ts(tp.get("timestamp") or tp.get("ts"), tz)
+            day = _local_date_from_ts(last_tp.get("timestamp"), tz)
             if day is None:
                 continue
             bucket = _bucket_start(day, resolved_grain).isoformat()
+            outcome = journey_outcome_summary(journey)
+            path_type = _path_type(journey)
             if curr_from <= day <= curr_to:
-                _add_metric_rollup(curr_store, channel, bucket, visits=1.0)
+                revenue = journey_revenue_value(journey, dedupe_seen=dedupe_curr)
+                _add_metric_rollup(curr_store, channel, bucket, conversions=1.0, revenue=revenue)
+                metrics = curr_outcomes.setdefault(channel, _empty_outcome_metrics())
+                _merge_outcome_metrics(metrics, outcome, path_type)
             elif compare and prev_from <= day <= prev_to:
-                _add_metric_rollup(prev_store, channel, bucket, visits=1.0)
-
-        if not matches_conversion_key:
-            continue
-        if not ((journey.get("conversions") or []) or journey.get("converted", False)):
-            continue
-        if not touchpoints:
-            continue
-        last_tp = touchpoints[-1] if isinstance(touchpoints[-1], dict) else {}
-        channel = str(last_tp.get("channel") or "unknown")
-        if filter_channels and channel not in allowed_channels:
-            continue
-        day = _local_date_from_ts(last_tp.get("timestamp"), tz)
-        if day is None:
-            continue
-        bucket = _bucket_start(day, resolved_grain).isoformat()
-        outcome = journey_outcome_summary(journey)
-        path_type = _path_type(journey)
-        if curr_from <= day <= curr_to:
-            revenue = journey_revenue_value(journey, dedupe_seen=dedupe_curr)
-            _add_metric_rollup(curr_store, channel, bucket, conversions=1.0, revenue=revenue)
-            metrics = curr_outcomes.setdefault(channel, _empty_outcome_metrics())
-            _merge_outcome_metrics(metrics, outcome, path_type)
-        elif compare and prev_from <= day <= prev_to:
-            revenue = journey_revenue_value(journey, dedupe_seen=dedupe_prev)
-            _add_metric_rollup(prev_store, channel, bucket, conversions=1.0, revenue=revenue)
-            metrics = prev_outcomes.setdefault(channel, _empty_outcome_metrics())
-            _merge_outcome_metrics(metrics, outcome, path_type)
+                revenue = journey_revenue_value(journey, dedupe_seen=dedupe_prev)
+                _add_metric_rollup(prev_store, channel, bucket, conversions=1.0, revenue=revenue)
+                metrics = prev_outcomes.setdefault(channel, _empty_outcome_metrics())
+                _merge_outcome_metrics(metrics, outcome, path_type)
+    else:
+        for channel, buckets in (aggregate_overlay.get("current_store") or {}).items():
+            for bucket, row in buckets.items():
+                _add_metric_rollup(
+                    curr_store,
+                    channel,
+                    bucket,
+                    spend=float((row or {}).get("spend", 0.0) or 0.0),
+                    visits=float((row or {}).get("visits", 0.0) or 0.0),
+                    conversions=float((row or {}).get("conversions", 0.0) or 0.0),
+                    revenue=float((row or {}).get("revenue", 0.0) or 0.0),
+                )
+        for channel, buckets in (aggregate_overlay.get("previous_store") or {}).items():
+            for bucket, row in buckets.items():
+                _add_metric_rollup(
+                    prev_store,
+                    channel,
+                    bucket,
+                    spend=float((row or {}).get("spend", 0.0) or 0.0),
+                    visits=float((row or {}).get("visits", 0.0) or 0.0),
+                    conversions=float((row or {}).get("conversions", 0.0) or 0.0),
+                    revenue=float((row or {}).get("revenue", 0.0) or 0.0),
+                )
+        curr_outcomes = {
+            key: {metric: float(value or 0.0) for metric, value in metrics.items()}
+            for key, metrics in (aggregate_overlay.get("current_outcomes") or {}).items()
+        }
+        prev_outcomes = {
+            key: {metric: float(value or 0.0) for metric, value in metrics.items()}
+            for key, metrics in (aggregate_overlay.get("previous_outcomes") or {}).items()
+        }
 
     for exp in _expense_records(expenses):
         channel, start_raw, amount, status = _expense_fields(exp)
@@ -291,6 +526,7 @@ def _collect_campaign_rollups(
     compare: bool,
     channels: Optional[List[str]],
     conversion_key: Optional[str] = None,
+    aggregate_overlay: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Dict[str, Dict[str, Dict[str, float]]], Dict[str, Dict[str, Dict[str, float]]], Dict[str, Dict[str, Any]]]:
     tz = _safe_tz(timezone)
     allowed_channels = set(channels or [])
@@ -340,40 +576,71 @@ def _collect_campaign_rollups(
             elif compare and prev_from <= day <= prev_to:
                 _add_metric_rollup(prev_store, c_key, bucket, visits=1.0)
 
-        if not matches_conversion_key:
-            continue
-        if not ((journey.get("conversions") or []) or journey.get("converted", False)):
-            continue
-        if not touchpoints:
-            continue
-        last_tp = touchpoints[-1] if isinstance(touchpoints[-1], dict) else {}
-        channel = str(last_tp.get("channel") or "unknown")
-        if filter_channels and channel not in allowed_channels:
-            continue
-        campaign_name = last_tp.get("campaign")
-        c_key = campaign_key(channel, campaign_name if campaign_name else None)
-        meta[c_key] = {
-            "campaign_id": c_key,
-            "campaign_name": campaign_name,
-            "channel": channel,
-            "platform": last_tp.get("platform"),
+        if aggregate_overlay is None:
+            if not matches_conversion_key:
+                continue
+            if not ((journey.get("conversions") or []) or journey.get("converted", False)):
+                continue
+            if not touchpoints:
+                continue
+            last_tp = touchpoints[-1] if isinstance(touchpoints[-1], dict) else {}
+            channel = str(last_tp.get("channel") or "unknown")
+            if filter_channels and channel not in allowed_channels:
+                continue
+            campaign_name = last_tp.get("campaign")
+            c_key = campaign_key(channel, campaign_name if campaign_name else None)
+            meta[c_key] = {
+                "campaign_id": c_key,
+                "campaign_name": campaign_name,
+                "channel": channel,
+                "platform": last_tp.get("platform"),
+            }
+            day = _local_date_from_ts(last_tp.get("timestamp"), tz)
+            if day is None:
+                continue
+            bucket = _bucket_start(day, resolved_grain).isoformat()
+            outcome = journey_outcome_summary(journey)
+            path_type = _path_type(journey)
+            if curr_from <= day <= curr_to:
+                revenue = journey_revenue_value(journey, dedupe_seen=dedupe_curr)
+                _add_metric_rollup(curr_store, c_key, bucket, conversions=1.0, revenue=revenue)
+                metrics = curr_outcomes.setdefault(c_key, _empty_outcome_metrics())
+                _merge_outcome_metrics(metrics, outcome, path_type)
+            elif compare and prev_from <= day <= prev_to:
+                revenue = journey_revenue_value(journey, dedupe_seen=dedupe_prev)
+                _add_metric_rollup(prev_store, c_key, bucket, conversions=1.0, revenue=revenue)
+                metrics = prev_outcomes.setdefault(c_key, _empty_outcome_metrics())
+                _merge_outcome_metrics(metrics, outcome, path_type)
+
+    if aggregate_overlay is not None:
+        for c_key, details in (aggregate_overlay.get("meta") or {}).items():
+            meta.setdefault(c_key, details)
+        for c_key, buckets in (aggregate_overlay.get("current_store") or {}).items():
+            for bucket, row in buckets.items():
+                _add_metric_rollup(
+                    curr_store,
+                    c_key,
+                    bucket,
+                    conversions=float((row or {}).get("conversions", 0.0) or 0.0),
+                    revenue=float((row or {}).get("revenue", 0.0) or 0.0),
+                )
+        for c_key, buckets in (aggregate_overlay.get("previous_store") or {}).items():
+            for bucket, row in buckets.items():
+                _add_metric_rollup(
+                    prev_store,
+                    c_key,
+                    bucket,
+                    conversions=float((row or {}).get("conversions", 0.0) or 0.0),
+                    revenue=float((row or {}).get("revenue", 0.0) or 0.0),
+                )
+        curr_outcomes = {
+            key: {metric: float(value or 0.0) for metric, value in metrics.items()}
+            for key, metrics in (aggregate_overlay.get("current_outcomes") or {}).items()
         }
-        day = _local_date_from_ts(last_tp.get("timestamp"), tz)
-        if day is None:
-            continue
-        bucket = _bucket_start(day, resolved_grain).isoformat()
-        outcome = journey_outcome_summary(journey)
-        path_type = _path_type(journey)
-        if curr_from <= day <= curr_to:
-            revenue = journey_revenue_value(journey, dedupe_seen=dedupe_curr)
-            _add_metric_rollup(curr_store, c_key, bucket, conversions=1.0, revenue=revenue)
-            metrics = curr_outcomes.setdefault(c_key, _empty_outcome_metrics())
-            _merge_outcome_metrics(metrics, outcome, path_type)
-        elif compare and prev_from <= day <= prev_to:
-            revenue = journey_revenue_value(journey, dedupe_seen=dedupe_prev)
-            _add_metric_rollup(prev_store, c_key, bucket, conversions=1.0, revenue=revenue)
-            metrics = prev_outcomes.setdefault(c_key, _empty_outcome_metrics())
-            _merge_outcome_metrics(metrics, outcome, path_type)
+        prev_outcomes = {
+            key: {metric: float(value or 0.0) for metric, value in metrics.items()}
+            for key, metrics in (aggregate_overlay.get("previous_outcomes") or {}).items()
+        }
 
     # Spend remains channel-level in source data. Allocate channel spend to campaign keys
     # per bucket to avoid double-counting when campaign totals are aggregated:
@@ -450,6 +717,7 @@ def build_channel_trend_response(
     compare: bool = True,
     channels: Optional[List[str]] = None,
     conversion_key: Optional[str] = None,
+    aggregate_overlay: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     if kpi_key not in SUPPORTED_KPIS:
         raise ValueError(f"Unsupported kpi_key '{kpi_key}'")
@@ -473,6 +741,7 @@ def build_channel_trend_response(
         compare=compare,
         channels=channels,
         conversion_key=conversion_key,
+        aggregate_overlay=aggregate_overlay,
     )
 
     dims = sorted(set(curr_store.keys()) | (set(prev_store.keys()) if compare else set()))
@@ -511,6 +780,7 @@ def build_campaign_trend_response(
     compare: bool = True,
     channels: Optional[List[str]] = None,
     conversion_key: Optional[str] = None,
+    aggregate_overlay: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     if kpi_key not in SUPPORTED_KPIS:
         raise ValueError(f"Unsupported kpi_key '{kpi_key}'")
@@ -534,6 +804,7 @@ def build_campaign_trend_response(
         compare=compare,
         channels=channels,
         conversion_key=conversion_key,
+        aggregate_overlay=aggregate_overlay,
     )
     if isinstance(meta.get("__current_outcomes__"), dict):
         meta = {key: value for key, value in meta.items() if not str(key).startswith("__")}
@@ -592,6 +863,7 @@ def build_channel_summary_response(
     compare: bool = True,
     channels: Optional[List[str]] = None,
     conversion_key: Optional[str] = None,
+    aggregate_overlay: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     windows = resolve_period_windows(date_from, date_to, "daily")
     curr_from = _parse_date(windows["current_period"]["date_from"])
@@ -610,6 +882,7 @@ def build_channel_summary_response(
         compare=compare,
         channels=channels,
         conversion_key=conversion_key,
+        aggregate_overlay=aggregate_overlay,
     )
     dims = sorted(set(curr_store.keys()) | (set(prev_store.keys()) if compare else set()))
     items: List[Dict[str, Any]] = []
@@ -678,6 +951,7 @@ def build_campaign_summary_response(
     compare: bool = True,
     channels: Optional[List[str]] = None,
     conversion_key: Optional[str] = None,
+    aggregate_overlay: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     windows = resolve_period_windows(date_from, date_to, "daily")
     curr_from = _parse_date(windows["current_period"]["date_from"])
@@ -696,6 +970,7 @@ def build_campaign_summary_response(
         compare=compare,
         channels=channels,
         conversion_key=conversion_key,
+        aggregate_overlay=aggregate_overlay,
     )
     curr_outcomes = meta.pop("__current_outcomes__", {}) if isinstance(meta.get("__current_outcomes__"), dict) else {}
     prev_outcomes = meta.pop("__previous_outcomes__", {}) if isinstance(meta.get("__previous_outcomes__"), dict) else {}

@@ -4,7 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
-from app.models_config_dq import ConversionPath, JourneyDefinition
+from app.models_config_dq import ConversionPath, JourneyDefinition, JourneyExampleFact
 from app.services_journey_examples import list_examples_for_journey_definition
 
 
@@ -62,6 +62,65 @@ def test_list_examples_for_journey_definition_uses_shared_conversion_path_helper
         assert out["total"] == 1
         item = out["items"][0]
         assert item["conversion_id"] == "conv-1"
+        assert item["touchpoints_count"] == 2
+        assert item["conversion_value"] == 123.45
+        assert item["touchpoints_preview"][0]["campaign"] == "Brand"
+    finally:
+        db.close()
+
+
+def test_list_examples_for_journey_definition_prefers_persisted_example_facts():
+    db = _unit_db_session()
+    try:
+        definition = JourneyDefinition(
+            id="jd-1",
+            name="J1",
+            conversion_kpi_id="purchase",
+            lookback_window_days=30,
+            mode_default="conversion_only",
+            created_by="test",
+            updated_by="test",
+            is_archived=False,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        db.add(definition)
+        db.add(
+            JourneyExampleFact(
+                date=date(2026, 2, 5),
+                journey_definition_id="jd-1",
+                conversion_id="conv-1",
+                profile_id="p-1",
+                conversion_key="purchase",
+                conversion_ts=datetime(2026, 2, 5, 12, 0),
+                path_hash="fact-hash-1",
+                steps_json=["Paid Landing", "Product View / Content View", "Purchase / Lead Won (conversion)"],
+                touchpoints_count=2,
+                conversion_value=123.45,
+                channel_group="paid",
+                campaign_id="cmp-1",
+                device=None,
+                country=None,
+                touchpoints_preview_json=[
+                    {"ts": "2026-02-01T09:00:00Z", "channel": "paid", "event": None, "campaign": "Brand"},
+                    {"ts": "2026-02-03T09:00:00Z", "channel": "email", "event": "product_view", "campaign": None},
+                ],
+            )
+        )
+        db.commit()
+
+        out = list_examples_for_journey_definition(
+            db,
+            definition=definition,
+            date_from=date(2026, 2, 1),
+            date_to=date(2026, 2, 10),
+            limit=10,
+        )
+
+        assert out["total"] == 1
+        item = out["items"][0]
+        assert item["conversion_id"] == "conv-1"
+        assert item["path_hash"] == "fact-hash-1"
         assert item["touchpoints_count"] == 2
         assert item["conversion_value"] == 123.45
         assert item["touchpoints_preview"][0]["campaign"] == "Brand"

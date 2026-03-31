@@ -339,12 +339,13 @@ def _ensure_journey_definition_columns():
 
 
 def _ensure_journey_paths_columns():
-    """Ensure new columns on journey_paths_daily exist for local SQLite dev DBs."""
+    """Ensure new columns on journey aggregate tables exist for local SQLite dev DBs."""
     try:
         from sqlalchemy import text
         with engine.connect() as conn:
             for stmt in (
                 "ALTER TABLE journey_paths_daily ADD COLUMN campaign_id VARCHAR(128)",
+                "ALTER TABLE journey_paths_daily ADD COLUMN last_touch_channel VARCHAR(128)",
                 "ALTER TABLE journey_paths_daily ADD COLUMN gross_conversions_total FLOAT NOT NULL DEFAULT 0",
                 "ALTER TABLE journey_paths_daily ADD COLUMN net_conversions_total FLOAT NOT NULL DEFAULT 0",
                 "ALTER TABLE journey_paths_daily ADD COLUMN gross_revenue_total FLOAT NOT NULL DEFAULT 0",
@@ -354,6 +355,19 @@ def _ensure_journey_paths_columns():
                 "ALTER TABLE journey_paths_daily ADD COLUMN mixed_path_conversions_total FLOAT NOT NULL DEFAULT 0",
                 "ALTER TABLE journey_transitions_daily ADD COLUMN campaign_id VARCHAR(128)",
                 "ALTER TABLE journey_transitions_daily ADD COLUMN country VARCHAR(64)",
+                "ALTER TABLE journey_transitions_daily ADD COLUMN avg_time_between_sec FLOAT",
+                "ALTER TABLE journey_transitions_daily ADD COLUMN p50_time_between_sec FLOAT",
+                "ALTER TABLE journey_transitions_daily ADD COLUMN p90_time_between_sec FLOAT",
+                "ALTER TABLE channel_performance_daily ADD COLUMN conversion_key VARCHAR(128)",
+                "ALTER TABLE channel_performance_daily ADD COLUMN visits_total INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE channel_performance_daily ADD COLUMN count_conversions INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE channel_performance_daily ADD COLUMN gross_conversions_total FLOAT NOT NULL DEFAULT 0",
+                "ALTER TABLE channel_performance_daily ADD COLUMN net_conversions_total FLOAT NOT NULL DEFAULT 0",
+                "ALTER TABLE channel_performance_daily ADD COLUMN gross_revenue_total FLOAT NOT NULL DEFAULT 0",
+                "ALTER TABLE channel_performance_daily ADD COLUMN net_revenue_total FLOAT NOT NULL DEFAULT 0",
+                "ALTER TABLE channel_performance_daily ADD COLUMN view_through_conversions_total FLOAT NOT NULL DEFAULT 0",
+                "ALTER TABLE channel_performance_daily ADD COLUMN click_through_conversions_total FLOAT NOT NULL DEFAULT 0",
+                "ALTER TABLE channel_performance_daily ADD COLUMN mixed_path_conversions_total FLOAT NOT NULL DEFAULT 0",
             ):
                 try:
                     conn.execute(text(stmt))
