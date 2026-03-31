@@ -280,27 +280,24 @@ def _compute_results_from_raw(
 ) -> Dict[str, Any]:
     if not steps:
         return {"step_counts": [], "time_between": [], "breakdown_device": [], "breakdown_channel_group": [], "source": "raw"}
-    start_dt = datetime.combine(date_from, dt_time.min)
-    end_dt = datetime.combine(date_to + timedelta(days=1), dt_time.min)
-    q = db.query(ConversionPath).filter(ConversionPath.conversion_ts >= start_dt, ConversionPath.conversion_ts < end_dt)
-    if journey_definition.conversion_kpi_id:
-        q = q.filter(ConversionPath.conversion_key == journey_definition.conversion_kpi_id)
-    rows = q.all()
-
     step_counts = [0 for _ in steps]
     pair_times: Dict[Tuple[str, str], List[float]] = {(a, b): [] for a, b in zip(steps, steps[1:])}
     by_device: Dict[str, int] = {}
     by_channel: Dict[str, int] = {}
 
-    for row in rows:
-        payload = conversion_path_payload(row)
+    for conversion_ts, payload in _iter_filtered_raw_payloads(
+        db,
+        journey_definition=journey_definition,
+        date_from=date_from,
+        date_to=date_to,
+    ):
         payload_device = str(payload.get("device") or "").strip()
         payload_country = str(payload.get("country") or "").strip().upper()
         if device and payload_device and payload_device != device:
             continue
         if country and payload_country and payload_country != country.upper():
             continue
-        seq = _extract_steps_with_ts(payload, row.conversion_ts)
+        seq = _extract_steps_with_ts(payload, conversion_ts)
         if not seq:
             continue
         mapped_steps = [s for s, _ in seq]
@@ -314,19 +311,9 @@ def _compute_results_from_raw(
             if _last_touchpoint_campaign_id(payload) != campaign_id:
                 continue
 
-        matched_idx = -1
-        matched_positions: List[int] = []
-        for target in steps:
-            found = None
-            for pos in range(matched_idx + 1, len(mapped_steps)):
-                if mapped_steps[pos] == target:
-                    found = pos
-                    break
-            if found is None:
-                break
-            matched_idx = found
-            matched_positions.append(found)
-            step_counts[len(matched_positions) - 1] += 1
+        matched_positions = _match_ordered_positions(mapped_steps, steps)
+        for idx in range(len(matched_positions)):
+            step_counts[idx] += 1
         if matched_positions:
             by_device[payload_device or "unknown"] = by_device.get(payload_device or "unknown", 0) + 1
             first_step = mapped_steps[matched_positions[0]]
@@ -369,6 +356,44 @@ def _compute_results_from_raw(
         "breakdown_channel_group": channel_breakdown,
         "source": "raw",
     }
+
+
+def _iter_filtered_raw_payloads(
+    db: Session,
+    *,
+    journey_definition: JourneyDefinition,
+    date_from: date,
+    date_to: date,
+):
+    start_dt = datetime.combine(date_from, dt_time.min)
+    end_dt = datetime.combine(date_to + timedelta(days=1), dt_time.min)
+    q = db.query(ConversionPath.conversion_ts, ConversionPath.path_json).filter(
+        ConversionPath.conversion_ts >= start_dt,
+        ConversionPath.conversion_ts < end_dt,
+    )
+    if journey_definition.conversion_kpi_id:
+        q = q.filter(ConversionPath.conversion_key == journey_definition.conversion_kpi_id)
+    for conversion_ts, path_json in q.yield_per(1000):
+        payload = path_json if isinstance(path_json, dict) else {}
+        if conversion_ts is None or not payload:
+            continue
+        yield conversion_ts, payload
+
+
+def _match_ordered_positions(mapped_steps: Sequence[str], target_steps: Sequence[str]) -> List[int]:
+    matched_idx = -1
+    matched_positions: List[int] = []
+    for target in target_steps:
+        found = None
+        for pos in range(matched_idx + 1, len(mapped_steps)):
+            if mapped_steps[pos] == target:
+                found = pos
+                break
+        if found is None:
+            break
+        matched_idx = found
+        matched_positions.append(found)
+    return matched_positions
 
 
 def get_funnel_results(
@@ -591,13 +616,6 @@ def _cohort_metrics_for_step(
     country: Optional[str],
     campaign_id: Optional[str],
 ) -> Dict[str, Any]:
-    start_dt = datetime.combine(date_from, dt_time.min)
-    end_dt = datetime.combine(date_to + timedelta(days=1), dt_time.min)
-    q = db.query(ConversionPath).filter(ConversionPath.conversion_ts >= start_dt, ConversionPath.conversion_ts < end_dt)
-    if journey_definition.conversion_kpi_id:
-        q = q.filter(ConversionPath.conversion_key == journey_definition.conversion_kpi_id)
-    rows = q.all()
-
     reached = 0
     advanced = 0
     times_to_next: List[float] = []
@@ -610,15 +628,19 @@ def _cohort_metrics_for_step(
     error_known = 0
     error_true = 0
 
-    for row in rows:
-        payload = conversion_path_payload(row)
+    for conversion_ts, payload in _iter_filtered_raw_payloads(
+        db,
+        journey_definition=journey_definition,
+        date_from=date_from,
+        date_to=date_to,
+    ):
         payload_device = str(payload.get("device") or "").strip().lower()
         payload_country = str(payload.get("country") or "").strip().upper()
         if device and payload_device and payload_device != device.lower():
             continue
         if country and payload_country and payload_country != country.upper():
             continue
-        seq = _extract_steps_with_ts(payload, row.conversion_ts)
+        seq = _extract_steps_with_ts(payload, conversion_ts)
         if not seq:
             continue
         mapped_steps = [s for s, _ in seq]
@@ -632,18 +654,7 @@ def _cohort_metrics_for_step(
             if _last_touchpoint_campaign_id(payload) != campaign_id:
                 continue
 
-        matched_idx = -1
-        matched_positions: List[int] = []
-        for target in steps:
-            found = None
-            for pos in range(matched_idx + 1, len(mapped_steps)):
-                if mapped_steps[pos] == target:
-                    found = pos
-                    break
-            if found is None:
-                break
-            matched_idx = found
-            matched_positions.append(found)
+        matched_positions = _match_ordered_positions(mapped_steps, steps)
 
         if len(matched_positions) <= step_index:
             continue

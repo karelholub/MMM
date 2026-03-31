@@ -730,6 +730,68 @@ class ConversionDataQualityFact(Base):
     )
 
 
+class SilverConversionFact(Base):
+    __tablename__ = "silver_conversion_facts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversion_id = Column(String(128), nullable=False, unique=True, index=True)
+    profile_id = Column(String(128), nullable=True, index=True)
+    conversion_key = Column(String(128), nullable=True, index=True)
+    conversion_ts = Column(DateTime, nullable=False, index=True)
+    import_batch_id = Column(String(36), nullable=True, index=True)
+    import_source = Column(String(32), nullable=True, index=True)
+    source_snapshot_id = Column(String(36), nullable=True, index=True)
+    path_hash = Column(String(128), nullable=True, index=True)
+    path_length = Column(Integer, nullable=False, default=0)
+    interaction_path_type = Column(String(32), nullable=True, index=True)
+    gross_conversions_total = Column(Float, nullable=False, default=0.0)
+    net_conversions_total = Column(Float, nullable=False, default=0.0)
+    gross_revenue_total = Column(Float, nullable=False, default=0.0)
+    net_revenue_total = Column(Float, nullable=False, default=0.0)
+    refunded_value = Column(Float, nullable=False, default=0.0)
+    cancelled_value = Column(Float, nullable=False, default=0.0)
+    invalid_leads = Column(Float, nullable=False, default=0.0)
+    valid_leads = Column(Float, nullable=False, default=0.0)
+    device = Column(String(64), nullable=True)
+    country = Column(String(64), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_silver_conversion_profile_ts", "profile_id", "conversion_ts"),
+        Index("ix_silver_conversion_batch_ts", "import_batch_id", "conversion_ts"),
+    )
+
+
+class SilverTouchpointFact(Base):
+    __tablename__ = "silver_touchpoint_facts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversion_id = Column(String(128), nullable=False)
+    profile_id = Column(String(128), nullable=True, index=True)
+    conversion_key = Column(String(128), nullable=True, index=True)
+    conversion_ts = Column(DateTime, nullable=False, index=True)
+    ordinal = Column(Integer, nullable=False)
+    touchpoint_ts = Column(DateTime, nullable=True, index=True)
+    channel = Column(String(128), nullable=True, index=True)
+    source = Column(String(255), nullable=True)
+    medium = Column(String(255), nullable=True)
+    campaign = Column(String(255), nullable=True)
+    event_name = Column(String(255), nullable=True)
+    interaction_type = Column(String(32), nullable=True)
+    import_batch_id = Column(String(36), nullable=True, index=True)
+    import_source = Column(String(32), nullable=True, index=True)
+    source_snapshot_id = Column(String(36), nullable=True, index=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_silver_touchpoint_conv_ord", "conversion_id", "ordinal", unique=True),
+        Index("ix_silver_touchpoint_profile_ts", "profile_id", "touchpoint_ts"),
+        Index("ix_silver_touchpoint_channel_ts", "channel", "touchpoint_ts"),
+    )
+
+
 class JourneyExampleFact(Base):
     __tablename__ = "journey_example_facts"
 

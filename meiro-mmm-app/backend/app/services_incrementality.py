@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -802,14 +803,18 @@ def auto_assign_from_conversion_paths(
 
     # Find all conversion paths with touchpoints in the channel during the period
     paths = (
-        db.query(ConversionPath)
+        db.query(ConversionPath.profile_id, ConversionPath.path_json)
         .filter(ConversionPath.conversion_ts >= start_date)
         .filter(ConversionPath.conversion_ts <= end_date)
         .all()
     )
 
     eligible_profiles = set()
-    for path in paths:
+    for profile_id, path_json in paths:
+        path = SimpleNamespace(
+            profile_id=profile_id,
+            path_json=path_json if isinstance(path_json, dict) else {},
+        )
         path_json = conversion_path_payload(path)
         touchpoints = conversion_path_touchpoints(path)
         for tp in touchpoints:

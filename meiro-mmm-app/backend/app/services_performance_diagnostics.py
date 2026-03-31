@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from sqlalchemy.orm import Session
@@ -104,6 +105,37 @@ def _finalize_diag(diag: Dict[str, Any]) -> None:
     funnel["conversion_rate"] = round(float(funnel["converted_journeys"]) / touch, 4)
 
 
+def _iter_scope_conversion_rows(
+    *,
+    db: Session,
+    start: datetime,
+    end: datetime,
+    conversion_key: Optional[str],
+):
+    q = db.query(
+        ConversionPath.conversion_id,
+        ConversionPath.conversion_key,
+        ConversionPath.conversion_ts,
+        ConversionPath.first_touch_ts,
+        ConversionPath.last_touch_ts,
+        ConversionPath.path_json,
+    ).filter(
+        ConversionPath.last_touch_ts >= start,
+        ConversionPath.first_touch_ts <= end,
+    )
+    if conversion_key:
+        q = q.filter(ConversionPath.conversion_key == conversion_key)
+    for row in q.yield_per(1000):
+        yield SimpleNamespace(
+            conversion_id=row[0],
+            conversion_key=row[1],
+            conversion_ts=row[2],
+            first_touch_ts=row[3],
+            last_touch_ts=row[4],
+            path_json=row[5] if isinstance(row[5], dict) else {},
+        )
+
+
 def _aggregate_scope_diagnostics_from_facts(
     *,
     db: Session,
@@ -127,19 +159,24 @@ def _aggregate_scope_diagnostics_from_facts(
     if not fact_rows:
         return None
 
-    raw_q = db.query(ConversionPath).filter(
-        ConversionPath.last_touch_ts >= start,
-        ConversionPath.first_touch_ts <= end,
-    )
-    if conversion_key:
-        raw_q = raw_q.filter(ConversionPath.conversion_key == conversion_key)
     if allowed_channels:
         raw_count = 0
-        for row in raw_q.all():
+        for row in _iter_scope_conversion_rows(
+            db=db,
+            start=start,
+            end=end,
+            conversion_key=conversion_key,
+        ):
             if any(str(tp.get("channel") or "unknown") in allowed_channels for tp in conversion_path_touchpoints(row)):
                 raw_count += 1
     else:
-        raw_count = raw_q.count()
+        raw_count_query = db.query(ConversionPath.conversion_id).filter(
+            ConversionPath.last_touch_ts >= start,
+            ConversionPath.first_touch_ts <= end,
+        )
+        if conversion_key:
+            raw_count_query = raw_count_query.filter(ConversionPath.conversion_key == conversion_key)
+        raw_count = raw_count_query.count()
     fact_count = len({str(row.conversion_id) for row in fact_rows})
     if raw_count > fact_count:
         return None
@@ -191,18 +228,15 @@ def build_scope_diagnostics(
     allowed_channels = set(channels or [])
     filter_channels = bool(allowed_channels)
 
-    q = db.query(ConversionPath).filter(
-        ConversionPath.last_touch_ts >= start,
-        ConversionPath.first_touch_ts <= end,
-    )
-    if conversion_key:
-        q = q.filter(ConversionPath.conversion_key == conversion_key)
-    rows = q.all()
-
     out: Dict[str, Dict[str, Any]] = {}
     dedupe_seen: set[str] = set()
 
-    for row in rows:
+    for row in _iter_scope_conversion_rows(
+        db=db,
+        start=start,
+        end=end,
+        conversion_key=conversion_key,
+    ):
         payload = conversion_path_payload(row)
         touchpoints = conversion_path_touchpoints(row)
         if not touchpoints:

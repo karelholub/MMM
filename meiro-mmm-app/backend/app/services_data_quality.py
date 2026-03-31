@@ -36,15 +36,15 @@ def _load_journeys(db: Session) -> List[Dict[str, Any]]:
     """
     # Primary source: normalised conversion paths
     rows = (
-        db.query(ConversionPath)
+        db.query(ConversionPath.path_json)
         .order_by(ConversionPath.conversion_ts.desc())
         .limit(10000)
         .all()
     )
     if rows:
         journeys: List[Dict[str, Any]] = []
-        for r in rows:
-            payload = conversion_path_payload(r)
+        for (payload_raw,) in rows:
+            payload = payload_raw if isinstance(payload_raw, dict) else {}
             if payload:
                 journeys.append(payload)
         if journeys:

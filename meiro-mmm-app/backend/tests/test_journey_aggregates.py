@@ -23,6 +23,7 @@ from app.services_journey_aggregates import (
     map_touchpoint_step,
     run_daily_journey_aggregates,
 )
+from app.services_conversions import persist_journeys_as_conversion_paths
 
 
 def _unit_db_session():
@@ -178,5 +179,69 @@ def test_run_daily_journey_aggregates_writes_paths_and_transitions_and_backfills
         assert restored > 0
         assert db.query(ChannelPerformanceDaily).filter(ChannelPerformanceDaily.date == day1_date).count() > 0
         assert db.query(JourneyExampleFact).filter(JourneyExampleFact.date == day1_date).count() > 0
+    finally:
+        db.close()
+
+
+def test_run_daily_journey_aggregates_rebuilds_channel_facts_from_silver_without_conversion_paths():
+    db = _unit_db_session()
+    try:
+        definition = JourneyDefinition(
+            id="def-silver",
+            name="Silver Journey",
+            conversion_kpi_id="purchase",
+            lookback_window_days=30,
+            mode_default="conversion_only",
+            created_by="test",
+            updated_by="test",
+            is_archived=False,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        db.add(definition)
+        db.commit()
+
+        inserted = persist_journeys_as_conversion_paths(
+            db,
+            [
+                {
+                    "_schema": "v2",
+                    "customer": {"id": "cust-1"},
+                    "touchpoints": [
+                        {"ts": "2026-02-08T09:00:00Z", "channel": "google_ads", "interaction_type": "impression"},
+                        {"ts": "2026-02-08T10:00:00Z", "channel": "google_ads", "campaign": "Brand", "interaction_type": "click"},
+                    ],
+                    "conversions": [
+                        {"id": "conv-silver", "name": "purchase", "ts": "2026-02-08T12:00:00Z", "value": 150.0}
+                    ],
+                }
+            ],
+            replace=True,
+            import_source="meiro_events_replay",
+            import_batch_id="silver-channel-batch",
+        )
+        assert inserted == 1
+
+        db.query(ConversionPath).delete(synchronize_session=False)
+        db.commit()
+
+        out = run_daily_journey_aggregates(db, as_of_date=date(2026, 2, 9), reprocess_days=1)
+
+        channel_rows = (
+            db.query(ChannelPerformanceDaily)
+            .filter(ChannelPerformanceDaily.date == date(2026, 2, 8))
+            .order_by(ChannelPerformanceDaily.channel.asc(), ChannelPerformanceDaily.conversion_key.asc().nullsfirst())
+            .all()
+        )
+
+        assert out["channel_rows_written"] >= 2
+        assert channel_rows
+        rollup = next(r for r in channel_rows if r.channel == "google_ads" and r.conversion_key is None)
+        keyed = next(r for r in channel_rows if r.channel == "google_ads" and r.conversion_key == "purchase")
+        assert rollup.visits_total == 2
+        assert float(rollup.gross_revenue_total or 0.0) == 150.0
+        assert keyed.count_conversions == 1
+        assert float(keyed.gross_revenue_total or 0.0) == 150.0
+        assert db.query(JourneyPathDaily).count() == 0
     finally:
         db.close()

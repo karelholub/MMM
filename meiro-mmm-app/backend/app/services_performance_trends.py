@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy.orm import Session
-from .models_config_dq import ChannelPerformanceDaily, JourneyDefinition, JourneyPathDaily
+from .models_config_dq import (
+    ChannelPerformanceDaily,
+    JourneyDefinition,
+    JourneyPathDaily,
+    SilverConversionFact,
+    SilverTouchpointFact,
+)
 from app.services_metrics import (
     SUPPORTED_KPIS,
     journey_outcome_summary,
@@ -233,7 +239,18 @@ def build_campaign_aggregate_overlay(
         .all()
     )
     if not rows:
-        return None
+        return _build_campaign_aggregate_overlay_from_silver(
+            db,
+            curr_from=curr_from,
+            curr_to=curr_to,
+            prev_from=prev_from,
+            prev_to=prev_to,
+            compare=compare,
+            resolved_grain=resolved_grain,
+            allowed_channels=allowed_channels,
+            filter_channels=filter_channels,
+            conversion_key=conversion_key,
+        )
 
     curr_store: Dict[str, Dict[str, Dict[str, float]]] = {}
     prev_store: Dict[str, Dict[str, Dict[str, float]]] = {}
@@ -294,6 +311,133 @@ def build_campaign_aggregate_overlay(
     }
 
 
+def _build_campaign_aggregate_overlay_from_silver(
+    db: Session,
+    *,
+    curr_from: date,
+    curr_to: date,
+    prev_from: date,
+    prev_to: date,
+    compare: bool,
+    resolved_grain: str,
+    allowed_channels: Set[str],
+    filter_channels: bool,
+    conversion_key: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    start_day = prev_from if compare else curr_from
+    day_start = datetime.combine(start_day, datetime.min.time())
+    day_end = datetime.combine(curr_to + timedelta(days=1), datetime.min.time())
+    conversion_rows = (
+        db.query(
+            SilverConversionFact.conversion_id,
+            SilverConversionFact.conversion_key,
+            SilverConversionFact.conversion_ts,
+            SilverConversionFact.interaction_path_type,
+            SilverConversionFact.gross_conversions_total,
+            SilverConversionFact.net_conversions_total,
+            SilverConversionFact.gross_revenue_total,
+            SilverConversionFact.net_revenue_total,
+        )
+        .filter(
+            SilverConversionFact.conversion_ts >= day_start,
+            SilverConversionFact.conversion_ts < day_end,
+        )
+        .all()
+    )
+    if not conversion_rows:
+        return None
+
+    curr_store: Dict[str, Dict[str, Dict[str, float]]] = {}
+    prev_store: Dict[str, Dict[str, Dict[str, float]]] = {}
+    curr_outcomes: Dict[str, Dict[str, float]] = {}
+    prev_outcomes: Dict[str, Dict[str, float]] = {}
+    meta: Dict[str, Dict[str, Any]] = {}
+
+    conversion_ids = [str(row[0] or "") for row in conversion_rows if str(row[0] or "")]
+    last_touch: Dict[str, Tuple[str, Optional[str]]] = {}
+    if conversion_ids:
+        for conversion_id, channel, campaign, _ordinal in (
+            db.query(
+                SilverTouchpointFact.conversion_id,
+                SilverTouchpointFact.channel,
+                SilverTouchpointFact.campaign,
+                SilverTouchpointFact.ordinal,
+            )
+            .filter(SilverTouchpointFact.conversion_id.in_(conversion_ids))
+            .order_by(SilverTouchpointFact.conversion_id.asc(), SilverTouchpointFact.ordinal.asc())
+            .all()
+        ):
+            last_touch[str(conversion_id or "")] = (
+                str(channel or "unknown"),
+                str(campaign).strip() if campaign not in (None, "") else None,
+            )
+
+    def _campaign_key(channel: str, campaign: Optional[str]) -> str:
+        return f"{channel}:{campaign}" if campaign else channel
+
+    for row in conversion_rows:
+        conversion_id = str(row[0] or "")
+        row_conversion_key = str(row[1] or "").strip() or None
+        conversion_ts = row[2]
+        if not isinstance(conversion_ts, datetime):
+            continue
+        if conversion_key is not None and row_conversion_key != conversion_key:
+            continue
+        day = conversion_ts.date()
+        channel, campaign = last_touch.get(conversion_id, ("unknown", None))
+        if filter_channels and channel not in allowed_channels:
+            continue
+        key = _campaign_key(channel, campaign)
+        meta.setdefault(
+            key,
+            {
+                "campaign_id": key,
+                "campaign_name": campaign,
+                "channel": channel,
+                "platform": None,
+            },
+        )
+        bucket = _bucket_start(day, resolved_grain).isoformat()
+        if curr_from <= day <= curr_to:
+            target_store = curr_store
+            target_outcomes = curr_outcomes
+        elif compare and prev_from <= day <= prev_to:
+            target_store = prev_store
+            target_outcomes = prev_outcomes
+        else:
+            continue
+        _add_metric_rollup(
+            target_store,
+            key,
+            bucket,
+            conversions=float(row[4] or 0.0),
+            revenue=float(row[6] or 0.0),
+        )
+        outcome = target_outcomes.setdefault(key, _empty_outcome_metrics())
+        outcome["gross_conversions"] += float(row[4] or 0.0)
+        outcome["net_conversions"] += float(row[5] or 0.0)
+        outcome["gross_revenue"] += float(row[6] or 0.0)
+        outcome["net_revenue"] += float(row[7] or 0.0)
+        path_type = str(row[3] or "").strip().lower()
+        net_conversions = float(row[5] or 0.0)
+        if path_type == "click_through":
+            outcome["click_through_conversions"] += net_conversions
+        elif path_type == "view_through":
+            outcome["view_through_conversions"] += net_conversions
+        elif path_type == "mixed_path":
+            outcome["mixed_path_conversions"] += net_conversions
+
+    if not curr_store and not prev_store:
+        return None
+    return {
+        "current_store": curr_store,
+        "previous_store": prev_store,
+        "current_outcomes": curr_outcomes,
+        "previous_outcomes": prev_outcomes,
+        "meta": meta,
+    }
+
+
 def build_channel_aggregate_overlay(
     db: Session,
     *,
@@ -325,7 +469,18 @@ def build_channel_aggregate_overlay(
         .all()
     )
     if not rows:
-        return None
+        return _build_channel_aggregate_overlay_from_silver(
+            db,
+            curr_from=curr_from,
+            curr_to=curr_to,
+            prev_from=prev_from,
+            prev_to=prev_to,
+            compare=compare,
+            resolved_grain=resolved_grain,
+            allowed_channels=allowed_channels,
+            filter_channels=filter_channels,
+            conversion_key=conversion_key,
+        )
 
     curr_store: Dict[str, Dict[str, Dict[str, float]]] = {}
     prev_store: Dict[str, Dict[str, Dict[str, float]]] = {}
@@ -374,6 +529,140 @@ def build_channel_aggregate_overlay(
         outcome["view_through_conversions"] += float(row.view_through_conversions_total or 0.0)
         outcome["click_through_conversions"] += float(row.click_through_conversions_total or 0.0)
         outcome["mixed_path_conversions"] += float(row.mixed_path_conversions_total or 0.0)
+
+    if not curr_store and not prev_store:
+        return None
+    return {
+        "current_store": curr_store,
+        "previous_store": prev_store,
+        "current_outcomes": curr_outcomes,
+        "previous_outcomes": prev_outcomes,
+    }
+
+
+def _build_channel_aggregate_overlay_from_silver(
+    db: Session,
+    *,
+    curr_from: date,
+    curr_to: date,
+    prev_from: date,
+    prev_to: date,
+    compare: bool,
+    resolved_grain: str,
+    allowed_channels: Set[str],
+    filter_channels: bool,
+    conversion_key: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    touchpoint_start = prev_from if compare else curr_from
+    day_start = datetime.combine(touchpoint_start, datetime.min.time())
+    day_end = datetime.combine(curr_to + timedelta(days=1), datetime.min.time())
+
+    touchpoint_rows = (
+        db.query(
+            SilverTouchpointFact.touchpoint_ts,
+            SilverTouchpointFact.channel,
+        )
+        .filter(
+            SilverTouchpointFact.touchpoint_ts.isnot(None),
+            SilverTouchpointFact.touchpoint_ts >= day_start,
+            SilverTouchpointFact.touchpoint_ts < day_end,
+        )
+        .all()
+    )
+    conversion_rows = (
+        db.query(
+            SilverConversionFact.conversion_id,
+            SilverConversionFact.conversion_key,
+            SilverConversionFact.conversion_ts,
+            SilverConversionFact.interaction_path_type,
+            SilverConversionFact.gross_conversions_total,
+            SilverConversionFact.net_conversions_total,
+            SilverConversionFact.gross_revenue_total,
+            SilverConversionFact.net_revenue_total,
+        )
+        .filter(
+            SilverConversionFact.conversion_ts >= day_start,
+            SilverConversionFact.conversion_ts < day_end,
+        )
+        .all()
+    )
+    if not touchpoint_rows and not conversion_rows:
+        return None
+
+    curr_store: Dict[str, Dict[str, Dict[str, float]]] = {}
+    prev_store: Dict[str, Dict[str, Dict[str, float]]] = {}
+    curr_outcomes: Dict[str, Dict[str, float]] = {}
+    prev_outcomes: Dict[str, Dict[str, float]] = {}
+
+    conversion_ids = [str(row[0] or "") for row in conversion_rows if str(row[0] or "")]
+    last_touch_channel: Dict[str, str] = {}
+    if conversion_ids:
+        for conversion_id, channel, _ordinal in (
+            db.query(
+                SilverTouchpointFact.conversion_id,
+                SilverTouchpointFact.channel,
+                SilverTouchpointFact.ordinal,
+            )
+            .filter(SilverTouchpointFact.conversion_id.in_(conversion_ids))
+            .order_by(SilverTouchpointFact.conversion_id.asc(), SilverTouchpointFact.ordinal.asc())
+            .all()
+        ):
+            last_touch_channel[str(conversion_id or "")] = str(channel or "unknown")
+
+    for touchpoint_ts, channel_raw in touchpoint_rows:
+        if not isinstance(touchpoint_ts, datetime):
+            continue
+        day = touchpoint_ts.date()
+        channel = str(channel_raw or "unknown")
+        if filter_channels and channel not in allowed_channels:
+            continue
+        bucket = _bucket_start(day, resolved_grain).isoformat()
+        if curr_from <= day <= curr_to:
+            _add_metric_rollup(curr_store, channel, bucket, visits=1.0)
+        elif compare and prev_from <= day <= prev_to:
+            _add_metric_rollup(prev_store, channel, bucket, visits=1.0)
+
+    for row in conversion_rows:
+        conversion_id = str(row[0] or "")
+        row_conversion_key = str(row[1] or "").strip() or None
+        conversion_ts = row[2]
+        if not isinstance(conversion_ts, datetime):
+            continue
+        if conversion_key is not None and row_conversion_key != conversion_key:
+            continue
+        day = conversion_ts.date()
+        channel = last_touch_channel.get(conversion_id, "unknown")
+        if filter_channels and channel not in allowed_channels:
+            continue
+        bucket = _bucket_start(day, resolved_grain).isoformat()
+        if curr_from <= day <= curr_to:
+            target_store = curr_store
+            target_outcomes = curr_outcomes
+        elif compare and prev_from <= day <= prev_to:
+            target_store = prev_store
+            target_outcomes = prev_outcomes
+        else:
+            continue
+        _add_metric_rollup(
+            target_store,
+            channel,
+            bucket,
+            conversions=1.0,
+            revenue=float(row[6] or 0.0),
+        )
+        outcome = target_outcomes.setdefault(channel, _empty_outcome_metrics())
+        outcome["gross_conversions"] += float(row[4] or 0.0)
+        outcome["net_conversions"] += float(row[5] or 0.0)
+        outcome["gross_revenue"] += float(row[6] or 0.0)
+        outcome["net_revenue"] += float(row[7] or 0.0)
+        path_type = str(row[3] or "").strip().lower()
+        net_conversions = float(row[5] or 0.0)
+        if path_type == "click_through":
+            outcome["click_through_conversions"] += net_conversions
+        elif path_type == "view_through":
+            outcome["view_through_conversions"] += net_conversions
+        elif path_type == "mixed_path":
+            outcome["mixed_path_conversions"] += net_conversions
 
     if not curr_store and not prev_store:
         return None

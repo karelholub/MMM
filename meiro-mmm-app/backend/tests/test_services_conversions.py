@@ -4,6 +4,7 @@ from sqlalchemy.orm import sessionmaker
 from app.db import Base
 from app.models_config_dq import ConversionDataQualityFact, ConversionPath, ConversionScopeDiagnosticFact
 from app.models_config_dq import ConversionKpiSignalFact, ConversionTaxonomyTouchpointFact
+from app.models_config_dq import SilverConversionFact, SilverTouchpointFact
 from app.services_conversions import (
     classify_journey_interaction,
     conversion_path_is_converted,
@@ -166,6 +167,17 @@ def test_persist_journeys_as_conversion_paths_stamps_import_metadata():
     taxonomy_facts = db.query(ConversionTaxonomyTouchpointFact).filter(ConversionTaxonomyTouchpointFact.conversion_id == row.conversion_id).all()
     assert len(taxonomy_facts) == 1
     assert taxonomy_facts[0].raw_channel == "google_ads"
+    silver_conversion = db.query(SilverConversionFact).filter(SilverConversionFact.conversion_id == row.conversion_id).one()
+    assert silver_conversion.import_batch_id == "batch-123"
+    assert silver_conversion.import_source == "meiro_webhook"
+    assert silver_conversion.path_length == 1
+    assert silver_conversion.gross_revenue_total == 10.0
+    assert silver_conversion.net_revenue_total == 10.0
+    assert silver_conversion.interaction_path_type == "unknown"
+    silver_touchpoints = db.query(SilverTouchpointFact).filter(SilverTouchpointFact.conversion_id == row.conversion_id).all()
+    assert len(silver_touchpoints) == 1
+    assert silver_touchpoints[0].channel == "google_ads"
+    assert silver_touchpoints[0].import_batch_id == "batch-123"
 
 
 def test_persist_journeys_as_conversion_paths_append_mode_skips_existing_conversion_ids():
@@ -218,6 +230,96 @@ def test_persist_journeys_as_conversion_paths_append_mode_skips_existing_convers
     assert rows[0].import_source == "upload"
     assert rows[1].import_source == "meiro_events_replay"
     assert rows[1].import_batch_id == "batch-append"
+
+
+def test_persist_journeys_as_conversion_paths_replace_profile_ids_deletes_matching_silver_facts():
+    db = _make_session()
+    persist_journeys_as_conversion_paths(
+        db,
+        [
+            {
+                "customer_id": "cust-1",
+                "conversion_id": "conv-1",
+                "kpi_type": "purchase",
+                "touchpoints": [{"channel": "google_ads", "timestamp": "2026-03-01T00:00:00Z"}],
+                "converted": True,
+                "conversion_value": 10.0,
+            },
+            {
+                "customer_id": "cust-2",
+                "conversion_id": "conv-2",
+                "kpi_type": "purchase",
+                "touchpoints": [{"channel": "meta_ads", "timestamp": "2026-03-02T00:00:00Z"}],
+                "converted": True,
+                "conversion_value": 25.0,
+            },
+        ],
+        replace=True,
+        import_source="upload",
+    )
+
+    inserted = persist_journeys_as_conversion_paths(
+        db,
+        [
+            {
+                "customer_id": "cust-1",
+                "conversion_id": "conv-3",
+                "kpi_type": "purchase",
+                "touchpoints": [{"channel": "email", "timestamp": "2026-03-03T00:00:00Z"}],
+                "converted": True,
+                "conversion_value": 15.0,
+            },
+        ],
+        replace=True,
+        replace_profile_ids=["cust-1"],
+        import_source="replay",
+        import_batch_id="batch-replace-profile",
+    )
+
+    assert inserted == 1
+    silver_conversions = db.query(SilverConversionFact).order_by(SilverConversionFact.conversion_id.asc()).all()
+    assert [row.conversion_id for row in silver_conversions] == ["conv-2", "conv-3"]
+    assert db.query(SilverTouchpointFact).filter(SilverTouchpointFact.profile_id == "cust-1").count() == 1
+    assert db.query(SilverTouchpointFact).filter(SilverTouchpointFact.profile_id == "cust-2").count() == 1
+
+
+def test_persist_journeys_as_conversion_paths_builds_silver_outcomes_for_v2_adjustments():
+    db = _make_session()
+    inserted = persist_journeys_as_conversion_paths(
+        db,
+        [
+            {
+                "_schema": "v2",
+                "customer": {"id": "cust-1"},
+                "touchpoints": [
+                    {"channel": "google_ads", "interaction_type": "impression", "ts": "2026-03-01T00:00:00Z"},
+                    {"channel": "google_ads", "interaction_type": "click", "ts": "2026-03-01T01:00:00Z"},
+                ],
+                "conversions": [
+                    {
+                        "id": "conv-1",
+                        "ts": "2026-03-01T02:00:00Z",
+                        "name": "purchase",
+                        "value": 120.0,
+                        "status": "partially_refunded",
+                        "adjustments": [{"type": "refund", "value": 20.0, "currency": "EUR"}],
+                    }
+                ],
+            }
+        ],
+        replace=True,
+        import_source="meiro_events_replay",
+    )
+
+    silver_conversion = db.query(SilverConversionFact).one()
+
+    assert inserted == 1
+    assert silver_conversion.gross_revenue_total == 120.0
+    assert silver_conversion.net_revenue_total == 100.0
+    assert silver_conversion.refunded_value == 20.0
+    assert silver_conversion.gross_conversions_total == 1.0
+    assert silver_conversion.net_conversions_total == 1.0
+    assert silver_conversion.interaction_path_type == "mixed_path"
 
 
 def test_persist_journeys_as_conversion_paths_replaces_only_selected_profiles():

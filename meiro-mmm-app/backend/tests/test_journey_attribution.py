@@ -163,3 +163,65 @@ def test_attribution_summary_path_hash_scopes_subset():
         assert out["totals"]["total_value_observed"] == 55.0
     finally:
         db.close()
+
+
+def test_attribution_summary_compresses_repeated_paths_for_linear_model():
+    db = _unit_db_session()
+    try:
+        jd = JourneyDefinition(
+            id="jd-3",
+            name="J3",
+            conversion_kpi_id="purchase",
+            lookback_window_days=30,
+            mode_default="conversion_only",
+            created_by="test",
+            updated_by="test",
+            is_archived=False,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        db.add(jd)
+
+        for idx in range(3):
+            payload = _v2_payload(
+                customer_id=f"dup-{idx}",
+                value=50.0,
+                conv_name="purchase",
+                touchpoints=[
+                    {"ts": f"2026-02-0{idx + 1}T08:00:00Z", "channel": "google_ads"},
+                    {"ts": f"2026-02-0{idx + 1}T09:00:00Z", "channel": "email"},
+                ],
+            )
+            db.add(
+                ConversionPath(
+                    conversion_id=f"cv-dup-{idx}",
+                    profile_id=f"dup-{idx}",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2026, 2, idx + 1, 10, 0, 0),
+                    path_json=payload,
+                    path_hash=f"h-dup-{idx}",
+                    length=2,
+                    first_touch_ts=datetime(2026, 2, idx + 1, 8, 0, 0),
+                    last_touch_ts=datetime(2026, 2, idx + 1, 9, 0, 0),
+                )
+            )
+        db.commit()
+
+        out = build_journey_attribution_summary(
+            db,
+            definition=jd,
+            date_from="2026-02-01",
+            date_to="2026-02-10",
+            model="linear",
+            include_campaign=False,
+        )
+
+        assert out["totals"]["journeys"] == 3
+        assert out["totals"]["total_value_observed"] == 150.0
+        assert out["approximation"]["method"] == "compressed_journey_instances"
+        assert out["approximation"]["compressed_journeys"] == 1
+        by_channel = {row["channel"]: row["attributed_value"] for row in out["by_channel"]}
+        assert by_channel["google_ads"] == 75.0
+        assert by_channel["email"] == 75.0
+    finally:
+        db.close()

@@ -20,6 +20,8 @@ from .models_config_dq import (
     JourneyExampleFact,
     JourneyPathDaily,
     JourneyTransitionDaily,
+    SilverConversionFact,
+    SilverTouchpointFact,
 )
 from .services_conversions import (
     classify_journey_interaction,
@@ -278,6 +280,9 @@ def _get_channel_source_days(
     *,
     end_day: date,
 ) -> Set[date]:
+    silver_days = _get_channel_source_days_from_silver(db, end_day=end_day)
+    if silver_days:
+        return silver_days
     upper_bound = datetime.combine(end_day + timedelta(days=1), dt_time.min)
     rows = (
         db.query(ConversionPath)
@@ -304,6 +309,27 @@ def _get_channel_source_days(
             ts = _touchpoint_ts(tp)
             if ts is not None and ts.date() <= end_day:
                 out.add(ts.date())
+    return out
+
+
+def _get_channel_source_days_from_silver(
+    db: Session,
+    *,
+    end_day: date,
+) -> Set[date]:
+    upper_bound = datetime.combine(end_day + timedelta(days=1), dt_time.min).replace(tzinfo=timezone.utc)
+    out: Set[date] = set()
+    for (raw_ts,) in db.query(SilverConversionFact.conversion_ts).filter(SilverConversionFact.conversion_ts < upper_bound).all():
+        ts = _to_utc_dt(raw_ts)
+        if ts is not None and ts.date() <= end_day:
+            out.add(ts.date())
+    for (raw_ts,) in db.query(SilverTouchpointFact.touchpoint_ts).filter(
+        SilverTouchpointFact.touchpoint_ts.isnot(None),
+        SilverTouchpointFact.touchpoint_ts < upper_bound,
+    ).all():
+        ts = _to_utc_dt(raw_ts)
+        if ts is not None and ts.date() <= end_day:
+            out.add(ts.date())
     return out
 
 
@@ -541,6 +567,9 @@ def _aggregate_channel_facts_for_day(
     *,
     day: date,
 ) -> Dict[str, int]:
+    silver_stats = _aggregate_channel_facts_for_day_from_silver(db, day=day)
+    if silver_stats is not None:
+        return silver_stats
     day_start = datetime.combine(day, dt_time.min).replace(tzinfo=timezone.utc)
     day_end = datetime.combine(day + timedelta(days=1), dt_time.min).replace(tzinfo=timezone.utc)
     rows = (
@@ -645,6 +674,131 @@ def _aggregate_channel_facts_for_day(
     db.commit()
     return {
         "source_rows": len(rows),
+        "channel_rows_written": len(aggs),
+    }
+
+
+def _aggregate_channel_facts_for_day_from_silver(
+    db: Session,
+    *,
+    day: date,
+) -> Optional[Dict[str, int]]:
+    day_start = datetime.combine(day, dt_time.min).replace(tzinfo=timezone.utc)
+    day_end = datetime.combine(day + timedelta(days=1), dt_time.min).replace(tzinfo=timezone.utc)
+    touchpoint_rows = (
+        db.query(
+            SilverTouchpointFact.conversion_id,
+            SilverTouchpointFact.touchpoint_ts,
+            SilverTouchpointFact.channel,
+            SilverTouchpointFact.ordinal,
+        )
+        .filter(
+            SilverTouchpointFact.touchpoint_ts.isnot(None),
+            SilverTouchpointFact.touchpoint_ts >= day_start,
+            SilverTouchpointFact.touchpoint_ts < day_end,
+        )
+        .order_by(SilverTouchpointFact.conversion_id.asc(), SilverTouchpointFact.ordinal.asc())
+        .all()
+    )
+    conversion_rows = (
+        db.query(
+            SilverConversionFact.conversion_id,
+            SilverConversionFact.conversion_key,
+            SilverConversionFact.conversion_ts,
+            SilverConversionFact.interaction_path_type,
+            SilverConversionFact.gross_conversions_total,
+            SilverConversionFact.net_conversions_total,
+            SilverConversionFact.gross_revenue_total,
+            SilverConversionFact.net_revenue_total,
+        )
+        .filter(
+            SilverConversionFact.conversion_ts >= day_start,
+            SilverConversionFact.conversion_ts < day_end,
+        )
+        .order_by(SilverConversionFact.conversion_id.asc())
+        .all()
+    )
+    if not touchpoint_rows and not conversion_rows:
+        return None
+
+    aggs: Dict[Tuple[str, Optional[str]], Dict[str, Any]] = {}
+
+    def _bucket(channel: str, conversion_key: Optional[str]) -> Dict[str, Any]:
+        key = (channel, conversion_key)
+        return aggs.setdefault(
+            key,
+            {
+                "channel": channel,
+                "conversion_key": conversion_key,
+                "visits_total": 0,
+                "count_conversions": 0,
+                "gross_conversions_total": 0.0,
+                "net_conversions_total": 0.0,
+                "gross_revenue_total": 0.0,
+                "net_revenue_total": 0.0,
+                "view_through_conversions_total": 0.0,
+                "click_through_conversions_total": 0.0,
+                "mixed_path_conversions_total": 0.0,
+            },
+        )
+
+    last_touch_channel: Dict[str, str] = {}
+    for conversion_id, _touchpoint_ts, channel, ordinal in touchpoint_rows:
+        ch = str(channel or "unknown")
+        _bucket(ch, None)["visits_total"] += 1
+        if conversion_id:
+            last_touch_channel[str(conversion_id)] = ch
+
+    for row in conversion_rows:
+        conversion_id = str(row[0] or "")
+        conversion_key = str(row[1] or "").strip() or None
+        channel = last_touch_channel.get(conversion_id, "unknown")
+        interaction_path_type = str(row[3] or "").strip().lower()
+        gross_conversions = float(row[4] or 0.0)
+        net_conversions = float(row[5] or 0.0)
+        gross_revenue = float(row[6] or 0.0)
+        net_revenue = float(row[7] or 0.0)
+        keys_to_update: List[Optional[str]] = [None]
+        if conversion_key:
+            keys_to_update.append(conversion_key)
+        for key in keys_to_update:
+            bucket = _bucket(channel, key)
+            bucket["count_conversions"] += 1
+            bucket["gross_conversions_total"] += gross_conversions
+            bucket["net_conversions_total"] += net_conversions
+            bucket["gross_revenue_total"] += gross_revenue
+            bucket["net_revenue_total"] += net_revenue
+            if interaction_path_type == "view_through":
+                bucket["view_through_conversions_total"] += net_conversions
+            elif interaction_path_type == "click_through":
+                bucket["click_through_conversions_total"] += net_conversions
+            elif interaction_path_type == "mixed_path":
+                bucket["mixed_path_conversions_total"] += net_conversions
+
+    db.query(ChannelPerformanceDaily).filter(ChannelPerformanceDaily.date == day).delete(synchronize_session=False)
+    now = datetime.now(timezone.utc)
+    for payload in aggs.values():
+        db.add(
+            ChannelPerformanceDaily(
+                date=day,
+                channel=payload["channel"],
+                conversion_key=payload["conversion_key"],
+                visits_total=payload["visits_total"],
+                count_conversions=payload["count_conversions"],
+                gross_conversions_total=payload["gross_conversions_total"],
+                net_conversions_total=payload["net_conversions_total"],
+                gross_revenue_total=payload["gross_revenue_total"],
+                net_revenue_total=payload["net_revenue_total"],
+                view_through_conversions_total=payload["view_through_conversions_total"],
+                click_through_conversions_total=payload["click_through_conversions_total"],
+                mixed_path_conversions_total=payload["mixed_path_conversions_total"],
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    db.commit()
+    return {
+        "source_rows": len(touchpoint_rows) + len(conversion_rows),
         "channel_rows_written": len(aggs),
     }
 

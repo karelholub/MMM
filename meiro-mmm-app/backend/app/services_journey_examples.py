@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time as dt_time, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
@@ -10,6 +11,38 @@ from sqlalchemy.orm import Session
 from .models_config_dq import ConversionPath, JourneyDefinition, JourneyExampleFact
 from .services_conversions import conversion_path_payload, conversion_path_revenue_value, conversion_path_touchpoints
 from .services_journey_aggregates import _build_journey_steps, _path_hash
+
+
+def _iter_raw_examples(
+    db: Session,
+    *,
+    definition: JourneyDefinition,
+    start_dt: datetime,
+    end_dt: datetime,
+    limit: int,
+):
+    raw_query = (
+        db.query(
+            ConversionPath.conversion_id,
+            ConversionPath.profile_id,
+            ConversionPath.conversion_key,
+            ConversionPath.conversion_ts,
+            ConversionPath.path_json,
+        )
+        .filter(ConversionPath.conversion_ts >= start_dt, ConversionPath.conversion_ts < end_dt)
+        .order_by(ConversionPath.conversion_ts.desc())
+    )
+    if definition.conversion_kpi_id:
+        raw_query = raw_query.filter(ConversionPath.conversion_key == definition.conversion_kpi_id)
+
+    for row in raw_query.limit(limit).all():
+        yield SimpleNamespace(
+            conversion_id=row[0],
+            profile_id=row[1],
+            conversion_key=row[2],
+            conversion_ts=row[3],
+            path_json=row[4] if isinstance(row[4], dict) else {},
+        )
 
 
 def list_examples_for_journey_definition(
@@ -40,16 +73,14 @@ def list_examples_for_journey_definition(
     if definition.conversion_kpi_id:
         fact_query = fact_query.filter(JourneyExampleFact.conversion_key == definition.conversion_kpi_id)
 
-    raw_query = (
-        db.query(ConversionPath)
+    fact_count = fact_query.count()
+    raw_count_query = (
+        db.query(ConversionPath.conversion_id)
         .filter(ConversionPath.conversion_ts >= start_dt, ConversionPath.conversion_ts < end_dt)
-        .order_by(ConversionPath.conversion_ts.desc())
     )
     if definition.conversion_kpi_id:
-        raw_query = raw_query.filter(ConversionPath.conversion_key == definition.conversion_kpi_id)
-
-    fact_count = fact_query.count()
-    raw_count = raw_query.count()
+        raw_count_query = raw_count_query.filter(ConversionPath.conversion_key == definition.conversion_kpi_id)
+    raw_count = raw_count_query.count()
     if fact_count >= raw_count and fact_count > 0:
         items: List[Dict[str, Any]] = []
         step_token = str(contains_step or "").strip().lower()
@@ -97,12 +128,16 @@ def list_examples_for_journey_definition(
             "contains_step": contains_step,
         }
 
-    query = raw_query
-
     items: List[Dict[str, Any]] = []
     step_token = str(contains_step or "").strip().lower()
 
-    for row in query.limit(max(50, int(limit) * 8)).all():
+    for row in _iter_raw_examples(
+        db,
+        definition=definition,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        limit=max(50, int(limit) * 8),
+    ):
         payload = conversion_path_payload(row)
         conversion_ts = row.conversion_ts
         if conversion_ts.tzinfo is None:

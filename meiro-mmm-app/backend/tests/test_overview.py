@@ -9,8 +9,10 @@ from sqlalchemy.orm import sessionmaker
 from app.db import Base
 from app.models_config_dq import ChannelPerformanceDaily, ConversionPath, JourneyDefinition, JourneyPathDaily
 from app.main import app
+from app import services_overview as overview
+from app.services_conversions import persist_journeys_as_conversion_paths
 from app.services_overview import get_overview_drivers, get_overview_funnels
-from app.services_overview import get_overview_summary
+from app.services_overview import get_overview_summary, get_overview_trend_insights
 
 client = TestClient(app)
 
@@ -562,6 +564,84 @@ def test_overview_summary_prefers_channel_facts_when_available():
         db.close()
 
 
+def test_overview_summary_prefers_silver_facts_when_channel_and_daily_aggregates_absent(monkeypatch):
+    db = _unit_db_session()
+    try:
+        inserted = persist_journeys_as_conversion_paths(
+            db,
+            [
+                {
+                    "_schema": "v2",
+                    "customer": {"id": "cust-1"},
+                    "touchpoints": [
+                        {"channel": "google_ads", "interaction_type": "click", "ts": "2024-02-11T10:00:00Z"},
+                    ],
+                    "conversions": [
+                        {
+                            "id": "conv-current",
+                            "name": "purchase",
+                            "ts": "2024-02-11T12:00:00Z",
+                            "value": 200.0,
+                            "status": "partially_refunded",
+                            "adjustments": [{"type": "refund", "value": 50.0, "currency": "EUR"}],
+                        }
+                    ],
+                },
+                {
+                    "_schema": "v2",
+                    "customer": {"id": "cust-2"},
+                    "touchpoints": [
+                        {"channel": "meta_ads", "interaction_type": "impression", "ts": "2024-02-08T10:00:00Z"},
+                    ],
+                    "conversions": [
+                        {
+                            "id": "conv-prev",
+                            "name": "purchase",
+                            "ts": "2024-02-08T12:00:00Z",
+                            "value": 90.0,
+                        }
+                    ],
+                },
+            ],
+            replace=True,
+            import_source="meiro_events_replay",
+            import_batch_id="silver-summary-batch",
+        )
+        assert inserted == 2
+
+        monkeypatch.setattr(overview, "_single_active_overview_definition_id", lambda _db: None)
+
+        original_iter = overview._iter_conversion_path_rows
+
+        def _fail_raw_rows(*args, **kwargs):
+            raise AssertionError("raw conversion path fallback should not run when silver facts exist")
+
+        monkeypatch.setattr(overview, "_iter_conversion_path_rows", _fail_raw_rows)
+
+        out = get_overview_summary(
+            db,
+            date_from="2024-02-10",
+            date_to="2024-02-15",
+            expenses={},
+        )
+
+        tiles = {tile["kpi_key"]: tile for tile in out["kpi_tiles"]}
+        assert tiles["visits"]["value"] == 1
+        assert tiles["conversions"]["value"] == 1
+        assert tiles["revenue"]["value"] == 200.0
+        assert tiles["net_conversions"]["value"] == 1.0
+        assert tiles["net_revenue"]["value"] == 150.0
+        assert out["outcomes"]["current"]["gross_value"] == 200.0
+        assert out["outcomes"]["current"]["refunded_value"] == 50.0
+        assert out["outcomes"]["current"]["click_through_conversions"] == 1.0
+        assert out["outcomes"]["previous"]["gross_value"] == 90.0
+        assert out["outcomes"]["previous"]["view_through_conversions"] == 1.0
+
+        monkeypatch.setattr(overview, "_iter_conversion_path_rows", original_iter)
+    finally:
+        db.close()
+
+
 def test_overview_drivers_prefers_daily_aggregates_for_campaign_rollups():
     db = _unit_db_session()
     try:
@@ -696,5 +776,101 @@ def test_overview_drivers_prefers_channel_facts_for_by_channel():
         assert by_channel["google_ads"]["conversions"] == 2
         assert by_channel["google_ads"]["revenue"] == 250.0
         assert by_channel["google_ads"]["outcomes"]["net_value"] == 200.0
+    finally:
+        db.close()
+
+
+def test_overview_trend_insights_prefers_silver_facts_when_channel_daily_facts_absent(monkeypatch):
+    db = _unit_db_session()
+    try:
+        inserted = persist_journeys_as_conversion_paths(
+            db,
+            [
+                {
+                    "_schema": "v2",
+                    "customer": {"id": "cust-prev"},
+                    "touchpoints": [{"channel": "paid_social", "interaction_type": "click", "ts": "2024-02-05T10:00:00Z"}],
+                    "conversions": [{"id": "conv-prev", "name": "purchase", "ts": "2024-02-05T12:00:00Z", "value": 100.0}],
+                },
+                {
+                    "_schema": "v2",
+                    "customer": {"id": "cust-current"},
+                    "touchpoints": [{"channel": "email", "interaction_type": "click", "ts": "2024-02-12T10:00:00Z"}],
+                    "conversions": [{"id": "conv-current", "name": "purchase", "ts": "2024-02-12T12:00:00Z", "value": 200.0}],
+                },
+            ],
+            replace=True,
+            import_source="meiro_events_replay",
+            import_batch_id="silver-trends-batch",
+        )
+        assert inserted == 2
+
+        def _fail_raw_rows(*args, **kwargs):
+            raise AssertionError("raw conversion path fallback should not run when silver facts exist")
+
+        monkeypatch.setattr(overview, "_iter_conversion_path_rows", _fail_raw_rows)
+
+        out = get_overview_trend_insights(
+            db,
+            date_from="2024-02-08",
+            date_to="2024-02-14",
+        )
+
+        assert out["decomposition"]["current"]["revenue"] == 200.0
+        assert out["decomposition"]["previous"]["revenue"] == 100.0
+        assert out["decomposition"]["current"]["conversions"] == 1.0
+        assert out["decomposition"]["current"]["visits"] == 1.0
+        assert out["momentum"]["rising"][0]["channel"] == "email"
+        assert any(row["channel"] == "email" for row in out["mix_shift"])
+    finally:
+        db.close()
+
+
+def test_overview_drivers_prefers_silver_facts_for_by_channel_when_channel_daily_facts_absent(monkeypatch):
+    db = _unit_db_session()
+    try:
+        inserted = persist_journeys_as_conversion_paths(
+            db,
+            [
+                {
+                    "_schema": "v2",
+                    "customer": {"id": "cust-prev"},
+                    "touchpoints": [{"channel": "paid_social", "campaign": "Winter", "interaction_type": "click", "ts": "2024-02-05T10:00:00Z"}],
+                    "conversions": [{"id": "conv-prev", "name": "purchase", "ts": "2024-02-05T12:00:00Z", "value": 100.0}],
+                },
+                {
+                    "_schema": "v2",
+                    "customer": {"id": "cust-current"},
+                    "touchpoints": [{"channel": "email", "campaign": "Spring", "interaction_type": "click", "ts": "2024-02-12T10:00:00Z"}],
+                    "conversions": [{"id": "conv-current", "name": "purchase", "ts": "2024-02-12T12:00:00Z", "value": 200.0}],
+                },
+            ],
+            replace=True,
+            import_source="meiro_events_replay",
+            import_batch_id="silver-drivers-batch",
+        )
+        assert inserted == 2
+
+        def _fail_raw_rows(*args, **kwargs):
+            raise AssertionError("raw conversion path fallback should not run when silver facts exist")
+
+        monkeypatch.setattr(overview, "_iter_conversion_path_rows", _fail_raw_rows)
+
+        out = get_overview_drivers(
+            db,
+            date_from="2024-02-08",
+            date_to="2024-02-14",
+            expenses=[],
+            top_campaigns_n=5,
+        )
+
+        by_channel = {row["channel"]: row for row in out["by_channel"]}
+        assert by_channel["email"]["visits"] == 1
+        assert by_channel["email"]["conversions"] == 1
+        assert by_channel["email"]["revenue"] == 200.0
+        assert by_channel["email"]["outcomes"]["gross_value"] == 200.0
+        assert by_channel["email"]["delta_revenue_pct"] == 100.0
+        assert out["by_campaign"][0]["campaign"] == "Spring"
+        assert out["by_campaign"][0]["revenue"] == 200.0
     finally:
         db.close()
