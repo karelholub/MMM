@@ -511,6 +511,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
     {
       key: 'channel',
       label: 'Channel',
+      hideable: false,
       render: (row) => row.channel,
       cellStyle: { fontWeight: t.font.weightMedium },
     },
@@ -552,6 +553,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
     {
       key: 'campaign',
       label: 'Campaign',
+      hideable: false,
       render: (row) => row.campaign,
       cellStyle: { fontWeight: t.font.weightMedium },
     },
@@ -576,6 +578,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
     {
       key: 'channel',
       label: 'Channel',
+      hideable: false,
       render: (row) => row.channel,
       cellStyle: { fontWeight: t.font.weightMedium },
     },
@@ -954,6 +957,23 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
               tableLabel="Top channels"
               minWidth={760}
               stickyFirstColumn
+              allowColumnHiding
+              allowDensityToggle
+              persistKey="overview-top-channels"
+              defaultHiddenColumnKeys={['spend']}
+              presets={[
+                {
+                  key: 'overview',
+                  label: 'Overview',
+                  visibleColumnKeys: ['channel', 'visits', 'conversions', 'revenue', 'delta'],
+                },
+                {
+                  key: 'efficiency',
+                  label: 'Spend',
+                  visibleColumnKeys: ['channel', 'spend', 'revenue', 'delta'],
+                },
+              ]}
+              defaultPresetKey="overview"
               emptyState="No channel data for this period."
             />
           </SectionCard>
@@ -986,6 +1006,17 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
               tableLabel="Top campaigns"
               minWidth={520}
               stickyFirstColumn
+              allowColumnHiding
+              allowDensityToggle
+              persistKey="overview-top-campaigns"
+              presets={[
+                {
+                  key: 'overview',
+                  label: 'Overview',
+                  visibleColumnKeys: ['campaign', 'revenue', 'delta'],
+                },
+              ]}
+              defaultPresetKey="overview"
               emptyState="No campaign data."
             />
           </SectionCard>
@@ -1331,6 +1362,22 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
                 tableLabel="Channel mix shift"
                 minWidth={640}
                 stickyFirstColumn
+                allowColumnHiding
+                allowDensityToggle
+                persistKey="overview-mix-shift"
+                presets={[
+                  {
+                    key: 'all',
+                    label: 'All',
+                    visibleColumnKeys: ['channel', 'revenue_share_delta_pp', 'visit_share_delta_pp', 'conversion_share_delta_pp'],
+                  },
+                  {
+                    key: 'revenue',
+                    label: 'Revenue',
+                    visibleColumnKeys: ['channel', 'revenue_share_delta_pp'],
+                  },
+                ]}
+                defaultPresetKey="all"
                 emptyState="No mix shift data for this period."
               />
             )}

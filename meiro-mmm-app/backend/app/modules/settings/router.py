@@ -259,7 +259,12 @@ def create_router(
         return _serialize_taxonomy()
 
     @router.post("/api/taxonomy")
-    def update_taxonomy(payload: Dict[str, Any]):
+    def update_taxonomy(payload: Dict[str, Any], db=Depends(get_db_dependency)):
+        from app.services_taxonomy import (
+            persist_taxonomy_dq_snapshots,
+            persist_taxonomy_dq_snapshots_from_db,
+        )
+
         parsed = _parse_taxonomy_payload(payload)
         rules = parsed.channel_rules
         invalid_rules = [
@@ -276,6 +281,11 @@ def create_router(
         save_taxonomy(
             parsed
         )
+        snapshots = persist_taxonomy_dq_snapshots_from_db(db, taxonomy=parsed)
+        if snapshots is None:
+            journeys = _settings_journeys(db)
+            if journeys:
+                persist_taxonomy_dq_snapshots(db, journeys, taxonomy=parsed)
         return _serialize_taxonomy()
 
     @router.get("/api/taxonomy/overview")
@@ -443,12 +453,17 @@ def create_router(
 
     @router.post("/api/taxonomy/compute-dq")
     def compute_taxonomy_dq(db=Depends(get_db_dependency)):
-        from app.services_taxonomy import persist_taxonomy_dq_snapshots
+        from app.services_taxonomy import (
+            persist_taxonomy_dq_snapshots,
+            persist_taxonomy_dq_snapshots_from_db,
+        )
 
-        journeys = _settings_journeys(db)
-        if not journeys:
-            return {"computed": 0, "message": "No journeys found"}
-        snapshots = persist_taxonomy_dq_snapshots(db, journeys)
+        snapshots = persist_taxonomy_dq_snapshots_from_db(db)
+        if snapshots is None:
+            journeys = _settings_journeys(db)
+            if not journeys:
+                return {"computed": 0, "message": "No journeys found"}
+            snapshots = persist_taxonomy_dq_snapshots(db, journeys)
         return {
             "computed": len(snapshots),
             "metrics": [

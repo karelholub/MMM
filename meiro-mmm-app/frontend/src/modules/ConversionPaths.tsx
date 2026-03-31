@@ -432,6 +432,7 @@ export default function ConversionPaths() {
     {
       key: 'rank',
       label: '#',
+      hideable: false,
       width: 40,
       render: (_row, idx) => idx + 1,
       cellStyle: { color: t.color.textMuted },
@@ -439,6 +440,7 @@ export default function ConversionPaths() {
     {
       key: 'path',
       label: 'Path',
+      hideable: false,
       render: (path) => (
         <>
           {path.path.split(' > ').map((step, i, arr) => (
@@ -1317,6 +1319,32 @@ export default function ConversionPaths() {
             tableLabel="Top conversion paths"
             minWidth={980}
             stickyFirstColumn
+            allowColumnHiding
+            allowDensityToggle
+            persistKey="conversion-paths-top-table"
+            defaultHiddenColumnKeys={hasAvgTimeColumn ? ['avg_time'] : []}
+            presets={[
+              {
+                key: 'overview',
+                label: 'Overview',
+                visibleColumnKeys: hasAvgTimeColumn
+                  ? ['rank', 'path', 'count', 'share', 'length', 'avg_time']
+                  : ['rank', 'path', 'count', 'share', 'length'],
+              },
+              {
+                key: 'volume',
+                label: 'Volume',
+                visibleColumnKeys: ['rank', 'path', 'count', 'share', 'length'],
+              },
+              {
+                key: 'next',
+                label: 'Next step',
+                visibleColumnKeys: hasAvgTimeColumn
+                  ? ['rank', 'path', 'count', 'share', 'avg_time', 'suggested_next']
+                  : ['rank', 'path', 'count', 'share', 'suggested_next'],
+              },
+            ]}
+            defaultPresetKey="overview"
             onRowClick={(path) => {
               void loadPathDetails(path.path)
             }}

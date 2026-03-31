@@ -1013,6 +1013,7 @@ export default function Journeys({
     {
       key: 'path_steps',
       label: 'Path steps',
+      hideable: false,
       render: (row) => (
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {normalizeSteps(row.path_steps).map((step) => pathChip(step))}
@@ -1302,6 +1303,28 @@ export default function Journeys({
                 }
                 tableLabel="Journey paths"
                 stickyFirstColumn
+                allowColumnHiding
+                allowDensityToggle
+                persistKey="journey-paths-table"
+                defaultHiddenColumnKeys={['p50_time_to_convert_sec', 'p90_time_to_convert_sec', 'credit_overlay']}
+                presets={[
+                  {
+                    key: 'overview',
+                    label: 'Overview',
+                    visibleColumnKeys: ['path_steps', 'count_journeys', 'conversion_rate', 'avg_time_to_convert_sec'],
+                  },
+                  {
+                    key: 'timing',
+                    label: 'Timing',
+                    visibleColumnKeys: ['path_steps', 'count_journeys', 'avg_time_to_convert_sec', 'p50_time_to_convert_sec', 'p90_time_to_convert_sec'],
+                  },
+                  {
+                    key: 'credit',
+                    label: 'Credit',
+                    visibleColumnKeys: ['path_steps', 'count_journeys', 'conversion_rate', 'credit_overlay'],
+                  },
+                ]}
+                defaultPresetKey="overview"
                 onRowClick={(row) => setSelectedPath(row)}
                 isRowActive={(row) =>
                   !!selectedPath &&

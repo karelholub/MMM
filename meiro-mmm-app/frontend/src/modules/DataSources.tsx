@@ -823,12 +823,14 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
     {
       key: 'started',
       label: 'Started',
+      hideable: false,
       render: (run) => relativeTime(run.started_at || run.created_at),
       cellStyle: { whiteSpace: 'nowrap' },
     },
     {
       key: 'source',
       label: 'Source',
+      hideable: false,
       render: (run) => run.source || '—',
     },
     {
@@ -879,6 +881,7 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
     {
       key: 'name',
       label: 'Name',
+      hideable: false,
       render: (item) => item.name,
       cellStyle: { fontWeight: t.font.weightMedium },
     },
@@ -907,6 +910,7 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
     {
       key: 'actions',
       label: 'Actions',
+      hideable: false,
       render: (item) => (
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {item.category === 'ad_platform' && (
@@ -1003,12 +1007,14 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
       ? (previewQuery.data?.columns ?? []).map((col: string): AnalyticsTableColumn<PreviewRow> => ({
           key: col,
           label: col,
+          hideable: col !== String(previewQuery.data?.columns?.[0] ?? col),
           render: (row) => String(row?.[col] ?? '—'),
         }))
       : [
           {
             key: 'empty',
             label: 'Preview',
+            hideable: false,
             render: () => '—',
           } satisfies AnalyticsTableColumn<PreviewRow>,
         ]
@@ -1206,6 +1212,27 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
                   density="compact"
                   minWidth={920}
                   stickyFirstColumn
+                  virtualized
+                  virtualizationThreshold={12}
+                  virtualizationHeight={360}
+                  virtualRowHeight={44}
+                  allowColumnHiding
+                  allowDensityToggle
+                  persistKey="data-sources-import-log"
+                  defaultHiddenColumnKeys={['note']}
+                  presets={[
+                    {
+                      key: 'overview',
+                      label: 'Overview',
+                      visibleColumnKeys: ['started', 'source', 'status', 'rows', 'cleaning'],
+                    },
+                    {
+                      key: 'diagnostics',
+                      label: 'Diagnostics',
+                      visibleColumnKeys: ['started', 'source', 'status', 'cleaning', 'note'],
+                    },
+                  ]}
+                  defaultPresetKey="overview"
                   onRowClick={(run) => setSelectedImportRunId(String(run.id))}
                   isRowActive={(run) => selectedImportRunId === run.id}
                   emptyState="No import runs yet."
@@ -1480,6 +1507,27 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
               density="compact"
               minWidth={1120}
               stickyFirstColumn
+              virtualized
+              virtualizationThreshold={15}
+              virtualizationHeight={420}
+              virtualRowHeight={48}
+              allowColumnHiding
+              allowDensityToggle
+              persistKey={`data-sources-systems-${systemsTab}`}
+              defaultHiddenColumnKeys={['note']}
+              presets={[
+                {
+                  key: 'overview',
+                  label: 'Overview',
+                  visibleColumnKeys: ['name', 'type', 'status', 'last_tested', 'actions'],
+                },
+                {
+                  key: 'notes',
+                  label: 'Notes',
+                  visibleColumnKeys: ['name', 'status', 'note', 'actions'],
+                },
+              ]}
+              defaultPresetKey="overview"
               emptyState={activeSystemsEmptyState}
             />
           </SectionCard>
@@ -1503,6 +1551,9 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
                 density="compact"
                 minWidth={Math.max((previewColumns.length || 1) * 140, 420)}
                 stickyFirstColumn
+                allowColumnHiding
+                allowDensityToggle
+                persistKey="data-sources-preview-table"
                 emptyState="No preview rows available."
               />
             ) : (

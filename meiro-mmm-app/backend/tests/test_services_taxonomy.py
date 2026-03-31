@@ -12,6 +12,7 @@ from app.services_taxonomy import (
     compute_unknown_share_from_db,
     map_to_channel,
     normalize_touchpoint_with_confidence,
+    persist_taxonomy_dq_snapshots_from_db,
 )
 from app.services_taxonomy_decisions import build_taxonomy_overview, build_taxonomy_overview_from_db
 from app.utils.taxonomy import Taxonomy, normalize_touchpoint
@@ -255,5 +256,40 @@ def test_taxonomy_reports_from_db_use_persisted_touchpoint_facts():
         channel_confidence = compute_channel_confidence_from_db(db, "email", taxonomy=Taxonomy.default())
         assert channel_confidence is not None
         assert channel_confidence["touchpoint_count"] == 1
+    finally:
+        db.close()
+
+
+def test_persist_taxonomy_dq_snapshots_from_db_uses_persisted_touchpoint_facts():
+    db = _make_session()
+    try:
+        persist_journeys_as_conversion_paths(
+            db,
+            [
+                {
+                    "customer_id": "c1",
+                    "conversion_id": "conv-1",
+                    "kpi_type": "purchase",
+                    "touchpoints": [
+                        {"source": "google", "medium": "", "campaign": None},
+                        {"source": "newsletter", "medium": "email", "campaign": "welcome"},
+                    ],
+                    "converted": True,
+                }
+            ],
+            replace=True,
+            import_source="upload",
+        )
+
+        snapshots = persist_taxonomy_dq_snapshots_from_db(db, taxonomy=Taxonomy.default())
+
+        assert snapshots is not None
+        assert len(snapshots) == 6
+        metric_map = {snapshot.metric_key: snapshot for snapshot in snapshots}
+        assert metric_map["unknown_channel_share"].metric_value > 0
+        assert metric_map["source_coverage"].metric_value >= 0
+        assert metric_map["medium_coverage"].metric_value >= 0
+        assert metric_map["mean_touchpoint_confidence"].meta_json["source"] == "db_touchpoint_facts"
+        assert metric_map["mean_journey_confidence"].meta_json["source"] == "db_touchpoint_facts"
     finally:
         db.close()

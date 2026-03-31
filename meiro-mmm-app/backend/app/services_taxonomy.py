@@ -866,3 +866,126 @@ def persist_taxonomy_dq_snapshots(
     
     db.commit()
     return snapshots
+
+
+def persist_taxonomy_dq_snapshots_from_db(
+    db: Session,
+    taxonomy: Optional[Taxonomy] = None,
+    sample_limit: int = 50000,
+) -> Optional[List[DQSnapshot]]:
+    """
+    Compute and persist taxonomy-related DQ snapshots from persisted touchpoint facts.
+
+    Returns None when DB fact coverage is not yet sufficient, so callers can fall
+    back to the journey-shaped recompute path without persisting partial metrics.
+    """
+    if taxonomy is None:
+        taxonomy = load_taxonomy()
+
+    rows = (
+        db.query(ConversionTaxonomyTouchpointFact)
+        .order_by(ConversionTaxonomyTouchpointFact.conversion_ts.desc(), ConversionTaxonomyTouchpointFact.ordinal.asc())
+        .limit(sample_limit)
+        .all()
+    )
+    if not rows:
+        return None
+
+    raw_count = (
+        db.query(ConversionPath.id)
+        .order_by(ConversionPath.conversion_ts.desc())
+        .limit(sample_limit)
+        .count()
+    )
+    observed_conversion_ids = {str(row.conversion_id or "") for row in rows}
+    if raw_count > len(observed_conversion_ids):
+        return None
+
+    ts_bucket = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+    unknown_report = compute_unknown_share_from_db(db, taxonomy=taxonomy, sample_size=20, sample_limit=sample_limit)
+    coverage = compute_taxonomy_coverage_from_db(db, taxonomy=taxonomy, sample_limit=sample_limit)
+    if unknown_report is None or coverage is None:
+        return None
+
+    touchpoint_confidences: List[float] = []
+    low_confidence_count = 0
+    journey_confidences_by_conversion: Dict[str, List[float]] = defaultdict(list)
+
+    for row in rows:
+        source = _normalized_text(row.source)
+        medium = _normalized_text(row.medium)
+        campaign = _normalized_text(row.campaign)
+        confidence = map_to_channel(source, medium, campaign, taxonomy).confidence
+        touchpoint_confidences.append(confidence)
+        if confidence < 0.5:
+            low_confidence_count += 1
+        conversion_id = str(row.conversion_id or "")
+        if conversion_id:
+            journey_confidences_by_conversion[conversion_id].append(confidence)
+
+    mean_tp_conf = (
+        sum(touchpoint_confidences) / len(touchpoint_confidences)
+        if touchpoint_confidences
+        else 0.0
+    )
+
+    journey_confidences: List[float] = []
+    for confidences in journey_confidences_by_conversion.values():
+        if not confidences:
+            continue
+        if any(confidence == 0 for confidence in confidences):
+            journey_confidences.append(0.0)
+        else:
+            journey_confidences.append(len(confidences) / sum(1.0 / confidence for confidence in confidences))
+
+    mean_journey_conf = (
+        sum(journey_confidences) / len(journey_confidences)
+        if journey_confidences
+        else 0.0
+    )
+    low_conf_share = (
+        low_confidence_count / len(touchpoint_confidences)
+        if touchpoint_confidences
+        else 0.0
+    )
+
+    metrics = [
+        ("taxonomy", "unknown_channel_share", unknown_report.unknown_share, {
+            "unknown_count": unknown_report.unknown_count,
+            "total": unknown_report.total_touchpoints,
+            "source": "db_touchpoint_facts",
+        }),
+        ("taxonomy", "mean_touchpoint_confidence", mean_tp_conf, {
+            "sample_size": len(touchpoint_confidences),
+            "source": "db_touchpoint_facts",
+        }),
+        ("taxonomy", "mean_journey_confidence", mean_journey_conf, {
+            "sample_size": len(journey_confidences),
+            "source": "db_touchpoint_facts",
+        }),
+        ("taxonomy", "source_coverage", coverage["source_coverage"], {
+            "source": "db_touchpoint_facts",
+        }),
+        ("taxonomy", "medium_coverage", coverage["medium_coverage"], {
+            "source": "db_touchpoint_facts",
+        }),
+        ("taxonomy", "low_confidence_touchpoint_share", low_conf_share, {
+            "threshold": 0.5,
+            "source": "db_touchpoint_facts",
+        }),
+    ]
+
+    snapshots: List[DQSnapshot] = []
+    for source, metric_key, metric_value, meta in metrics:
+        snap = DQSnapshot(
+            ts_bucket=ts_bucket,
+            source=source,
+            metric_key=metric_key,
+            metric_value=float(metric_value),
+            meta_json=meta,
+        )
+        db.add(snap)
+        snapshots.append(snap)
+
+    db.commit()
+    return snapshots

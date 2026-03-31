@@ -625,10 +625,45 @@ export default function DataQuality() {
         },
       ]
     : []
+  const taxonomySuggestions = meiroWebhookSuggestionsQuery.data?.taxonomy_suggestions
+  const topSourceRows = (taxonomySuggestions?.top_sources || []).slice(0, 8)
+  const topMediumRows = (taxonomySuggestions?.top_mediums || []).slice(0, 8)
+  const unresolvedPairRows = (taxonomySuggestions?.unresolved_pairs || []).slice(0, 16)
+  const observedSources = (taxonomySuggestions?.top_sources || []).slice(0, 6).map((item) => item.source)
+  const observedMediums = (taxonomySuggestions?.top_mediums || []).slice(0, 6).map((item) => item.medium)
+  const observedPairLookup = new Map(
+    (taxonomySuggestions?.observed_pairs || []).map((item) => [`${item.source}__${item.medium}`, item.count]),
+  )
+  const maxObservedPairCount = Math.max(
+    1,
+    ...(taxonomySuggestions?.observed_pairs || []).map((item) => Number(item.count || 0)),
+  )
+  const unresolvedPairColumns: AnalyticsTableColumn<{ source: string; medium: string; count: number }>[] = [
+    {
+      key: 'source',
+      label: 'Source',
+      render: (row) => row.source || '∅',
+      cellStyle: { fontWeight: t.font.weightMedium },
+    },
+    {
+      key: 'medium',
+      label: 'Medium',
+      render: (row) => row.medium || '∅',
+      cellStyle: { color: t.color.textSecondary },
+    },
+    {
+      key: 'count',
+      label: 'Count',
+      align: 'right',
+      render: (row) => Number(row.count || 0).toLocaleString(),
+      cellStyle: { fontWeight: t.font.weightMedium },
+    },
+  ]
   const webhookEventColumns: AnalyticsTableColumn<MeiroWebhookEvent>[] = [
     {
       key: 'received_at',
       label: 'Received',
+      hideable: false,
       render: (event) => (event.received_at ? new Date(event.received_at).toLocaleString() : '—'),
     },
     {
@@ -807,11 +842,13 @@ export default function DataQuality() {
     {
       key: 'triggered_at',
       label: 'First seen',
+      hideable: false,
       render: (alert) => new Date(alert.triggered_at).toLocaleString(),
     },
     {
       key: 'rule',
       label: 'Rule',
+      hideable: false,
       render: (alert) => alert.rule?.name ?? alert.message,
     },
     {
@@ -1226,6 +1263,27 @@ export default function DataQuality() {
             tableLabel="Meiro pipes diagnostics"
             stickyFirstColumn
             minWidth={1200}
+            virtualized
+            virtualizationThreshold={20}
+            virtualizationHeight={440}
+            virtualRowHeight={54}
+            allowColumnHiding
+            allowDensityToggle
+            persistKey="data-quality-webhook-events"
+            defaultHiddenColumnKeys={['source', 'payload_bytes']}
+            presets={[
+              {
+                key: 'overview',
+                label: 'Overview',
+                visibleColumnKeys: ['received_at', 'ingest_kind', 'received_count', 'replace', 'conversion_event_names', 'detected_summary'],
+              },
+              {
+                key: 'payloads',
+                label: 'Payloads',
+                visibleColumnKeys: ['received_at', 'ingest_kind', 'payload_bytes', 'source', 'payload'],
+              },
+            ]}
+            defaultPresetKey="overview"
           />
         ) : (
           <p style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
@@ -1387,6 +1445,87 @@ export default function DataQuality() {
                 {' '}{Object.keys(meiroWebhookSuggestionsQuery.data.taxonomy_suggestions.medium_aliases || {}).length} medium aliases,
                 {' '}{(meiroWebhookSuggestionsQuery.data.taxonomy_suggestions.unresolved_pairs || []).length} unresolved source/medium pairs.
               </div>
+              <div style={{ marginTop: t.space.md, display: 'grid', gap: t.space.md, gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, marginBottom: t.space.xs }}>Top sources</div>
+                  <ResponsiveContainer width="100%" height={220}>
+                    <BarChart data={topSourceRows} margin={{ top: 8, right: 16, left: 8, bottom: 24 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
+                      <XAxis dataKey="source" tick={{ fontSize: t.font.sizeXs, fill: t.color.textSecondary }} interval={0} angle={-18} textAnchor="end" height={56} />
+                      <YAxis tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }} />
+                      <Tooltip contentStyle={{ fontSize: t.font.sizeSm, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+                      <Bar dataKey="count" fill={t.color.chart[4]} radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, marginBottom: t.space.xs }}>Top mediums</div>
+                  <ResponsiveContainer width="100%" height={220}>
+                    <BarChart data={topMediumRows} margin={{ top: 8, right: 16, left: 8, bottom: 24 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
+                      <XAxis dataKey="medium" tick={{ fontSize: t.font.sizeXs, fill: t.color.textSecondary }} interval={0} angle={-18} textAnchor="end" height={56} />
+                      <YAxis tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }} />
+                      <Tooltip contentStyle={{ fontSize: t.font.sizeSm, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+                      <Bar dataKey="count" fill={t.color.chart[1]} radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+              {!!observedSources.length && !!observedMediums.length && (
+                <div style={{ marginTop: t.space.md, display: 'grid', gap: t.space.xs }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Observed source / medium matrix</div>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: t.font.sizeXs }}>
+                      <thead>
+                        <tr>
+                          <th style={{ textAlign: 'left', padding: `${t.space.sm}px ${t.space.md}px`, color: t.color.textMuted, background: t.color.bg, position: 'sticky', left: 0 }}>Source \ Medium</th>
+                          {observedMediums.map((medium) => (
+                            <th key={medium} style={{ textAlign: 'center', padding: `${t.space.sm}px ${t.space.md}px`, color: t.color.textMuted, background: t.color.bg }}>
+                              {medium || '∅'}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {observedSources.map((source, rowIdx) => (
+                          <tr key={source}>
+                            <td
+                              style={{
+                                padding: `${t.space.sm}px ${t.space.md}px`,
+                                fontWeight: t.font.weightMedium,
+                                background: rowIdx % 2 === 0 ? t.color.surface : t.color.bg,
+                                position: 'sticky',
+                                left: 0,
+                              }}
+                            >
+                              {source || '∅'}
+                            </td>
+                            {observedMediums.map((medium) => {
+                              const count = Number(observedPairLookup.get(`${source}__${medium}`) || 0)
+                              const intensity = count > 0 ? count / maxObservedPairCount : 0
+                              return (
+                                <td
+                                  key={`${source}-${medium}`}
+                                  style={{
+                                    padding: `${t.space.sm}px ${t.space.md}px`,
+                                    textAlign: 'center',
+                                    fontVariantNumeric: 'tabular-nums',
+                                    background: intensity > 0 ? `color-mix(in srgb, ${t.color.accentMuted} ${Math.round(intensity * 85)}%, ${t.color.surface})` : t.color.surface,
+                                    color: count > 0 ? t.color.text : t.color.textMuted,
+                                    borderBottom: `1px solid ${t.color.borderLight}`,
+                                  }}
+                                >
+                                  {count > 0 ? count.toLocaleString() : '—'}
+                                </td>
+                              )
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
               {Object.keys(meiroWebhookSuggestionsQuery.data.taxonomy_suggestions.source_aliases || {}).slice(0, 4).map((raw) => (
                 <div key={`src-${raw}`} style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary, marginTop: 4 }}>
                   Source alias: <code>{raw}</code> → <code>{meiroWebhookSuggestionsQuery.data.taxonomy_suggestions.source_aliases[raw]}</code>
@@ -1406,11 +1545,20 @@ export default function DataQuality() {
                   {rule.observed_count != null ? <> · observed: {rule.observed_count}</> : null}
                 </div>
               ))}
-              {(meiroWebhookSuggestionsQuery.data.taxonomy_suggestions.unresolved_pairs || []).slice(0, 3).map((pair, index) => (
-                <div key={`unresolved-${index}`} style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary, marginTop: 4 }}>
-                  Unresolved pair: <code>{pair.source || '∅'}</code> / <code>{pair.medium || '∅'}</code> · observed: {pair.count}
+              {!!unresolvedPairRows.length && (
+                <div style={{ marginTop: t.space.md }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, marginBottom: t.space.xs }}>Top unresolved pairs</div>
+                  <AnalyticsTable
+                    columns={unresolvedPairColumns}
+                    rows={unresolvedPairRows}
+                    rowKey={(row, index) => `${row.source}-${row.medium}-${index}`}
+                    tableLabel="Top unresolved taxonomy pairs"
+                    density="compact"
+                    minWidth={460}
+                    stickyFirstColumn
+                  />
                 </div>
-              ))}
+              )}
               <div style={{ marginTop: t.space.sm }}>
                 <button
                   type="button"
@@ -1781,6 +1929,27 @@ export default function DataQuality() {
             tableLabel="Data quality alerts"
             stickyFirstColumn
             minWidth={1100}
+            virtualized
+            virtualizationThreshold={20}
+            virtualizationHeight={520}
+            virtualRowHeight={54}
+            allowColumnHiding
+            allowDensityToggle
+            persistKey="data-quality-alerts"
+            defaultHiddenColumnKeys={['source', 'baseline_value']}
+            presets={[
+              {
+                key: 'overview',
+                label: 'Overview',
+                visibleColumnKeys: ['triggered_at', 'rule', 'metric_key', 'metric_value', 'severity', 'status', 'actions'],
+              },
+              {
+                key: 'thresholds',
+                label: 'Thresholds',
+                visibleColumnKeys: ['triggered_at', 'rule', 'source', 'metric_key', 'metric_value', 'baseline_value', 'severity', 'status'],
+              },
+            ]}
+            defaultPresetKey="overview"
           />
         ) : (
           <div

@@ -10,7 +10,6 @@ import {
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { tokens } from '../theme/tokens'
 import { WorkspaceContext, JourneysSummary } from '../components/WorkspaceContext'
-import MMMWizardShell from './MMMWizardShell'
 import type { SettingsPageHandle, SectionKey } from './Settings'
 import { usePermissions } from '../hooks/usePermissions'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
@@ -42,6 +41,7 @@ const DataQuality = lazy(() => import('./DataQuality'))
 const IncrementalityPage = lazy(() => import('./Incrementality'))
 const PathArchetypes = lazy(() => import('./PathArchetypes'))
 const JourneysPage = lazy(() => import('./Journeys'))
+const MMMWizardShell = lazy(() => import('./MMMWizardShell'))
 
 const PAGE_FALLBACK = (
   <div style={{ padding: 48, textAlign: 'center', color: '#64748b', fontSize: 14 }}>

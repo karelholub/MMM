@@ -689,6 +689,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
     {
       key: 'campaign',
       label: 'Campaign',
+      hideable: false,
       sortable: true,
       sortDirection: sortKey === 'campaign' ? sortDir : null,
       onSort: () => handleSort('campaign'),
@@ -1808,6 +1809,32 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
           rowKey={(campaign) => campaign.campaign}
           tableLabel="Campaign detail"
           stickyFirstColumn
+          virtualized
+          virtualizationThreshold={60}
+          virtualizationHeight={680}
+          virtualRowHeight={52}
+          allowColumnHiding
+          allowDensityToggle
+          persistKey="campaign-detail-table"
+          defaultHiddenColumnKeys={['treatment_rate', 'holdout_rate', 'uplift_abs', 'confidence']}
+          presets={[
+            {
+              key: 'overview',
+              label: 'Overview',
+              visibleColumnKeys: ['campaign', 'channel', 'spend', 'visits', 'attributed_conversions', 'attributed_value', 'roas', 'cpa'],
+            },
+            {
+              key: 'efficiency',
+              label: 'Efficiency',
+              visibleColumnKeys: ['campaign', 'channel', 'visits', 'cvr', 'cost_per_visit', 'revenue_per_visit', 'spend', 'roi', 'roas', 'cpa'],
+            },
+            {
+              key: 'experiments',
+              label: 'Experiments',
+              visibleColumnKeys: ['campaign', 'channel', 'attributed_conversions', 'attributed_value', 'treatment_rate', 'holdout_rate', 'uplift_abs', 'suggested_next', 'actions'],
+            },
+          ]}
+          defaultPresetKey="overview"
           onRowClick={(campaign) => setSelectedCampaign(campaign.campaign)}
           isRowActive={(campaign) => activeCampaignKey === campaign.campaign}
           emptyState="No campaigns match the current filters."

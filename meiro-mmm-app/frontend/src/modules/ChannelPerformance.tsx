@@ -688,6 +688,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     ...tableColumns.map((column) => ({
       key: String(column.key),
       label: column.label,
+      hideable: column.key !== 'channel',
       align: column.align,
       sortable: true,
       sortDirection: sortKey === column.key ? sortDir : null,
@@ -1397,6 +1398,32 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
           rowKey={(channel) => channel.channel}
           tableLabel="Channel detail"
           stickyFirstColumn
+          virtualized
+          virtualizationThreshold={40}
+          virtualizationHeight={680}
+          virtualRowHeight={50}
+          allowColumnHiding
+          allowDensityToggle
+          persistKey="channel-detail-table"
+          defaultHiddenColumnKeys={['cost_per_visit', 'revenue_per_visit', 'attributed_share', 'confidence']}
+          presets={[
+            {
+              key: 'overview',
+              label: 'Overview',
+              visibleColumnKeys: ['channel', 'visits', 'attributed_conversions', 'attributed_value', 'spend', 'roas', 'cpa'],
+            },
+            {
+              key: 'efficiency',
+              label: 'Efficiency',
+              visibleColumnKeys: ['channel', 'visits', 'cvr', 'cost_per_visit', 'revenue_per_visit', 'roi', 'roas', 'cpa', 'confidence'],
+            },
+            {
+              key: 'mix',
+              label: 'Mix',
+              visibleColumnKeys: ['channel', 'visits', 'attributed_conversions', 'attributed_value', 'attributed_share', 'spend', 'confidence'],
+            },
+          ]}
+          defaultPresetKey="overview"
           toolbar={
             <div
               style={{
