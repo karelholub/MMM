@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { tokens } from '../theme/tokens'
+import { AnalyticsTable, type AnalyticsTableColumn } from '../components/dashboard'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import ExplainabilityPanel from '../components/ExplainabilityPanel'
 import ConfidenceBadge, { type Confidence } from '../components/ConfidenceBadge'
@@ -361,6 +362,190 @@ export default function ConversionPaths() {
   const timeDist = data.time_to_conversion_distribution
   const directDiag = data.direct_unknown_diagnostics
   const nbaConfig = data.nba_config
+  const hasAvgTimeColumn = filteredAndSortedPaths.some((path) => path.avg_time_to_convert_days != null)
+
+  const loadPathDetails = async (path: string) => {
+    setSelectedPath(path)
+    setSelectedPathDetails(null)
+    setSelectedPathError(null)
+    setSelectedPathLoading(true)
+    try {
+      const params = new URLSearchParams({
+        path,
+        direct_mode: directMode,
+        path_scope: pathScope === 'all' ? 'all' : 'converted',
+      })
+      if (journeys?.date_min) params.set('date_from', journeys.date_min.slice(0, 10))
+      if (journeys?.date_max) params.set('date_to', journeys.date_max.slice(0, 10))
+      const json = await apiGetJson<PathDetails>(`/api/conversion-paths/details?${params.toString()}`, {
+        fallbackMessage: 'Failed to load path details',
+      })
+      setSelectedPathDetails(json)
+    } catch (err) {
+      setSelectedPathError((err as Error).message)
+    } finally {
+      setSelectedPathLoading(false)
+    }
+  }
+
+  const frequencyColumns: AnalyticsTableColumn<(typeof sortedFreq)[number]>[] = [
+    {
+      key: 'channel',
+      label: 'Channel',
+      sortable: true,
+      sortDirection: freqSort === 'channel' ? freqSortDir : null,
+      onSort: () => {
+        setFreqSort('channel')
+        setFreqSortDir((dir) => (dir === 'asc' ? 'desc' : 'asc'))
+      },
+      render: (row) => row.channel,
+      cellStyle: { fontWeight: t.font.weightMedium, color: t.color.text },
+    },
+    {
+      key: 'count',
+      label: 'Touchpoints',
+      align: 'right',
+      sortable: true,
+      sortDirection: freqSort === 'count' ? freqSortDir : null,
+      onSort: () => {
+        setFreqSort('count')
+        setFreqSortDir('desc')
+      },
+      render: (row) => row.count,
+    },
+    {
+      key: 'pct',
+      label: '% of Total',
+      align: 'right',
+      sortable: true,
+      sortDirection: freqSort === 'pct' ? freqSortDir : null,
+      onSort: () => {
+        setFreqSort('pct')
+        setFreqSortDir('desc')
+      },
+      render: (row) => `${row.pct.toFixed(1)}%`,
+      cellStyle: { fontWeight: t.font.weightMedium, color: t.color.accent },
+    },
+  ]
+
+  const pathColumns: AnalyticsTableColumn<(typeof filteredAndSortedPaths)[number]>[] = [
+    {
+      key: 'rank',
+      label: '#',
+      width: 40,
+      render: (_row, idx) => idx + 1,
+      cellStyle: { color: t.color.textMuted },
+    },
+    {
+      key: 'path',
+      label: 'Path',
+      render: (path) => (
+        <>
+          {path.path.split(' > ').map((step, i, arr) => (
+            <span key={`${path.path}-${i}`}>
+              <span
+                style={{
+                  display: 'inline-block',
+                  padding: '2px 8px',
+                  backgroundColor: t.color.accentMuted,
+                  color: t.color.accent,
+                  borderRadius: t.radius.sm,
+                  fontSize: t.font.sizeXs,
+                  fontWeight: t.font.weightSemibold,
+                }}
+              >
+                {step}
+              </span>
+              {i < arr.length - 1 && <span style={{ margin: '0 4px', color: t.color.textMuted }}>→</span>}
+            </span>
+          ))}
+        </>
+      ),
+    },
+    {
+      key: 'count',
+      label: 'Count',
+      align: 'right',
+      sortable: true,
+      sortDirection: pathSort === 'count' ? pathSortDir : null,
+      onSort: () => {
+        setPathSort('count')
+        setPathSortDir((dir) => (dir === 'asc' ? 'desc' : 'asc'))
+      },
+      render: (path) => path.count,
+      cellStyle: { fontWeight: t.font.weightMedium },
+    },
+    {
+      key: 'share',
+      label: 'Share',
+      align: 'right',
+      sortable: true,
+      sortDirection: pathSort === 'share' ? pathSortDir : null,
+      onSort: () => {
+        setPathSort('share')
+        setPathSortDir((dir) => (dir === 'asc' ? 'desc' : 'asc'))
+      },
+      render: (path) => `${(path.share * 100).toFixed(1)}%`,
+      cellStyle: { fontWeight: t.font.weightMedium, color: t.color.accent },
+    },
+    {
+      key: 'length',
+      label: 'Avg touchpoints',
+      align: 'right',
+      sortable: true,
+      sortDirection: pathSort === 'length' ? pathSortDir : null,
+      onSort: () => {
+        setPathSort('length')
+        setPathSortDir((dir) => (dir === 'asc' ? 'desc' : 'asc'))
+      },
+      render: (path) => path.path_length ?? path.path.split(' > ').length,
+      cellStyle: { color: t.color.textSecondary },
+    },
+    ...(hasAvgTimeColumn
+      ? [
+          {
+            key: 'avg_time',
+            label: 'Avg time to convert',
+            align: 'right' as const,
+            sortable: true,
+            sortDirection: pathSort === 'avg_time' ? pathSortDir : null,
+            onSort: () => {
+              setPathSort('avg_time')
+              setPathSortDir((dir) => (dir === 'asc' ? 'desc' : 'asc'))
+            },
+            render: (path: (typeof filteredAndSortedPaths)[number]) =>
+              path.avg_time_to_convert_days != null ? `${path.avg_time_to_convert_days.toFixed(1)}d` : '—',
+            cellStyle: { color: t.color.textSecondary },
+          } satisfies AnalyticsTableColumn<(typeof filteredAndSortedPaths)[number]>,
+        ]
+      : []),
+    {
+      key: 'suggested_next',
+      label: 'Suggested next',
+      render: (path) => {
+        const prefix = path.path.split(' > ').slice(0, -1).join(' > ')
+        const top = data.next_best_by_prefix?.[prefix]?.[0]
+        return top ? (
+          <span
+            title={`${top.count} journeys, ${(top.conversion_rate * 100).toFixed(1)}% conversion, avg value $${top.avg_value}`}
+            style={{
+              display: 'inline-block',
+              padding: '2px 8px',
+              backgroundColor: t.color.accentMuted,
+              color: t.color.accent,
+              borderRadius: t.radius.sm,
+              fontSize: t.font.sizeXs,
+              fontWeight: t.font.weightSemibold,
+            }}
+          >
+            {top.channel} ({(top.conversion_rate * 100).toFixed(0)}%)
+          </span>
+        ) : (
+          <span style={{ color: t.color.textMuted, fontSize: t.font.sizeXs }}>—</span>
+        )
+      },
+    },
+  ]
 
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto' }}>
@@ -702,7 +887,6 @@ export default function ConversionPaths() {
       {/* Channel frequency + table */}
       <style>{`
         @media (max-width: 900px) { .conv-charts { grid-template-columns: 1fr !important; } }
-        .conv-table tbody tr:hover { background: ${t.color.accentMuted} !important; }
       `}</style>
       <div
         className="conv-charts"
@@ -748,79 +932,14 @@ export default function ConversionPaths() {
           <h3 style={{ margin: `0 0 ${t.space.lg}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
             Channel Touchpoint Stats
           </h3>
-          <div style={{ overflowX: 'auto' }}>
-            <table className="conv-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: t.font.sizeSm }}>
-              <thead>
-                <tr style={{ borderBottom: `2px solid ${t.color.border}` }}>
-                  <th
-                    style={{
-                      padding: `${t.space.md}px ${t.space.lg}px`,
-                      textAlign: 'left',
-                      fontWeight: t.font.weightSemibold,
-                      color: t.color.textSecondary,
-                      cursor: 'pointer',
-                      userSelect: 'none',
-                    }}
-                    onClick={() => {
-                      setFreqSort('channel')
-                      setFreqSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
-                    }}
-                  >
-                    Channel {freqSort === 'channel' && (freqSortDir === 'asc' ? '↑' : '↓')}
-                  </th>
-                  <th
-                    style={{
-                      padding: `${t.space.md}px ${t.space.lg}px`,
-                      textAlign: 'right',
-                      fontWeight: t.font.weightSemibold,
-                      color: t.color.textSecondary,
-                      cursor: 'pointer',
-                      userSelect: 'none',
-                    }}
-                    onClick={() => {
-                      setFreqSort('count')
-                      setFreqSortDir('desc')
-                    }}
-                  >
-                    Touchpoints {freqSort === 'count' && (freqSortDir === 'asc' ? '↑' : '↓')}
-                  </th>
-                  <th
-                    style={{
-                      padding: `${t.space.md}px ${t.space.lg}px`,
-                      textAlign: 'right',
-                      fontWeight: t.font.weightSemibold,
-                      color: t.color.textSecondary,
-                      cursor: 'pointer',
-                      userSelect: 'none',
-                    }}
-                    onClick={() => {
-                      setFreqSort('pct')
-                      setFreqSortDir('desc')
-                    }}
-                  >
-                    % of Total {freqSort === 'pct' && (freqSortDir === 'asc' ? '↑' : '↓')}
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedFreq.map((row, idx) => (
-                  <tr
-                    key={row.channel}
-                    style={{
-                      borderBottom: `1px solid ${t.color.borderLight}`,
-                      backgroundColor: idx % 2 === 0 ? t.color.surface : t.color.bg,
-                    }}
-                  >
-                    <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, fontWeight: t.font.weightMedium, color: t.color.text }}>{row.channel}</td>
-                    <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{row.count}</td>
-                    <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontWeight: t.font.weightMedium, color: t.color.accent, fontVariantNumeric: 'tabular-nums' }}>
-                      {row.pct.toFixed(1)}%
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <AnalyticsTable
+            columns={frequencyColumns}
+            rows={sortedFreq}
+            rowKey={(row) => row.channel}
+            tableLabel="Channel touchpoint stats"
+            minWidth={480}
+            stickyFirstColumn
+          />
         </div>
       </div>
 
@@ -1191,175 +1310,18 @@ export default function ConversionPaths() {
           </button>
         </div>
         <div style={{ overflowX: 'auto' }}>
-          <table className="conv-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: t.font.sizeSm }}>
-            <thead>
-              <tr style={{ borderBottom: `2px solid ${t.color.border}` }}>
-                <th style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'left', fontWeight: t.font.weightSemibold, color: t.color.textSecondary, width: 40 }}>#</th>
-                <th style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'left', fontWeight: t.font.weightSemibold, color: t.color.textSecondary }}>Path</th>
-                <th
-                  style={{
-                    padding: `${t.space.md}px ${t.space.lg}px`,
-                    textAlign: 'right',
-                    fontWeight: t.font.weightSemibold,
-                    color: t.color.textSecondary,
-                    cursor: 'pointer',
-                    userSelect: 'none',
-                  }}
-                  onClick={() => {
-                    setPathSort('count')
-                    setPathSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
-                  }}
-                >
-                  Count {pathSort === 'count' && (pathSortDir === 'asc' ? '↑' : '↓')}
-                </th>
-                <th
-                  style={{
-                    padding: `${t.space.md}px ${t.space.lg}px`,
-                    textAlign: 'right',
-                    fontWeight: t.font.weightSemibold,
-                    color: t.color.textSecondary,
-                    cursor: 'pointer',
-                    userSelect: 'none',
-                  }}
-                  onClick={() => {
-                    setPathSort('share')
-                    setPathSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
-                  }}
-                >
-                  Share {pathSort === 'share' && (pathSortDir === 'asc' ? '↑' : '↓')}
-                </th>
-                <th
-                  style={{
-                    padding: `${t.space.md}px ${t.space.lg}px`,
-                    textAlign: 'right',
-                    fontWeight: t.font.weightSemibold,
-                    color: t.color.textSecondary,
-                    cursor: 'pointer',
-                    userSelect: 'none',
-                  }}
-                  onClick={() => {
-                    setPathSort('length')
-                    setPathSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
-                  }}
-                >
-                  Avg touchpoints {pathSort === 'length' && (pathSortDir === 'asc' ? '↑' : '↓')}
-                </th>
-                {filteredAndSortedPaths.some((p) => p.avg_time_to_convert_days != null) && (
-                  <th
-                    style={{
-                      padding: `${t.space.md}px ${t.space.lg}px`,
-                      textAlign: 'right',
-                      fontWeight: t.font.weightSemibold,
-                      color: t.color.textSecondary,
-                      cursor: 'pointer',
-                      userSelect: 'none',
-                    }}
-                    onClick={() => {
-                      setPathSort('avg_time')
-                      setPathSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
-                    }}
-                  >
-                    Avg time to convert {pathSort === 'avg_time' && (pathSortDir === 'asc' ? '↑' : '↓')}
-                  </th>
-                )}
-                <th style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'left', fontWeight: t.font.weightSemibold, color: t.color.textSecondary }}>Suggested next</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredAndSortedPaths.slice(0, 20).map((p, idx) => {
-                const prefix = p.path.split(' > ').slice(0, -1).join(' > ')
-                const recs = data.next_best_by_prefix?.[prefix]
-                const top = recs?.[0]
-                return (
-                <tr
-                  key={idx}
-                  style={{
-                    borderBottom: `1px solid ${t.color.borderLight}`,
-                    backgroundColor: idx % 2 === 0 ? t.color.surface : t.color.bg,
-                    cursor: 'pointer',
-                  }}
-                  onClick={async () => {
-                    setSelectedPath(p.path)
-                    setSelectedPathDetails(null)
-                    setSelectedPathError(null)
-                    setSelectedPathLoading(true)
-                    try {
-                      const params = new URLSearchParams({
-                        path: p.path,
-                        direct_mode: directMode,
-                        path_scope: pathScope === 'all' ? 'all' : 'converted',
-                      })
-                      if (journeys?.date_min) params.set('date_from', journeys.date_min.slice(0, 10))
-                      if (journeys?.date_max) params.set('date_to', journeys.date_max.slice(0, 10))
-                      const json = await apiGetJson<PathDetails>(`/api/conversion-paths/details?${params.toString()}`, {
-                        fallbackMessage: 'Failed to load path details',
-                      })
-                      setSelectedPathDetails(json)
-                    } catch (err) {
-                      setSelectedPathError((err as Error).message)
-                    } finally {
-                      setSelectedPathLoading(false)
-                    }
-                  }}
-                >
-                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, color: t.color.textMuted, fontVariantNumeric: 'tabular-nums' }}>{idx + 1}</td>
-                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px` }}>
-                    {p.path.split(' > ').map((step, i, arr) => (
-                      <span key={i}>
-                        <span
-                          style={{
-                            display: 'inline-block',
-                            padding: '2px 8px',
-                            backgroundColor: t.color.accentMuted,
-                            color: t.color.accent,
-                            borderRadius: t.radius.sm,
-                            fontSize: t.font.sizeXs,
-                            fontWeight: t.font.weightSemibold,
-                          }}
-                        >
-                          {step}
-                        </span>
-                        {i < arr.length - 1 && <span style={{ margin: '0 4px', color: t.color.textMuted }}>→</span>}
-                      </span>
-                    ))}
-                  </td>
-                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontWeight: t.font.weightMedium, fontVariantNumeric: 'tabular-nums' }}>{p.count}</td>
-                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontWeight: t.font.weightMedium, color: t.color.accent, fontVariantNumeric: 'tabular-nums' }}>
-                    {(p.share * 100).toFixed(1)}%
-                  </td>
-                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: t.color.textSecondary }}>
-                    {p.path_length ?? p.path.split(' > ').length}
-                  </td>
-                  {filteredAndSortedPaths.some((row) => row.avg_time_to_convert_days != null) && (
-                    <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: t.color.textSecondary }}>
-                      {p.avg_time_to_convert_days != null ? `${p.avg_time_to_convert_days.toFixed(1)}d` : '—'}
-                    </td>
-                  )}
-                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px` }}>
-                    {top ? (
-                      <span
-                        title={`${top.count} journeys, ${(top.conversion_rate * 100).toFixed(1)}% conversion, avg value $${top.avg_value}`}
-                        style={{
-                          display: 'inline-block',
-                          padding: '2px 8px',
-                          backgroundColor: t.color.accentMuted,
-                          color: t.color.accent,
-                          borderRadius: t.radius.sm,
-                          fontSize: t.font.sizeXs,
-                          fontWeight: t.font.weightSemibold,
-                        }}
-                      >
-                        {top.channel} ({(top.conversion_rate * 100).toFixed(0)}%)
-                      </span>
-                    ) : (
-                      <span style={{ color: t.color.textMuted, fontSize: t.font.sizeXs }}>—</span>
-                    )}
-                  </td>
-                </tr>
-                )
-              })}
-            </tbody>
-          </table>
+          <AnalyticsTable
+            columns={pathColumns}
+            rows={filteredAndSortedPaths.slice(0, 20)}
+            rowKey={(path, idx) => `${path.path}-${idx}`}
+            tableLabel="Top conversion paths"
+            minWidth={980}
+            stickyFirstColumn
+            onRowClick={(path) => {
+              void loadPathDetails(path.path)
+            }}
+            isRowActive={(path) => selectedPath === path.path}
+          />
         </div>
         {filteredAndSortedPaths.length > 20 && (
           <p style={{ margin: `${t.space.md}px 0 0`, fontSize: t.font.sizeXs, color: t.color.textMuted }}>

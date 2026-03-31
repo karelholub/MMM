@@ -33,6 +33,25 @@ interface MeiroImportReplayProps {
   onSelectQuarantineRun: (runId: string) => void
 }
 
+type CleaningReportView = {
+  fixed?: number
+  dropped?: number
+  ambiguous?: number
+  duplicate_profiles?: number
+  quality?: {
+    average_score?: number
+  }
+  top_unresolved_patterns?: Array<{
+    code?: string
+    count?: number
+  }>
+}
+
+function asCleaningReport(value: unknown): CleaningReportView | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  return value as CleaningReportView
+}
+
 export default function MeiroImportReplay({
   meiroConfig,
   meiroPullDraft,
@@ -67,7 +86,7 @@ export default function MeiroImportReplay({
     importFromMeiroResult?.import_summary ||
     reprocessWebhookArchiveResult?.import_result?.import_summary ||
     meiroDryRunData?.import_summary
-  const cleaningReport = latestImportSummary?.cleaning_report || meiroDryRunData?.cleaning_report
+  const cleaningReport = asCleaningReport(latestImportSummary?.cleaning_report || meiroDryRunData?.cleaning_report)
   const replayMode = meiroPullDraft.replay_mode || DEFAULT_MEIRO_PULL_CONFIG.replay_mode
   const replaySource = meiroPullDraft.replay_archive_source || DEFAULT_MEIRO_PULL_CONFIG.replay_archive_source
   const replayScopeLabel =

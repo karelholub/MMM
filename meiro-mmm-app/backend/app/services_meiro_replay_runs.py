@@ -88,9 +88,10 @@ def record_meiro_replay_run(
         result_json=result_json or {},
     )
     db.add(item)
+    db.flush()
+    payload = _serialize(item)
     db.commit()
-    db.refresh(item)
-    return _serialize(item)
+    return payload
 
 
 def list_meiro_replay_runs(

@@ -1,10 +1,11 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Line, ScatterChart, Scatter, ZAxis } from 'recharts'
 import { tokens } from '../theme/tokens'
 import ConfidenceBadge, { Confidence } from '../components/ConfidenceBadge'
 import ExplainabilityPanel from '../components/ExplainabilityPanel'
 import TrendPanel from '../components/dashboard/TrendPanel'
+import { AnalyticsTable, type AnalyticsTableColumn, SectionCard } from '../components/dashboard'
 import { apiGetJson } from '../lib/apiClient'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import AdsActionsDrawer from '../components/ads/AdsActionsDrawer'
@@ -684,12 +685,315 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
   const funnelRows = [...sortedCampaigns]
     .sort((a, b) => b.touch_journeys - a.touch_journeys)
     .slice(0, 8)
+  const campaignTableColumns: AnalyticsTableColumn<CampaignData>[] = [
+    {
+      key: 'campaign',
+      label: 'Campaign',
+      sortable: true,
+      sortDirection: sortKey === 'campaign' ? sortDir : null,
+      onSort: () => handleSort('campaign'),
+      title: 'Sort by Campaign',
+      render: (campaign) =>
+        campaign.campaign_name ? `${campaign.channel} / ${campaign.campaign_name}` : campaign.campaign,
+      cellStyle: { fontWeight: t.font.weightMedium, color: t.color.text },
+    },
+    {
+      key: 'channel',
+      label: 'Channel',
+      sortable: true,
+      sortDirection: sortKey === 'channel' ? sortDir : null,
+      onSort: () => handleSort('channel'),
+      title: 'Sort by Channel',
+      render: (campaign) => campaign.channel,
+      cellStyle: { color: t.color.textSecondary },
+    },
+    {
+      key: 'visits',
+      label: 'Visits',
+      align: 'right',
+      sortable: true,
+      sortDirection: sortKey === 'visits' ? sortDir : null,
+      onSort: () => handleSort('visits'),
+      title: 'Sort by Visits',
+      render: (campaign) => campaign.visits.toFixed(0),
+    },
+    {
+      key: 'cvr',
+      label: 'CVR',
+      align: 'right',
+      sortable: true,
+      sortDirection: sortKey === 'cvr' ? sortDir : null,
+      onSort: () => handleSort('cvr'),
+      title: 'Sort by CVR',
+      render: (campaign) => `${(campaign.cvr * 100).toFixed(2)}%`,
+    },
+    {
+      key: 'cost_per_visit',
+      label: 'Cost / Visit',
+      align: 'right',
+      sortable: true,
+      sortDirection: sortKey === 'cost_per_visit' ? sortDir : null,
+      onSort: () => handleSort('cost_per_visit'),
+      title: 'Sort by Cost / Visit',
+      render: (campaign) => formatCurrency(campaign.cost_per_visit),
+    },
+    {
+      key: 'revenue_per_visit',
+      label: 'Revenue / Visit',
+      align: 'right',
+      sortable: true,
+      sortDirection: sortKey === 'revenue_per_visit' ? sortDir : null,
+      onSort: () => handleSort('revenue_per_visit'),
+      title: 'Sort by Revenue / Visit',
+      render: (campaign) => formatCurrency(campaign.revenue_per_visit),
+    },
+    {
+      key: 'attributed_value',
+      label: 'Attributed Revenue',
+      align: 'right',
+      sortable: true,
+      sortDirection: sortKey === 'attributed_value' ? sortDir : null,
+      onSort: () => handleSort('attributed_value'),
+      title: 'Sort by Attributed Revenue',
+      render: (campaign) => formatCurrency(campaign.attributed_value),
+      cellStyle: { fontWeight: t.font.weightMedium, color: t.color.success },
+    },
+    {
+      key: 'attributed_share',
+      label: 'Share',
+      align: 'right',
+      sortable: true,
+      sortDirection: sortKey === 'attributed_share' ? sortDir : null,
+      onSort: () => handleSort('attributed_share'),
+      title: 'Sort by Share',
+      render: (campaign) => `${(campaign.attributed_share * 100).toFixed(1)}%`,
+    },
+    {
+      key: 'attributed_conversions',
+      label: 'Conversions',
+      align: 'right',
+      sortable: true,
+      sortDirection: sortKey === 'attributed_conversions' ? sortDir : null,
+      onSort: () => handleSort('attributed_conversions'),
+      title: 'Sort by Conversions',
+      render: (campaign) => campaign.attributed_conversions.toFixed(1),
+    },
+    {
+      key: 'spend',
+      label: 'Spend',
+      align: 'right',
+      sortable: true,
+      sortDirection: sortKey === 'spend' ? sortDir : null,
+      onSort: () => handleSort('spend'),
+      title: 'Sort by Spend',
+      render: (campaign) => formatCurrency(campaign.spend),
+    },
+    {
+      key: 'roi',
+      label: 'ROI',
+      align: 'right',
+      sortable: true,
+      sortDirection: sortKey === 'roi' ? sortDir : null,
+      onSort: () => handleSort('roi'),
+      title: 'Sort by ROI',
+      render: (campaign) => (campaign.roi != null ? `${(campaign.roi * 100).toFixed(0)}%` : '—'),
+      cellStyle: (campaign) => ({
+        color:
+          campaign.roi != null && campaign.roi >= 0
+            ? t.color.success
+            : campaign.roi != null
+            ? t.color.danger
+            : t.color.textMuted,
+      }),
+    },
+    {
+      key: 'roas',
+      label: 'ROAS',
+      align: 'right',
+      sortable: true,
+      sortDirection: sortKey === 'roas' ? sortDir : null,
+      onSort: () => handleSort('roas'),
+      title: 'Sort by ROAS',
+      render: (campaign) => (campaign.roas != null ? `${campaign.roas.toFixed(2)}×` : '—'),
+    },
+    {
+      key: 'cpa',
+      label: 'CPA',
+      align: 'right',
+      sortable: true,
+      sortDirection: sortKey === 'cpa' ? sortDir : null,
+      onSort: () => handleSort('cpa'),
+      title: 'Sort by CPA',
+      render: (campaign) => (campaign.cpa != null ? formatCurrency(campaign.cpa) : '—'),
+    },
+    {
+      key: 'treatment_rate',
+      label: 'Conv rate (treated)',
+      align: 'right',
+      sortable: true,
+      sortDirection: sortKey === 'treatment_rate' ? sortDir : null,
+      onSort: () => handleSort('treatment_rate'),
+      title: 'Sort by Conv rate (treated)',
+      render: (campaign) =>
+        campaign.treatment_rate != null ? `${(campaign.treatment_rate * 100).toFixed(1)}%` : '—',
+    },
+    {
+      key: 'holdout_rate',
+      label: 'Conv rate (holdout)',
+      align: 'right',
+      sortable: true,
+      sortDirection: sortKey === 'holdout_rate' ? sortDir : null,
+      onSort: () => handleSort('holdout_rate'),
+      title: 'Sort by Conv rate (holdout)',
+      render: (campaign) =>
+        campaign.holdout_rate != null ? `${(campaign.holdout_rate * 100).toFixed(1)}%` : '—',
+    },
+    {
+      key: 'uplift_abs',
+      label: 'Uplift',
+      align: 'right',
+      sortable: true,
+      sortDirection: sortKey === 'uplift_abs' ? sortDir : null,
+      onSort: () => handleSort('uplift_abs'),
+      title: 'Sort by Uplift',
+      render: (campaign) => (campaign.uplift_abs != null ? `${(campaign.uplift_abs * 100).toFixed(1)}%` : '—'),
+      cellStyle: (campaign) => ({
+        color:
+          campaign.uplift_abs != null && campaign.uplift_abs > 0
+            ? t.color.success
+            : campaign.uplift_abs != null && campaign.uplift_abs < 0
+            ? t.color.danger
+            : t.color.textMuted,
+      }),
+    },
+    {
+      key: 'suggested_next',
+      label: 'Suggested next',
+      title: METRIC_DEFINITIONS['Suggested next'],
+      render: (campaign) =>
+        campaign.suggested_next ? (
+          <span
+            title={`${campaign.suggested_next.count} journeys, ${(campaign.suggested_next.conversion_rate * 100).toFixed(1)}% conversion, avg $${campaign.suggested_next.avg_value}`}
+            style={{
+              display: 'inline-block',
+              padding: '2px 8px',
+              backgroundColor: t.color.accentMuted,
+              color: t.color.accent,
+              borderRadius: t.radius.sm,
+              fontSize: t.font.sizeXs,
+              fontWeight: t.font.weightSemibold,
+            }}
+          >
+            {campaign.suggested_next.campaign != null
+              ? `${campaign.suggested_next.channel} / ${campaign.suggested_next.campaign}`
+              : campaign.suggested_next.channel}{' '}
+            ({(campaign.suggested_next.conversion_rate * 100).toFixed(0)}%)
+          </span>
+        ) : (
+          <span style={{ color: t.color.textMuted, fontSize: t.font.sizeXs }}>—</span>
+        ),
+    },
+    {
+      key: 'actions',
+      label: 'Actions',
+      render: (campaign) =>
+        providerFromChannel(campaign.channel) && campaign.campaign ? (
+          <div style={{ display: 'inline-flex', gap: t.space.xs, whiteSpace: 'nowrap' }}>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation()
+                void openProviderLink(campaign)
+              }}
+              style={{
+                border: `1px solid ${t.color.border}`,
+                background: t.color.surface,
+                color: t.color.accent,
+                borderRadius: t.radius.sm,
+                padding: `2px ${t.space.xs}px`,
+                fontSize: t.font.sizeXs,
+                cursor: 'pointer',
+              }}
+              title="Open this campaign in provider UI"
+            >
+              Open ↗
+            </button>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation()
+                openAdsDrawer(campaign)
+              }}
+              style={{
+                border: `1px solid ${t.color.border}`,
+                background: t.color.bg,
+                color: t.color.text,
+                borderRadius: t.radius.sm,
+                padding: `2px ${t.space.xs}px`,
+                fontSize: t.font.sizeXs,
+                cursor: 'pointer',
+              }}
+              title="Propose pause/enable/budget changes"
+            >
+              Manage
+            </button>
+          </div>
+        ) : (
+          <span style={{ color: t.color.textMuted, fontSize: t.font.sizeXs }} title="Missing provider entity id">
+            —
+          </span>
+        ),
+    },
+    {
+      key: 'confidence',
+      label: 'Confidence',
+      align: 'right',
+      render: (campaign) => <ConfidenceBadge confidence={campaign.confidence} compact />,
+    },
+  ]
 
   const chartData = filteredCampaigns.map((c) => ({
     name: c.campaign_name ? `${c.channel} / ${c.campaign_name}` : c.campaign,
     spend: c.spend,
     attributed_value: c.attributed_value,
   }))
+  const topCampaignChartData = [...filteredCampaigns]
+    .sort((a, b) => b.spend - a.spend || b.attributed_value - a.attributed_value)
+    .slice(0, 12)
+    .map((c) => ({
+      name: c.campaign_name ? `${c.channel} / ${c.campaign_name}` : c.campaign,
+      spend: c.spend,
+      attributed_value: c.attributed_value,
+    }))
+  const paretoChartData = (() => {
+    const ranked = [...filteredCampaigns]
+      .sort((a, b) => b.spend - a.spend || b.attributed_value - a.attributed_value)
+      .slice(0, 12)
+    const totalSpendBase = ranked.reduce((sum, campaign) => sum + campaign.spend, 0)
+    let cumulativeSpend = 0
+    return ranked.map((campaign) => {
+      cumulativeSpend += campaign.spend
+      return {
+        name: campaign.campaign_name ? `${campaign.channel} / ${campaign.campaign_name}` : campaign.campaign,
+        spend: campaign.spend,
+        cumulative_spend_share_pct: totalSpendBase > 0 ? (cumulativeSpend / totalSpendBase) * 100 : 0,
+        revenue: campaign.attributed_value,
+      }
+    })
+  })()
+  const efficiencyScatterData = filteredCampaigns
+    .filter((campaign) => campaign.spend > 0 || campaign.attributed_value > 0)
+    .slice(0, 120)
+    .map((campaign) => ({
+      x: campaign.spend,
+      y: campaign.roas ?? 0,
+      z: Math.max(campaign.attributed_conversions, 1),
+      name: campaign.campaign_name ? `${campaign.channel} / ${campaign.campaign_name}` : campaign.campaign,
+      revenue: campaign.attributed_value,
+      conversions: campaign.attributed_conversions,
+      cpa: campaign.cpa,
+      channel: campaign.channel,
+    }))
 
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto' }}>
@@ -1289,7 +1593,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: '2fr 1.5fr',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
           gap: t.space.xl,
           marginBottom: t.space.xl,
         }}
@@ -1307,7 +1611,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
             Spend vs. Attributed Revenue by Campaign
           </h3>
           <ResponsiveContainer width="100%" height={320}>
-            <BarChart data={chartData} layout="vertical" margin={{ left: 8, right: 16 }}>
+            <BarChart data={topCampaignChartData} layout="vertical" margin={{ left: 8, right: 16 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
               <XAxis type="number" tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }} tickFormatter={(v) => formatCurrency(v)} />
               <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: t.font.sizeSm, fill: t.color.text }} />
@@ -1317,6 +1621,95 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
               <Bar dataKey="attributed_value" fill={t.color.success} name="Attributed Revenue" radius={[0, 4, 4, 0]} />
             </BarChart>
           </ResponsiveContainer>
+        </div>
+
+        <div
+          style={{
+            background: t.color.surface,
+            border: `1px solid ${t.color.borderLight}`,
+            borderRadius: t.radius.lg,
+            padding: t.space.xl,
+            boxShadow: t.shadowSm,
+          }}
+        >
+          <h3 style={{ margin: `0 0 ${t.space.lg}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+            Spend concentration (Pareto)
+          </h3>
+          <ResponsiveContainer width="100%" height={320}>
+            <ComposedChart data={paretoChartData} margin={{ top: 8, right: 16, left: 8, bottom: 20 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
+              <XAxis dataKey="name" tick={{ fontSize: t.font.sizeXs, fill: t.color.textSecondary }} interval={0} angle={-18} textAnchor="end" height={72} />
+              <YAxis yAxisId="left" tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }} tickFormatter={(v) => formatCurrency(v)} />
+              <YAxis yAxisId="right" orientation="right" domain={[0, 100]} tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }} tickFormatter={(v) => `${v}%`} />
+              <Tooltip
+                contentStyle={{ fontSize: t.font.sizeSm, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                formatter={(value: number, key: string) => {
+                  if (key === 'cumulative_spend_share_pct') return `${value.toFixed(1)}%`
+                  return formatCurrency(value)
+                }}
+              />
+              <Legend wrapperStyle={{ fontSize: t.font.sizeSm }} />
+              <Bar yAxisId="left" dataKey="spend" fill={t.color.chart[0]} name="Spend" radius={[4, 4, 0, 0]} />
+              <Line yAxisId="right" type="monotone" dataKey="cumulative_spend_share_pct" stroke={t.color.accent} strokeWidth={2} dot={{ r: 3 }} name="Cumulative spend share" />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div
+          style={{
+            background: t.color.surface,
+            border: `1px solid ${t.color.borderLight}`,
+            borderRadius: t.radius.lg,
+            padding: t.space.xl,
+            boxShadow: t.shadowSm,
+          }}
+        >
+          <h3 style={{ margin: `0 0 ${t.space.lg}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+            Spend vs. ROAS scatter
+          </h3>
+          <ResponsiveContainer width="100%" height={320}>
+            <ScatterChart margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
+              <XAxis
+                type="number"
+                dataKey="x"
+                name="Spend"
+                tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }}
+                tickFormatter={(v) => formatCurrency(v)}
+              />
+              <YAxis
+                type="number"
+                dataKey="y"
+                name="ROAS"
+                tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }}
+                tickFormatter={(v) => `${v.toFixed(1)}×`}
+              />
+              <ZAxis type="number" dataKey="z" range={[60, 360]} name="Conversions" />
+              <Tooltip
+                cursor={{ strokeDasharray: '3 3' }}
+                contentStyle={{ fontSize: t.font.sizeSm, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                formatter={(value: number, _key: string, payload: { payload?: typeof efficiencyScatterData[number] }) => {
+                  const point = payload?.payload
+                  if (!point) return value
+                  return [
+                    <div key="tooltip" style={{ display: 'grid', gap: 2 }}>
+                      <strong>{point.name}</strong>
+                      <span>Spend: {formatCurrency(point.x)}</span>
+                      <span>Revenue: {formatCurrency(point.revenue)}</span>
+                      <span>ROAS: {point.y.toFixed(2)}×</span>
+                      <span>Conversions: {point.conversions.toFixed(1)}</span>
+                      <span>CPA: {point.cpa != null ? formatCurrency(point.cpa) : '—'}</span>
+                    </div>,
+                    point.channel,
+                  ]
+                }}
+              />
+              <Scatter name="Campaign efficiency" data={efficiencyScatterData} fill={t.color.chart[3]} />
+            </ScatterChart>
+          </ResponsiveContainer>
+          <p style={{ margin: `${t.space.md}px 0 0`, fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+            Bubble size reflects attributed conversions. High-spend points below the cluster are the first low-efficiency campaigns to inspect.
+          </p>
         </div>
 
         <div
@@ -1381,19 +1774,9 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
         </div>
       </div>
 
-      <div
-        style={{
-          background: t.color.surface,
-          border: `1px solid ${t.color.borderLight}`,
-          borderRadius: t.radius.lg,
-          padding: t.space.xl,
-          boxShadow: t.shadowSm,
-        }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: t.space.lg, flexWrap: 'wrap', gap: t.space.md }}>
-          <h3 style={{ margin: 0, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-            Campaign Detail {filteredCampaigns.length < campaigns.length ? `(${filteredCampaigns.length} shown)` : ''}
-          </h3>
+      <SectionCard
+        title={`Campaign Detail ${filteredCampaigns.length < campaigns.length ? `(${filteredCampaigns.length} shown)` : ''}`}
+        actions={
           <button
             type="button"
             onClick={() =>
@@ -1416,213 +1799,20 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
           >
             Export CSV
           </button>
-        </div>
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: t.font.sizeSm }}>
-            <thead>
-              <tr style={{ borderBottom: `2px solid ${t.color.border}` }}>
-                {[
-                  { key: 'campaign' as SortKey, label: 'Campaign', align: 'left' },
-                  { key: 'channel' as SortKey, label: 'Channel', align: 'left' },
-                  { key: 'visits' as SortKey, label: 'Visits', align: 'right' },
-                  { key: 'cvr' as SortKey, label: 'CVR', align: 'right' },
-                  { key: 'cost_per_visit' as SortKey, label: 'Cost / Visit', align: 'right' },
-                  { key: 'revenue_per_visit' as SortKey, label: 'Revenue / Visit', align: 'right' },
-                  { key: 'attributed_value' as SortKey, label: 'Attributed Revenue', align: 'right' },
-                  { key: 'attributed_share' as SortKey, label: 'Share', align: 'right' },
-                  { key: 'attributed_conversions' as SortKey, label: 'Conversions', align: 'right' },
-                  { key: 'spend' as SortKey, label: 'Spend', align: 'right' },
-                  { key: 'roi' as SortKey, label: 'ROI', align: 'right' },
-                  { key: 'roas' as SortKey, label: 'ROAS', align: 'right' },
-                  { key: 'cpa' as SortKey, label: 'CPA', align: 'right' },
-                  { key: 'treatment_rate' as SortKey, label: 'Conv rate (treated)', align: 'right' },
-                  { key: 'holdout_rate' as SortKey, label: 'Conv rate (holdout)', align: 'right' },
-                  { key: 'uplift_abs' as SortKey, label: 'Uplift', align: 'right' },
-                  { key: 'suggested_next' as SortKey, label: 'Suggested next', align: 'left' },
-                ].map((col) => (
-                  <th
-                    key={col.key}
-                    style={{
-                      padding: `${t.space.md}px ${t.space.lg}px`,
-                      textAlign: col.align as 'left' | 'right',
-                      fontWeight: t.font.weightSemibold,
-                      color: t.color.textSecondary,
-                      whiteSpace: 'nowrap',
-                      cursor: col.key !== 'suggested_next' ? 'pointer' : 'default',
-                      userSelect: 'none',
-                    }}
-                    onClick={col.key !== 'suggested_next' ? () => handleSort(col.key) : undefined}
-                    title={col.key === 'suggested_next' ? METRIC_DEFINITIONS['Suggested next'] : `Sort by ${col.label}`}
-                  >
-                    {col.label}
-                    {sortKey === col.key && col.key !== 'suggested_next' && (sortDir === 'asc' ? ' ↑' : ' ↓')}
-                  </th>
-                ))}
-                <th
-                  style={{
-                    padding: `${t.space.md}px ${t.space.lg}px`,
-                    textAlign: 'left',
-                    fontWeight: t.font.weightSemibold,
-                    color: t.color.textSecondary,
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  Actions
-                </th>
-                <th
-                  style={{
-                    padding: `${t.space.md}px ${t.space.lg}px`,
-                    textAlign: 'right',
-                    fontWeight: t.font.weightSemibold,
-                    color: t.color.textSecondary,
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  Confidence
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {sortedCampaigns.map((c, idx) => (
-                <tr
-                  key={c.campaign}
-                  style={{
-                    borderBottom: `1px solid ${t.color.borderLight}`,
-                    backgroundColor:
-                      activeCampaignKey === c.campaign
-                        ? t.color.accentMuted
-                        : idx % 2 === 0
-                        ? t.color.surface
-                        : t.color.bg,
-                    cursor: 'pointer',
-                  }}
-                  onClick={() => setSelectedCampaign(c.campaign)}
-                >
-                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, fontWeight: t.font.weightMedium, color: t.color.text }}>
-                    {c.campaign_name ? `${c.channel} / ${c.campaign_name}` : c.campaign}
-                  </td>
-                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, color: t.color.textSecondary }}>{c.channel}</td>
-                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                    {c.visits.toFixed(0)}
-                  </td>
-                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                    {(c.cvr * 100).toFixed(2)}%
-                  </td>
-                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                    {formatCurrency(c.cost_per_visit)}
-                  </td>
-                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                    {formatCurrency(c.revenue_per_visit)}
-                  </td>
-                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontWeight: t.font.weightMedium, color: t.color.success, fontVariantNumeric: 'tabular-nums' }}>
-                    {formatCurrency(c.attributed_value)}
-                  </td>
-                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                    {(c.attributed_share * 100).toFixed(1)}%
-                  </td>
-                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                    {c.attributed_conversions.toFixed(1)}
-                  </td>
-                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                    {formatCurrency(c.spend)}
-                  </td>
-                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: c.roi != null && c.roi >= 0 ? t.color.success : c.roi != null ? t.color.danger : t.color.textMuted }}>
-                    {c.roi != null ? `${(c.roi * 100).toFixed(0)}%` : '—'}
-                  </td>
-                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                    {c.roas != null ? `${c.roas.toFixed(2)}×` : '—'}
-                  </td>
-                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                    {c.cpa != null ? formatCurrency(c.cpa) : '—'}
-                  </td>
-                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                    {c.treatment_rate != null ? `${(c.treatment_rate * 100).toFixed(1)}%` : '—'}
-                  </td>
-                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                    {c.holdout_rate != null ? `${(c.holdout_rate * 100).toFixed(1)}%` : '—'}
-                  </td>
-                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: c.uplift_abs != null && c.uplift_abs > 0 ? t.color.success : c.uplift_abs != null && c.uplift_abs < 0 ? t.color.danger : t.color.textMuted }}>
-                    {c.uplift_abs != null ? `${(c.uplift_abs * 100).toFixed(1)}%` : '—'}
-                  </td>
-                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px` }}>
-                    {c.suggested_next ? (
-                      <span
-                        title={`${c.suggested_next.count} journeys, ${(c.suggested_next.conversion_rate * 100).toFixed(1)}% conversion, avg $${c.suggested_next.avg_value}`}
-                        style={{
-                          display: 'inline-block',
-                          padding: '2px 8px',
-                          backgroundColor: t.color.accentMuted,
-                          color: t.color.accent,
-                          borderRadius: t.radius.sm,
-                          fontSize: t.font.sizeXs,
-                          fontWeight: t.font.weightSemibold,
-                        }}
-                      >
-                        {c.suggested_next.campaign != null ? `${c.suggested_next.channel} / ${c.suggested_next.campaign}` : c.suggested_next.channel}
-                        {' '}
-                        ({(c.suggested_next.conversion_rate * 100).toFixed(0)}%)
-                      </span>
-                    ) : (
-                      <span style={{ color: t.color.textMuted, fontSize: t.font.sizeXs }}>—</span>
-                    )}
-                  </td>
-                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, whiteSpace: 'nowrap' }}>
-                    {providerFromChannel(c.channel) && c.campaign ? (
-                      <div style={{ display: 'inline-flex', gap: t.space.xs }}>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            void openProviderLink(c)
-                          }}
-                          style={{
-                            border: `1px solid ${t.color.border}`,
-                            background: t.color.surface,
-                            color: t.color.accent,
-                            borderRadius: t.radius.sm,
-                            padding: `2px ${t.space.xs}px`,
-                            fontSize: t.font.sizeXs,
-                            cursor: 'pointer',
-                          }}
-                          title="Open this campaign in provider UI"
-                        >
-                          Open ↗
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            openAdsDrawer(c)
-                          }}
-                          style={{
-                            border: `1px solid ${t.color.border}`,
-                            background: t.color.bg,
-                            color: t.color.text,
-                            borderRadius: t.radius.sm,
-                            padding: `2px ${t.space.xs}px`,
-                            fontSize: t.font.sizeXs,
-                            cursor: 'pointer',
-                          }}
-                          title="Propose pause/enable/budget changes"
-                        >
-                          Manage
-                        </button>
-                      </div>
-                    ) : (
-                      <span style={{ color: t.color.textMuted, fontSize: t.font.sizeXs }} title="Missing provider entity id">
-                        —
-                      </span>
-                    )}
-                  </td>
-                  <td style={{ padding: `${t.space.md}px ${t.space.lg}px`, textAlign: 'right' }}>
-                    <ConfidenceBadge confidence={c.confidence} compact />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+        }
+        overflow="visible"
+      >
+        <AnalyticsTable
+          columns={campaignTableColumns}
+          rows={sortedCampaigns}
+          rowKey={(campaign) => campaign.campaign}
+          tableLabel="Campaign detail"
+          stickyFirstColumn
+          onRowClick={(campaign) => setSelectedCampaign(campaign.campaign)}
+          isRowActive={(campaign) => activeCampaignKey === campaign.campaign}
+          emptyState="No campaigns match the current filters."
+        />
+      </SectionCard>
 
       {/* Campaign-level budget: targets vs actual spend */}
       <div

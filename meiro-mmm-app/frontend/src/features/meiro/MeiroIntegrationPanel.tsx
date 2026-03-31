@@ -76,7 +76,7 @@ interface MeiroIntegrationPanelProps {
   onDryRun: () => void
   onImportFromMeiro: () => void
   onReplayArchive: () => void
-  onReprocessSelectedQuarantine?: () => void
+  onReprocessSelectedQuarantine?: (recordIndices?: number[]) => void
   onSelectQuarantineRun: (runId: string) => void
 }
 

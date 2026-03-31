@@ -1,7 +1,9 @@
-import { Fragment, useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { BarChart, Bar, CartesianGrid, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { tokens as t } from '../theme/tokens'
 import RecommendedActionsList, { type RecommendedActionItem } from '../components/RecommendedActionsList'
+import { AnalyticsTable, type AnalyticsTableColumn } from '../components/dashboard'
 import { navigateForRecommendedAction } from '../lib/recommendedActions'
 import { apiGetJson, apiSendJson, withQuery } from '../lib/apiClient'
 
@@ -597,6 +599,273 @@ export default function DataQuality() {
   if (scoreInputs.defaulted_value > 10) topDrivers.push(`${scoreInputs.defaulted_value.toFixed(1)}% defaulted conversion values`)
   if (scoreInputs.unresolved_pairs > 10) topDrivers.push(`${scoreInputs.unresolved_pairs.toFixed(1)}% unresolved source/medium touchpoints`)
   if (scoreInputs.inferred_journeys > 15) topDrivers.push(`${scoreInputs.inferred_journeys.toFixed(1)}% journeys using inferred mappings`)
+  const rawEventDiagnostics = meiroWebhookSuggestionsQuery.data?.event_stream_diagnostics
+  const rawEventFunnelData = rawEventDiagnostics?.available
+    ? [
+        { label: 'Events', value: rawEventDiagnostics.events_examined, annotation: 'Examined' },
+        {
+          label: 'Named',
+          value: Math.round(rawEventDiagnostics.events_examined * rawEventDiagnostics.usable_event_name_share),
+          annotation: `${(rawEventDiagnostics.usable_event_name_share * 100).toFixed(0)}%`,
+        },
+        {
+          label: 'Identified',
+          value: Math.round(rawEventDiagnostics.events_examined * rawEventDiagnostics.identity_share),
+          annotation: `${(rawEventDiagnostics.identity_share * 100).toFixed(0)}%`,
+        },
+        {
+          label: 'Source/medium',
+          value: Math.round(rawEventDiagnostics.events_examined * rawEventDiagnostics.source_medium_share),
+          annotation: `${(rawEventDiagnostics.source_medium_share * 100).toFixed(0)}%`,
+        },
+        {
+          label: 'Linked',
+          value: Math.round(rawEventDiagnostics.events_examined * rawEventDiagnostics.conversion_linkage_share),
+          annotation: `${(rawEventDiagnostics.conversion_linkage_share * 100).toFixed(0)}%`,
+        },
+      ]
+    : []
+  const webhookEventColumns: AnalyticsTableColumn<MeiroWebhookEvent>[] = [
+    {
+      key: 'received_at',
+      label: 'Received',
+      render: (event) => (event.received_at ? new Date(event.received_at).toLocaleString() : '—'),
+    },
+    {
+      key: 'ingest_kind',
+      label: 'Kind',
+      render: (event) => {
+        const ingestKind = String(event.ingest_kind || 'profiles')
+        return (
+          <span
+            style={{
+              padding: '2px 6px',
+              borderRadius: 999,
+              fontSize: t.font.sizeXs,
+              fontWeight: t.font.weightMedium,
+              background: ingestKind === 'events' ? t.color.warningMuted : t.color.successMuted,
+              color: ingestKind === 'events' ? t.color.warning : t.color.success,
+            }}
+          >
+            {ingestKind === 'events' ? 'events' : 'profiles'}
+          </span>
+        )
+      },
+    },
+    {
+      key: 'received_count',
+      label: 'Records',
+      align: 'right',
+      render: (event) => (event.received_count ?? 0).toLocaleString(),
+    },
+    {
+      key: 'replace',
+      label: 'Mode',
+      render: (event) => (event.replace ? 'replace' : 'append'),
+    },
+    {
+      key: 'payload_bytes',
+      label: 'Payload size',
+      align: 'right',
+      render: (event) => (event.payload_bytes != null ? `${event.payload_bytes.toLocaleString()} B` : '—'),
+    },
+    {
+      key: 'conversion_event_names',
+      label: 'Detected events',
+      render: (event) => (event.conversion_event_names?.length ? event.conversion_event_names.join(', ') : '—'),
+    },
+    {
+      key: 'detected_summary',
+      label: 'Detected channels / profiles',
+      render: (event) => {
+        const ingestKind = String(event.ingest_kind || 'profiles')
+        return ingestKind === 'events'
+          ? event.channels_detected?.length
+            ? event.channels_detected.join(', ')
+            : 'Reconstructed on replay/import'
+          : event.channels_detected?.length
+          ? event.channels_detected.join(', ')
+          : '—'
+      },
+    },
+    {
+      key: 'source',
+      label: 'Source',
+      render: (event) => (
+        <div>
+          <div>{event.ip || '—'}</div>
+          {event.user_agent ? (
+            <div
+              style={{
+                fontSize: t.font.sizeXs,
+                color: t.color.textMuted,
+                maxWidth: 300,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {event.user_agent}
+            </div>
+          ) : null}
+        </div>
+      ),
+    },
+    {
+      key: 'payload',
+      label: 'Payload',
+      align: 'center',
+      render: (event, idx) => {
+        const isExpanded = expandedWebhookRow === idx
+        return (
+          <div style={{ display: 'grid', gap: 8, justifyItems: 'center' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <span
+                style={{
+                  padding: '2px 6px',
+                  borderRadius: 999,
+                  fontSize: t.font.sizeXs,
+                  fontWeight: t.font.weightMedium,
+                  background: event.payload_json_valid === false ? t.color.dangerMuted : t.color.successMuted,
+                  color: event.payload_json_valid === false ? t.color.danger : t.color.success,
+                }}
+              >
+                {event.payload_json_valid === false ? 'JSON invalid' : 'JSON valid'}
+              </span>
+              {event.payload_truncated ? (
+                <span style={{ fontSize: t.font.sizeXs, color: t.color.warning }}>Truncated</span>
+              ) : null}
+              <button
+                type="button"
+                onClick={(rowEvent) => {
+                  rowEvent.stopPropagation()
+                  setExpandedWebhookRow(isExpanded ? null : idx)
+                }}
+                style={{
+                  padding: '2px 8px',
+                  fontSize: t.font.sizeXs,
+                  color: t.color.textSecondary,
+                  background: 'transparent',
+                  border: `1px solid ${t.color.border}`,
+                  borderRadius: t.radius.sm,
+                  cursor: 'pointer',
+                }}
+              >
+                {isExpanded ? 'Hide' : 'View'}
+              </button>
+              <button
+                type="button"
+                onClick={async (rowEvent) => {
+                  rowEvent.stopPropagation()
+                  try {
+                    await navigator.clipboard.writeText(event.payload_excerpt || '')
+                    showToast('Payload copied to clipboard.', 'success')
+                  } catch {
+                    showToast('Failed to copy payload.', 'error')
+                  }
+                }}
+                style={{
+                  padding: '2px 8px',
+                  fontSize: t.font.sizeXs,
+                  color: t.color.textSecondary,
+                  background: 'transparent',
+                  border: `1px solid ${t.color.border}`,
+                  borderRadius: t.radius.sm,
+                  cursor: 'pointer',
+                }}
+              >
+                Copy
+              </button>
+            </div>
+            {isExpanded ? (
+              <pre
+                style={{
+                  margin: 0,
+                  width: 'min(560px, 100%)',
+                  fontSize: t.font.sizeXs,
+                  background: t.color.bgSubtle,
+                  border: `1px solid ${t.color.borderLight}`,
+                  borderRadius: t.radius.sm,
+                  padding: t.space.sm,
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  maxHeight: 260,
+                  overflow: 'auto',
+                  textAlign: 'left',
+                }}
+              >
+                {event.payload_excerpt || 'No payload captured'}
+                {event.payload_truncated ? '\n\n[Payload truncated in log]' : ''}
+              </pre>
+            ) : null}
+          </div>
+        )
+      },
+    },
+  ]
+  const alertColumns: AnalyticsTableColumn<DQAlert>[] = [
+    {
+      key: 'triggered_at',
+      label: 'First seen',
+      render: (alert) => new Date(alert.triggered_at).toLocaleString(),
+    },
+    {
+      key: 'rule',
+      label: 'Rule',
+      render: (alert) => alert.rule?.name ?? alert.message,
+    },
+    {
+      key: 'source',
+      label: 'Source',
+      render: (alert) => alert.rule?.source ?? '—',
+    },
+    {
+      key: 'metric_key',
+      label: 'Metric',
+      render: (alert) => alert.rule?.metric_key ?? '—',
+    },
+    {
+      key: 'metric_value',
+      label: 'Value',
+      align: 'right',
+      render: (alert) => alert.metric_value.toFixed(2),
+    },
+    {
+      key: 'baseline_value',
+      label: 'Threshold',
+      align: 'right',
+      render: (alert) => (alert.baseline_value != null ? alert.baseline_value.toFixed(2) : '—'),
+    },
+    {
+      key: 'severity',
+      label: 'Severity',
+      align: 'center',
+      render: (alert) => {
+        const sev = (alert.rule?.severity ?? 'warn') as string
+        const sevColor =
+          sev === 'critical' ? t.color.danger : sev === 'info' ? t.color.textSecondary : t.color.warning
+        return <span style={{ color: sevColor }}>{sev}</span>
+      },
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      align: 'center',
+      render: (alert) => (alert.status === 'acked' ? 'Acknowledged' : alert.status === 'resolved' ? 'Resolved' : 'Open'),
+    },
+    {
+      key: 'actions',
+      label: 'Actions',
+      align: 'center',
+      render: (alert) => (
+        <AlertActions
+          alert={alert}
+          onStatus={(status) => updateAlertStatus.mutate({ id: alert.id, status })}
+          onNote={(note) => updateAlertNote.mutate({ id: alert.id, note })}
+        />
+      ),
+    },
+  ]
 
   return (
     <div style={{ maxWidth: 1200, margin: '0 auto' }}>
@@ -950,156 +1219,14 @@ export default function DataQuality() {
             {(meiroWebhookEventsQuery.error as Error)?.message || 'Failed to load webhook events'}
           </p>
         ) : (meiroWebhookEventsQuery.data?.items?.length || 0) > 0 ? (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: t.font.sizeSm }}>
-              <thead>
-                <tr style={{ borderBottom: `2px solid ${t.color.border}` }}>
-                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Received</th>
-                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Kind</th>
-                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right' }}>Records</th>
-                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Mode</th>
-                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right' }}>Payload size</th>
-                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Detected events</th>
-                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Detected channels / profiles</th>
-                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Source</th>
-                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'center' }}>Payload</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(meiroWebhookEventsQuery.data?.items || []).map((event, idx) => {
-                  const isExpanded = expandedWebhookRow === idx
-                  const ingestKind = String(event.ingest_kind || 'profiles')
-                  const detectedSummary =
-                    ingestKind === 'events'
-                      ? (event.channels_detected?.length ? event.channels_detected.join(', ') : 'Reconstructed on replay/import')
-                      : (event.channels_detected?.length ? event.channels_detected.join(', ') : '—')
-                  return (
-                    <Fragment key={`evt-${idx}`}>
-                      <tr style={{ borderBottom: `1px solid ${t.color.borderLight}` }}>
-                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px` }}>
-                          {event.received_at ? new Date(event.received_at).toLocaleString() : '—'}
-                        </td>
-                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px` }}>
-                          <span
-                            style={{
-                              padding: '2px 6px',
-                              borderRadius: 999,
-                              fontSize: t.font.sizeXs,
-                              fontWeight: t.font.weightMedium,
-                              background: ingestKind === 'events' ? t.color.warningMuted : t.color.successMuted,
-                              color: ingestKind === 'events' ? t.color.warning : t.color.success,
-                            }}
-                          >
-                            {ingestKind === 'events' ? 'events' : 'profiles'}
-                          </span>
-                        </td>
-                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right' }}>
-                          {(event.received_count ?? 0).toLocaleString()}
-                        </td>
-                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px` }}>{event.replace ? 'replace' : 'append'}</td>
-                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right' }}>
-                          {event.payload_bytes != null ? `${event.payload_bytes.toLocaleString()} B` : '—'}
-                        </td>
-                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px` }}>
-                          {event.conversion_event_names?.length ? event.conversion_event_names.join(', ') : '—'}
-                        </td>
-                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px` }}>
-                          {detectedSummary}
-                        </td>
-                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px` }}>
-                          {event.ip || '—'}
-                          {event.user_agent ? (
-                            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {event.user_agent}
-                            </div>
-                          ) : null}
-                        </td>
-                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'center' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, flexWrap: 'wrap' }}>
-                            <span
-                              style={{
-                                padding: '2px 6px',
-                                borderRadius: 999,
-                                fontSize: t.font.sizeXs,
-                                fontWeight: t.font.weightMedium,
-                                background: event.payload_json_valid === false ? t.color.dangerMuted : t.color.successMuted,
-                                color: event.payload_json_valid === false ? t.color.danger : t.color.success,
-                              }}
-                            >
-                              {event.payload_json_valid === false ? 'JSON invalid' : 'JSON valid'}
-                            </span>
-                            {event.payload_truncated ? (
-                              <span style={{ fontSize: t.font.sizeXs, color: t.color.warning }}>Truncated</span>
-                            ) : null}
-                            <button
-                              type="button"
-                              onClick={() => setExpandedWebhookRow(isExpanded ? null : idx)}
-                              style={{
-                                padding: '2px 8px',
-                                fontSize: t.font.sizeXs,
-                                color: t.color.textSecondary,
-                                background: 'transparent',
-                                border: `1px solid ${t.color.border}`,
-                                borderRadius: t.radius.sm,
-                                cursor: 'pointer',
-                              }}
-                            >
-                              {isExpanded ? 'Hide' : 'View'}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                try {
-                                  await navigator.clipboard.writeText(event.payload_excerpt || '')
-                                  showToast('Payload copied to clipboard.', 'success')
-                                } catch {
-                                  showToast('Failed to copy payload.', 'error')
-                                }
-                              }}
-                              style={{
-                                padding: '2px 8px',
-                                fontSize: t.font.sizeXs,
-                                color: t.color.textSecondary,
-                                background: 'transparent',
-                                border: `1px solid ${t.color.border}`,
-                                borderRadius: t.radius.sm,
-                                cursor: 'pointer',
-                              }}
-                            >
-                              Copy
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                      {isExpanded && (
-                        <tr style={{ borderBottom: `1px solid ${t.color.borderLight}` }}>
-                          <td colSpan={9} style={{ padding: `${t.space.sm}px ${t.space.md}px` }}>
-                            <pre
-                              style={{
-                                margin: 0,
-                                fontSize: t.font.sizeXs,
-                                background: t.color.bgSubtle,
-                                border: `1px solid ${t.color.borderLight}`,
-                                borderRadius: t.radius.sm,
-                                padding: t.space.sm,
-                                whiteSpace: 'pre-wrap',
-                                wordBreak: 'break-word',
-                                maxHeight: 260,
-                                overflow: 'auto',
-                              }}
-                            >
-                              {event.payload_excerpt || 'No payload captured'}
-                              {event.payload_truncated ? '\n\n[Payload truncated in log]' : ''}
-                            </pre>
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+          <AnalyticsTable
+            columns={webhookEventColumns}
+            rows={meiroWebhookEventsQuery.data?.items || []}
+            rowKey={(event, idx) => `evt-${idx}-${event.received_at || 'na'}`}
+            tableLabel="Meiro pipes diagnostics"
+            stickyFirstColumn
+            minWidth={1200}
+          />
         ) : (
           <p style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
             No Meiro webhook traffic captured yet. Send data to either `/api/connectors/meiro/profiles` or `/api/connectors/meiro/events`.
@@ -1164,20 +1291,41 @@ export default function DataQuality() {
                 <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
                   Raw event stream diagnostics
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: t.space.sm }}>
-                  {[
-                    { label: 'Usable names', value: `${(meiroWebhookSuggestionsQuery.data.event_stream_diagnostics.usable_event_name_share * 100).toFixed(1)}%` },
-                    { label: 'Identity coverage', value: `${(meiroWebhookSuggestionsQuery.data.event_stream_diagnostics.identity_share * 100).toFixed(1)}%` },
-                    { label: 'Source/medium', value: `${(meiroWebhookSuggestionsQuery.data.event_stream_diagnostics.source_medium_share * 100).toFixed(1)}%` },
-                    { label: 'Referrer-only', value: `${(meiroWebhookSuggestionsQuery.data.event_stream_diagnostics.referrer_only_share * 100).toFixed(1)}%` },
-                    { label: 'Conversion linkage', value: `${(meiroWebhookSuggestionsQuery.data.event_stream_diagnostics.conversion_linkage_share * 100).toFixed(1)}%` },
-                    { label: 'Touchpoint-like', value: Number(meiroWebhookSuggestionsQuery.data.event_stream_diagnostics.touchpoint_like_events || 0).toLocaleString() },
-                  ].map((item) => (
-                    <div key={item.label} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
-                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
-                      <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold }}>{item.value}</div>
-                    </div>
-                  ))}
+                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.35fr) minmax(280px, 1fr)', gap: t.space.md, alignItems: 'stretch' }}>
+                  <div style={{ minWidth: 0 }}>
+                    <ResponsiveContainer width="100%" height={260}>
+                      <BarChart data={rawEventFunnelData} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
+                        <XAxis dataKey="label" tick={{ fontSize: t.font.sizeXs, fill: t.color.textSecondary }} />
+                        <YAxis tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }} />
+                        <Tooltip
+                          contentStyle={{ fontSize: t.font.sizeSm, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                          formatter={(value: number, _name: string, item: { payload?: { annotation?: string } }) => [
+                            Number(value).toLocaleString(),
+                            item.payload?.annotation || 'count',
+                          ]}
+                        />
+                        <Bar dataKey="value" fill={t.color.chart[2]} radius={[4, 4, 0, 0]}>
+                          <LabelList dataKey="annotation" position="top" fill={t.color.textMuted} fontSize={11} />
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: t.space.sm }}>
+                    {[
+                      { label: 'Usable names', value: `${(meiroWebhookSuggestionsQuery.data.event_stream_diagnostics.usable_event_name_share * 100).toFixed(1)}%` },
+                      { label: 'Identity coverage', value: `${(meiroWebhookSuggestionsQuery.data.event_stream_diagnostics.identity_share * 100).toFixed(1)}%` },
+                      { label: 'Source/medium', value: `${(meiroWebhookSuggestionsQuery.data.event_stream_diagnostics.source_medium_share * 100).toFixed(1)}%` },
+                      { label: 'Referrer-only', value: `${(meiroWebhookSuggestionsQuery.data.event_stream_diagnostics.referrer_only_share * 100).toFixed(1)}%` },
+                      { label: 'Conversion linkage', value: `${(meiroWebhookSuggestionsQuery.data.event_stream_diagnostics.conversion_linkage_share * 100).toFixed(1)}%` },
+                      { label: 'Touchpoint-like', value: Number(meiroWebhookSuggestionsQuery.data.event_stream_diagnostics.touchpoint_like_events || 0).toLocaleString() },
+                    ].map((item) => (
+                      <div key={item.label} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                        <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold }}>{item.value}</div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
                 {(meiroWebhookSuggestionsQuery.data.event_stream_diagnostics.warnings || []).length ? (
                   <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>
@@ -1626,59 +1774,14 @@ export default function DataQuality() {
         {alertsQuery.isLoading ? (
           <p style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading alerts…</p>
         ) : alertsQuery.data && alertsQuery.data.length > 0 ? (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: t.font.sizeSm }}>
-              <thead>
-                <tr style={{ borderBottom: `2px solid ${t.color.border}` }}>
-                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>First seen</th>
-                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Rule</th>
-                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Source</th>
-                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Metric</th>
-                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right' }}>Value</th>
-                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right' }}>Threshold</th>
-                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'center' }}>Severity</th>
-                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'center' }}>Status</th>
-                  <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'center' }}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {alertsQuery.data.map((a) => {
-                  const sev = (a.rule?.severity ?? 'warn') as string
-                  const sevColor =
-                    sev === 'critical' ? t.color.danger : sev === 'info' ? t.color.textSecondary : t.color.warning
-                  return (
-                    <tr key={a.id} style={{ borderBottom: `1px solid ${t.color.borderLight}` }}>
-                      <td style={{ padding: `${t.space.sm}px ${t.space.md}px` }}>
-                        {new Date(a.triggered_at).toLocaleString()}
-                      </td>
-                      <td style={{ padding: `${t.space.sm}px ${t.space.md}px` }}>{a.rule?.name ?? a.message}</td>
-                      <td style={{ padding: `${t.space.sm}px ${t.space.md}px` }}>{a.rule?.source ?? '—'}</td>
-                      <td style={{ padding: `${t.space.sm}px ${t.space.md}px` }}>{a.rule?.metric_key ?? '—'}</td>
-                      <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right' }}>
-                        {a.metric_value.toFixed(2)}
-                      </td>
-                      <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right' }}>
-                        {a.baseline_value != null ? a.baseline_value.toFixed(2) : '—'}
-                      </td>
-                      <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'center', color: sevColor }}>
-                        {sev}
-                      </td>
-                      <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'center' }}>
-                        {a.status === 'acked' ? 'Acknowledged' : a.status === 'resolved' ? 'Resolved' : 'Open'}
-                      </td>
-                      <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'center' }}>
-                        <AlertActions
-                          alert={a}
-                          onStatus={(s) => updateAlertStatus.mutate({ id: a.id, status: s })}
-                          onNote={(n) => updateAlertNote.mutate({ id: a.id, note: n })}
-                        />
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+          <AnalyticsTable
+            columns={alertColumns}
+            rows={alertsQuery.data}
+            rowKey={(alert) => String(alert.id)}
+            tableLabel="Data quality alerts"
+            stickyFirstColumn
+            minWidth={1100}
+          />
         ) : (
           <div
             style={{

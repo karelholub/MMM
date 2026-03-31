@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import DashboardPage from '../components/dashboard/DashboardPage'
 import SectionCard from '../components/dashboard/SectionCard'
-import DashboardTable from '../components/dashboard/DashboardTable'
+import { AnalyticsTable, type AnalyticsTableColumn } from '../components/dashboard'
 import GlobalFilterBar, { GlobalFiltersState } from '../components/dashboard/GlobalFilterBar'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { tokens as t } from '../theme/tokens'
@@ -1009,6 +1009,53 @@ export default function Journeys({
     () => (transitionsQuery.data?.edges ?? []).slice(0, 12),
     [transitionsQuery.data?.edges],
   )
+  const pathTableColumns: AnalyticsTableColumn<JourneyPathRow>[] = [
+    {
+      key: 'path_steps',
+      label: 'Path steps',
+      render: (row) => (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {normalizeSteps(row.path_steps).map((step) => pathChip(step))}
+        </div>
+      ),
+      cellStyle: { fontWeight: t.font.weightMedium },
+    },
+    {
+      key: 'count_journeys',
+      label: 'Journeys',
+      align: 'right',
+      render: (row) => row.count_journeys.toLocaleString(),
+    },
+    {
+      key: 'conversion_rate',
+      label: 'Conv. rate',
+      align: 'right',
+      render: (row) => formatPercent(row.conversion_rate),
+    },
+    {
+      key: 'avg_time_to_convert_sec',
+      label: 'Avg',
+      align: 'right',
+      render: (row) => formatSeconds(row.avg_time_to_convert_sec),
+    },
+    {
+      key: 'p50_time_to_convert_sec',
+      label: 'P50',
+      align: 'right',
+      render: (row) => formatSeconds(row.p50_time_to_convert_sec),
+    },
+    {
+      key: 'p90_time_to_convert_sec',
+      label: 'P90',
+      align: 'right',
+      render: (row) => formatSeconds(row.p90_time_to_convert_sec),
+    },
+    {
+      key: 'credit_overlay',
+      label: 'Credit overlay',
+      render: (row) => creditOverlay(globalCredits, row.channel_group),
+    },
+  ]
 
   const buildCurrentSavedViewState = (): SavedJourneyViewStatePayload => ({
     selectedJourneyId,
@@ -1247,41 +1294,80 @@ export default function Journeys({
 
           {activeTab === 'paths' && (
             <>
-              <DashboardTable
-                search={{ value: pathSearch, onChange: setPathSearch, placeholder: 'Search path steps…' }}
-                actions={
-                  <>
-                    <select
-                      value={pathSortBy}
-                      onChange={(e) => setPathSortBy(e.target.value as PathSortBy)}
-                      style={{ padding: '7px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, fontSize: t.font.sizeSm }}
-                    >
-                      <option value="journeys">Sort: Journeys</option>
-                      <option value="conversion_rate">Sort: Conversion rate</option>
-                      <option value="avg_time">Sort: Avg time-to-convert</option>
-                    </select>
-                    <button
-                      type="button"
-                      onClick={() => setPathSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
-                      style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, color: t.color.text, borderRadius: t.radius.sm, fontSize: t.font.sizeSm, padding: '7px 10px', cursor: 'pointer' }}
-                    >
-                      {pathSortDir === 'asc' ? 'Ascending' : 'Descending'}
-                    </button>
-                    <select
-                      value={pathsLimit}
-                      onChange={(e) => {
-                        setPathsLimit(Number(e.target.value))
-                        setPathsPage(1)
+              <AnalyticsTable
+                columns={pathTableColumns}
+                rows={pathsQuery.isLoading || pathsQuery.isError ? [] : filteredPaths}
+                rowKey={(row, idx) =>
+                  `${row.path_hash}-${row.device || ''}-${row.country || ''}-${row.channel_group || ''}-${row.campaign_id || ''}-${idx}`
+                }
+                tableLabel="Journey paths"
+                stickyFirstColumn
+                onRowClick={(row) => setSelectedPath(row)}
+                isRowActive={(row) =>
+                  !!selectedPath &&
+                  row.path_hash === selectedPath.path_hash &&
+                  (row.channel_group || '') === (selectedPath.channel_group || '') &&
+                  (row.campaign_id || '') === (selectedPath.campaign_id || '') &&
+                  (row.device || '') === (selectedPath.device || '') &&
+                  (row.country || '') === (selectedPath.country || '')
+                }
+                toolbar={
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: t.space.md,
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <input
+                      type="search"
+                      value={pathSearch}
+                      onChange={(event) => setPathSearch(event.target.value)}
+                      placeholder="Search path steps…"
+                      style={{
+                        minWidth: 220,
+                        flex: '1 1 280px',
+                        padding: `${t.space.sm}px ${t.space.md}px`,
+                        borderRadius: t.radius.sm,
+                        border: `1px solid ${t.color.border}`,
+                        fontSize: t.font.sizeSm,
                       }}
-                      style={{ padding: '7px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, fontSize: t.font.sizeSm }}
-                    >
-                      {[25, 50, 100].map((v) => (
-                        <option key={v} value={v}>
-                          {v} rows
-                        </option>
-                      ))}
-                    </select>
-                  </>
+                    />
+                    <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+                      <select
+                        value={pathSortBy}
+                        onChange={(e) => setPathSortBy(e.target.value as PathSortBy)}
+                        style={{ padding: '7px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, fontSize: t.font.sizeSm }}
+                      >
+                        <option value="journeys">Sort: Journeys</option>
+                        <option value="conversion_rate">Sort: Conversion rate</option>
+                        <option value="avg_time">Sort: Avg time-to-convert</option>
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => setPathSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
+                        style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, color: t.color.text, borderRadius: t.radius.sm, fontSize: t.font.sizeSm, padding: '7px 10px', cursor: 'pointer' }}
+                      >
+                        {pathSortDir === 'asc' ? 'Ascending' : 'Descending'}
+                      </button>
+                      <select
+                        value={pathsLimit}
+                        onChange={(e) => {
+                          setPathsLimit(Number(e.target.value))
+                          setPathsPage(1)
+                        }}
+                        style={{ padding: '7px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, fontSize: t.font.sizeSm }}
+                      >
+                        {[25, 50, 100].map((v) => (
+                          <option key={v} value={v}>
+                            {v} rows
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
                 }
                 pagination={
                   <>
@@ -1306,61 +1392,14 @@ export default function Journeys({
                     </button>
                   </>
                 }
-              >
-                <thead>
-                  <tr>
-                    <th>Path steps</th>
-                    <th>Journeys</th>
-                    <th>Conv. rate</th>
-                    <th>Avg</th>
-                    <th>P50</th>
-                    <th>P90</th>
-                    <th>Credit overlay</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pathsQuery.isLoading && (
-                    <tr>
-                      <td colSpan={7} style={{ color: t.color.textSecondary }}>
-                        Loading path aggregates…
-                      </td>
-                    </tr>
-                  )}
-                  {pathsQuery.isError && (
-                    <tr>
-                      <td colSpan={7} style={{ color: t.color.danger }}>
-                        {(pathsQuery.error as Error).message}
-                      </td>
-                    </tr>
-                  )}
-                  {!pathsQuery.isLoading && !pathsQuery.isError && filteredPaths.length === 0 && (
-                    <tr>
-                      <td colSpan={7} style={{ color: t.color.textSecondary }}>
-                        No paths for the selected journey and filters.
-                      </td>
-                    </tr>
-                  )}
-                  {filteredPaths.map((row, idx) => (
-                    <tr
-                      key={`${row.path_hash}-${row.device || ''}-${row.country || ''}-${row.channel_group || ''}-${row.campaign_id || ''}-${idx}`}
-                      onClick={() => setSelectedPath(row)}
-                      style={{ cursor: 'pointer' }}
-                    >
-                      <td>
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                          {normalizeSteps(row.path_steps).map((s) => pathChip(s))}
-                        </div>
-                      </td>
-                      <td>{row.count_journeys.toLocaleString()}</td>
-                      <td>{formatPercent(row.conversion_rate)}</td>
-                      <td>{formatSeconds(row.avg_time_to_convert_sec)}</td>
-                      <td>{formatSeconds(row.p50_time_to_convert_sec)}</td>
-                      <td>{formatSeconds(row.p90_time_to_convert_sec)}</td>
-                      <td>{creditOverlay(globalCredits, row.channel_group)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </DashboardTable>
+                emptyState={
+                  pathsQuery.isLoading
+                    ? 'Loading path aggregates…'
+                    : pathsQuery.isError
+                    ? (pathsQuery.error as Error).message
+                    : 'No paths for the selected journey and filters.'
+                }
+              />
             </>
           )}
 

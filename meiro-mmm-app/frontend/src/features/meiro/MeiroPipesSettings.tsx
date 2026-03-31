@@ -1,6 +1,6 @@
 import { useEffect, useState, type Dispatch, type SetStateAction } from 'react'
 
-import DashboardTable from '../../components/dashboard/DashboardTable'
+import { AnalyticsTable, type AnalyticsTableColumn } from '../../components/dashboard'
 import type { MeiroConfig, MeiroPullConfig, MeiroWebhookDiagnostics, MeiroWebhookEvent } from '../../connectors/meiroConnector'
 import { tokens as t } from '../../theme/tokens'
 import { DEFAULT_MEIRO_PULL_CONFIG, type MeiroWebhookArchiveStatus } from './shared'
@@ -68,6 +68,44 @@ export default function MeiroPipesSettings({
   useEffect(() => {
     setAdjustmentAliasDraft(adjustmentAliasText)
   }, [adjustmentAliasText])
+
+  const webhookEventColumns: AnalyticsTableColumn<MeiroWebhookEvent>[] = [
+    {
+      key: 'received',
+      label: 'Received',
+      render: (event) => relativeTime(event.received_at),
+      cellStyle: { whiteSpace: 'nowrap' },
+    },
+    {
+      key: 'records',
+      label: 'Records',
+      align: 'right',
+      render: (event) => Number(event.received_count || 0).toLocaleString(),
+      cellStyle: { fontWeight: t.font.weightMedium },
+    },
+    {
+      key: 'kind',
+      label: 'Kind',
+      render: (event) => String((event as MeiroWebhookEvent & { ingest_kind?: string }).ingest_kind || 'profiles'),
+    },
+    {
+      key: 'mode',
+      label: 'Mode',
+      render: (event) => (event.replace ? 'replace' : 'append'),
+    },
+    {
+      key: 'stored_total',
+      label: 'Stored total',
+      align: 'right',
+      render: (event) => Number(event.stored_total || 0).toLocaleString(),
+    },
+    {
+      key: 'source_ip',
+      label: 'Source IP',
+      render: (event) => event.ip || '—',
+      cellStyle: { color: t.color.textSecondary },
+    },
+  ]
 
   return (
     <div style={{ display: 'grid', gap: t.space.md }}>
@@ -504,35 +542,16 @@ export default function MeiroPipesSettings({
         ) : meiroWebhookEventsError ? (
           <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{meiroWebhookEventsError}</div>
         ) : (
-          <DashboardTable density="compact">
-            <thead>
-              <tr>
-                <th>Received</th>
-                <th>Records</th>
-                <th>Kind</th>
-                <th>Mode</th>
-                <th>Stored total</th>
-                <th>Source IP</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(meiroWebhookEvents?.items || []).map((event, idx) => (
-                <tr key={`${event.received_at || 'event'}-${idx}`}>
-                  <td>{relativeTime(event.received_at)}</td>
-                  <td>{Number(event.received_count || 0).toLocaleString()}</td>
-                  <td>{String((event as MeiroWebhookEvent & { ingest_kind?: string }).ingest_kind || 'profiles')}</td>
-                  <td>{event.replace ? 'replace' : 'append'}</td>
-                  <td>{Number(event.stored_total || 0).toLocaleString()}</td>
-                  <td>{event.ip || '—'}</td>
-                </tr>
-              ))}
-              {!(meiroWebhookEvents?.items || []).length && (
-                <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', color: t.color.textSecondary }}>No webhook events received yet.</td>
-                </tr>
-              )}
-            </tbody>
-          </DashboardTable>
+          <AnalyticsTable
+            columns={webhookEventColumns}
+            rows={meiroWebhookEvents?.items || []}
+            rowKey={(event, idx) => `${event.received_at || 'event'}-${idx}`}
+            tableLabel="Recent Meiro webhook events"
+            density="compact"
+            minWidth={760}
+            stickyFirstColumn
+            emptyState="No webhook events received yet."
+          />
         )}
       </div>
     </div>

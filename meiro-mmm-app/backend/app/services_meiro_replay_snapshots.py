@@ -47,9 +47,10 @@ def create_meiro_replay_snapshot(
         context_json=context_json or {},
     )
     db.add(item)
+    db.flush()
+    payload = _serialize(item)
     db.commit()
-    db.refresh(item)
-    return _serialize(item)
+    return payload
 
 
 def get_meiro_replay_snapshot(db: Session, snapshot_id: str) -> Optional[Dict[str, Any]]:

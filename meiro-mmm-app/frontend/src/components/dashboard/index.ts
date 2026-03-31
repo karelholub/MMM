@@ -1,4 +1,6 @@
 export { DashboardPage } from './DashboardPage'
+export { default as AnalyticsTable } from './AnalyticsTable'
+export type { AnalyticsTableColumn } from './AnalyticsTable'
 export { default as KpiTile } from './KpiTile'
 export { default as SectionCard } from './SectionCard'
 export { default as InsightRow } from './InsightRow'

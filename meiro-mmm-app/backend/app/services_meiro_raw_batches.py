@@ -66,6 +66,23 @@ def _serialize_batch(row: MeiroRawBatch) -> Dict[str, Any]:
     return payload
 
 
+def _clone_batch(row: MeiroRawBatch) -> MeiroRawBatch:
+    clone = MeiroRawBatch(
+        batch_id=row.batch_id,
+        source_kind=row.source_kind,
+        ingestion_channel=row.ingestion_channel,
+        received_at=row.received_at,
+        parser_version=row.parser_version,
+        payload_shape=row.payload_shape,
+        replace=bool(row.replace),
+        records_count=int(row.records_count or 0),
+        payload_json=dict(row.payload_json or {}),
+        metadata_json=dict(row.metadata_json or {}),
+    )
+    clone.id = int(row.id) if row.id is not None else None
+    return clone
+
+
 def record_meiro_raw_batch(
     db: Session,
     *,
@@ -92,9 +109,10 @@ def record_meiro_raw_batch(
         metadata_json=metadata_json or {},
     )
     db.add(item)
+    db.flush()
+    detached = _clone_batch(item)
     db.commit()
-    db.refresh(item)
-    return item
+    return detached
 
 
 def list_meiro_raw_batches(

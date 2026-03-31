@@ -1,4 +1,4 @@
-import type { MeiroCleaningReport, MeiroImportResult, MeiroImportSummary, MeiroPullConfig } from '../../connectors/meiroConnector'
+import type { MeiroImportResult, MeiroPullConfig } from '../../connectors/meiroConnector'
 
 export type MeiroTab = 'overview' | 'cdp' | 'pipes' | 'normalization' | 'import'
 
@@ -7,8 +7,8 @@ export type DryRunResult = {
   preview: Array<{ id: string; touchpoints: number; value: number; quality_score?: number; quality_band?: string }>
   warnings: string[]
   validation: { ok?: boolean; error?: string }
-  import_summary?: MeiroImportSummary
-  cleaning_report?: MeiroCleaningReport
+  import_summary?: Record<string, unknown>
+  cleaning_report?: Record<string, unknown>
   quarantine_count?: number
 }
 
@@ -136,7 +136,7 @@ export function normalizeMeiroPullConfig(raw?: Partial<MeiroPullConfig> | Record
   const autoReplayMode = typeof cfg.auto_replay_mode === 'string' && ['disabled', 'interval', 'after_batch'].includes(cfg.auto_replay_mode)
     ? cfg.auto_replay_mode as MeiroPullConfig['auto_replay_mode']
     : DEFAULT_MEIRO_PULL_CONFIG.auto_replay_mode
-  const normalizeMap = (value: unknown, fallback: Record<string, string>) =>
+  const normalizeMap = (value: unknown, fallback: Record<string, string> = {}) =>
     typeof value === 'object' && value && !Array.isArray(value)
       ? Object.fromEntries(
           Object.entries(value)
@@ -148,7 +148,7 @@ export function normalizeMeiroPullConfig(raw?: Partial<MeiroPullConfig> | Record
     ? cfg.adjustment_linkage_keys
         .map((value) => String(value || '').trim())
         .filter((value): value is 'conversion_id' | 'order_id' | 'lead_id' | 'event_id' => ['conversion_id', 'order_id', 'lead_id', 'event_id'].includes(value))
-    : DEFAULT_MEIRO_PULL_CONFIG.adjustment_linkage_keys
+    : (DEFAULT_MEIRO_PULL_CONFIG.adjustment_linkage_keys || [])
   return {
     lookback_days: asInt(cfg.lookback_days, DEFAULT_MEIRO_PULL_CONFIG.lookback_days, 1, 365),
     session_gap_minutes: asInt(cfg.session_gap_minutes, DEFAULT_MEIRO_PULL_CONFIG.session_gap_minutes, 1, 720),
@@ -178,6 +178,6 @@ export function normalizeMeiroPullConfig(raw?: Partial<MeiroPullConfig> | Record
     conversion_event_aliases: normalizeMap(cfg.conversion_event_aliases, DEFAULT_MEIRO_PULL_CONFIG.conversion_event_aliases),
     touchpoint_interaction_aliases: normalizeMap(cfg.touchpoint_interaction_aliases, DEFAULT_MEIRO_PULL_CONFIG.touchpoint_interaction_aliases || {}),
     adjustment_event_aliases: normalizeMap(cfg.adjustment_event_aliases, DEFAULT_MEIRO_PULL_CONFIG.adjustment_event_aliases || {}),
-    adjustment_linkage_keys: linkageKeys.length ? linkageKeys : DEFAULT_MEIRO_PULL_CONFIG.adjustment_linkage_keys,
+    adjustment_linkage_keys: linkageKeys.length ? linkageKeys : (DEFAULT_MEIRO_PULL_CONFIG.adjustment_linkage_keys || []),
   }
 }

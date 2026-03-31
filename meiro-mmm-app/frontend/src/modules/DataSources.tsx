@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import DashboardPage from '../components/dashboard/DashboardPage'
 import SectionCard from '../components/dashboard/SectionCard'
-import DashboardTable from '../components/dashboard/DashboardTable'
+import { AnalyticsTable, type AnalyticsTableColumn } from '../components/dashboard'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import { tokens as t } from '../theme/tokens'
 import {
@@ -66,6 +66,9 @@ type WarehouseType = 'bigquery' | 'snowflake'
 type ProviderModalState = { provider: OAuthProviderKey; displayName: string } | null
 type ConnectPickerState = { open: boolean } 
 type CredentialsModalState = { open: boolean; provider: OAuthProviderKey | null }
+type ImportLogRow = Record<string, any>
+type ActiveSystemRow = Record<string, any>
+type PreviewRow = Record<string, unknown>
 
 interface DataSourcesReadinessResponse {
   status: string
@@ -815,6 +818,201 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
     ? adPlatformItems.find((p: any) => p.id === drawerConnector.id || p.provider_key === drawerConnector.type || p.type === drawerConnector.type)
     : null
 
+  const importLogRows = (importLogQuery.data?.runs ?? []).slice(0, 10)
+  const importLogColumns: AnalyticsTableColumn<ImportLogRow>[] = [
+    {
+      key: 'started',
+      label: 'Started',
+      render: (run) => relativeTime(run.started_at || run.created_at),
+      cellStyle: { whiteSpace: 'nowrap' },
+    },
+    {
+      key: 'source',
+      label: 'Source',
+      render: (run) => run.source || '—',
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      render: (run) => statusBadge(run.status || 'not_connected'),
+    },
+    {
+      key: 'rows',
+      label: 'Rows',
+      align: 'right',
+      render: (run) => Number(run.valid ?? run.count ?? 0).toLocaleString(),
+      cellStyle: { fontWeight: t.font.weightMedium },
+    },
+    {
+      key: 'cleaning',
+      label: 'Cleaning',
+      render: (run) =>
+        run.validation_summary?.event_reconstruction_diagnostics ? (
+          <span style={{ color: t.color.textSecondary, fontSize: t.font.sizeXs }}>
+            events {Number(run.validation_summary.event_reconstruction_diagnostics.events_loaded || 0).toLocaleString()}
+            {' '}· attributable {Number(run.validation_summary.event_reconstruction_diagnostics.attributable_profiles || 0).toLocaleString()}
+            {' '}· persisted {Number(run.validation_summary.event_reconstruction_diagnostics.journeys_persisted || 0).toLocaleString()}
+          </span>
+        ) : run.validation_summary?.cleaning_report ? (
+          <span style={{ color: t.color.textSecondary, fontSize: t.font.sizeXs }}>
+            fixed {Number(run.validation_summary.cleaning_report.fixed || 0).toLocaleString()}
+            {' '}· quarantined {Number(run.validation_summary.cleaning_report.dropped || 0).toLocaleString()}
+            {' '}· ambiguous {Number(run.validation_summary.cleaning_report.ambiguous || 0).toLocaleString()}
+          </span>
+        ) : (
+          <span style={{ color: t.color.textMuted }}>—</span>
+        ),
+    },
+    {
+      key: 'note',
+      label: 'Note',
+      render: (run) => <span style={{ color: t.color.textSecondary }}>{run.error || '—'}</span>,
+    },
+  ]
+
+  const activeSystemsEmptyState =
+    systemsTab === 'ad_platforms' && (oauthConnectionsQuery.isLoading || legacyConnectionsQuery.isLoading)
+      ? 'Loading providers…'
+      : 'No systems in this category.'
+
+  const systemsColumns: AnalyticsTableColumn<ActiveSystemRow>[] = [
+    {
+      key: 'name',
+      label: 'Name',
+      render: (item) => item.name,
+      cellStyle: { fontWeight: t.font.weightMedium },
+    },
+    {
+      key: 'type',
+      label: 'Type',
+      render: (item) => item.type,
+      cellStyle: { color: t.color.textSecondary },
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      render: (item) => statusBadge(item.status || 'not_connected'),
+    },
+    {
+      key: 'last_tested',
+      label: 'Last tested/synced',
+      render: (item) => relativeTime(item.last_tested_at),
+      cellStyle: { whiteSpace: 'nowrap' },
+    },
+    {
+      key: 'note',
+      label: 'Note',
+      render: (item) => <span style={{ color: t.color.textSecondary }}>{item.note || item.last_error || '—'}</span>,
+    },
+    {
+      key: 'actions',
+      label: 'Actions',
+      render: (item) => (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {item.category === 'ad_platform' && (
+            <>
+              {(item.status === 'not_connected' || item.status === 'disabled') && (
+                <button
+                  type="button"
+                  onClick={() => startOAuthMutation.mutate(item.provider_key as OAuthProviderKey)}
+                  disabled={!!disabledReason(canManageSettings, item)}
+                  title={disabledReason(canManageSettings, item)}
+                  style={{ border: `1px solid ${t.color.accent}`, background: t.color.accent, color: '#fff', borderRadius: t.radius.sm, padding: '4px 8px', cursor: disabledReason(canManageSettings, item) ? 'not-allowed' : 'pointer', opacity: disabledReason(canManageSettings, item) ? 0.7 : 1, fontSize: t.font.sizeXs }}
+                >
+                  Connect
+                </button>
+              )}
+              {(item.status === 'needs_reauth' || item.status === 'error') && (
+                <button
+                  type="button"
+                  onClick={() => reauthOAuthMutation.mutate(item.provider_key as OAuthProviderKey)}
+                  disabled={!!disabledReason(canManageSettings, item)}
+                  title={disabledReason(canManageSettings, item)}
+                  style={{ border: `1px solid ${t.color.warning}`, background: t.color.warningSubtle, color: t.color.warning, borderRadius: t.radius.sm, padding: '4px 8px', cursor: disabledReason(canManageSettings, item) ? 'not-allowed' : 'pointer', opacity: disabledReason(canManageSettings, item) ? 0.7 : 1, fontSize: t.font.sizeXs }}
+                >
+                  Reconnect
+                </button>
+              )}
+              {item.status === 'connected' && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProviderModal({ provider: item.provider_key as OAuthProviderKey, displayName: item.name })
+                      setSelectedProviderAccounts((item.selected_accounts || []).map((id: string) => String(id)))
+                    }}
+                    disabled={!canManageSettings}
+                    title={!canManageSettings ? 'You need Settings manage permission' : undefined}
+                    style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '4px 8px', cursor: 'pointer', fontSize: t.font.sizeXs }}
+                  >
+                    Select accounts
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => testOAuthMutation.mutate(item.provider_key as OAuthProviderKey)}
+                    disabled={!canManageSettings}
+                    title={!canManageSettings ? 'You need Settings manage permission' : undefined}
+                    style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '4px 8px', cursor: 'pointer', fontSize: t.font.sizeXs }}
+                  >
+                    Test
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => disconnectOAuthMutation.mutate(item.provider_key as OAuthProviderKey)}
+                    disabled={!canManageSettings}
+                    title={!canManageSettings ? 'You need Settings manage permission' : undefined}
+                    style={{ border: `1px solid ${t.color.danger}`, background: t.color.dangerMuted, color: t.color.danger, borderRadius: t.radius.sm, padding: '4px 8px', cursor: 'pointer', fontSize: t.font.sizeXs }}
+                  >
+                    Disconnect
+                  </button>
+                </>
+              )}
+            </>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              if (item.type === 'meiro' && onOpenMeiro) {
+                onOpenMeiro()
+                return
+              }
+              setDrawerConnector({ id: item.id, name: item.name, type: item.type, category: item.category })
+              if (item.type === 'meiro') setMeiroTab('overview')
+              setDrawerOpen(true)
+            }}
+            style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '4px 8px', cursor: 'pointer', fontSize: t.font.sizeXs }}
+          >
+            {item.type === 'meiro' ? 'Open workspace' : 'Configure'}
+          </button>
+          {item.category === 'warehouse' && (
+            <button
+              type="button"
+              onClick={() => testSavedMutation.mutate(item.id)}
+              style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '4px 8px', cursor: 'pointer', fontSize: t.font.sizeXs }}
+            >
+              Test
+            </button>
+          )}
+        </div>
+      ),
+    },
+  ]
+
+  const previewColumns =
+    (previewQuery.data?.columns ?? []).length > 0
+      ? (previewQuery.data?.columns ?? []).map((col: string): AnalyticsTableColumn<PreviewRow> => ({
+          key: col,
+          label: col,
+          render: (row) => String(row?.[col] ?? '—'),
+        }))
+      : [
+          {
+            key: 'empty',
+            label: 'Preview',
+            render: () => '—',
+          } satisfies AnalyticsTableColumn<PreviewRow>,
+        ]
+
   const openCredentialsModal = (provider: OAuthProviderKey) => {
     setCredentialFields({
       client_id: '',
@@ -1000,55 +1198,18 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
 
             {showImportLog && (
               <div style={{ marginTop: t.space.md }}>
-                <DashboardTable density="compact">
-                  <thead>
-                    <tr>
-                      <th>Started</th>
-                      <th>Source</th>
-                      <th>Status</th>
-                      <th>Rows</th>
-                      <th>Cleaning</th>
-                      <th>Note</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(importLogQuery.data?.runs ?? []).slice(0, 10).map((run: any) => (
-                      <tr
-                        key={run.id}
-                        onClick={() => setSelectedImportRunId(run.id)}
-                        style={{ cursor: 'pointer', background: selectedImportRunId === run.id ? t.color.bgSubtle : undefined }}
-                      >
-                        <td>{relativeTime(run.started_at || run.created_at)}</td>
-                        <td>{run.source || '—'}</td>
-                        <td>{statusBadge(run.status || 'not_connected')}</td>
-                        <td>{run.valid ?? run.count ?? 0}</td>
-                        <td style={{ color: t.color.textSecondary, fontSize: t.font.sizeXs }}>
-                          {run.validation_summary?.event_reconstruction_diagnostics ? (
-                            <>
-                              events {Number(run.validation_summary.event_reconstruction_diagnostics.events_loaded || 0).toLocaleString()}
-                              {' '}· attributable {Number(run.validation_summary.event_reconstruction_diagnostics.attributable_profiles || 0).toLocaleString()}
-                              {' '}· persisted {Number(run.validation_summary.event_reconstruction_diagnostics.journeys_persisted || 0).toLocaleString()}
-                            </>
-                          ) : run.validation_summary?.cleaning_report ? (
-                            <>
-                              fixed {Number(run.validation_summary.cleaning_report.fixed || 0).toLocaleString()}
-                              {' '}· quarantined {Number(run.validation_summary.cleaning_report.dropped || 0).toLocaleString()}
-                              {' '}· ambiguous {Number(run.validation_summary.cleaning_report.ambiguous || 0).toLocaleString()}
-                            </>
-                          ) : (
-                            '—'
-                          )}
-                        </td>
-                        <td style={{ color: t.color.textSecondary }}>{run.error || '—'}</td>
-                      </tr>
-                    ))}
-                    {(importLogQuery.data?.runs ?? []).length === 0 && (
-                      <tr>
-                        <td colSpan={6} style={{ color: t.color.textSecondary, textAlign: 'center' }}>No import runs yet.</td>
-                      </tr>
-                    )}
-                  </tbody>
-                </DashboardTable>
+                <AnalyticsTable
+                  columns={importLogColumns}
+                  rows={importLogRows}
+                  rowKey={(run) => String(run.id)}
+                  tableLabel="Import log"
+                  density="compact"
+                  minWidth={920}
+                  stickyFirstColumn
+                  onRowClick={(run) => setSelectedImportRunId(String(run.id))}
+                  isRowActive={(run) => selectedImportRunId === run.id}
+                  emptyState="No import runs yet."
+                />
 
                 <div style={{ marginTop: t.space.md, border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.surface, padding: t.space.md, display: 'grid', gap: t.space.sm }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1311,127 +1472,16 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
               ))}
             </div>
 
-            <DashboardTable density="compact">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Type</th>
-                  <th>Status</th>
-                  <th>Last tested/synced</th>
-                  <th>Note</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {activeSystemsItems.map((item: any) => (
-                  <tr key={item.id}>
-                    <td>{item.name}</td>
-                    <td>{item.type}</td>
-                    <td>{statusBadge(item.status || 'not_connected')}</td>
-                    <td>{relativeTime(item.last_tested_at)}</td>
-                    <td style={{ color: t.color.textSecondary }}>{item.note || item.last_error || '—'}</td>
-                    <td>
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        {item.category === 'ad_platform' && (
-                          <>
-                            {(item.status === 'not_connected' || item.status === 'disabled') && (
-                              <button
-                                type="button"
-                                onClick={() => startOAuthMutation.mutate(item.provider_key as OAuthProviderKey)}
-                                disabled={!!disabledReason(canManageSettings, item)}
-                                title={disabledReason(canManageSettings, item)}
-                                style={{ border: `1px solid ${t.color.accent}`, background: t.color.accent, color: '#fff', borderRadius: t.radius.sm, padding: '4px 8px', cursor: disabledReason(canManageSettings, item) ? 'not-allowed' : 'pointer', opacity: disabledReason(canManageSettings, item) ? 0.7 : 1, fontSize: t.font.sizeXs }}
-                              >
-                                Connect
-                              </button>
-                            )}
-                            {(item.status === 'needs_reauth' || item.status === 'error') && (
-                              <button
-                                type="button"
-                                onClick={() => reauthOAuthMutation.mutate(item.provider_key as OAuthProviderKey)}
-                                disabled={!!disabledReason(canManageSettings, item)}
-                                title={disabledReason(canManageSettings, item)}
-                                style={{ border: `1px solid ${t.color.warning}`, background: t.color.warningSubtle, color: t.color.warning, borderRadius: t.radius.sm, padding: '4px 8px', cursor: disabledReason(canManageSettings, item) ? 'not-allowed' : 'pointer', opacity: disabledReason(canManageSettings, item) ? 0.7 : 1, fontSize: t.font.sizeXs }}
-                              >
-                                Reconnect
-                              </button>
-                            )}
-                            {item.status === 'connected' && (
-                              <>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setProviderModal({ provider: item.provider_key as OAuthProviderKey, displayName: item.name })
-                                    setSelectedProviderAccounts((item.selected_accounts || []).map((id: string) => String(id)))
-                                  }}
-                                  disabled={!canManageSettings}
-                                  title={!canManageSettings ? 'You need Settings manage permission' : undefined}
-                                  style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '4px 8px', cursor: 'pointer', fontSize: t.font.sizeXs }}
-                                >
-                                  Select accounts
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => testOAuthMutation.mutate(item.provider_key as OAuthProviderKey)}
-                                  disabled={!canManageSettings}
-                                  title={!canManageSettings ? 'You need Settings manage permission' : undefined}
-                                  style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '4px 8px', cursor: 'pointer', fontSize: t.font.sizeXs }}
-                                >
-                                  Test
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => disconnectOAuthMutation.mutate(item.provider_key as OAuthProviderKey)}
-                                  disabled={!canManageSettings}
-                                  title={!canManageSettings ? 'You need Settings manage permission' : undefined}
-                                  style={{ border: `1px solid ${t.color.danger}`, background: t.color.dangerMuted, color: t.color.danger, borderRadius: t.radius.sm, padding: '4px 8px', cursor: 'pointer', fontSize: t.font.sizeXs }}
-                                >
-                                  Disconnect
-                                </button>
-                              </>
-                            )}
-                          </>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (item.type === 'meiro' && onOpenMeiro) {
-                              onOpenMeiro()
-                              return
-                            }
-                            setDrawerConnector({ id: item.id, name: item.name, type: item.type, category: item.category })
-                            if (item.type === 'meiro') setMeiroTab('overview')
-                            setDrawerOpen(true)
-                          }}
-                          style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '4px 8px', cursor: 'pointer', fontSize: t.font.sizeXs }}
-                        >
-                          {item.type === 'meiro' ? 'Open workspace' : 'Configure'}
-                        </button>
-                        {item.category === 'warehouse' && (
-                          <button
-                            type="button"
-                            onClick={() => testSavedMutation.mutate(item.id)}
-                            style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '4px 8px', cursor: 'pointer', fontSize: t.font.sizeXs }}
-                          >
-                            Test
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-                {systemsTab === 'ad_platforms' && (oauthConnectionsQuery.isLoading || legacyConnectionsQuery.isLoading) && (
-                  <tr>
-                    <td colSpan={6} style={{ textAlign: 'center', color: t.color.textSecondary }}>Loading providers…</td>
-                  </tr>
-                )}
-                {activeSystemsItems.length === 0 && !(systemsTab === 'ad_platforms' && (oauthConnectionsQuery.isLoading || legacyConnectionsQuery.isLoading)) && (
-                  <tr>
-                    <td colSpan={6} style={{ textAlign: 'center', color: t.color.textSecondary }}>No systems in this category.</td>
-                  </tr>
-                )}
-              </tbody>
-            </DashboardTable>
+            <AnalyticsTable
+              columns={systemsColumns}
+              rows={activeSystemsItems}
+              rowKey={(item) => String(item.id)}
+              tableLabel="Connected systems"
+              density="compact"
+              minWidth={1120}
+              stickyFirstColumn
+              emptyState={activeSystemsEmptyState}
+            />
           </SectionCard>
 
           <SectionCard
@@ -1445,29 +1495,16 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
             }
           >
             {showPreviewValidation ? (
-              <DashboardTable density="compact">
-                <thead>
-                  <tr>
-                    {(previewQuery.data?.columns ?? []).map((col: string) => (
-                      <th key={col}>{col}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {(previewQuery.data?.rows ?? []).slice(0, 12).map((row: any, idx: number) => (
-                    <tr key={idx}>
-                      {(previewQuery.data?.columns ?? []).map((col: string) => (
-                        <td key={col}>{String(row?.[col] ?? '—')}</td>
-                      ))}
-                    </tr>
-                  ))}
-                  {(previewQuery.data?.rows ?? []).length === 0 && (
-                    <tr>
-                      <td style={{ color: t.color.textSecondary }}>No preview rows available.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </DashboardTable>
+              <AnalyticsTable
+                columns={previewColumns}
+                rows={(previewQuery.data?.rows ?? []).slice(0, 12)}
+                rowKey={(_row, idx) => `preview-${idx}`}
+                tableLabel="Journey preview"
+                density="compact"
+                minWidth={Math.max((previewColumns.length || 1) * 140, 420)}
+                stickyFirstColumn
+                emptyState="No preview rows available."
+              />
             ) : (
               <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Collapsed by default to reduce noise.</div>
             )}

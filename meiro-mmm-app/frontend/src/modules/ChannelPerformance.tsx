@@ -20,6 +20,7 @@ import { tokens } from '../theme/tokens'
 import { apiGetJson, withQuery } from '../lib/apiClient'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import DecisionStatusCard from '../components/DecisionStatusCard'
+import { AnalyticsTable, type AnalyticsTableColumn, SectionCard } from '../components/dashboard'
 
 interface ChannelPerformanceProps {
   model: string
@@ -683,6 +684,46 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
   const funnelRows = [...sortedChannels]
     .sort((a, b) => b.touch_journeys - a.touch_journeys)
     .slice(0, 8)
+  const channelTableColumns: AnalyticsTableColumn<ChannelData>[] = [
+    ...tableColumns.map((column) => ({
+      key: String(column.key),
+      label: column.label,
+      align: column.align,
+      sortable: true,
+      sortDirection: sortKey === column.key ? sortDir : null,
+      onSort: () => handleSort(column.key),
+      title: `Sort by ${column.label}`,
+      render: (channel: ChannelData) => {
+        if (column.key === 'roas' && channel.spend === 0) return 'N/A'
+        if (column.key === 'cpa' && channel.spend === 0) return 'N/A'
+        return column.format(channel)
+      },
+      cellStyle: (channel: ChannelData) => {
+        const isChannel = column.key === 'channel'
+        const isRoi = column.key === 'roi'
+        const isValue = column.key === 'attributed_value'
+        return {
+          fontWeight: isChannel || isValue || isRoi ? t.font.weightMedium : t.font.weightNormal,
+          color:
+            column.key === 'cpa' && channel.spend === 0
+              ? t.color.textSecondary
+              : isValue
+              ? t.color.success
+              : isRoi
+              ? channel.roi >= 0
+                ? t.color.success
+                : t.color.danger
+              : t.color.text,
+        }
+      },
+    })),
+    {
+      key: 'confidence',
+      label: 'Confidence',
+      align: 'right',
+      render: (channel) => <ConfidenceBadge confidence={channel.confidence} compact />,
+    },
+  ]
 
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto' }}>
@@ -1317,28 +1358,9 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
       </div>
 
       {/* Sortable detail table + export */}
-      <div
-        style={{
-          background: t.color.surface,
-          border: `1px solid ${t.color.borderLight}`,
-          borderRadius: t.radius.lg,
-          padding: t.space.xl,
-          boxShadow: t.shadowSm,
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            marginBottom: t.space.lg,
-            flexWrap: 'wrap',
-            gap: t.space.md,
-          }}
-        >
-          <h3 style={{ margin: 0, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-            Channel Detail
-          </h3>
+      <SectionCard
+        title="Channel Detail"
+        actions={
           <button
             type="button"
             onClick={() =>
@@ -1363,146 +1385,65 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
           >
             Export CSV
           </button>
-        </div>
+        }
+        overflow="visible"
+      >
         <style>{`
-          .cp-table tbody tr:hover { background: ${t.color.accentMuted} !important; }
           @media (max-width: 900px) { .cp-charts { grid-template-columns: 1fr !important; } }
         `}</style>
-        <div style={{ overflowX: 'auto' }}>
-          <table className="cp-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: t.font.sizeSm }}>
-            <thead>
-              <tr style={{ borderBottom: `2px solid ${t.color.border}` }}>
-                <th
-                  colSpan={5}
-                  style={{
-                    padding: `${t.space.sm}px ${t.space.lg}px`,
-                    textAlign: 'left',
-                    fontWeight: t.font.weightNormal,
-                  }}
-                >
-                  <input
-                    type="text"
-                    value={channelSearch}
-                    onChange={(e) => setChannelSearch(e.target.value)}
-                    placeholder="Search channels…"
-                    style={{
-                      width: '100%',
-                      padding: `${t.space.xs}px ${t.space.sm}px`,
-                      borderRadius: t.radius.sm,
-                      border: `1px solid ${t.color.borderLight}`,
-                      fontSize: t.font.sizeXs,
-                    }}
-                  />
-                </th>
-                <th
-                  colSpan={7}
-                  style={{
-                    padding: `${t.space.sm}px ${t.space.lg}px`,
-                    textAlign: 'right',
-                    fontWeight: t.font.weightNormal,
-                    color: t.color.textSecondary,
-                  }}
-                >
-                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={onlyLowConfidence}
-                      onChange={(e) => setOnlyLowConfidence(e.target.checked)}
-                      style={{ margin: 0 }}
-                    />
-                    Show only low confidence (Conf. &lt; 70)
-                  </label>
-                </th>
-                <th />
-              </tr>
-              <tr style={{ borderBottom: `2px solid ${t.color.border}` }}>
-                {tableColumns.map((col) => (
-                  <th
-                    key={col.key}
-                    style={{
-                      padding: `${t.space.md}px ${t.space.lg}px`,
-                      textAlign: col.align,
-                      fontWeight: t.font.weightSemibold,
-                      color: t.color.textSecondary,
-                      whiteSpace: 'nowrap',
-                      cursor: 'pointer',
-                      userSelect: 'none',
-                    }}
-                    onClick={() => handleSort(col.key)}
-                    title={`Sort by ${col.label}`}
-                  >
-                    {col.label}
-                    {sortKey === col.key && (sortDir === 'asc' ? ' ↑' : ' ↓')}
-                  </th>
-                ))}
-                <th
-                  style={{
-                    padding: `${t.space.md}px ${t.space.lg}px`,
-                    textAlign: 'right',
-                    fontWeight: t.font.weightSemibold,
-                    color: t.color.textSecondary,
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  Confidence
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {sortedChannels.map((ch, idx) => (
-                <tr
-                  key={ch.channel}
-                  style={{
-                    borderBottom: `1px solid ${t.color.borderLight}`,
-                    backgroundColor: idx % 2 === 0 ? t.color.surface : t.color.bg,
-                  }}
-                >
-                  {tableColumns.map((col) => {
-                    const isChannel = col.key === 'channel'
-                    const isRoi = col.key === 'roi'
-                    const isValue = col.key === 'attributed_value'
-                    return (
-                      <td
-                        key={col.key}
-                        style={{
-                          padding: `${t.space.md}px ${t.space.lg}px`,
-                          textAlign: col.align,
-                          fontWeight: isChannel || isValue || isRoi ? t.font.weightMedium : t.font.weightNormal,
-                          color:
-                            col.key === 'cpa' && ch.spend === 0
-                              ? t.color.textSecondary
-                              : isValue
-                              ? t.color.success
-                              : isRoi
-                              ? ch.roi >= 0
-                                ? t.color.success
-                                : t.color.danger
-                              : t.color.text,
-                          fontVariantNumeric: col.align === 'right' ? 'tabular-nums' : undefined,
-                        }}
-                      >
-                        {(() => {
-                          if (col.key === 'roas' && ch.spend === 0) return 'N/A'
-                          if (col.key === 'cpa' && ch.spend === 0) return 'N/A'
-                          return col.format(ch)
-                        })()}
-                      </td>
-                    )
-                  })}
-                  <td
-                    style={{
-                      padding: `${t.space.md}px ${t.space.lg}px`,
-                      textAlign: 'right',
-                    }}
-                  >
-                    <ConfidenceBadge confidence={ch.confidence} compact />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+        <AnalyticsTable
+          columns={channelTableColumns}
+          rows={sortedChannels}
+          rowKey={(channel) => channel.channel}
+          tableLabel="Channel detail"
+          stickyFirstColumn
+          toolbar={
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: t.space.md,
+                flexWrap: 'wrap',
+              }}
+            >
+              <input
+                type="search"
+                value={channelSearch}
+                onChange={(event) => setChannelSearch(event.target.value)}
+                placeholder="Search channels…"
+                style={{
+                  minWidth: 220,
+                  flex: '1 1 280px',
+                  padding: `${t.space.sm}px ${t.space.md}px`,
+                  borderRadius: t.radius.sm,
+                  border: `1px solid ${t.color.borderLight}`,
+                  fontSize: t.font.sizeSm,
+                }}
+              />
+              <label
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  cursor: 'pointer',
+                  fontSize: t.font.sizeSm,
+                  color: t.color.textSecondary,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={onlyLowConfidence}
+                  onChange={(event) => setOnlyLowConfidence(event.target.checked)}
+                  style={{ margin: 0 }}
+                />
+                Show only low confidence (Conf. &lt; 70)
+              </label>
+            </div>
+          }
+          emptyState="No channels match the current filters."
+        />
+      </SectionCard>
     </div>
   )
 }

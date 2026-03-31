@@ -15,10 +15,11 @@ import {
 } from './alerts/api'
 import {
   DashboardPage,
+  AnalyticsTable,
+  type AnalyticsTableColumn,
   KpiTile,
   SectionCard,
   InsightRow,
-  DashboardTable,
   KpiTileSkeleton,
   DataHealthCard,
 } from '../components/dashboard'
@@ -506,6 +507,100 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
   const orderedKpiTiles = tileOrder
     .map((key) => kpiTiles.find((k) => k.kpi_key === key))
     .filter((k): k is KpiTileResponse => Boolean(k))
+  const channelColumns: AnalyticsTableColumn<(typeof byChannel)[number]>[] = [
+    {
+      key: 'channel',
+      label: 'Channel',
+      render: (row) => row.channel,
+      cellStyle: { fontWeight: t.font.weightMedium },
+    },
+    {
+      key: 'spend',
+      label: 'Spend',
+      align: 'right',
+      render: (row) => formatCurrency(row.spend),
+    },
+    {
+      key: 'visits',
+      label: 'Visits',
+      align: 'right',
+      render: (row) => row.visits.toLocaleString(),
+    },
+    {
+      key: 'conversions',
+      label: 'Conversions',
+      align: 'right',
+      render: (row) => row.conversions.toLocaleString(),
+    },
+    {
+      key: 'revenue',
+      label: 'Revenue',
+      align: 'right',
+      render: (row) => formatCurrency(row.revenue),
+    },
+    {
+      key: 'delta',
+      label: 'Δ%',
+      align: 'right',
+      render: (row) =>
+        row.delta_revenue_pct != null
+          ? `${row.delta_revenue_pct >= 0 ? '▲' : '▼'} ${Math.abs(row.delta_revenue_pct).toFixed(1)}%`
+          : '—',
+    },
+  ]
+  const campaignColumns: AnalyticsTableColumn<(typeof byCampaign)[number]>[] = [
+    {
+      key: 'campaign',
+      label: 'Campaign',
+      render: (row) => row.campaign,
+      cellStyle: { fontWeight: t.font.weightMedium },
+    },
+    {
+      key: 'revenue',
+      label: 'Revenue',
+      align: 'right',
+      render: (row) => formatCurrency(row.revenue),
+    },
+    {
+      key: 'delta',
+      label: 'Δ%',
+      align: 'right',
+      render: (row) =>
+        row.delta_revenue_pct != null
+          ? `${row.delta_revenue_pct >= 0 ? '▲' : '▼'} ${Math.abs(row.delta_revenue_pct).toFixed(1)}%`
+          : '—',
+    },
+  ]
+  const mixShiftRows = trendInsights?.mix_shift ?? []
+  const mixShiftColumns: AnalyticsTableColumn<(typeof mixShiftRows)[number]>[] = [
+    {
+      key: 'channel',
+      label: 'Channel',
+      render: (row) => row.channel,
+      cellStyle: { fontWeight: t.font.weightMedium },
+    },
+    {
+      key: 'revenue_share_delta_pp',
+      label: 'Revenue share Δ',
+      align: 'right',
+      render: (row) => `${row.revenue_share_delta_pp >= 0 ? '+' : ''}${row.revenue_share_delta_pp.toFixed(2)} pp`,
+      cellStyle: (row) => ({ color: row.revenue_share_delta_pp >= 0 ? t.color.success : t.color.danger }),
+    },
+    {
+      key: 'visit_share_delta_pp',
+      label: 'Visit share Δ',
+      align: 'right',
+      render: (row) => `${row.visit_share_delta_pp >= 0 ? '+' : ''}${row.visit_share_delta_pp.toFixed(2)} pp`,
+      cellStyle: (row) => ({ color: row.visit_share_delta_pp >= 0 ? t.color.success : t.color.danger }),
+    },
+    {
+      key: 'conversion_share_delta_pp',
+      label: 'Conv share Δ',
+      align: 'right',
+      render: (row) => `${row.conversion_share_delta_pp >= 0 ? '+' : ''}${row.conversion_share_delta_pp.toFixed(2)} pp`,
+      cellStyle: (row) => ({ color: row.conversion_share_delta_pp >= 0 ? t.color.success : t.color.danger }),
+    },
+  ]
 
   function trendLabelFor(tile: KpiTileResponse): string {
     const grain = tile.current_period?.grain ?? summary?.current_period?.grain ?? 'daily'
@@ -852,41 +947,15 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
               </button>
             }
           >
-            <DashboardTable>
-              <thead>
-                <tr>
-                  <th>Channel</th>
-                  <th>Spend</th>
-                  <th>Visits</th>
-                  <th>Conversions</th>
-                  <th>Revenue</th>
-                  <th>Δ%</th>
-                </tr>
-              </thead>
-              <tbody>
-                {byChannel.slice(0, 10).map((row) => (
-                  <tr key={row.channel}>
-                    <td style={{ fontWeight: t.font.weightMedium }}>{row.channel}</td>
-                    <td>{formatCurrency(row.spend)}</td>
-                    <td>{row.visits.toLocaleString()}</td>
-                    <td>{row.conversions.toLocaleString()}</td>
-                    <td>{formatCurrency(row.revenue)}</td>
-                    <td>
-                      {row.delta_revenue_pct != null
-                        ? `${row.delta_revenue_pct >= 0 ? '▲' : '▼'} ${Math.abs(row.delta_revenue_pct).toFixed(1)}%`
-                        : '—'}
-                    </td>
-                  </tr>
-                ))}
-                {byChannel.length === 0 && (
-                  <tr>
-                    <td colSpan={6} style={{ textAlign: 'center', color: t.color.textSecondary }}>
-                      No channel data for this period.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </DashboardTable>
+            <AnalyticsTable
+              columns={channelColumns}
+              rows={byChannel.slice(0, 10)}
+              rowKey={(row) => row.channel}
+              tableLabel="Top channels"
+              minWidth={760}
+              stickyFirstColumn
+              emptyState="No channel data for this period."
+            />
           </SectionCard>
 
           <SectionCard
@@ -910,35 +979,15 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
               </button>
             }
           >
-            <DashboardTable>
-              <thead>
-                <tr>
-                  <th>Campaign</th>
-                  <th>Revenue</th>
-                  <th>Δ%</th>
-                </tr>
-              </thead>
-              <tbody>
-                {byCampaign.slice(0, 5).map((row) => (
-                  <tr key={row.campaign}>
-                    <td style={{ fontWeight: t.font.weightMedium }}>{row.campaign}</td>
-                    <td>{formatCurrency(row.revenue)}</td>
-                    <td>
-                      {row.delta_revenue_pct != null
-                        ? `${row.delta_revenue_pct >= 0 ? '▲' : '▼'} ${Math.abs(row.delta_revenue_pct).toFixed(1)}%`
-                        : '—'}
-                    </td>
-                  </tr>
-                ))}
-                {byCampaign.length === 0 && (
-                  <tr>
-                    <td colSpan={3} style={{ textAlign: 'center', color: t.color.textSecondary }}>
-                      No campaign data.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </DashboardTable>
+            <AnalyticsTable
+              columns={campaignColumns}
+              rows={byCampaign.slice(0, 5)}
+              rowKey={(row) => row.campaign}
+              tableLabel="Top campaigns"
+              minWidth={520}
+              stickyFirstColumn
+              emptyState="No campaign data."
+            />
           </SectionCard>
         </div>
 
@@ -1275,39 +1324,15 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
                 {(trendsQuery.error as Error)?.message ?? 'Failed to load mix shift.'}
               </div>
             ) : (
-              <DashboardTable>
-                <thead>
-                  <tr>
-                    <th>Channel</th>
-                    <th>Revenue share Δ</th>
-                    <th>Visit share Δ</th>
-                    <th>Conv share Δ</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(trendInsights?.mix_shift ?? []).map((row) => (
-                    <tr key={row.channel}>
-                      <td style={{ fontWeight: t.font.weightMedium }}>{row.channel}</td>
-                      <td style={{ color: row.revenue_share_delta_pp >= 0 ? t.color.success : t.color.danger }}>
-                        {row.revenue_share_delta_pp >= 0 ? '+' : ''}{row.revenue_share_delta_pp.toFixed(2)} pp
-                      </td>
-                      <td style={{ color: row.visit_share_delta_pp >= 0 ? t.color.success : t.color.danger }}>
-                        {row.visit_share_delta_pp >= 0 ? '+' : ''}{row.visit_share_delta_pp.toFixed(2)} pp
-                      </td>
-                      <td style={{ color: row.conversion_share_delta_pp >= 0 ? t.color.success : t.color.danger }}>
-                        {row.conversion_share_delta_pp >= 0 ? '+' : ''}{row.conversion_share_delta_pp.toFixed(2)} pp
-                      </td>
-                    </tr>
-                  ))}
-                  {(trendInsights?.mix_shift ?? []).length === 0 && (
-                    <tr>
-                      <td colSpan={4} style={{ textAlign: 'center', color: t.color.textSecondary }}>
-                        No mix shift data for this period.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </DashboardTable>
+              <AnalyticsTable
+                columns={mixShiftColumns}
+                rows={mixShiftRows}
+                rowKey={(row) => row.channel}
+                tableLabel="Channel mix shift"
+                minWidth={640}
+                stickyFirstColumn
+                emptyState="No mix shift data for this period."
+              />
             )}
           </SectionCard>
         </div>
