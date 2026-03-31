@@ -3,7 +3,10 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any, Dict, List, Optional
 
+from sqlalchemy.orm import Session
+
 from app.modules.settings.schemas import KpiConfigModel, KpiDefinitionModel
+from app.models_config_dq import ConversionKpiSignalFact, ConversionPath
 
 
 def _confidence_band(score: float) -> str:
@@ -208,6 +211,8 @@ def build_kpi_suggestions(
     configured_events = {definition.event_name.strip().lower() for definition in cfg.definitions if definition.event_name}
     event_counts: Counter[str] = Counter()
     kpi_type_counts: Counter[str] = Counter()
+    conversion_name_counts: Counter[str] = Counter()
+    generic_conversion_fallback_count = 0
 
     for journey in journeys:
         kpi_type = str(journey.get("kpi_type") or "").strip().lower()
@@ -217,6 +222,17 @@ def build_kpi_suggestions(
             name = str(event.get("name") or event.get("event_name") or "").strip().lower()
             if name:
                 event_counts[name] += 1
+        for conversion in journey.get("conversions") or []:
+            name = str(
+                conversion.get("name")
+                or conversion.get("event_name")
+                or conversion.get("conversion_key")
+                or ""
+            ).strip().lower()
+            if name:
+                conversion_name_counts[name] += 1
+        if kpi_type == "conversion":
+            generic_conversion_fallback_count += 1
 
     suggestions: List[Dict[str, Any]] = []
 
@@ -241,7 +257,13 @@ def build_kpi_suggestions(
                 }
             )
 
-    for event_name, count in event_counts.most_common(limit * 2):
+    observed_definition_candidates: Counter[str] = Counter()
+    observed_definition_candidates.update(event_counts)
+    observed_definition_candidates.update(conversion_name_counts)
+    for kpi_name, count in kpi_type_counts.items():
+        observed_definition_candidates[kpi_name] += count
+
+    for event_name, count in observed_definition_candidates.most_common(limit * 3):
         if event_name in configured_events or event_name in configured_ids:
             continue
         suggestion_id = f"definition:{event_name}"
@@ -271,6 +293,24 @@ def build_kpi_suggestions(
         if len(suggestions) >= limit:
             break
 
+    if (
+        generic_conversion_fallback_count > 0
+        and len(suggestions) < limit
+    ):
+        suggestions.append(
+            {
+                "id": "review_generic_conversion_mapping",
+                "type": "review_mapping",
+                "title": "Review generic 'conversion' KPI mapping",
+                "description": "Some journeys still rely on the generic fallback conversion key instead of a specific KPI event name.",
+                "confidence": {"score": 0.68, "band": "medium"},
+                "impact_count": int(generic_conversion_fallback_count),
+                "reasons": ["generic_conversion_fallback", "raw_event_mapping_gap"],
+                "recommended_action": "Tighten conversion event naming or aliases so these journeys resolve to a specific KPI like purchase or form_submit.",
+                "payload": {"focus_conversion_key": "conversion"},
+            }
+        )
+
     if cfg.definitions:
         best_existing = max(
             _build_definition_stats(journeys, cfg),
@@ -295,6 +335,79 @@ def build_kpi_suggestions(
                 )
 
     return {"suggestions": suggestions[:limit]}
+
+
+def build_kpi_suggestions_from_db(
+    db: Session,
+    cfg: KpiConfigModel,
+    *,
+    limit: int = 8,
+    sample_limit: int = 50000,
+) -> Optional[Dict[str, Any]]:
+    rows = (
+        db.query(ConversionKpiSignalFact)
+        .order_by(ConversionKpiSignalFact.conversion_ts.desc())
+        .limit(sample_limit)
+        .all()
+    )
+    if not rows:
+        return None
+    raw_count = (
+        db.query(ConversionPath.id)
+        .order_by(ConversionPath.conversion_ts.desc())
+        .limit(sample_limit)
+        .count()
+    )
+    if raw_count > len(rows):
+        return None
+
+    journeys: List[Dict[str, Any]] = []
+    for row in rows:
+        journeys.append(
+            {
+                "kpi_type": row.kpi_type,
+                "events": [{"name": name} for name in (row.event_names_json or []) if isinstance(name, str)],
+                "conversions": [{"name": name} for name in (row.conversion_names_json or []) if isinstance(name, str)],
+            }
+        )
+    return build_kpi_suggestions(journeys, cfg, limit=limit)
+
+
+def build_kpi_overview_from_db(
+    db: Session,
+    cfg: KpiConfigModel,
+    *,
+    suggestion_count: int = 0,
+    sample_limit: int = 50000,
+) -> Optional[Dict[str, Any]]:
+    rows = (
+        db.query(ConversionKpiSignalFact)
+        .order_by(ConversionKpiSignalFact.conversion_ts.desc())
+        .limit(sample_limit)
+        .all()
+    )
+    if not rows:
+        return None
+    raw_count = (
+        db.query(ConversionPath.id)
+        .order_by(ConversionPath.conversion_ts.desc())
+        .limit(sample_limit)
+        .count()
+    )
+    if raw_count > len(rows):
+        return None
+
+    journeys: List[Dict[str, Any]] = []
+    for row in rows:
+        journeys.append(
+            {
+                "kpi_type": row.kpi_type,
+                "events": [{"name": name} for name in (row.event_names_json or []) if isinstance(name, str)],
+                "conversions": [{"name": name} for name in (row.conversion_names_json or []) if isinstance(name, str)],
+                "converted": bool(row.kpi_type),
+            }
+        )
+    return build_kpi_overview(journeys, cfg, suggestion_count=suggestion_count)
 
 
 def build_kpi_preview(

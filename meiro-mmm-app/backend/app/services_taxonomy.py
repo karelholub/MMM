@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from sqlalchemy.orm import Session
 
-from .models_config_dq import DQSnapshot
+from .models_config_dq import ConversionPath, ConversionTaxonomyTouchpointFact, DQSnapshot
 from .utils.taxonomy import Taxonomy, ChannelRule, infer_source_medium_from_referrer, load_taxonomy, save_taxonomy
 
 logger = logging.getLogger(__name__)
@@ -412,6 +412,75 @@ def compute_unknown_share(
     )
 
 
+def compute_unknown_share_from_db(
+    db: Session,
+    taxonomy: Optional[Taxonomy] = None,
+    sample_size: int = 20,
+    sample_limit: int = 50000,
+) -> Optional[UnknownShareReport]:
+    if taxonomy is None:
+        taxonomy = load_taxonomy()
+
+    rows = (
+        db.query(ConversionTaxonomyTouchpointFact)
+        .order_by(ConversionTaxonomyTouchpointFact.conversion_ts.desc(), ConversionTaxonomyTouchpointFact.ordinal.asc())
+        .limit(sample_limit)
+        .all()
+    )
+    if not rows:
+        return None
+    raw_count = (
+        db.query(ConversionPath.id)
+        .order_by(ConversionPath.conversion_ts.desc())
+        .limit(sample_limit)
+        .count()
+    )
+    observed_conversion_ids = {str(row.conversion_id or "") for row in rows}
+    if raw_count > len(observed_conversion_ids):
+        return None
+
+    total_touchpoints = 0
+    unknown_count = 0
+    by_source = defaultdict(int)
+    by_medium = defaultdict(int)
+    by_source_medium = defaultdict(int)
+    unmapped_samples = []
+
+    for row in rows:
+        total_touchpoints += 1
+        source = _normalized_text(row.source)
+        medium = _normalized_text(row.medium)
+        campaign = _normalized_text(row.campaign)
+        mapping = map_to_channel(source, medium, campaign, taxonomy)
+        if mapping.channel == "unknown" or mapping.confidence < 0.5:
+            unknown_count += 1
+            by_source[source] += 1
+            by_medium[medium] += 1
+            by_source_medium[(source, medium)] += 1
+            if len(unmapped_samples) < sample_size:
+                unmapped_samples.append(
+                    {
+                        "source": source,
+                        "medium": medium,
+                        "channel": mapping.channel,
+                        "confidence": mapping.confidence,
+                        "fallback_reason": mapping.fallback_reason,
+                        "campaign": row.campaign,
+                    }
+                )
+
+    unknown_share = unknown_count / total_touchpoints if total_touchpoints > 0 else 0.0
+    return UnknownShareReport(
+        total_touchpoints=total_touchpoints,
+        unknown_count=unknown_count,
+        unknown_share=unknown_share,
+        by_source=dict(by_source),
+        by_medium=dict(by_medium),
+        by_source_medium=dict(by_source_medium),
+        sample_unmapped=unmapped_samples,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Per-entity confidence scoring
 # ---------------------------------------------------------------------------
@@ -500,6 +569,73 @@ def compute_channel_confidence(
     }
 
 
+def compute_channel_confidence_from_db(
+    db: Session,
+    channel: str,
+    taxonomy: Optional[Taxonomy] = None,
+    sample_limit: int = 50000,
+) -> Optional[Dict[str, Any]]:
+    if taxonomy is None:
+        taxonomy = load_taxonomy()
+    rows = (
+        db.query(ConversionTaxonomyTouchpointFact)
+        .order_by(ConversionTaxonomyTouchpointFact.conversion_ts.desc(), ConversionTaxonomyTouchpointFact.ordinal.asc())
+        .limit(sample_limit)
+        .all()
+    )
+    if not rows:
+        return None
+    raw_count = (
+        db.query(ConversionPath.id)
+        .order_by(ConversionPath.conversion_ts.desc())
+        .limit(sample_limit)
+        .count()
+    )
+    observed_conversion_ids = {str(row.conversion_id or "") for row in rows}
+    if raw_count > len(observed_conversion_ids):
+        return None
+
+    confidences = []
+    low_confidence_samples = []
+    for row in rows:
+        source = _normalized_text(row.source)
+        medium = _normalized_text(row.medium)
+        campaign = _normalized_text(row.campaign)
+        mapping = map_to_channel(source, medium, campaign, taxonomy)
+        if mapping.channel != channel:
+            continue
+        confidence = mapping.confidence
+        confidences.append(confidence)
+        if confidence < 0.5 and len(low_confidence_samples) < 10:
+            low_confidence_samples.append(
+                {
+                    "source": source,
+                    "medium": medium,
+                    "campaign": row.campaign,
+                    "confidence": confidence,
+                    "warnings": [],
+                }
+            )
+
+    if not confidences:
+        return {
+            "mean_confidence": 0.0,
+            "touchpoint_count": 0,
+            "low_confidence_count": 0,
+            "sample_low_confidence": [],
+        }
+
+    mean_confidence = sum(confidences) / len(confidences)
+    low_confidence_count = sum(1 for c in confidences if c < 0.5)
+    return {
+        "mean_confidence": mean_confidence,
+        "touchpoint_count": len(confidences),
+        "low_confidence_count": low_confidence_count,
+        "low_confidence_share": low_confidence_count / len(confidences),
+        "sample_low_confidence": low_confidence_samples,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Taxonomy coverage and quality reports
 # ---------------------------------------------------------------------------
@@ -568,6 +704,74 @@ def compute_taxonomy_coverage(
         key=lambda x: -x[1]
     )[:20]
     
+    return {
+        "channel_distribution": dict(channel_dist),
+        "source_coverage": source_coverage,
+        "medium_coverage": medium_coverage,
+        "rule_usage": dict(rule_usage),
+        "top_unmapped_patterns": [
+            {"source": s, "medium": m, "campaign": c or None, "count": count}
+            for (s, m, c), count in top_unmapped
+        ],
+    }
+
+
+def compute_taxonomy_coverage_from_db(
+    db: Session,
+    taxonomy: Optional[Taxonomy] = None,
+    sample_limit: int = 50000,
+) -> Optional[Dict[str, Any]]:
+    if taxonomy is None:
+        taxonomy = load_taxonomy()
+
+    rows = (
+        db.query(ConversionTaxonomyTouchpointFact)
+        .order_by(ConversionTaxonomyTouchpointFact.conversion_ts.desc(), ConversionTaxonomyTouchpointFact.ordinal.asc())
+        .limit(sample_limit)
+        .all()
+    )
+    if not rows:
+        return None
+    raw_count = (
+        db.query(ConversionPath.id)
+        .order_by(ConversionPath.conversion_ts.desc())
+        .limit(sample_limit)
+        .count()
+    )
+    observed_conversion_ids = {str(row.conversion_id or "") for row in rows}
+    if raw_count > len(observed_conversion_ids):
+        return None
+
+    channel_dist = defaultdict(int)
+    rule_usage = defaultdict(int)
+    source_confidences = defaultdict(list)
+    medium_confidences = defaultdict(list)
+    unmapped_patterns = defaultdict(int)
+
+    for row in rows:
+        source = _normalized_text(row.source)
+        medium = _normalized_text(row.medium)
+        campaign = _normalized_text(row.campaign)
+        mapping = map_to_channel(source, medium, campaign, taxonomy)
+        channel_dist[mapping.channel] += 1
+        if mapping.matched_rule:
+            rule_usage[mapping.matched_rule] += 1
+        source_confidences[source].append(mapping.confidence)
+        medium_confidences[medium].append(mapping.confidence)
+        if mapping.confidence < 0.5:
+            unmapped_patterns[(source, medium, campaign)] += 1
+
+    sources_with_good_mapping = sum(
+        1 for confidences in source_confidences.values() if sum(confidences) / len(confidences) >= 0.5
+    )
+    source_coverage = sources_with_good_mapping / len(source_confidences) if source_confidences else 0.0
+
+    mediums_with_good_mapping = sum(
+        1 for confidences in medium_confidences.values() if sum(confidences) / len(confidences) >= 0.5
+    )
+    medium_coverage = mediums_with_good_mapping / len(medium_confidences) if medium_confidences else 0.0
+
+    top_unmapped = sorted([(k, v) for k, v in unmapped_patterns.items()], key=lambda x: -x[1])[:20]
     return {
         "channel_distribution": dict(channel_dist),
         "source_coverage": source_coverage,

@@ -759,6 +759,49 @@ class JourneyExampleFact(Base):
     )
 
 
+class ConversionKpiSignalFact(Base):
+    __tablename__ = "conversion_kpi_signal_facts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversion_id = Column(String(128), nullable=False, unique=True)
+    profile_id = Column(String(128), nullable=True, index=True)
+    conversion_key = Column(String(128), nullable=True, index=True)
+    conversion_ts = Column(DateTime, nullable=False, index=True)
+    kpi_type = Column(String(128), nullable=True)
+    event_names_json = Column(JSON, nullable=False, default=list)
+    conversion_names_json = Column(JSON, nullable=False, default=list)
+    generic_conversion_fallback = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_conversion_kpi_signal_facts_profile_ts", "profile_id", "conversion_ts"),
+    )
+
+
+class ConversionTaxonomyTouchpointFact(Base):
+    __tablename__ = "conversion_taxonomy_touchpoint_facts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversion_id = Column(String(128), nullable=False)
+    profile_id = Column(String(128), nullable=True, index=True)
+    conversion_key = Column(String(128), nullable=True, index=True)
+    conversion_ts = Column(DateTime, nullable=False, index=True)
+    ordinal = Column(Integer, nullable=False)
+    raw_channel = Column(String(128), nullable=True)
+    source = Column(String(255), nullable=True)
+    medium = Column(String(255), nullable=True)
+    campaign = Column(String(255), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_conversion_taxonomy_touchpoint_conv_ord", "conversion_id", "ordinal", unique=True),
+        Index("ix_conversion_taxonomy_touchpoint_profile_ts", "profile_id", "conversion_ts"),
+        Index("ix_conversion_taxonomy_touchpoint_source_medium", "source", "medium"),
+    )
+
+
 class JourneySavedView(Base):
     __tablename__ = "journey_saved_views"
 

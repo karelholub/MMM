@@ -4,7 +4,10 @@ import re
 from collections import Counter, defaultdict
 from typing import Any, Dict, List, Optional
 
-from app.services_taxonomy import compute_taxonomy_coverage, compute_unknown_share
+from sqlalchemy.orm import Session
+
+from app.models_config_dq import ConversionPath, ConversionTaxonomyTouchpointFact
+from app.services_taxonomy import compute_taxonomy_coverage, compute_unknown_share, map_to_channel
 from app.utils.taxonomy import Taxonomy, load_taxonomy
 
 
@@ -45,6 +48,18 @@ RAW_CHANNEL_TO_CANONICAL = {
     "chatgpt.com": "referral",
     "home_page": "direct",
     "direct": "direct",
+}
+
+SOURCE_ONLY_CHANNEL_HINTS = {
+    "google": "organic_search",
+    "bing": "organic_search",
+    "duckduckgo": "organic_search",
+    "yahoo": "organic_search",
+    "seznam": "organic_search",
+    "chatgpt.com": "referral",
+    "facebook": "referral",
+    "instagram": "referral",
+    "linkedin": "referral",
 }
 
 
@@ -151,6 +166,47 @@ def generate_taxonomy_suggestions(
                     if len(suggestions) >= limit:
                         break
 
+        if source and not medium:
+            hinted_channel = SOURCE_ONLY_CHANNEL_HINTS.get(taxonomy.source_aliases.get(source, source))
+            if hinted_channel:
+                exists = any(
+                    rule.channel == hinted_channel
+                    and rule.source.normalize_operator() == "equals"
+                    and (rule.source.value or "").strip().lower() == (taxonomy.source_aliases.get(source, source) or "").strip().lower()
+                    and rule.medium.normalize_operator() == "any"
+                    for rule in taxonomy.channel_rules
+                )
+                if not exists:
+                    suggestion_id = f"source_only_rule:{source}:{hinted_channel}"
+                    if suggestion_id not in seen_ids:
+                        seen_ids.add(suggestion_id)
+                        suggestions.append(
+                            {
+                                "id": suggestion_id,
+                                "type": "channel_rule",
+                                "title": f"Map source '{source}' to {hinted_channel} when medium is missing",
+                                "description": "This source often arrives without medium information. A source-only fallback rule would reduce unknown traffic in a controlled way.",
+                                "confidence": _confidence(0.72),
+                                "impact_count": count,
+                                "estimated_unknown_share_delta": count / total_touchpoints,
+                                "channel": hinted_channel,
+                                "reasons": ["source_only_pattern", "missing_medium_fallback"],
+                                "recommended_action": "Apply the fallback rule to the draft and verify the preview impact before saving.",
+                                "sample": {"source": source, "medium": medium, "campaign": campaign or None},
+                                "payload": {
+                                    "channel_rule": {
+                                        "name": f"{hinted_channel.replace('_', ' ').title()} - {source}",
+                                        "channel": hinted_channel,
+                                        "source": {"operator": "equals", "value": taxonomy.source_aliases.get(source, source)},
+                                        "medium": {"operator": "any", "value": ""},
+                                        "campaign": {"operator": "any", "value": ""},
+                                    }
+                                },
+                            }
+                        )
+                        if len(suggestions) >= limit:
+                            break
+
         channel = _infer_channel(taxonomy.source_aliases.get(source, source), taxonomy.medium_aliases.get(medium, medium))
         if channel:
             exists = any(
@@ -189,6 +245,54 @@ def generate_taxonomy_suggestions(
                             },
                         }
                     )
+
+    for (source, medium), count in sorted(unknown_report.by_source_medium.items(), key=lambda item: -item[1]):
+        if len(suggestions) >= limit:
+            break
+        source = (source or "").strip().lower()
+        medium = (medium or "").strip().lower()
+        if not source or medium:
+            continue
+        hinted_channel = SOURCE_ONLY_CHANNEL_HINTS.get(taxonomy.source_aliases.get(source, source))
+        if not hinted_channel:
+            continue
+        exists = any(
+            rule.channel == hinted_channel
+            and rule.source.normalize_operator() == "equals"
+            and (rule.source.value or "").strip().lower() == (taxonomy.source_aliases.get(source, source) or "").strip().lower()
+            and rule.medium.normalize_operator() == "any"
+            for rule in taxonomy.channel_rules
+        )
+        if exists:
+            continue
+        suggestion_id = f"source_only_rule:{source}:{hinted_channel}"
+        if suggestion_id in seen_ids:
+            continue
+        seen_ids.add(suggestion_id)
+        suggestions.append(
+            {
+                "id": suggestion_id,
+                "type": "channel_rule",
+                "title": f"Map source '{source}' to {hinted_channel} when medium is missing",
+                "description": "This source often arrives without medium information. A source-only fallback rule would reduce unknown traffic in a controlled way.",
+                "confidence": _confidence(0.72),
+                "impact_count": count,
+                "estimated_unknown_share_delta": count / total_touchpoints,
+                "channel": hinted_channel,
+                "reasons": ["source_only_pattern", "missing_medium_fallback"],
+                "recommended_action": "Apply the fallback rule to the draft and verify the preview impact before saving.",
+                "sample": {"source": source, "medium": medium, "campaign": None},
+                "payload": {
+                    "channel_rule": {
+                        "name": f"{hinted_channel.replace('_', ' ').title()} - {source}",
+                        "channel": hinted_channel,
+                        "source": {"operator": "equals", "value": taxonomy.source_aliases.get(source, source)},
+                        "medium": {"operator": "any", "value": ""},
+                        "campaign": {"operator": "any", "value": ""},
+                    }
+                },
+            }
+        )
 
     missing_source_campaigns: dict[str, Counter[str]] = defaultdict(Counter)
     for journey in journeys:
@@ -273,3 +377,45 @@ def generate_taxonomy_suggestions(
             ),
         ),
     }
+
+
+def generate_taxonomy_suggestions_from_db(
+    db: Session,
+    *,
+    taxonomy: Optional[Taxonomy] = None,
+    limit: int = 12,
+    sample_limit: int = 50000,
+) -> Optional[Dict[str, Any]]:
+    taxonomy = taxonomy or load_taxonomy()
+    rows = (
+        db.query(ConversionTaxonomyTouchpointFact)
+        .order_by(ConversionTaxonomyTouchpointFact.conversion_ts.desc(), ConversionTaxonomyTouchpointFact.ordinal.asc())
+        .limit(sample_limit)
+        .all()
+    )
+    if not rows:
+        return None
+    raw_count = (
+        db.query(ConversionPath.id)
+        .order_by(ConversionPath.conversion_ts.desc())
+        .limit(sample_limit)
+        .count()
+    )
+    observed_conversion_ids = {str(row.conversion_id or "") for row in rows}
+    if raw_count > len(observed_conversion_ids):
+        return None
+
+    journeys_by_conversion: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        conversion_id = str(row.conversion_id or "")
+        journey = journeys_by_conversion.setdefault(conversion_id, {"touchpoints": []})
+        journey["touchpoints"].append(
+            {
+                "channel": row.raw_channel,
+                "source": row.source or "",
+                "medium": row.medium or "",
+                "campaign": row.campaign,
+            }
+        )
+
+    return generate_taxonomy_suggestions(list(journeys_by_conversion.values()), taxonomy=taxonomy, limit=limit)

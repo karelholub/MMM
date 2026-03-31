@@ -280,15 +280,22 @@ def create_router(
 
     @router.get("/api/taxonomy/overview")
     def get_taxonomy_overview(db=Depends(get_db_dependency)):
-        from app.services_taxonomy_decisions import build_taxonomy_overview
-        from app.services_taxonomy_suggestions import generate_taxonomy_suggestions
-
-        journeys = _settings_journeys(db)
-        suggestions = generate_taxonomy_suggestions(journeys, limit=8)
-        return build_taxonomy_overview(
-            journeys,
-            suggestion_count=len(suggestions.get("suggestions", [])),
+        from app.services_taxonomy_decisions import build_taxonomy_overview, build_taxonomy_overview_from_db
+        from app.services_taxonomy_suggestions import (
+            generate_taxonomy_suggestions,
+            generate_taxonomy_suggestions_from_db,
         )
+
+        from_db_suggestions = generate_taxonomy_suggestions_from_db(db, limit=8)
+        from_db_overview = build_taxonomy_overview_from_db(
+            db,
+            suggestion_count=len((from_db_suggestions or {}).get("suggestions", [])),
+        )
+        if from_db_overview is not None and from_db_suggestions is not None:
+            return from_db_overview
+        journeys = _settings_journeys(db)
+        suggestions = from_db_suggestions or generate_taxonomy_suggestions(journeys, limit=8)
+        return build_taxonomy_overview(journeys, suggestion_count=len(suggestions.get("suggestions", [])))
 
     @router.post("/api/taxonomy/preview")
     def preview_taxonomy(payload: Dict[str, Any], db=Depends(get_db_dependency)):
@@ -337,7 +344,23 @@ def create_router(
 
     @router.get("/api/taxonomy/unknown-share")
     def get_unknown_share(limit: int = 20, db=Depends(get_db_dependency)):
-        from app.services_taxonomy import compute_unknown_share
+        from app.services_taxonomy import compute_unknown_share, compute_unknown_share_from_db
+
+        from_db = compute_unknown_share_from_db(db, sample_size=limit)
+        if from_db is not None:
+            top_patterns = sorted(from_db.by_source_medium.items(), key=lambda item: -item[1])[:limit]
+            return {
+                "total_touchpoints": from_db.total_touchpoints,
+                "unknown_count": from_db.unknown_count,
+                "unknown_share": from_db.unknown_share,
+                "by_source": from_db.by_source,
+                "by_medium": from_db.by_medium,
+                "top_unmapped_patterns": [
+                    {"source": source, "medium": medium, "count": count}
+                    for (source, medium), count in top_patterns
+                ],
+                "sample_unmapped": from_db.sample_unmapped,
+            }
 
         journeys = _settings_journeys(db)
         if not journeys:
@@ -368,7 +391,11 @@ def create_router(
 
     @router.get("/api/taxonomy/coverage")
     def get_taxonomy_coverage(db=Depends(get_db_dependency)):
-        from app.services_taxonomy import compute_taxonomy_coverage
+        from app.services_taxonomy import compute_taxonomy_coverage, compute_taxonomy_coverage_from_db
+
+        from_db = compute_taxonomy_coverage_from_db(db)
+        if from_db is not None:
+            return from_db
 
         journeys = _settings_journeys(db)
         if not journeys:
@@ -383,14 +410,25 @@ def create_router(
 
     @router.get("/api/taxonomy/suggestions")
     def get_taxonomy_suggestions(limit: int = 12, db=Depends(get_db_dependency)):
-        from app.services_taxonomy_suggestions import generate_taxonomy_suggestions
+        from app.services_taxonomy_suggestions import (
+            generate_taxonomy_suggestions,
+            generate_taxonomy_suggestions_from_db,
+        )
 
+        bounded_limit = max(1, min(limit, 30))
+        from_db = generate_taxonomy_suggestions_from_db(db, limit=bounded_limit)
+        if from_db is not None:
+            return from_db
         journeys = _settings_journeys(db)
-        return generate_taxonomy_suggestions(journeys, limit=max(1, min(limit, 30)))
+        return generate_taxonomy_suggestions(journeys, limit=bounded_limit)
 
     @router.get("/api/taxonomy/channel-confidence")
     def get_channel_confidence(channel: str, db=Depends(get_db_dependency)):
-        from app.services_taxonomy import compute_channel_confidence
+        from app.services_taxonomy import compute_channel_confidence, compute_channel_confidence_from_db
+
+        from_db = compute_channel_confidence_from_db(db, channel)
+        if from_db is not None:
+            return from_db
 
         journeys = _settings_journeys(db)
         if not journeys:
@@ -430,20 +468,41 @@ def create_router(
 
     @router.get("/api/kpis/overview")
     def get_kpi_overview(db=Depends(get_db_dependency)):
-        from app.services_kpi_decisions import build_kpi_overview, build_kpi_suggestions
+        from app.services_kpi_decisions import (
+            build_kpi_overview,
+            build_kpi_overview_from_db,
+            build_kpi_suggestions,
+            build_kpi_suggestions_from_db,
+        )
 
-        journeys = ensure_journeys_loaded_fn(db)
         cfg = get_kpi_config_model_fn()
-        suggestions = build_kpi_suggestions(journeys, cfg, limit=6)
+        suggestions = build_kpi_suggestions_from_db(db, cfg, limit=6)
+        overview = build_kpi_overview_from_db(
+            db,
+            cfg,
+            suggestion_count=len((suggestions or {}).get("suggestions", [])),
+        )
+        if overview is not None and suggestions is not None:
+            return overview
+        journeys = ensure_journeys_loaded_fn(db)
+        if suggestions is None:
+            suggestions = build_kpi_suggestions(journeys, cfg, limit=6)
         return build_kpi_overview(journeys, cfg, suggestion_count=len(suggestions.get("suggestions", [])))
 
     @router.get("/api/kpis/suggestions")
     def get_kpi_suggestions(limit: int = 8, db=Depends(get_db_dependency)):
-        from app.services_kpi_decisions import build_kpi_suggestions
+        from app.services_kpi_decisions import (
+            build_kpi_suggestions,
+            build_kpi_suggestions_from_db,
+        )
 
-        journeys = ensure_journeys_loaded_fn(db)
         cfg = get_kpi_config_model_fn()
-        return build_kpi_suggestions(journeys, cfg, limit=max(1, min(limit, 20)))
+        bounded_limit = max(1, min(limit, 20))
+        from_db = build_kpi_suggestions_from_db(db, cfg, limit=bounded_limit)
+        if from_db is not None:
+            return from_db
+        journeys = ensure_journeys_loaded_fn(db)
+        return build_kpi_suggestions(journeys, cfg, limit=bounded_limit)
 
     @router.post("/api/kpis/preview")
     def preview_kpis(cfg: KpiConfigModel, db=Depends(get_db_dependency)):

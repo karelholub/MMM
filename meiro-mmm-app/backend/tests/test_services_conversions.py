@@ -3,6 +3,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
 from app.models_config_dq import ConversionDataQualityFact, ConversionPath, ConversionScopeDiagnosticFact
+from app.models_config_dq import ConversionKpiSignalFact, ConversionTaxonomyTouchpointFact
 from app.services_conversions import (
     classify_journey_interaction,
     conversion_path_is_converted,
@@ -160,6 +161,11 @@ def test_persist_journeys_as_conversion_paths_stamps_import_metadata():
     dq_fact = db.query(ConversionDataQualityFact).filter(ConversionDataQualityFact.conversion_id == row.conversion_id).one()
     assert dq_fact.touchpoint_count == 1
     assert dq_fact.missing_profile is False
+    kpi_fact = db.query(ConversionKpiSignalFact).filter(ConversionKpiSignalFact.conversion_id == row.conversion_id).one()
+    assert kpi_fact.conversion_names_json == ["purchase"]
+    taxonomy_facts = db.query(ConversionTaxonomyTouchpointFact).filter(ConversionTaxonomyTouchpointFact.conversion_id == row.conversion_id).all()
+    assert len(taxonomy_facts) == 1
+    assert taxonomy_facts[0].raw_channel == "google_ads"
 
 
 def test_persist_journeys_as_conversion_paths_append_mode_skips_existing_conversion_ids():

@@ -3,13 +3,18 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
+from sqlalchemy.orm import Session
+
 from app.services_taxonomy import (
     compute_taxonomy_coverage,
-    compute_unknown_share,
+    compute_taxonomy_coverage_from_db,
     compute_touchpoint_confidence,
+    compute_unknown_share,
+    compute_unknown_share_from_db,
     map_to_channel,
     _normalized_text,
 )
+from app.models_config_dq import ConversionPath, ConversionTaxonomyTouchpointFact
 from app.utils.taxonomy import Taxonomy, load_taxonomy
 
 
@@ -83,6 +88,70 @@ def _compute_low_confidence_patterns(
                 key = (source, medium, campaign)
                 pattern_counts[key] += 1
                 pattern_confidences[key].append(confidence)
+
+    top_patterns = sorted(pattern_counts.items(), key=lambda item: -item[1])[:limit]
+    return {
+        "count": low_confidence_count,
+        "share": (low_confidence_count / total_touchpoints) if total_touchpoints else 0.0,
+        "top_patterns": [
+            {
+                "source": source,
+                "medium": medium,
+                "campaign": campaign or None,
+                "count": count,
+                "confidence": (
+                    sum(pattern_confidences[(source, medium, campaign)])
+                    / len(pattern_confidences[(source, medium, campaign)])
+                )
+                if pattern_confidences[(source, medium, campaign)]
+                else 0.0,
+            }
+            for (source, medium, campaign), count in top_patterns
+        ],
+    }
+
+
+def _compute_low_confidence_patterns_from_db(
+    db: Session,
+    taxonomy: Taxonomy,
+    *,
+    limit: int = 8,
+    sample_limit: int = 50000,
+) -> Optional[Dict[str, Any]]:
+    rows = (
+        db.query(ConversionTaxonomyTouchpointFact)
+        .order_by(ConversionTaxonomyTouchpointFact.conversion_ts.desc(), ConversionTaxonomyTouchpointFact.ordinal.asc())
+        .limit(sample_limit)
+        .all()
+    )
+    if not rows:
+        return None
+    raw_count = (
+        db.query(ConversionPath.id)
+        .order_by(ConversionPath.conversion_ts.desc())
+        .limit(sample_limit)
+        .count()
+    )
+    observed_conversion_ids = {str(row.conversion_id or "") for row in rows}
+    if raw_count > len(observed_conversion_ids):
+        return None
+
+    total_touchpoints = 0
+    low_confidence_count = 0
+    pattern_counts: dict[tuple[str, str, str], int] = defaultdict(int)
+    pattern_confidences: dict[tuple[str, str, str], list[float]] = defaultdict(list)
+
+    for row in rows:
+        total_touchpoints += 1
+        source = _normalized_text(row.source)
+        medium = _normalized_text(row.medium)
+        campaign = _normalized_text(row.campaign)
+        confidence = map_to_channel(source, medium, campaign, taxonomy).confidence
+        if confidence < 0.5:
+            low_confidence_count += 1
+            key = (source, medium, campaign)
+            pattern_counts[key] += 1
+            pattern_confidences[key].append(confidence)
 
     top_patterns = sorted(pattern_counts.items(), key=lambda item: -item[1])[:limit]
     return {
@@ -187,6 +256,63 @@ def build_taxonomy_overview(
     unknown_report = compute_unknown_share(journeys, taxonomy=taxonomy, sample_size=10)
     coverage = compute_taxonomy_coverage(journeys, taxonomy=taxonomy)
     low_confidence = _compute_low_confidence_patterns(journeys, taxonomy)
+    status = "ready"
+    if unknown_report.unknown_share >= 0.2:
+        status = "blocked"
+    elif unknown_report.unknown_share >= 0.08 or low_confidence["share"] >= 0.1:
+        status = "warning"
+
+    confidence_score = max(
+        0.0,
+        min(1.0, 1.0 - unknown_report.unknown_share * 0.65 - low_confidence["share"] * 0.35),
+    )
+
+    return {
+        "status": status,
+        "confidence": {
+            "score": round(confidence_score, 3),
+            "band": _confidence_band(confidence_score),
+        },
+        "summary": {
+            "unknown_share": unknown_report.unknown_share,
+            "unknown_count": unknown_report.unknown_count,
+            "total_touchpoints": unknown_report.total_touchpoints,
+            "source_coverage": coverage.get("source_coverage", 0.0),
+            "medium_coverage": coverage.get("medium_coverage", 0.0),
+            "active_rules": len([rule for rule in taxonomy.channel_rules if rule.enabled]),
+            "source_aliases": len(taxonomy.source_aliases),
+            "medium_aliases": len(taxonomy.medium_aliases),
+            "low_confidence_share": low_confidence["share"],
+            "low_confidence_count": low_confidence["count"],
+        },
+        "top_unmapped_patterns": coverage.get("top_unmapped_patterns", [])[:8],
+        "top_low_confidence_patterns": low_confidence["top_patterns"],
+        "attention_queue": _build_attention_queue(
+            unknown_patterns=coverage.get("top_unmapped_patterns", []),
+            low_confidence_patterns=low_confidence["top_patterns"],
+        ),
+        "warnings": _rule_overlap_warnings(taxonomy),
+        "recommended_actions": _recommended_actions(
+            unknown_share=unknown_report.unknown_share,
+            low_confidence_share=low_confidence["share"],
+            suggestion_count=suggestion_count,
+        ),
+    }
+
+
+def build_taxonomy_overview_from_db(
+    db: Session,
+    *,
+    taxonomy: Optional[Taxonomy] = None,
+    suggestion_count: int = 0,
+) -> Optional[Dict[str, Any]]:
+    taxonomy = taxonomy or load_taxonomy()
+    unknown_report = compute_unknown_share_from_db(db, taxonomy=taxonomy, sample_size=10)
+    coverage = compute_taxonomy_coverage_from_db(db, taxonomy=taxonomy)
+    low_confidence = _compute_low_confidence_patterns_from_db(db, taxonomy)
+    if unknown_report is None or coverage is None or low_confidence is None:
+        return None
+
     status = "ready"
     if unknown_report.unknown_share >= 0.2:
         status = "blocked"

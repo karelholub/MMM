@@ -19,10 +19,20 @@ import uuid
 import pandas as pd
 from sqlalchemy.orm import Session
 
-from .models_config_dq import ConversionDataQualityFact, ConversionPath, ConversionScopeDiagnosticFact
+from .models_config_dq import (
+    ConversionDataQualityFact,
+    ConversionKpiSignalFact,
+    ConversionPath,
+    ConversionScopeDiagnosticFact,
+    ConversionTaxonomyTouchpointFact,
+)
 from .services_conversion_dq_facts import build_conversion_dq_fact_row
 from .services_metrics import journey_outcome_summary
 from .services_conversion_scope_facts import build_scope_diagnostic_fact_rows
+from .services_conversion_signal_facts import (
+    build_conversion_kpi_signal_fact,
+    build_conversion_taxonomy_touchpoint_facts,
+)
 from .services_revenue_config import compute_payload_revenue_value, extract_revenue_entries, get_revenue_config
 
 
@@ -384,17 +394,25 @@ def persist_journeys_as_conversion_paths(
         q = db.query(ConversionPath)
         facts_q = db.query(ConversionScopeDiagnosticFact)
         dq_facts_q = db.query(ConversionDataQualityFact)
+        kpi_facts_q = db.query(ConversionKpiSignalFact)
+        taxonomy_touchpoint_q = db.query(ConversionTaxonomyTouchpointFact)
         if conversion_key is not None:
             q = q.filter(ConversionPath.conversion_key == conversion_key)
             facts_q = facts_q.filter(ConversionScopeDiagnosticFact.conversion_key == conversion_key)
             dq_facts_q = dq_facts_q.filter(ConversionDataQualityFact.conversion_key == conversion_key)
+            kpi_facts_q = kpi_facts_q.filter(ConversionKpiSignalFact.conversion_key == conversion_key)
+            taxonomy_touchpoint_q = taxonomy_touchpoint_q.filter(ConversionTaxonomyTouchpointFact.conversion_key == conversion_key)
         if normalized_replace_profile_ids:
             q = q.filter(ConversionPath.profile_id.in_(normalized_replace_profile_ids))
             facts_q = facts_q.filter(ConversionScopeDiagnosticFact.profile_id.in_(normalized_replace_profile_ids))
             dq_facts_q = dq_facts_q.filter(ConversionDataQualityFact.profile_id.in_(normalized_replace_profile_ids))
+            kpi_facts_q = kpi_facts_q.filter(ConversionKpiSignalFact.profile_id.in_(normalized_replace_profile_ids))
+            taxonomy_touchpoint_q = taxonomy_touchpoint_q.filter(ConversionTaxonomyTouchpointFact.profile_id.in_(normalized_replace_profile_ids))
         q.delete(synchronize_session=False)
         facts_q.delete(synchronize_session=False)
         dq_facts_q.delete(synchronize_session=False)
+        kpi_facts_q.delete(synchronize_session=False)
+        taxonomy_touchpoint_q.delete(synchronize_session=False)
         db.commit()
     else:
         candidate_conversion_ids = {
@@ -421,6 +439,8 @@ def persist_journeys_as_conversion_paths(
     seen_conversion_ids = set()
     fact_rows: List[ConversionScopeDiagnosticFact] = []
     dq_fact_rows: List[ConversionDataQualityFact] = []
+    kpi_signal_rows: List[ConversionKpiSignalFact] = []
+    taxonomy_touchpoint_rows: List[ConversionTaxonomyTouchpointFact] = []
     for idx, j in enumerate(journeys):
         identity = _journey_identity(j, idx=idx)
         profile_id = str(identity.get("profile_id") or f"anon-{idx}")
@@ -477,12 +497,36 @@ def persist_journeys_as_conversion_paths(
                 created_at=now,
             )
         )
+        kpi_signal_rows.append(
+            build_conversion_kpi_signal_fact(
+                journey=j,
+                conversion_id=conv_id,
+                profile_id=profile_id,
+                conversion_key=effective_key,
+                conversion_ts=conv_ts,
+                created_at=now,
+            )
+        )
+        taxonomy_touchpoint_rows.extend(
+            build_conversion_taxonomy_touchpoint_facts(
+                journey=j,
+                conversion_id=conv_id,
+                profile_id=profile_id,
+                conversion_key=effective_key,
+                conversion_ts=conv_ts,
+                created_at=now,
+            )
+        )
         inserted += 1
 
     for fact_row in fact_rows:
         db.add(fact_row)
     for dq_fact_row in dq_fact_rows:
         db.add(dq_fact_row)
+    for kpi_signal_row in kpi_signal_rows:
+        db.add(kpi_signal_row)
+    for taxonomy_touchpoint_row in taxonomy_touchpoint_rows:
+        db.add(taxonomy_touchpoint_row)
     db.commit()
     return inserted
 
