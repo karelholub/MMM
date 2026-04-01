@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import type { MeiroConfig, MeiroImportResult, MeiroMappingState, MeiroPullConfig, MeiroQuarantineReprocessResult, MeiroQuarantineRun, MeiroWebhookSuggestions } from '../../connectors/meiroConnector'
 import { tokens as t } from '../../theme/tokens'
@@ -19,6 +19,7 @@ interface MeiroImportReplayProps {
   reprocessWebhookArchiveResult?: MeiroWebhookReprocessResult | null
   reprocessQuarantinePending: boolean
   reprocessQuarantineResult?: MeiroQuarantineReprocessResult | null
+  reprocessQuarantineError?: string | null
   quarantineRuns?: { items: MeiroQuarantineRun[]; total: number }
   quarantineRunsLoading: boolean
   quarantineRunsError?: string | null
@@ -67,6 +68,7 @@ export default function MeiroImportReplay({
   reprocessWebhookArchiveResult,
   reprocessQuarantinePending,
   reprocessQuarantineResult,
+  reprocessQuarantineError,
   quarantineRuns,
   quarantineRunsLoading,
   quarantineRunsError,
@@ -98,14 +100,37 @@ export default function MeiroImportReplay({
   const replaySourceLabel =
     replaySource === 'events' ? 'Raw events archive' : replaySource === 'profiles' ? 'Profiles archive' : 'Auto (freshest archive)'
   const replayDiagnostics = reprocessWebhookArchiveResult?.event_reconstruction_diagnostics
-  const indexedRecords = (selectedQuarantineRun?.records || []).map((record, index) => ({ record, index }))
-  const recordsForDisplay = indexedRecords.filter(({ record }) => {
-    if (showResolvedRecords) return true
-    return String(record.remediation?.status || 'open') === 'open'
-  })
-  const visibleRecords = recordsForDisplay.slice(0, 10)
-  const visibleRecordIndices = visibleRecords.map(({ index }) => index)
-  const openRecordCount = indexedRecords.filter(({ record }) => String(record.remediation?.status || 'open') === 'open').length
+  const indexedRecords = useMemo(
+    () => (selectedQuarantineRun?.records || []).map((record, index) => ({ record, index })),
+    [selectedQuarantineRun?.records],
+  )
+  const openRecordIndices = useMemo(
+    () => indexedRecords
+      .filter(({ record }) => String(record.remediation?.status || 'open') === 'open')
+      .map(({ index }) => index),
+    [indexedRecords],
+  )
+  const reprocessableRecordIndices = useMemo(
+    () => indexedRecords
+      .filter(({ record }) => !!record.original && typeof record.original === 'object')
+      .map(({ index }) => index),
+    [indexedRecords],
+  )
+  const recordsForDisplay = useMemo(
+    () => indexedRecords.filter(({ record }) => {
+      if (showResolvedRecords) return true
+      return String(record.remediation?.status || 'open') === 'open'
+    }),
+    [indexedRecords, showResolvedRecords],
+  )
+  const visibleRecords = useMemo(() => recordsForDisplay.slice(0, 10), [recordsForDisplay])
+  const visibleRecordIndices = useMemo(
+    () => visibleRecords
+      .filter(({ record }) => !!record.original && typeof record.original === 'object')
+      .map(({ index }) => index),
+    [visibleRecords],
+  )
+  const openRecordCount = openRecordIndices.length
   const remediatedRecordCount = Math.max(0, indexedRecords.length - openRecordCount)
 
   useEffect(() => {
@@ -114,14 +139,17 @@ export default function MeiroImportReplay({
   }, [selectedQuarantineRun?.id])
 
   useEffect(() => {
-    setSelectedRecordIndices((prev) => (
-      prev.filter((index) => (
-        showResolvedRecords
-          ? index >= 0 && index < indexedRecords.length
-          : String(indexedRecords[index]?.record?.remediation?.status || 'open') === 'open'
+    setSelectedRecordIndices((prev) => {
+      const next = prev.filter((index) => (
+        reprocessableRecordIndices.includes(index) &&
+        (
+          showResolvedRecords ||
+          String(indexedRecords[index]?.record?.remediation?.status || 'open') === 'open'
+        )
       ))
-    ))
-  }, [indexedRecords, showResolvedRecords])
+      return next.length === prev.length && next.every((value, position) => value === prev[position]) ? prev : next
+    })
+  }, [indexedRecords, reprocessableRecordIndices, showResolvedRecords])
 
   return (
     <div style={{ display: 'grid', gap: t.space.md }}>
@@ -298,8 +326,8 @@ export default function MeiroImportReplay({
                   <button
                     type="button"
                     onClick={() => onReprocessSelectedQuarantine()}
-                    disabled={reprocessQuarantinePending || !(selectedQuarantineRun.records || []).length}
-                    style={{ border: `1px solid ${t.color.accent}`, background: '#fff', color: t.color.accent, borderRadius: t.radius.sm, padding: '8px 10px', cursor: reprocessQuarantinePending ? 'wait' : 'pointer', opacity: reprocessQuarantinePending || !(selectedQuarantineRun.records || []).length ? 0.7 : 1 }}
+                    disabled={reprocessQuarantinePending || reprocessableRecordIndices.length === 0}
+                    style={{ border: `1px solid ${t.color.accent}`, background: '#fff', color: t.color.accent, borderRadius: t.radius.sm, padding: '8px 10px', cursor: reprocessQuarantinePending ? 'wait' : 'pointer', opacity: reprocessQuarantinePending || reprocessableRecordIndices.length === 0 ? 0.7 : 1 }}
                   >
                     {reprocessQuarantinePending ? 'Reprocessing run…' : 'Reprocess run into attribution'}
                   </button>
@@ -331,6 +359,14 @@ export default function MeiroImportReplay({
                     Re-runs quarantined originals through the current mapping and sanitation rules, then appends recovered journeys to attribution.
                   </div>
                 </div>
+                {reprocessableRecordIndices.length === 0 ? (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>
+                    This quarantine run has no original records available for reprocessing.
+                  </div>
+                ) : null}
+                {reprocessQuarantineError ? (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{reprocessQuarantineError}</div>
+                ) : null}
                 <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: t.font.sizeSm, color: t.color.text }}>
                   <input type="checkbox" checked={showResolvedRecords} onChange={(e) => setShowResolvedRecords(e.target.checked)} />
                   Show remediated records
@@ -352,7 +388,10 @@ export default function MeiroImportReplay({
                       <input
                         type="checkbox"
                         checked={selectedRecordIndices.includes(index)}
-                        disabled={String(record.remediation?.status || 'open') !== 'open'}
+                        disabled={
+                          String(record.remediation?.status || 'open') !== 'open' ||
+                          !(record.original && typeof record.original === 'object')
+                        }
                         onChange={(e) => {
                           const checked = e.target.checked
                           setSelectedRecordIndices((prev) => (

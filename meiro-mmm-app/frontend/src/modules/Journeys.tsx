@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import DashboardPage from '../components/dashboard/DashboardPage'
 import SectionCard from '../components/dashboard/SectionCard'
-import { AnalyticsTable, type AnalyticsTableColumn } from '../components/dashboard'
+import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn } from '../components/dashboard'
 import GlobalFilterBar, { GlobalFiltersState } from '../components/dashboard/GlobalFilterBar'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { tokens as t } from '../theme/tokens'
@@ -1335,62 +1335,45 @@ export default function Journeys({
                   (row.country || '') === (selectedPath.country || '')
                 }
                 toolbar={
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      gap: t.space.md,
-                      flexWrap: 'wrap',
-                    }}
-                  >
-                    <input
-                      type="search"
-                      value={pathSearch}
-                      onChange={(event) => setPathSearch(event.target.value)}
-                      placeholder="Search path steps…"
-                      style={{
-                        minWidth: 220,
-                        flex: '1 1 280px',
-                        padding: `${t.space.sm}px ${t.space.md}px`,
-                        borderRadius: t.radius.sm,
-                        border: `1px solid ${t.color.border}`,
-                        fontSize: t.font.sizeSm,
-                      }}
-                    />
-                    <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
-                      <select
-                        value={pathSortBy}
-                        onChange={(e) => setPathSortBy(e.target.value as PathSortBy)}
-                        style={{ padding: '7px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, fontSize: t.font.sizeSm }}
-                      >
-                        <option value="journeys">Sort: Journeys</option>
-                        <option value="conversion_rate">Sort: Conversion rate</option>
-                        <option value="avg_time">Sort: Avg time-to-convert</option>
-                      </select>
-                      <button
-                        type="button"
-                        onClick={() => setPathSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
-                        style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, color: t.color.text, borderRadius: t.radius.sm, fontSize: t.font.sizeSm, padding: '7px 10px', cursor: 'pointer' }}
-                      >
-                        {pathSortDir === 'asc' ? 'Ascending' : 'Descending'}
-                      </button>
-                      <select
-                        value={pathsLimit}
-                        onChange={(e) => {
-                          setPathsLimit(Number(e.target.value))
-                          setPathsPage(1)
-                        }}
-                        style={{ padding: '7px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, fontSize: t.font.sizeSm }}
-                      >
-                        {[25, 50, 100].map((v) => (
-                          <option key={v} value={v}>
-                            {v} rows
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
+                  <AnalyticsToolbar
+                    searchValue={pathSearch}
+                    onSearchChange={setPathSearch}
+                    searchPlaceholder="Search path steps…"
+                    actions={
+                      <>
+                        <select
+                          value={pathSortBy}
+                          onChange={(e) => setPathSortBy(e.target.value as PathSortBy)}
+                          style={{ padding: '7px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, fontSize: t.font.sizeSm }}
+                        >
+                          <option value="journeys">Sort: Journeys</option>
+                          <option value="conversion_rate">Sort: Conversion rate</option>
+                          <option value="avg_time">Sort: Avg time-to-convert</option>
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => setPathSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
+                          style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, color: t.color.text, borderRadius: t.radius.sm, fontSize: t.font.sizeSm, padding: '7px 10px', cursor: 'pointer' }}
+                        >
+                          {pathSortDir === 'asc' ? 'Ascending' : 'Descending'}
+                        </button>
+                        <select
+                          value={pathsLimit}
+                          onChange={(e) => {
+                            setPathsLimit(Number(e.target.value))
+                            setPathsPage(1)
+                          }}
+                          style={{ padding: '7px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, fontSize: t.font.sizeSm }}
+                        >
+                          {[25, 50, 100].map((v) => (
+                            <option key={v} value={v}>
+                              {v} rows
+                            </option>
+                          ))}
+                        </select>
+                      </>
+                    }
+                  />
                 }
                 pagination={
                   <>

@@ -1,23 +1,23 @@
 {
   "definitions": [
     {
-      "id": "form_submit",
-      "label": "Form Submit",
-      "type": "primary",
-      "event_name": "form_submit",
-      "value_field": "value",
+      "id": "purchase",
+      "label": "Purchase",
+      "type": "conversion",
+      "event_name": "purchase",
+      "value_field": null,
       "weight": 1.0,
-      "lookback_days": 30
+      "lookback_days": null
     },
     {
-      "id": "conversion",
-      "label": "Conversion",
-      "type": "micro",
-      "event_name": "conversion",
+      "id": "lead",
+      "label": "Lead",
+      "type": "conversion",
+      "event_name": "lead_submit",
       "value_field": null,
-      "weight": 0.5,
-      "lookback_days": 14
+      "weight": 1.0,
+      "lookback_days": null
     }
   ],
-  "primary_kpi_id": "form_submit"
+  "primary_kpi_id": "lead"
 }

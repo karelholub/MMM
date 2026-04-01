@@ -480,6 +480,7 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
               reprocessWebhookArchiveResult={reprocessWebhookArchiveMutation.data ?? null}
               reprocessQuarantinePending={reprocessSelectedQuarantineMutation.isPending}
               reprocessQuarantineResult={reprocessSelectedQuarantineMutation.data ?? null}
+              reprocessQuarantineError={reprocessSelectedQuarantineMutation.error ? (reprocessSelectedQuarantineMutation.error as Error).message : null}
               quarantineRuns={meiroQuarantineRunsQuery.data}
               quarantineRunsLoading={meiroQuarantineRunsQuery.isLoading}
               quarantineRunsError={(meiroQuarantineRunsQuery.error as Error | undefined)?.message || null}

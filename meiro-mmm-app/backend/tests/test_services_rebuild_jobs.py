@@ -6,10 +6,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.services_rebuild_jobs import (
     purge_journey_definition_outputs,
+    rebuild_multiple_journey_definition_outputs,
+    rebuild_outputs_for_kpi_config_change,
+    rebuild_outputs_for_taxonomy_change,
     rebuild_journey_definition_outputs,
     rebuild_journey_aggregate_outputs,
     rebuild_taxonomy_dq_outputs,
 )
+from app.modules.settings.schemas import KpiConfigModel, KpiDefinitionModel
 
 
 def test_rebuild_taxonomy_dq_outputs_prefers_db_facts(monkeypatch):
@@ -125,3 +129,82 @@ def test_purge_journey_definition_outputs_delegates(monkeypatch):
     out = purge_journey_definition_outputs(db, definition_id="def-2")
 
     assert out == {"definition_id": "def-2", "path_rows_deleted": 2}
+
+
+def test_rebuild_multiple_journey_definition_outputs_summarizes_results(monkeypatch):
+    db = object()
+    monkeypatch.setattr(
+        "app.services_rebuild_jobs.list_active_journey_definitions",
+        lambda db: [type("D", (), {"id": "def-1"})(), type("D", (), {"id": "def-2"})()],
+    )
+    monkeypatch.setattr(
+        "app.services_rebuild_jobs.rebuild_journey_definition_outputs_from_daily",
+        lambda db, definition_id=None, reprocess_days=0: {
+            "definition_id": definition_id,
+            "days_processed": 1,
+            "source_rows_processed": 2,
+            "path_rows_written": 3,
+            "transition_rows_written": 4,
+            "example_rows_written": 5,
+            "definition_rows_written": 6,
+            "obsolete_days_removed": 7,
+        },
+    )
+
+    out = rebuild_multiple_journey_definition_outputs(db, reprocess_days=9)
+
+    assert out["definitions_rebuilt"] == 2
+    assert out["definition_ids"] == ["def-1", "def-2"]
+    assert out["effective_reprocess_days"] == 9
+    assert out["days_processed"] == 2
+    assert out["definition_rows_written"] == 12
+
+
+def test_rebuild_outputs_for_taxonomy_change_runs_taxonomy_and_definition_jobs(monkeypatch):
+    db = object()
+    monkeypatch.setattr(
+        "app.services_rebuild_jobs.rebuild_taxonomy_dq_outputs",
+        lambda db, taxonomy=None: {"source": "db_touchpoint_facts", "taxonomy": taxonomy},
+    )
+    monkeypatch.setattr(
+        "app.services_rebuild_jobs.rebuild_multiple_journey_definition_outputs",
+        lambda db, reprocess_days=None: {"definitions_rebuilt": 3, "effective_reprocess_days": reprocess_days or 3},
+    )
+
+    out = rebuild_outputs_for_taxonomy_change(db, taxonomy="taxonomy", reprocess_days=5)
+
+    assert out["taxonomy"]["taxonomy"] == "taxonomy"
+    assert out["journey_outputs"]["definitions_rebuilt"] == 3
+    assert out["journey_outputs"]["effective_reprocess_days"] == 5
+
+
+def test_rebuild_outputs_for_kpi_config_change_targets_impacted_definitions(monkeypatch):
+    db = object()
+    previous_cfg = KpiConfigModel(
+        definitions=[
+            KpiDefinitionModel(id="purchase", label="Purchase", type="conversion", event_name="purchase"),
+            KpiDefinitionModel(id="lead", label="Lead", type="conversion", event_name="lead_submit"),
+        ],
+        primary_kpi_id="purchase",
+    )
+    current_cfg = KpiConfigModel(
+        definitions=[
+            KpiDefinitionModel(id="purchase", label="Purchase", type="conversion", event_name="purchase_confirmed"),
+            KpiDefinitionModel(id="lead", label="Lead", type="conversion", event_name="lead_submit"),
+        ],
+        primary_kpi_id="purchase",
+    )
+    monkeypatch.setattr(
+        "app.services_rebuild_jobs.list_active_journey_definitions",
+        lambda db, conversion_kpi_ids=None: [type("D", (), {"id": "def-1", "conversion_kpi_id": "purchase"})()],
+    )
+    monkeypatch.setattr(
+        "app.services_rebuild_jobs.rebuild_multiple_journey_definition_outputs",
+        lambda db, definition_ids=None, reprocess_days=None: {"definition_ids": definition_ids or [], "definitions_rebuilt": len(definition_ids or [])},
+    )
+
+    out = rebuild_outputs_for_kpi_config_change(db, previous_cfg=previous_cfg, current_cfg=current_cfg)
+
+    assert out["impacted_kpi_ids"] == ["purchase"]
+    assert out["affected_definition_ids"] == ["def-1"]
+    assert out["rebuild"]["definitions_rebuilt"] == 1

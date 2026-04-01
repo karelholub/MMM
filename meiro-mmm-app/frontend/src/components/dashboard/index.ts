@@ -1,5 +1,6 @@
 export { DashboardPage } from './DashboardPage'
 export { default as AnalyticsTable } from './AnalyticsTable'
+export { default as AnalyticsToolbar } from './AnalyticsToolbar'
 export type { AnalyticsTableColumn } from './AnalyticsTable'
 export { default as KpiTile } from './KpiTile'
 export { default as SectionCard } from './SectionCard'

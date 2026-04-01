@@ -1,5 +1,2455 @@
 [
 {
+"id": "a6cf1168-932",
+"source": "meiro_events_replay",
+"started_at": "2026-04-01T16:35:08.061735Z",
+"finished_at": "2026-04-01T16:35:08.061735Z",
+"status": "success",
+"total": 42,
+"valid": 42,
+"invalid": 0,
+"converted": 42,
+"channels_detected": [
+"Organic Search",
+"Referral",
+"direct",
+"paid_search"
+],
+"validation_summary": {
+"cleaning_report": {
+"fixed": 42,
+"dropped": 0,
+"ambiguous": 37,
+"duplicate_profiles": 0,
+"top_unresolved_patterns": [],
+"quality": {
+"average_score": 65.5,
+"high": 0,
+"medium": 42,
+"low": 0
+}
+},
+"top_quarantine_reasons": [],
+"replay_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 85,
+"replay_snapshot_id": "3aeb7a4e-90ce-4a8d-883f-d64716136aa9",
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 187,
+"profiles_reconstructed": 42,
+"avg_events_per_profile": 4.45,
+"touchpoints_reconstructed": 171,
+"conversions_reconstructed": 16,
+"profiles_with_touchpoints": 42,
+"profiles_with_conversions": 5,
+"attributable_profiles": 5,
+"avg_touchpoints_per_profile": 4.07,
+"avg_conversions_per_profile": 0.38,
+"warnings": []
+}
+},
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 187,
+"profiles_reconstructed": 42,
+"avg_events_per_profile": 4.45,
+"touchpoints_reconstructed": 171,
+"conversions_reconstructed": 16,
+"profiles_with_touchpoints": 42,
+"profiles_with_conversions": 5,
+"attributable_profiles": 5,
+"avg_touchpoints_per_profile": 4.07,
+"avg_conversions_per_profile": 0.38,
+"warnings": []
+}
+},
+"config_snapshot": {
+"conversion_import_batch_id": "cf21cecc-b7d8-49ec-b159-10d6bb38aa2d",
+"mapping_preset": "saved",
+"schema_version": "1.0",
+"dedup_interval_minutes": 5,
+"dedup_mode": "balanced",
+"primary_dedup_key": "auto",
+"fallback_dedup_keys": [
+"conversion_id",
+"order_id",
+"event_id"
+],
+"strict_ingest": true,
+"timestamp_fallback_policy": "profile",
+"value_fallback_policy": "default",
+"currency_fallback_policy": "default",
+"replay_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 85,
+"replay_snapshot_id": "3aeb7a4e-90ce-4a8d-883f-d64716136aa9",
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 187,
+"profiles_reconstructed": 42,
+"avg_events_per_profile": 4.45,
+"touchpoints_reconstructed": 171,
+"conversions_reconstructed": 16,
+"profiles_with_touchpoints": 42,
+"profiles_with_conversions": 5,
+"attributable_profiles": 5,
+"avg_touchpoints_per_profile": 4.07,
+"avg_conversions_per_profile": 0.38,
+"warnings": []
+}
+},
+"replay_snapshot_id": "3aeb7a4e-90ce-4a8d-883f-d64716136aa9",
+"replay_snapshot_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 85,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 187,
+"profiles_reconstructed": 42,
+"avg_events_per_profile": 4.45,
+"touchpoints_reconstructed": 171,
+"conversions_reconstructed": 16,
+"profiles_with_touchpoints": 42,
+"profiles_with_conversions": 5,
+"attributable_profiles": 5,
+"avg_touchpoints_per_profile": 4.07,
+"avg_conversions_per_profile": 0.38,
+"warnings": []
+},
+"replace_profile_ids": [],
+"incremental": false
+},
+"source_snapshot_id": "3aeb7a4e-90ce-4a8d-883f-d64716136aa9"
+},
+"initiated_by": null,
+"import_note": "Reprocessed from raw-event archive using current approved mapping",
+"error": null,
+"preview_rows": [
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 27483.699999999997
+},
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 2276.1
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 4,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 3,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+}
+]
+},
+{
+"id": "5e407948-aa9",
+"source": "meiro_webhook",
+"started_at": "2026-04-01T16:31:32.539472Z",
+"finished_at": "2026-04-01T16:31:32.539472Z",
+"status": "success",
+"total": 71,
+"valid": 10,
+"invalid": 61,
+"converted": 0,
+"channels_detected": [
+"direct",
+"home_page",
+"interaktivni_rozcestnik",
+"meta_ads"
+],
+"validation_summary": {
+"cleaning_report": {
+"fixed": 0,
+"dropped": 61,
+"ambiguous": 10,
+"duplicate_profiles": 17,
+"top_unresolved_patterns": [
+{
+"code": "duplicate_profile_id",
+"count": 61
+},
+{
+"code": "missing_conversions",
+"count": 57
+}
+],
+"quality": {
+"average_score": 67.5,
+"high": 11,
+"medium": 60,
+"low": 0
+}
+},
+"top_quarantine_reasons": [
+{
+"code": "duplicate_profile_id",
+"count": 61
+},
+{
+"code": "missing_conversions",
+"count": 57
+}
+]
+},
+"config_snapshot": {
+"conversion_import_batch_id": "156b5f0b-fea6-4483-91e4-0a58dbd828cd",
+"mapping_preset": "saved",
+"schema_version": "1.0",
+"dedup_interval_minutes": 5,
+"dedup_mode": "balanced",
+"primary_dedup_key": "auto",
+"fallback_dedup_keys": [
+"conversion_id",
+"order_id",
+"event_id"
+],
+"strict_ingest": true,
+"timestamp_fallback_policy": "profile",
+"value_fallback_policy": "default",
+"currency_fallback_policy": "default",
+"replay_snapshot_id": "51d67b15-04ab-4af8-a777-4dfe163635fd",
+"replay_snapshot_context": {
+"archive_source": "profiles",
+"replay_mode": "last_n",
+"archive_entries_used": 5000,
+"event_reconstruction_diagnostics": {},
+"replace_profile_ids": [],
+"incremental": false
+},
+"source_snapshot_id": "51d67b15-04ab-4af8-a777-4dfe163635fd"
+},
+"initiated_by": null,
+"import_note": "Reprocessed from webhook archive using current approved mapping",
+"error": null,
+"preview_rows": [
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 6,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 11,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+}
+]
+},
+{
+"id": "e3a1606d-642",
+"source": "meiro_events_replay",
+"started_at": "2026-04-01T16:17:02.463521Z",
+"finished_at": "2026-04-01T16:17:02.463521Z",
+"status": "success",
+"total": 1,
+"valid": 1,
+"invalid": 0,
+"converted": 1,
+"channels_detected": [
+"direct"
+],
+"validation_summary": {
+"cleaning_report": {
+"fixed": 1,
+"dropped": 0,
+"ambiguous": 1,
+"duplicate_profiles": 0,
+"top_unresolved_patterns": [],
+"quality": {
+"average_score": 65.0,
+"high": 0,
+"medium": 1,
+"low": 0
+}
+},
+"top_quarantine_reasons": [],
+"replay_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"replay_snapshot_id": "2e1dba66-d09f-4f66-81d7-a715a0e34190",
+"latest_event_batch_db_id": 29,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 1,
+"profiles_reconstructed": 1,
+"avg_events_per_profile": 1.0,
+"touchpoints_reconstructed": 1,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 1,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 1.0,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"7481be52-d797-4749-a740-849ee9529f4c"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 1,
+"profiles_reconstructed": 1,
+"avg_events_per_profile": 1.0,
+"touchpoints_reconstructed": 1,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 1,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 1.0,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+}
+},
+"config_snapshot": {
+"conversion_import_batch_id": "2972f9d7-8ffd-4175-b5fd-a768c32d3818",
+"mapping_preset": "saved",
+"schema_version": "1.0",
+"dedup_interval_minutes": 5,
+"dedup_mode": "balanced",
+"primary_dedup_key": "conversion_id",
+"fallback_dedup_keys": [
+"order_id",
+"event_id"
+],
+"strict_ingest": true,
+"timestamp_fallback_policy": "profile",
+"value_fallback_policy": "default",
+"currency_fallback_policy": "default",
+"replay_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"replay_snapshot_id": "2e1dba66-d09f-4f66-81d7-a715a0e34190",
+"latest_event_batch_db_id": 29,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 1,
+"profiles_reconstructed": 1,
+"avg_events_per_profile": 1.0,
+"touchpoints_reconstructed": 1,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 1,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 1.0,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"7481be52-d797-4749-a740-849ee9529f4c"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"replay_snapshot_id": "2e1dba66-d09f-4f66-81d7-a715a0e34190",
+"replay_snapshot_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"latest_event_batch_db_id": 29,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 1,
+"profiles_reconstructed": 1,
+"avg_events_per_profile": 1.0,
+"touchpoints_reconstructed": 1,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 1,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 1.0,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"7481be52-d797-4749-a740-849ee9529f4c"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"source_snapshot_id": "2e1dba66-d09f-4f66-81d7-a715a0e34190",
+"replace_profile_ids": [
+"7481be52-d797-4749-a740-849ee9529f4c"
+]
+},
+"initiated_by": null,
+"import_note": "Auto-replayed from raw-event archive (after_batch)",
+"error": null,
+"preview_rows": [
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+}
+]
+},
+{
+"id": "fdbababd-52e",
+"source": "meiro_events_replay",
+"started_at": "2026-04-01T16:16:49.608043Z",
+"finished_at": "2026-04-01T16:16:49.608043Z",
+"status": "success",
+"total": 2,
+"valid": 2,
+"invalid": 0,
+"converted": 2,
+"channels_detected": [
+"Organic Search"
+],
+"validation_summary": {
+"cleaning_report": {
+"fixed": 2,
+"dropped": 0,
+"ambiguous": 2,
+"duplicate_profiles": 0,
+"top_unresolved_patterns": [],
+"quality": {
+"average_score": 65.0,
+"high": 0,
+"medium": 2,
+"low": 0
+}
+},
+"top_quarantine_reasons": [],
+"replay_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"replay_snapshot_id": "7e122ad7-226b-4c52-a4fb-b11337a70378",
+"latest_event_batch_db_id": 28,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 4,
+"profiles_reconstructed": 2,
+"avg_events_per_profile": 2.0,
+"touchpoints_reconstructed": 4,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 2,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 2.0,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"e80303ac-f5a5-4e23-9660-49ee3824a2ed",
+"3d75535e-37cc-4eda-9692-dd92222a98cc"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 4,
+"profiles_reconstructed": 2,
+"avg_events_per_profile": 2.0,
+"touchpoints_reconstructed": 4,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 2,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 2.0,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+}
+},
+"config_snapshot": {
+"conversion_import_batch_id": "261bf3ed-920c-4f86-b76a-0ddcd66d1973",
+"mapping_preset": "saved",
+"schema_version": "1.0",
+"dedup_interval_minutes": 5,
+"dedup_mode": "balanced",
+"primary_dedup_key": "conversion_id",
+"fallback_dedup_keys": [
+"order_id",
+"event_id"
+],
+"strict_ingest": true,
+"timestamp_fallback_policy": "profile",
+"value_fallback_policy": "default",
+"currency_fallback_policy": "default",
+"replay_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"replay_snapshot_id": "7e122ad7-226b-4c52-a4fb-b11337a70378",
+"latest_event_batch_db_id": 28,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 4,
+"profiles_reconstructed": 2,
+"avg_events_per_profile": 2.0,
+"touchpoints_reconstructed": 4,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 2,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 2.0,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"e80303ac-f5a5-4e23-9660-49ee3824a2ed",
+"3d75535e-37cc-4eda-9692-dd92222a98cc"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"replay_snapshot_id": "7e122ad7-226b-4c52-a4fb-b11337a70378",
+"replay_snapshot_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"latest_event_batch_db_id": 28,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 4,
+"profiles_reconstructed": 2,
+"avg_events_per_profile": 2.0,
+"touchpoints_reconstructed": 4,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 2,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 2.0,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"e80303ac-f5a5-4e23-9660-49ee3824a2ed",
+"3d75535e-37cc-4eda-9692-dd92222a98cc"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"source_snapshot_id": "7e122ad7-226b-4c52-a4fb-b11337a70378",
+"replace_profile_ids": [
+"e80303ac-f5a5-4e23-9660-49ee3824a2ed",
+"3d75535e-37cc-4eda-9692-dd92222a98cc"
+]
+},
+"initiated_by": null,
+"import_note": "Auto-replayed from raw-event archive (after_batch)",
+"error": null,
+"preview_rows": [
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+}
+]
+},
+{
+"id": "3524a26c-fa6",
+"source": "meiro_events_replay",
+"started_at": "2026-04-01T16:15:57.320382Z",
+"finished_at": "2026-04-01T16:15:57.320382Z",
+"status": "success",
+"total": 1,
+"valid": 1,
+"invalid": 0,
+"converted": 1,
+"channels_detected": [
+"Organic Search"
+],
+"validation_summary": {
+"cleaning_report": {
+"fixed": 1,
+"dropped": 0,
+"ambiguous": 1,
+"duplicate_profiles": 0,
+"top_unresolved_patterns": [],
+"quality": {
+"average_score": 65.0,
+"high": 0,
+"medium": 1,
+"low": 0
+}
+},
+"top_quarantine_reasons": [],
+"replay_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"replay_snapshot_id": "7f3660f7-8c01-48af-a836-04ab15d4aecb",
+"latest_event_batch_db_id": 27,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 3,
+"profiles_reconstructed": 1,
+"avg_events_per_profile": 3.0,
+"touchpoints_reconstructed": 3,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 1,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 3.0,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"2fdd6c7d-6041-4fb3-af8d-10fb2ff51d11"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 3,
+"profiles_reconstructed": 1,
+"avg_events_per_profile": 3.0,
+"touchpoints_reconstructed": 3,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 1,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 3.0,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+}
+},
+"config_snapshot": {
+"conversion_import_batch_id": "d4aa7d6d-258c-496e-93ce-6894db37d4a7",
+"mapping_preset": "saved",
+"schema_version": "1.0",
+"dedup_interval_minutes": 5,
+"dedup_mode": "balanced",
+"primary_dedup_key": "conversion_id",
+"fallback_dedup_keys": [
+"order_id",
+"event_id"
+],
+"strict_ingest": true,
+"timestamp_fallback_policy": "profile",
+"value_fallback_policy": "default",
+"currency_fallback_policy": "default",
+"replay_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"replay_snapshot_id": "7f3660f7-8c01-48af-a836-04ab15d4aecb",
+"latest_event_batch_db_id": 27,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 3,
+"profiles_reconstructed": 1,
+"avg_events_per_profile": 3.0,
+"touchpoints_reconstructed": 3,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 1,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 3.0,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"2fdd6c7d-6041-4fb3-af8d-10fb2ff51d11"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"replay_snapshot_id": "7f3660f7-8c01-48af-a836-04ab15d4aecb",
+"replay_snapshot_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"latest_event_batch_db_id": 27,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 3,
+"profiles_reconstructed": 1,
+"avg_events_per_profile": 3.0,
+"touchpoints_reconstructed": 3,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 1,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 3.0,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"2fdd6c7d-6041-4fb3-af8d-10fb2ff51d11"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"source_snapshot_id": "7f3660f7-8c01-48af-a836-04ab15d4aecb",
+"replace_profile_ids": [
+"2fdd6c7d-6041-4fb3-af8d-10fb2ff51d11"
+]
+},
+"initiated_by": null,
+"import_note": "Auto-replayed from raw-event archive (after_batch)",
+"error": null,
+"preview_rows": [
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+}
+]
+},
+{
+"id": "9c29a027-485",
+"source": "meiro_events_replay",
+"started_at": "2026-04-01T16:15:55.325284Z",
+"finished_at": "2026-04-01T16:15:55.325284Z",
+"status": "success",
+"total": 1,
+"valid": 1,
+"invalid": 0,
+"converted": 1,
+"channels_detected": [
+"Organic Search"
+],
+"validation_summary": {
+"cleaning_report": {
+"fixed": 1,
+"dropped": 0,
+"ambiguous": 1,
+"duplicate_profiles": 0,
+"top_unresolved_patterns": [],
+"quality": {
+"average_score": 65.0,
+"high": 0,
+"medium": 1,
+"low": 0
+}
+},
+"top_quarantine_reasons": [],
+"replay_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"replay_snapshot_id": "856bbeba-ffe0-4f39-beb4-f2b6128ffc19",
+"latest_event_batch_db_id": 26,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 1,
+"profiles_reconstructed": 1,
+"avg_events_per_profile": 1.0,
+"touchpoints_reconstructed": 1,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 1,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 1.0,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"7bb6d21d-e8fd-49c2-8539-afa4af07a308"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 1,
+"profiles_reconstructed": 1,
+"avg_events_per_profile": 1.0,
+"touchpoints_reconstructed": 1,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 1,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 1.0,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+}
+},
+"config_snapshot": {
+"conversion_import_batch_id": "eb9b5761-9e83-4012-a25d-a0db64a748de",
+"mapping_preset": "saved",
+"schema_version": "1.0",
+"dedup_interval_minutes": 5,
+"dedup_mode": "balanced",
+"primary_dedup_key": "conversion_id",
+"fallback_dedup_keys": [
+"order_id",
+"event_id"
+],
+"strict_ingest": true,
+"timestamp_fallback_policy": "profile",
+"value_fallback_policy": "default",
+"currency_fallback_policy": "default",
+"replay_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"replay_snapshot_id": "856bbeba-ffe0-4f39-beb4-f2b6128ffc19",
+"latest_event_batch_db_id": 26,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 1,
+"profiles_reconstructed": 1,
+"avg_events_per_profile": 1.0,
+"touchpoints_reconstructed": 1,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 1,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 1.0,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"7bb6d21d-e8fd-49c2-8539-afa4af07a308"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"replay_snapshot_id": "856bbeba-ffe0-4f39-beb4-f2b6128ffc19",
+"replay_snapshot_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"latest_event_batch_db_id": 26,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 1,
+"profiles_reconstructed": 1,
+"avg_events_per_profile": 1.0,
+"touchpoints_reconstructed": 1,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 1,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 1.0,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"7bb6d21d-e8fd-49c2-8539-afa4af07a308"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"source_snapshot_id": "856bbeba-ffe0-4f39-beb4-f2b6128ffc19",
+"replace_profile_ids": [
+"7bb6d21d-e8fd-49c2-8539-afa4af07a308"
+]
+},
+"initiated_by": null,
+"import_note": "Auto-replayed from raw-event archive (after_batch)",
+"error": null,
+"preview_rows": [
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+}
+]
+},
+{
+"id": "c857d0cf-eb2",
+"source": "meiro_events_replay",
+"started_at": "2026-04-01T16:15:22.843181Z",
+"finished_at": "2026-04-01T16:15:22.843181Z",
+"status": "success",
+"total": 1,
+"valid": 1,
+"invalid": 0,
+"converted": 1,
+"channels_detected": [
+"Referral"
+],
+"validation_summary": {
+"cleaning_report": {
+"fixed": 1,
+"dropped": 0,
+"ambiguous": 1,
+"duplicate_profiles": 0,
+"top_unresolved_patterns": [],
+"quality": {
+"average_score": 65.0,
+"high": 0,
+"medium": 1,
+"low": 0
+}
+},
+"top_quarantine_reasons": [],
+"replay_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"replay_snapshot_id": "f29f70ba-9169-4a0e-b021-9dc2add36d7e",
+"latest_event_batch_db_id": 25,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 2,
+"profiles_reconstructed": 1,
+"avg_events_per_profile": 2.0,
+"touchpoints_reconstructed": 5,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 1,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 5.0,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"767505f5-dc8e-440b-af6d-1794c1c8e593"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 2,
+"profiles_reconstructed": 1,
+"avg_events_per_profile": 2.0,
+"touchpoints_reconstructed": 5,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 1,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 5.0,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+}
+},
+"config_snapshot": {
+"conversion_import_batch_id": "65b81c61-fda7-4d34-b9ad-c0d08a2ae6e5",
+"mapping_preset": "saved",
+"schema_version": "1.0",
+"dedup_interval_minutes": 5,
+"dedup_mode": "balanced",
+"primary_dedup_key": "conversion_id",
+"fallback_dedup_keys": [
+"order_id",
+"event_id"
+],
+"strict_ingest": true,
+"timestamp_fallback_policy": "profile",
+"value_fallback_policy": "default",
+"currency_fallback_policy": "default",
+"replay_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"replay_snapshot_id": "f29f70ba-9169-4a0e-b021-9dc2add36d7e",
+"latest_event_batch_db_id": 25,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 2,
+"profiles_reconstructed": 1,
+"avg_events_per_profile": 2.0,
+"touchpoints_reconstructed": 5,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 1,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 5.0,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"767505f5-dc8e-440b-af6d-1794c1c8e593"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"replay_snapshot_id": "f29f70ba-9169-4a0e-b021-9dc2add36d7e",
+"replay_snapshot_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"latest_event_batch_db_id": 25,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 2,
+"profiles_reconstructed": 1,
+"avg_events_per_profile": 2.0,
+"touchpoints_reconstructed": 5,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 1,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 5.0,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"767505f5-dc8e-440b-af6d-1794c1c8e593"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"source_snapshot_id": "f29f70ba-9169-4a0e-b021-9dc2add36d7e",
+"replace_profile_ids": [
+"767505f5-dc8e-440b-af6d-1794c1c8e593"
+]
+},
+"initiated_by": null,
+"import_note": "Auto-replayed from raw-event archive (after_batch)",
+"error": null,
+"preview_rows": [
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+}
+]
+},
+{
+"id": "b34e3906-ea8",
+"source": "meiro_events_replay",
+"started_at": "2026-04-01T16:15:19.246561Z",
+"finished_at": "2026-04-01T16:15:19.246561Z",
+"status": "success",
+"total": 2,
+"valid": 2,
+"invalid": 0,
+"converted": 2,
+"channels_detected": [
+"Organic Search",
+"Referral"
+],
+"validation_summary": {
+"cleaning_report": {
+"fixed": 2,
+"dropped": 0,
+"ambiguous": 2,
+"duplicate_profiles": 0,
+"top_unresolved_patterns": [],
+"quality": {
+"average_score": 65.5,
+"high": 0,
+"medium": 2,
+"low": 0
+}
+},
+"top_quarantine_reasons": [],
+"replay_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"replay_snapshot_id": "7aa6bbfb-9f7f-4411-b05b-f5e8364eaaac",
+"latest_event_batch_db_id": 24,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 4,
+"profiles_reconstructed": 2,
+"avg_events_per_profile": 2.0,
+"touchpoints_reconstructed": 5,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 2,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 2.5,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"767505f5-dc8e-440b-af6d-1794c1c8e593",
+"b05f6a25-0421-4fa6-979c-8f0edab727bf"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 4,
+"profiles_reconstructed": 2,
+"avg_events_per_profile": 2.0,
+"touchpoints_reconstructed": 5,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 2,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 2.5,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+}
+},
+"config_snapshot": {
+"conversion_import_batch_id": "1331e65f-7fcf-47e9-83fd-0f771b8cdc60",
+"mapping_preset": "saved",
+"schema_version": "1.0",
+"dedup_interval_minutes": 5,
+"dedup_mode": "balanced",
+"primary_dedup_key": "conversion_id",
+"fallback_dedup_keys": [
+"order_id",
+"event_id"
+],
+"strict_ingest": true,
+"timestamp_fallback_policy": "profile",
+"value_fallback_policy": "default",
+"currency_fallback_policy": "default",
+"replay_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"replay_snapshot_id": "7aa6bbfb-9f7f-4411-b05b-f5e8364eaaac",
+"latest_event_batch_db_id": 24,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 4,
+"profiles_reconstructed": 2,
+"avg_events_per_profile": 2.0,
+"touchpoints_reconstructed": 5,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 2,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 2.5,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"767505f5-dc8e-440b-af6d-1794c1c8e593",
+"b05f6a25-0421-4fa6-979c-8f0edab727bf"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"replay_snapshot_id": "7aa6bbfb-9f7f-4411-b05b-f5e8364eaaac",
+"replay_snapshot_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"latest_event_batch_db_id": 24,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 4,
+"profiles_reconstructed": 2,
+"avg_events_per_profile": 2.0,
+"touchpoints_reconstructed": 5,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 2,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 2.5,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"767505f5-dc8e-440b-af6d-1794c1c8e593",
+"b05f6a25-0421-4fa6-979c-8f0edab727bf"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"source_snapshot_id": "7aa6bbfb-9f7f-4411-b05b-f5e8364eaaac",
+"replace_profile_ids": [
+"767505f5-dc8e-440b-af6d-1794c1c8e593",
+"b05f6a25-0421-4fa6-979c-8f0edab727bf"
+]
+},
+"initiated_by": null,
+"import_note": "Auto-replayed from raw-event archive (after_batch)",
+"error": null,
+"preview_rows": [
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+}
+]
+},
+{
+"id": "8e40bc3f-407",
+"source": "meiro_events_replay",
+"started_at": "2026-04-01T16:15:16.146377Z",
+"finished_at": "2026-04-01T16:15:16.146377Z",
+"status": "success",
+"total": 2,
+"valid": 2,
+"invalid": 0,
+"converted": 2,
+"channels_detected": [
+"direct"
+],
+"validation_summary": {
+"cleaning_report": {
+"fixed": 2,
+"dropped": 0,
+"ambiguous": 2,
+"duplicate_profiles": 0,
+"top_unresolved_patterns": [],
+"quality": {
+"average_score": 65.0,
+"high": 0,
+"medium": 2,
+"low": 0
+}
+},
+"top_quarantine_reasons": [],
+"replay_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"replay_snapshot_id": "c41f4789-bfb2-4620-8400-efad1b3d96de",
+"latest_event_batch_db_id": 23,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 3,
+"profiles_reconstructed": 2,
+"avg_events_per_profile": 1.5,
+"touchpoints_reconstructed": 3,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 2,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 1.5,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"49b79be9-215a-4cb2-8148-8c27b86c56e7",
+"859f22cb-993b-44b4-8775-79efcc491d9e"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 3,
+"profiles_reconstructed": 2,
+"avg_events_per_profile": 1.5,
+"touchpoints_reconstructed": 3,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 2,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 1.5,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+}
+},
+"config_snapshot": {
+"conversion_import_batch_id": "6a289283-4f76-464b-b0e6-e8ead6283139",
+"mapping_preset": "saved",
+"schema_version": "1.0",
+"dedup_interval_minutes": 5,
+"dedup_mode": "balanced",
+"primary_dedup_key": "conversion_id",
+"fallback_dedup_keys": [
+"order_id",
+"event_id"
+],
+"strict_ingest": true,
+"timestamp_fallback_policy": "profile",
+"value_fallback_policy": "default",
+"currency_fallback_policy": "default",
+"replay_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"replay_snapshot_id": "c41f4789-bfb2-4620-8400-efad1b3d96de",
+"latest_event_batch_db_id": 23,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 3,
+"profiles_reconstructed": 2,
+"avg_events_per_profile": 1.5,
+"touchpoints_reconstructed": 3,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 2,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 1.5,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"49b79be9-215a-4cb2-8148-8c27b86c56e7",
+"859f22cb-993b-44b4-8775-79efcc491d9e"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"replay_snapshot_id": "c41f4789-bfb2-4620-8400-efad1b3d96de",
+"replay_snapshot_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"latest_event_batch_db_id": 23,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 3,
+"profiles_reconstructed": 2,
+"avg_events_per_profile": 1.5,
+"touchpoints_reconstructed": 3,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 2,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 1.5,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"49b79be9-215a-4cb2-8148-8c27b86c56e7",
+"859f22cb-993b-44b4-8775-79efcc491d9e"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"source_snapshot_id": "c41f4789-bfb2-4620-8400-efad1b3d96de",
+"replace_profile_ids": [
+"49b79be9-215a-4cb2-8148-8c27b86c56e7",
+"859f22cb-993b-44b4-8775-79efcc491d9e"
+]
+},
+"initiated_by": null,
+"import_note": "Auto-replayed from raw-event archive (after_batch)",
+"error": null,
+"preview_rows": [
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+}
+]
+},
+{
+"id": "5578c102-df2",
+"source": "meiro_events_replay",
+"started_at": "2026-04-01T16:14:54.897299Z",
+"finished_at": "2026-04-01T16:14:54.897299Z",
+"status": "success",
+"total": 1,
+"valid": 1,
+"invalid": 0,
+"converted": 1,
+"channels_detected": [
+"Organic Search"
+],
+"validation_summary": {
+"cleaning_report": {
+"fixed": 1,
+"dropped": 0,
+"ambiguous": 1,
+"duplicate_profiles": 0,
+"top_unresolved_patterns": [],
+"quality": {
+"average_score": 65.0,
+"high": 0,
+"medium": 1,
+"low": 0
+}
+},
+"top_quarantine_reasons": [],
+"replay_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"replay_snapshot_id": "8348d8b8-0528-4b78-95a4-19a9b539e228",
+"latest_event_batch_db_id": 22,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 1,
+"profiles_reconstructed": 1,
+"avg_events_per_profile": 1.0,
+"touchpoints_reconstructed": 1,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 1,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 1.0,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"b05f6a25-0421-4fa6-979c-8f0edab727bf"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 1,
+"profiles_reconstructed": 1,
+"avg_events_per_profile": 1.0,
+"touchpoints_reconstructed": 1,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 1,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 1.0,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+}
+},
+"config_snapshot": {
+"conversion_import_batch_id": "58f80986-99fe-46af-bcb3-061c379f10a0",
+"mapping_preset": "saved",
+"schema_version": "1.0",
+"dedup_interval_minutes": 5,
+"dedup_mode": "balanced",
+"primary_dedup_key": "conversion_id",
+"fallback_dedup_keys": [
+"order_id",
+"event_id"
+],
+"strict_ingest": true,
+"timestamp_fallback_policy": "profile",
+"value_fallback_policy": "default",
+"currency_fallback_policy": "default",
+"replay_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"replay_snapshot_id": "8348d8b8-0528-4b78-95a4-19a9b539e228",
+"latest_event_batch_db_id": 22,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 1,
+"profiles_reconstructed": 1,
+"avg_events_per_profile": 1.0,
+"touchpoints_reconstructed": 1,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 1,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 1.0,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"b05f6a25-0421-4fa6-979c-8f0edab727bf"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"replay_snapshot_id": "8348d8b8-0528-4b78-95a4-19a9b539e228",
+"replay_snapshot_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"latest_event_batch_db_id": 22,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 1,
+"profiles_reconstructed": 1,
+"avg_events_per_profile": 1.0,
+"touchpoints_reconstructed": 1,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 1,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 1.0,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"b05f6a25-0421-4fa6-979c-8f0edab727bf"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"source_snapshot_id": "8348d8b8-0528-4b78-95a4-19a9b539e228",
+"replace_profile_ids": [
+"b05f6a25-0421-4fa6-979c-8f0edab727bf"
+]
+},
+"initiated_by": null,
+"import_note": "Auto-replayed from raw-event archive (after_batch)",
+"error": null,
+"preview_rows": [
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+}
+]
+},
+{
+"id": "6c4752ae-6a6",
+"source": "meiro_events_replay",
+"started_at": "2026-04-01T16:14:34.685654Z",
+"finished_at": "2026-04-01T16:14:34.685654Z",
+"status": "success",
+"total": 2,
+"valid": 2,
+"invalid": 0,
+"converted": 2,
+"channels_detected": [
+"Referral",
+"paid_search"
+],
+"validation_summary": {
+"cleaning_report": {
+"fixed": 2,
+"dropped": 0,
+"ambiguous": 2,
+"duplicate_profiles": 0,
+"top_unresolved_patterns": [],
+"quality": {
+"average_score": 65.5,
+"high": 0,
+"medium": 2,
+"low": 0
+}
+},
+"top_quarantine_reasons": [],
+"replay_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"replay_snapshot_id": "9a00bb8e-cd2e-4c0b-919f-e38bcc2ad55e",
+"latest_event_batch_db_id": 21,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 4,
+"profiles_reconstructed": 2,
+"avg_events_per_profile": 2.0,
+"touchpoints_reconstructed": 5,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 2,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 2.5,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"064ded82-0035-4d2b-90b5-229c0497649d",
+"f4d8f8b6-a0d7-476f-aea1-153d2461a434"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 4,
+"profiles_reconstructed": 2,
+"avg_events_per_profile": 2.0,
+"touchpoints_reconstructed": 5,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 2,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 2.5,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+}
+},
+"config_snapshot": {
+"conversion_import_batch_id": "42fc982f-f592-4aaf-a580-25a4c1dbb551",
+"mapping_preset": "saved",
+"schema_version": "1.0",
+"dedup_interval_minutes": 5,
+"dedup_mode": "balanced",
+"primary_dedup_key": "conversion_id",
+"fallback_dedup_keys": [
+"order_id",
+"event_id"
+],
+"strict_ingest": true,
+"timestamp_fallback_policy": "profile",
+"value_fallback_policy": "default",
+"currency_fallback_policy": "default",
+"replay_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"replay_snapshot_id": "9a00bb8e-cd2e-4c0b-919f-e38bcc2ad55e",
+"latest_event_batch_db_id": 21,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 4,
+"profiles_reconstructed": 2,
+"avg_events_per_profile": 2.0,
+"touchpoints_reconstructed": 5,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 2,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 2.5,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"064ded82-0035-4d2b-90b5-229c0497649d",
+"f4d8f8b6-a0d7-476f-aea1-153d2461a434"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"replay_snapshot_id": "9a00bb8e-cd2e-4c0b-919f-e38bcc2ad55e",
+"replay_snapshot_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 1,
+"latest_event_batch_db_id": 21,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 4,
+"profiles_reconstructed": 2,
+"avg_events_per_profile": 2.0,
+"touchpoints_reconstructed": 5,
+"conversions_reconstructed": 0,
+"profiles_with_touchpoints": 2,
+"profiles_with_conversions": 0,
+"attributable_profiles": 0,
+"avg_touchpoints_per_profile": 2.5,
+"avg_conversions_per_profile": 0.0,
+"warnings": [
+"Reconstructed profiles contain no conversions, so attribution models have nothing to score."
+]
+},
+"replace_profile_ids": [
+"064ded82-0035-4d2b-90b5-229c0497649d",
+"f4d8f8b6-a0d7-476f-aea1-153d2461a434"
+],
+"incremental": true,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"source_snapshot_id": "9a00bb8e-cd2e-4c0b-919f-e38bcc2ad55e",
+"replace_profile_ids": [
+"064ded82-0035-4d2b-90b5-229c0497649d",
+"f4d8f8b6-a0d7-476f-aea1-153d2461a434"
+]
+},
+"initiated_by": null,
+"import_note": "Auto-replayed from raw-event archive (after_batch)",
+"error": null,
+"preview_rows": [
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+}
+]
+},
+{
+"id": "eb6ea3bf-69d",
+"source": "meiro_events_replay",
+"started_at": "2026-04-01T16:14:29.091299Z",
+"finished_at": "2026-04-01T16:14:29.091299Z",
+"status": "success",
+"total": 13,
+"valid": 13,
+"invalid": 0,
+"converted": 13,
+"channels_detected": [
+"Organic Search",
+"Referral",
+"direct",
+"paid_search"
+],
+"validation_summary": {
+"cleaning_report": {
+"fixed": 13,
+"dropped": 0,
+"ambiguous": 11,
+"duplicate_profiles": 0,
+"top_unresolved_patterns": [],
+"quality": {
+"average_score": 65.2,
+"high": 0,
+"medium": 13,
+"low": 0
+}
+},
+"top_quarantine_reasons": [],
+"replay_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 20,
+"replay_snapshot_id": "f277297b-787a-4d4e-897e-051d51547096",
+"latest_event_batch_db_id": 20,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 37,
+"profiles_reconstructed": 13,
+"avg_events_per_profile": 2.85,
+"touchpoints_reconstructed": 34,
+"conversions_reconstructed": 3,
+"profiles_with_touchpoints": 13,
+"profiles_with_conversions": 2,
+"attributable_profiles": 2,
+"avg_touchpoints_per_profile": 2.62,
+"avg_conversions_per_profile": 0.23,
+"warnings": []
+},
+"replace_profile_ids": [],
+"incremental": false,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 37,
+"profiles_reconstructed": 13,
+"avg_events_per_profile": 2.85,
+"touchpoints_reconstructed": 34,
+"conversions_reconstructed": 3,
+"profiles_with_touchpoints": 13,
+"profiles_with_conversions": 2,
+"attributable_profiles": 2,
+"avg_touchpoints_per_profile": 2.62,
+"avg_conversions_per_profile": 0.23,
+"warnings": []
+}
+},
+"config_snapshot": {
+"conversion_import_batch_id": "a0ef233c-ef44-40a0-87ed-db7ff3da58a1",
+"mapping_preset": "saved",
+"schema_version": "1.0",
+"dedup_interval_minutes": 5,
+"dedup_mode": "balanced",
+"primary_dedup_key": "conversion_id",
+"fallback_dedup_keys": [
+"order_id",
+"event_id"
+],
+"strict_ingest": true,
+"timestamp_fallback_policy": "profile",
+"value_fallback_policy": "default",
+"currency_fallback_policy": "default",
+"replay_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 20,
+"replay_snapshot_id": "f277297b-787a-4d4e-897e-051d51547096",
+"latest_event_batch_db_id": 20,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 37,
+"profiles_reconstructed": 13,
+"avg_events_per_profile": 2.85,
+"touchpoints_reconstructed": 34,
+"conversions_reconstructed": 3,
+"profiles_with_touchpoints": 13,
+"profiles_with_conversions": 2,
+"attributable_profiles": 2,
+"avg_touchpoints_per_profile": 2.62,
+"avg_conversions_per_profile": 0.23,
+"warnings": []
+},
+"replace_profile_ids": [],
+"incremental": false,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"replay_snapshot_id": "f277297b-787a-4d4e-897e-051d51547096",
+"replay_snapshot_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 20,
+"latest_event_batch_db_id": 20,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 37,
+"profiles_reconstructed": 13,
+"avg_events_per_profile": 2.85,
+"touchpoints_reconstructed": 34,
+"conversions_reconstructed": 3,
+"profiles_with_touchpoints": 13,
+"profiles_with_conversions": 2,
+"attributable_profiles": 2,
+"avg_touchpoints_per_profile": 2.62,
+"avg_conversions_per_profile": 0.23,
+"warnings": []
+},
+"replace_profile_ids": [],
+"incremental": false,
+"auto_replay": true,
+"auto_replay_trigger": "after_batch"
+},
+"source_snapshot_id": "f277297b-787a-4d4e-897e-051d51547096"
+},
+"initiated_by": null,
+"import_note": "Auto-replayed from raw-event archive (after_batch)",
+"error": null,
+"preview_rows": [
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 2276.1
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 4,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+}
+]
+},
+{
+"id": "50a8efaa-881",
+"source": "meiro_events_replay",
+"started_at": "2026-04-01T16:13:16.433040Z",
+"finished_at": "2026-04-01T16:13:16.433040Z",
+"status": "success",
+"total": 12,
+"valid": 12,
+"invalid": 0,
+"converted": 12,
+"channels_detected": [
+"Referral",
+"direct",
+"paid_search"
+],
+"validation_summary": {
+"cleaning_report": {
+"fixed": 12,
+"dropped": 0,
+"ambiguous": 10,
+"duplicate_profiles": 0,
+"top_unresolved_patterns": [],
+"quality": {
+"average_score": 65.2,
+"high": 0,
+"medium": 12,
+"low": 0
+}
+},
+"top_quarantine_reasons": [],
+"replay_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 19,
+"replay_snapshot_id": "b14ab2c5-9e63-4ce9-85c7-cce9247467c4",
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 36,
+"profiles_reconstructed": 12,
+"avg_events_per_profile": 3.0,
+"touchpoints_reconstructed": 33,
+"conversions_reconstructed": 3,
+"profiles_with_touchpoints": 12,
+"profiles_with_conversions": 2,
+"attributable_profiles": 2,
+"avg_touchpoints_per_profile": 2.75,
+"avg_conversions_per_profile": 0.25,
+"warnings": []
+}
+},
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 36,
+"profiles_reconstructed": 12,
+"avg_events_per_profile": 3.0,
+"touchpoints_reconstructed": 33,
+"conversions_reconstructed": 3,
+"profiles_with_touchpoints": 12,
+"profiles_with_conversions": 2,
+"attributable_profiles": 2,
+"avg_touchpoints_per_profile": 2.75,
+"avg_conversions_per_profile": 0.25,
+"warnings": []
+}
+},
+"config_snapshot": {
+"conversion_import_batch_id": "8346c1e3-0bab-47fe-a261-17f21d22548d",
+"mapping_preset": "saved",
+"schema_version": "1.0",
+"dedup_interval_minutes": 5,
+"dedup_mode": "balanced",
+"primary_dedup_key": "conversion_id",
+"fallback_dedup_keys": [
+"order_id",
+"event_id"
+],
+"strict_ingest": true,
+"timestamp_fallback_policy": "profile",
+"value_fallback_policy": "default",
+"currency_fallback_policy": "default",
+"replay_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 19,
+"replay_snapshot_id": "b14ab2c5-9e63-4ce9-85c7-cce9247467c4",
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 36,
+"profiles_reconstructed": 12,
+"avg_events_per_profile": 3.0,
+"touchpoints_reconstructed": 33,
+"conversions_reconstructed": 3,
+"profiles_with_touchpoints": 12,
+"profiles_with_conversions": 2,
+"attributable_profiles": 2,
+"avg_touchpoints_per_profile": 2.75,
+"avg_conversions_per_profile": 0.25,
+"warnings": []
+}
+},
+"replay_snapshot_id": "b14ab2c5-9e63-4ce9-85c7-cce9247467c4",
+"replay_snapshot_context": {
+"archive_source": "events",
+"replay_mode": "last_n",
+"archive_entries_used": 19,
+"event_reconstruction_diagnostics": {
+"archive_source": "events",
+"events_loaded": 36,
+"profiles_reconstructed": 12,
+"avg_events_per_profile": 3.0,
+"touchpoints_reconstructed": 33,
+"conversions_reconstructed": 3,
+"profiles_with_touchpoints": 12,
+"profiles_with_conversions": 2,
+"attributable_profiles": 2,
+"avg_touchpoints_per_profile": 2.75,
+"avg_conversions_per_profile": 0.25,
+"warnings": []
+},
+"replace_profile_ids": [],
+"incremental": false
+},
+"source_snapshot_id": "b14ab2c5-9e63-4ce9-85c7-cce9247467c4"
+},
+"initiated_by": null,
+"import_note": "Reprocessed from raw-event archive using current approved mapping",
+"error": null,
+"preview_rows": [
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 2276.1
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 4,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+}
+]
+},
+{
+"id": "47611cdc-6b0",
+"source": "meiro_webhook",
+"started_at": "2026-04-01T16:12:40.519984Z",
+"finished_at": "2026-04-01T16:12:40.519984Z",
+"status": "success",
+"total": 999,
+"valid": 151,
+"invalid": 848,
+"converted": 151,
+"channels_detected": [
+"chatgpt.com",
+"meta_ads",
+"paid_search",
+"paid_social",
+"referral"
+],
+"validation_summary": {
+"cleaning_report": {
+"fixed": 151,
+"dropped": 848,
+"ambiguous": 150,
+"duplicate_profiles": 0,
+"top_unresolved_patterns": [
+{
+"code": "unknown_channel",
+"count": 848
+},
+{
+"code": "inferred_conversion_name",
+"count": 823
+},
+{
+"code": "missing_conversions",
+"count": 17
+}
+],
+"quality": {
+"average_score": 48.9,
+"high": 0,
+"medium": 151,
+"low": 848
+}
+},
+"top_quarantine_reasons": [
+{
+"code": "unknown_channel",
+"count": 848
+},
+{
+"code": "inferred_conversion_name",
+"count": 823
+},
+{
+"code": "missing_conversions",
+"count": 17
+}
+]
+},
+"config_snapshot": {
+"conversion_import_batch_id": "ecea58fd-120a-4030-9768-4dbe6577d8f3",
+"mapping_preset": "saved",
+"schema_version": "1.0",
+"dedup_interval_minutes": 5,
+"dedup_mode": "balanced",
+"primary_dedup_key": "conversion_id",
+"fallback_dedup_keys": [
+"order_id",
+"event_id"
+],
+"strict_ingest": true,
+"timestamp_fallback_policy": "profile",
+"value_fallback_policy": "default",
+"currency_fallback_policy": "default"
+},
+"initiated_by": null,
+"import_note": null,
+"error": null,
+"preview_rows": [
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 0.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 2,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+},
+{
+"customer_id": "?",
+"touchpoints": 1,
+"value": 120.0
+}
+]
+},
+{
 "id": "913369dd-6ce",
 "source": "meiro_webhook",
 "started_at": "2026-03-27T10:15:28.112865Z",

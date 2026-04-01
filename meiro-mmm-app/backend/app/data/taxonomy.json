@@ -1,212 +1,24 @@
 {
   "channel_rules": [
     {
-      "name": "Paid Search",
+      "name": "Paid search",
       "channel": "paid_search",
       "priority": 10,
       "enabled": true,
       "source": {
-        "operator": "regex",
-        "value": "google|bing|baidu|seznam"
-      },
-      "medium": {
-        "operator": "regex",
-        "value": "cpc|ppc|paid_search"
-      },
-      "campaign": {
-        "operator": "any",
-        "value": ""
-      }
-    },
-    {
-      "name": "Paid Social",
-      "channel": "paid_social",
-      "priority": 20,
-      "enabled": true,
-      "source": {
-        "operator": "regex",
-        "value": "facebook|meta|instagram|linkedin|twitter|tiktok|pinterest"
-      },
-      "medium": {
-        "operator": "regex",
-        "value": "cpc|paid_social|social"
-      },
-      "campaign": {
-        "operator": "any",
-        "value": ""
-      }
-    },
-    {
-      "name": "Email",
-      "channel": "email",
-      "priority": 30,
-      "enabled": true,
-      "source": {
-        "operator": "any",
-        "value": ""
-      },
-      "medium": {
-        "operator": "contains",
-        "value": "email"
-      },
-      "campaign": {
-        "operator": "any",
-        "value": ""
-      }
-    },
-    {
-      "name": "Direct",
-      "channel": "direct",
-      "priority": 40,
-      "enabled": true,
-      "source": {
-        "operator": "any",
-        "value": ""
-      },
-      "medium": {
-        "operator": "regex",
-        "value": "(none|direct)"
-      },
-      "campaign": {
-        "operator": "any",
-        "value": ""
-      }
-    },
-    {
-      "name": "Paid Search - PRINT-Brand",
-      "channel": "paid_search",
-      "priority": 50,
-      "enabled": true,
-      "source": {
-        "operator": "any",
-        "value": ""
-      },
-      "medium": {
-        "operator": "any",
-        "value": ""
-      },
-      "campaign": {
         "operator": "equals",
-        "value": "PRINT-Brand"
-      }
-    },
-    {
-      "name": "Paid Social - myTimi PLAN",
-      "channel": "paid_social",
-      "priority": 60,
-      "enabled": true,
-      "source": {
-        "operator": "any",
-        "value": ""
+        "value": "google"
       },
       "medium": {
-        "operator": "any",
-        "value": ""
-      },
-      "campaign": {
-        "operator": "contains",
-        "value": "myTimi+|+PLAN+"
-      }
-    },
-    {
-      "name": "Referral",
-      "channel": "referral",
-      "priority": 70,
-      "enabled": true,
-      "source": {
-        "operator": "any",
-        "value": ""
-      },
-      "medium": {
-        "operator": "any",
-        "value": ""
-      },
-      "campaign": {
-        "operator": "contains",
-        "value": "firmy.cz"
-      }
-    },
-    {
-      "name": "Mapy",
-      "channel": "referral",
-      "priority": 80,
-      "enabled": true,
-      "source": {
-        "operator": "contains",
-        "value": "mapy.cz"
-      },
-      "medium": {
-        "operator": "any",
-        "value": ""
-      },
-      "campaign": {
-        "operator": "any",
-        "value": ""
-      }
-    },
-    {
-      "name": "Meta Ads",
-      "channel": "paid_social",
-      "priority": 90,
-      "enabled": true,
-      "source": {
-        "operator": "contains",
-        "value": "meta_ads"
-      },
-      "medium": {
-        "operator": "any",
-        "value": ""
-      },
-      "campaign": {
-        "operator": "any",
-        "value": ""
-      }
-    },
-    {
-      "name": "Direct - letaky",
-      "channel": "direct",
-      "priority": 100,
-      "enabled": true,
-      "source": {
-        "operator": "any",
-        "value": ""
-      },
-      "medium": {
-        "operator": "any",
-        "value": ""
-      },
-      "campaign": {
         "operator": "equals",
-        "value": "letaky"
-      }
-    },
-    {
-      "name": "Paid Social - myTimi PRINT",
-      "channel": "paid_social",
-      "priority": 110,
-      "enabled": true,
-      "source": {
-        "operator": "any",
-        "value": ""
-      },
-      "medium": {
-        "operator": "any",
-        "value": ""
+        "value": "cpc"
       },
       "campaign": {
-        "operator": "contains",
-        "value": "myTimi|PRINT"
+        "operator": "any",
+        "value": ""
       }
     }
   ],
-  "source_aliases": {
-    "fb": "facebook",
-    "ig": "instagram",
-    "g": "google"
-  },
-  "medium_aliases": {
-    "paid": "cpc",
-    "cpm": "display",
-    "paidsocial": "paid_social"
-  }
+  "source_aliases": {},
+  "medium_aliases": {}
 }

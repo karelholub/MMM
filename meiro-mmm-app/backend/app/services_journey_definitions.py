@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import uuid
-from typing import Optional
+from typing import Iterable, Optional
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -55,6 +55,20 @@ def list_journey_definitions(
 
 def get_journey_definition(db: Session, definition_id: str) -> Optional[JourneyDefinition]:
     return db.get(JourneyDefinition, definition_id)
+
+
+def list_active_journey_definitions(
+    db: Session,
+    *,
+    conversion_kpi_ids: Optional[Iterable[str]] = None,
+) -> list[JourneyDefinition]:
+    q = db.query(JourneyDefinition).filter(JourneyDefinition.is_archived == False)  # noqa: E712
+    if conversion_kpi_ids is not None:
+        normalized_ids = sorted({str(value).strip() for value in conversion_kpi_ids if str(value).strip()})
+        if not normalized_ids:
+            return []
+        q = q.filter(JourneyDefinition.conversion_kpi_id.in_(normalized_ids))
+    return q.order_by(JourneyDefinition.updated_at.desc(), JourneyDefinition.created_at.desc()).all()
 
 
 def create_journey_definition(

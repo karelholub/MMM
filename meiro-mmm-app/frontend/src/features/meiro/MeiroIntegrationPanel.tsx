@@ -55,6 +55,7 @@ interface MeiroIntegrationPanelProps {
   reprocessWebhookArchiveResult?: MeiroWebhookReprocessResult | null
   reprocessQuarantinePending?: boolean
   reprocessQuarantineResult?: MeiroQuarantineReprocessResult | null
+  reprocessQuarantineError?: string | null
   quarantineRuns?: { items: MeiroQuarantineRun[]; total: number }
   quarantineRunsLoading?: boolean
   quarantineRunsError?: string | null
@@ -215,6 +216,7 @@ export default function MeiroIntegrationPanel(props: MeiroIntegrationPanelProps)
           reprocessWebhookArchiveResult={props.reprocessWebhookArchiveResult}
           reprocessQuarantinePending={props.reprocessQuarantinePending || false}
           reprocessQuarantineResult={props.reprocessQuarantineResult ?? null}
+          reprocessQuarantineError={props.reprocessQuarantineError}
           quarantineRuns={props.quarantineRuns}
           quarantineRunsLoading={props.quarantineRunsLoading || false}
           quarantineRunsError={props.quarantineRunsError}

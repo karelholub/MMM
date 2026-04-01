@@ -5,7 +5,7 @@ import { tokens } from '../theme/tokens'
 import ConfidenceBadge, { Confidence } from '../components/ConfidenceBadge'
 import ExplainabilityPanel from '../components/ExplainabilityPanel'
 import TrendPanel from '../components/dashboard/TrendPanel'
-import { AnalyticsTable, type AnalyticsTableColumn, SectionCard } from '../components/dashboard'
+import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn, SectionCard } from '../components/dashboard'
 import { apiGetJson } from '../lib/apiClient'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import AdsActionsDrawer from '../components/ads/AdsActionsDrawer'
@@ -1534,77 +1534,58 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       )}
 
       {/* Search and filter */}
-      <div
-        style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: t.space.md,
-          alignItems: 'center',
-          marginBottom: t.space.xl,
-          background: t.color.surface,
-          border: `1px solid ${t.color.borderLight}`,
-          borderRadius: t.radius.lg,
-          padding: t.space.lg,
-          boxShadow: t.shadowSm,
-        }}
-      >
-        <label style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightMedium, color: t.color.textSecondary }}>
-          Search
-        </label>
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Campaign or channel name..."
-          style={{
-            minWidth: 200,
-            padding: `${t.space.sm}px ${t.space.md}px`,
-            fontSize: t.font.sizeSm,
-            border: `1px solid ${t.color.border}`,
-            borderRadius: t.radius.sm,
-            color: t.color.text,
-          }}
+      <div style={{ marginBottom: t.space.xl }}>
+        <AnalyticsToolbar
+          searchLabel="Search"
+          searchValue={search}
+          onSearchChange={setSearch}
+          searchPlaceholder="Campaign or channel name..."
+          beforeFilters={
+            <label style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightMedium, color: t.color.textSecondary }}>
+              Channel
+            </label>
+          }
+          filters={
+            <>
+              <select
+                value={channelFilter}
+                onChange={(e) => setChannelFilter(e.target.value)}
+                style={{
+                  padding: `${t.space.sm}px ${t.space.md}px`,
+                  fontSize: t.font.sizeSm,
+                  border: `1px solid ${t.color.border}`,
+                  borderRadius: t.radius.sm,
+                  color: t.color.text,
+                  background: t.color.surface,
+                }}
+              >
+                <option value="">All channels</option>
+                {channelsList.map((ch) => (
+                  <option key={ch} value={ch}>{ch}</option>
+                ))}
+              </select>
+              {(search || channelFilter) && (
+                <button
+                  type="button"
+                  onClick={() => { setSearch(''); setChannelFilter('') }}
+                  style={{
+                    padding: `${t.space.sm}px ${t.space.md}px`,
+                    fontSize: t.font.sizeSm,
+                    color: t.color.textSecondary,
+                    background: 'transparent',
+                    border: `1px solid ${t.color.border}`,
+                    borderRadius: t.radius.sm,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Clear filters
+                </button>
+              )}
+            </>
+          }
+          summary={`Showing ${filteredCampaigns.length} of ${campaigns.length} campaigns`}
+          padded
         />
-        <label style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightMedium, color: t.color.textSecondary }}>
-          Channel
-        </label>
-        <select
-          value={channelFilter}
-          onChange={(e) => setChannelFilter(e.target.value)}
-          style={{
-            padding: `${t.space.sm}px ${t.space.md}px`,
-            fontSize: t.font.sizeSm,
-            border: `1px solid ${t.color.border}`,
-            borderRadius: t.radius.sm,
-            color: t.color.text,
-            background: t.color.surface,
-          }}
-        >
-          <option value="">All channels</option>
-          {channelsList.map((ch) => (
-            <option key={ch} value={ch}>{ch}</option>
-          ))}
-        </select>
-        {(search || channelFilter) && (
-          <button
-            type="button"
-            onClick={() => { setSearch(''); setChannelFilter('') }}
-            style={{
-              padding: `${t.space.sm}px ${t.space.md}px`,
-              fontSize: t.font.sizeSm,
-              color: t.color.textSecondary,
-              background: 'transparent',
-              border: `1px solid ${t.color.border}`,
-              borderRadius: t.radius.sm,
-              cursor: 'pointer',
-            }}
-          >
-            Clear filters
-          </button>
-        )}
-        <span style={{ marginLeft: 'auto', fontSize: t.font.sizeSm, color: t.color.textMuted }}>
-          Showing {filteredCampaigns.length} of {campaigns.length} campaigns
-        </span>
       </div>
 
       <div

@@ -260,7 +260,7 @@ def create_router(
 
     @router.post("/api/taxonomy")
     def update_taxonomy(payload: Dict[str, Any], db=Depends(get_db_dependency)):
-        from app.services_rebuild_jobs import rebuild_taxonomy_dq_outputs
+        from app.services_rebuild_jobs import rebuild_outputs_for_taxonomy_change
 
         parsed = _parse_taxonomy_payload(payload)
         rules = parsed.channel_rules
@@ -278,7 +278,7 @@ def create_router(
         save_taxonomy(
             parsed
         )
-        rebuild_taxonomy_dq_outputs(db, taxonomy=parsed)
+        rebuild_outputs_for_taxonomy_change(db, taxonomy=parsed)
         return _serialize_taxonomy()
 
     @router.get("/api/taxonomy/overview")
@@ -467,6 +467,26 @@ def create_router(
             ],
         }
 
+    @router.post("/api/taxonomy/rebuild")
+    def rebuild_taxonomy_outputs(
+        reprocess_days: Optional[int] = Query(None, ge=1, le=366),
+        db=Depends(get_db_dependency),
+        _ctx=Depends(require_permission_dependency("settings.manage")),
+    ):
+        from app.services_rebuild_jobs import rebuild_outputs_for_taxonomy_change
+
+        result = rebuild_outputs_for_taxonomy_change(db, reprocess_days=reprocess_days)
+        taxonomy_result = result.get("taxonomy") or {}
+        snapshots = taxonomy_result.get("snapshots") or []
+        return {
+            "taxonomy": {
+                "source": taxonomy_result.get("source"),
+                "backfill": taxonomy_result.get("backfill"),
+                "computed": len(snapshots),
+            },
+            "journey_outputs": result.get("journey_outputs") or {},
+        }
+
     @router.get("/api/kpis", response_model=KpiConfigModel)
     def get_kpis():
         return get_kpi_config_model_fn()
@@ -600,8 +620,42 @@ def create_router(
         }
 
     @router.post("/api/kpis", response_model=KpiConfigModel)
-    def update_kpis(cfg: KpiConfigModel):
-        return replace_kpi_config_fn(cfg)
+    def update_kpis(cfg: KpiConfigModel, db=Depends(get_db_dependency)):
+        from app.services_journey_definitions import list_active_journey_definitions
+        from app.services_rebuild_jobs import rebuild_outputs_for_kpi_config_change
+
+        current_cfg = get_kpi_config_model_fn()
+        next_ids = {definition.id for definition in cfg.definitions}
+        referenced_definitions = [
+            definition
+            for definition in list_active_journey_definitions(db)
+            if definition.conversion_kpi_id and definition.conversion_kpi_id not in next_ids
+        ]
+        if referenced_definitions:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Cannot remove KPI definitions still referenced by active journey definitions: "
+                    + ", ".join(
+                        f"{definition.name} ({definition.conversion_kpi_id})"
+                        for definition in referenced_definitions[:5]
+                    )
+                ),
+            )
+
+        saved = replace_kpi_config_fn(cfg)
+        rebuild_outputs_for_kpi_config_change(db, previous_cfg=current_cfg, current_cfg=saved)
+        return saved
+
+    @router.post("/api/kpis/rebuild-dependent-journeys")
+    def rebuild_kpi_dependent_journeys(
+        reprocess_days: Optional[int] = Query(None, ge=1, le=366),
+        db=Depends(get_db_dependency),
+        _ctx=Depends(require_permission_dependency("settings.manage")),
+    ):
+        from app.services_rebuild_jobs import rebuild_multiple_journey_definition_outputs
+
+        return rebuild_multiple_journey_definition_outputs(db, reprocess_days=reprocess_days)
 
     @router.get("/api/settings/notification-channels")
     def api_list_notification_channels(

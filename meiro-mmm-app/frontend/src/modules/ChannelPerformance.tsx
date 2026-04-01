@@ -20,7 +20,7 @@ import { tokens } from '../theme/tokens'
 import { apiGetJson, withQuery } from '../lib/apiClient'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import DecisionStatusCard from '../components/DecisionStatusCard'
-import { AnalyticsTable, type AnalyticsTableColumn, SectionCard } from '../components/dashboard'
+import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn, SectionCard } from '../components/dashboard'
 
 interface ChannelPerformanceProps {
   model: string
@@ -1447,48 +1447,31 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
           ]}
           defaultPresetKey="overview"
           toolbar={
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                gap: t.space.md,
-                flexWrap: 'wrap',
-              }}
-            >
-              <input
-                type="search"
-                value={channelSearch}
-                onChange={(event) => setChannelSearch(event.target.value)}
-                placeholder="Search channels…"
-                style={{
-                  minWidth: 220,
-                  flex: '1 1 280px',
-                  padding: `${t.space.sm}px ${t.space.md}px`,
-                  borderRadius: t.radius.sm,
-                  border: `1px solid ${t.color.borderLight}`,
-                  fontSize: t.font.sizeSm,
-                }}
-              />
-              <label
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  cursor: 'pointer',
-                  fontSize: t.font.sizeSm,
-                  color: t.color.textSecondary,
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={onlyLowConfidence}
-                  onChange={(event) => setOnlyLowConfidence(event.target.checked)}
-                  style={{ margin: 0 }}
-                />
-                Show only low confidence (Conf. &lt; 70)
-              </label>
-            </div>
+            <AnalyticsToolbar
+              searchValue={channelSearch}
+              onSearchChange={setChannelSearch}
+              searchPlaceholder="Search channels…"
+              filters={
+                <label
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    cursor: 'pointer',
+                    fontSize: t.font.sizeSm,
+                    color: t.color.textSecondary,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={onlyLowConfidence}
+                    onChange={(event) => setOnlyLowConfidence(event.target.checked)}
+                    style={{ margin: 0 }}
+                  />
+                  Show only low confidence (Conf. &lt; 70)
+                </label>
+              }
+            />
           }
           emptyState="No channels match the current filters."
         />
