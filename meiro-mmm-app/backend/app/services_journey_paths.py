@@ -9,7 +9,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .models_config_dq import JourneyPathDaily
-from .services_journey_definition_facts import has_definition_instance_facts, list_paths_from_definition_facts
+from .services_journey_path_outputs import list_paths_from_outputs, query_path_daily_outputs
 
 
 def list_paths_for_journey_definition(
@@ -26,41 +26,33 @@ def list_paths_for_journey_definition(
     page: int = 1,
     limit: int = 50,
 ) -> dict:
-    q = db.query(JourneyPathDaily).filter(
-        JourneyPathDaily.journey_definition_id == journey_definition_id,
-        JourneyPathDaily.date >= date_from,
-        JourneyPathDaily.date <= date_to,
-    )
-    if channel_group:
-        q = q.filter(JourneyPathDaily.channel_group == channel_group)
-    if campaign_id:
-        q = q.filter(JourneyPathDaily.campaign_id == campaign_id)
-    if device:
-        q = q.filter(JourneyPathDaily.device == device)
-    if country:
-        q = q.filter(JourneyPathDaily.country == country)
-    if mode == "conversion_only":
-        q = q.filter(JourneyPathDaily.count_conversions > 0)
-
-    if q.limit(1).first() is None and has_definition_instance_facts(
+    fallback = list_paths_from_outputs(
         db,
         journey_definition_id=journey_definition_id,
         date_from=date_from,
         date_to=date_to,
-    ):
-        return list_paths_from_definition_facts(
-            db,
-            journey_definition_id=journey_definition_id,
-            date_from=date_from,
-            date_to=date_to,
-            mode=mode,
-            channel_group=channel_group,
-            campaign_id=campaign_id,
-            device=device,
-            country=country,
-            page=page,
-            limit=limit,
-        )
+        mode=mode,
+        channel_group=channel_group,
+        campaign_id=campaign_id,
+        device=device,
+        country=country,
+        page=page,
+        limit=limit,
+    )
+    if fallback is not None:
+        return fallback
+
+    q = query_path_daily_outputs(
+        db,
+        journey_definition_id=journey_definition_id,
+        date_from=date_from,
+        date_to=date_to,
+        mode=mode,
+        channel_group=channel_group,
+        campaign_id=campaign_id,
+        device=device,
+        country=country,
+    )
 
     summary_row = q.with_entities(
         func.sum(JourneyPathDaily.count_journeys),

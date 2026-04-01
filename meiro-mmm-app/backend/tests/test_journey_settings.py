@@ -7,6 +7,7 @@ from app.main import app
 from app.services_journey_settings import (
     JourneySettingsStatus,
     activate_journey_settings_version,
+    build_journey_settings_impact_preview,
     create_journey_settings_draft,
     ensure_active_journey_settings,
     validate_journey_settings,
@@ -77,3 +78,32 @@ def test_activate_route_requires_permission_and_confirm():
         headers={"X-User-Role": "admin"},
     )
     assert not_confirmed.status_code == 400
+
+
+def test_build_journey_settings_impact_preview_uses_canonical_output_counts(monkeypatch):
+    db = _unit_db_session()
+    try:
+        monkeypatch.setattr(
+            "app.services_journey_settings.count_recent_path_outputs",
+            lambda db, date_from=None, date_to=None: 12,
+        )
+        monkeypatch.setattr(
+            "app.services_journey_settings.count_recent_transition_outputs",
+            lambda db, date_from=None, date_to=None: 34,
+        )
+        monkeypatch.setattr(
+            "app.services_journey_settings.count_recent_transition_from_steps",
+            lambda db, date_from=None, date_to=None: 5,
+        )
+
+        preview = build_journey_settings_impact_preview(
+            db,
+            draft_settings_json={"schema_version": "1.0"},
+        )
+
+        assert preview["preview_available"] is True
+        assert preview["baseline"]["recent_paths_7d"] == 12
+        assert preview["baseline"]["recent_transitions_7d"] == 34
+        assert preview["baseline"]["distinct_steps_7d"] == 5
+    finally:
+        db.close()

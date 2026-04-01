@@ -7,18 +7,17 @@ import math
 import uuid
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .models_config_dq import (
     ConversionPath,
     FunnelDefinition,
     JourneyDefinition,
-    JourneyTransitionDaily,
 )
 from .services_canonical_facts import load_preferred_journey_rows
 from .services_conversions import conversion_path_payload
 from .services_journey_steps import STEP_ORGANIC_LANDING, STEP_PAID_LANDING, map_touchpoint_step
+from .services_journey_transition_outputs import list_transition_breakdowns_from_outputs, list_transition_edges_from_outputs
 
 
 def _percentile(values: Sequence[float], q: float) -> Optional[float]:
@@ -251,46 +250,40 @@ def _compute_results_from_transitions(
 ) -> Optional[Dict[str, Any]]:
     if len(steps) < 2:
         return None
+    journey_definition = db.get(JourneyDefinition, journey_definition_id)
+    if not journey_definition or journey_definition.is_archived:
+        return None
+
+    edges_raw, source = list_transition_edges_from_outputs(
+        db,
+        journey_definition=journey_definition,
+        date_from=date_from,
+        date_to=date_to,
+        channel_group=channel_group,
+        campaign_id=campaign_id,
+        device=device,
+        country=country,
+    )
+    edge_lookup = {
+        (str(edge.get("from_step") or ""), str(edge.get("to_step") or "")): edge
+        for edge in edges_raw
+    }
     pair_counts: List[int] = []
     time_between: List[Dict[str, Any]] = []
     for src, tgt in zip(steps, steps[1:]):
-        q = db.query(
-            func.sum(JourneyTransitionDaily.count_profiles),
-            func.sum(JourneyTransitionDaily.count_transitions),
-            func.sum(JourneyTransitionDaily.avg_time_between_sec * JourneyTransitionDaily.count_transitions),
-            func.sum(JourneyTransitionDaily.p50_time_between_sec * JourneyTransitionDaily.count_transitions),
-            func.sum(JourneyTransitionDaily.p90_time_between_sec * JourneyTransitionDaily.count_transitions),
-        ).filter(
-            JourneyTransitionDaily.journey_definition_id == journey_definition_id,
-            JourneyTransitionDaily.date >= date_from,
-            JourneyTransitionDaily.date <= date_to,
-            JourneyTransitionDaily.from_step == src,
-            JourneyTransitionDaily.to_step == tgt,
-        )
-        if device:
-            q = q.filter(JourneyTransitionDaily.device == device)
-        if channel_group:
-            q = q.filter(JourneyTransitionDaily.channel_group == channel_group)
-        if country:
-            q = q.filter(JourneyTransitionDaily.country == country)
-        if campaign_id:
-            q = q.filter(JourneyTransitionDaily.campaign_id == campaign_id)
-        row = q.first()
-        c = int((row[0] if row else 0) or 0)
+        edge = edge_lookup.get((src, tgt))
+        c = int((edge or {}).get("count_profiles") or 0)
         pair_counts.append(c)
-        timing_weight = float((row[1] if row else 0.0) or 0.0)
+        timing_weight = int((edge or {}).get("count_transitions") or 0)
         if timing_weight > 0:
-            avg_sec = float((row[2] if row else 0.0) or 0.0) / timing_weight
-            p50_sec = float((row[3] if row else 0.0) or 0.0) / timing_weight
-            p90_sec = float((row[4] if row else 0.0) or 0.0) / timing_weight
             time_between.append(
                 {
                     "from_step": src,
                     "to_step": tgt,
                     "count": int(timing_weight),
-                    "avg_sec": round(avg_sec, 2),
-                    "p50_sec": round(p50_sec, 2),
-                    "p90_sec": round(p90_sec, 2),
+                    "avg_sec": (edge or {}).get("avg_time_between_sec"),
+                    "p50_sec": (edge or {}).get("p50_time_between_sec"),
+                    "p90_sec": (edge or {}).get("p90_time_between_sec"),
                 }
             )
     if not pair_counts or max(pair_counts) <= 0:
@@ -304,39 +297,25 @@ def _compute_results_from_transitions(
 
     # Top 5 breakdowns from first pair.
     first_src, first_tgt = steps[0], steps[1]
-    qd = db.query(JourneyTransitionDaily.device, func.sum(JourneyTransitionDaily.count_profiles)).filter(
-        JourneyTransitionDaily.journey_definition_id == journey_definition_id,
-        JourneyTransitionDaily.date >= date_from,
-        JourneyTransitionDaily.date <= date_to,
-        JourneyTransitionDaily.from_step == first_src,
-        JourneyTransitionDaily.to_step == first_tgt,
-    ).group_by(JourneyTransitionDaily.device)
-    qc = db.query(JourneyTransitionDaily.channel_group, func.sum(JourneyTransitionDaily.count_profiles)).filter(
-        JourneyTransitionDaily.journey_definition_id == journey_definition_id,
-        JourneyTransitionDaily.date >= date_from,
-        JourneyTransitionDaily.date <= date_to,
-        JourneyTransitionDaily.from_step == first_src,
-        JourneyTransitionDaily.to_step == first_tgt,
-    ).group_by(JourneyTransitionDaily.channel_group)
-    if country:
-        qd = qd.filter(JourneyTransitionDaily.country == country)
-        qc = qc.filter(JourneyTransitionDaily.country == country)
-    if campaign_id:
-        qd = qd.filter(JourneyTransitionDaily.campaign_id == campaign_id)
-        qc = qc.filter(JourneyTransitionDaily.campaign_id == campaign_id)
-    if device:
-        qc = qc.filter(JourneyTransitionDaily.device == device)
-    if channel_group:
-        qd = qd.filter(JourneyTransitionDaily.channel_group == channel_group)
-    device_breakdown = [{"key": str(k or "unknown"), "count": int(v or 0)} for k, v in qd.all() if int(v or 0) > 0][:5]
-    channel_breakdown = [{"key": str(k or "unknown"), "count": int(v or 0)} for k, v in qc.all() if int(v or 0) > 0][:5]
+    device_breakdown, channel_breakdown, breakdown_source = list_transition_breakdowns_from_outputs(
+        db,
+        journey_definition=journey_definition,
+        from_step=first_src,
+        to_step=first_tgt,
+        date_from=date_from,
+        date_to=date_to,
+        channel_group=channel_group,
+        campaign_id=campaign_id,
+        device=device,
+        country=country,
+    )
 
     return {
         "step_counts": step_counts,
         "time_between": time_between,
         "breakdown_device": device_breakdown,
         "breakdown_channel_group": channel_breakdown,
-        "source": "aggregates",
+        "source": "aggregates" if source == "aggregates" and breakdown_source == "aggregates" else "raw",
     }
 
 
@@ -558,7 +537,7 @@ def get_funnel_results(
     )
     raw = None
     warning = None
-    source = "aggregates"
+    source = str((agg or {}).get("source") or "aggregates") if agg else "aggregates"
     used_raw = False
     if not agg:
         raw = _compute_results_from_raw(
@@ -593,6 +572,9 @@ def get_funnel_results(
             source = "mixed"
             used_raw = True
             warning = "Step timings are computed from canonical journeys because transition aggregates do not include timing metrics."
+    elif source == "raw":
+        used_raw = True
+        warning = "Transition outputs are unavailable for this funnel/date range. Results computed from canonical journeys."
 
     step_counts = agg["step_counts"]
     steps_out = []

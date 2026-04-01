@@ -15,10 +15,9 @@ from .models_config_dq import (
     JourneyAlertEvent,
     JourneyDefinition,
     JourneyPathDaily,
-    JourneyTransitionDaily,
 )
-from .services_journey_definition_facts import compute_path_metric_from_definition_facts, has_definition_instance_facts
-from .services_journey_transition_facts import iter_journey_transition_rows
+from .services_journey_path_outputs import compute_path_metric_from_outputs
+from .services_journey_transition_outputs import compute_transition_pair_counts_from_outputs
 
 ALERT_TYPES = {
     "path_cr_drop",
@@ -249,65 +248,20 @@ def _path_metric_for_period(
         return None
 
     filters = _normalize_filters(scope)
-    q = db.query(JourneyPathDaily).filter(
-        JourneyPathDaily.journey_definition_id == journey_definition_id,
-        JourneyPathDaily.date >= date_from,
-        JourneyPathDaily.date <= date_to,
-    )
     path_hash = (scope.get("path_hash") or "").strip()
-    if path_hash:
-        q = q.filter(JourneyPathDaily.path_hash == path_hash)
-    q = _apply_path_scope_filters(q, filters)
-    if q.limit(1).first() is None and has_definition_instance_facts(
+    return compute_path_metric_from_outputs(
         db,
         journey_definition_id=journey_definition_id,
+        metric=metric,
         date_from=date_from,
         date_to=date_to,
-    ):
-        return compute_path_metric_from_definition_facts(
-            db,
-            journey_definition_id=journey_definition_id,
-            metric=metric,
-            date_from=date_from,
-            date_to=date_to,
-            path_hash=path_hash or None,
-            channel_group=filters.get("channel_group"),
-            campaign_id=filters.get("campaign_id"),
-            device=filters.get("device"),
-            country=filters.get("country"),
-        )
-
-    sums = q.with_entities(
-        func.sum(JourneyPathDaily.count_journeys),
-        func.sum(JourneyPathDaily.count_conversions),
-        func.sum(JourneyPathDaily.gross_conversions_total),
-        func.sum(JourneyPathDaily.net_conversions_total),
-        func.sum(JourneyPathDaily.gross_revenue_total),
-        func.sum(JourneyPathDaily.net_revenue_total),
-        func.sum((JourneyPathDaily.p50_time_to_convert_sec) * (JourneyPathDaily.count_conversions)),
-    ).first()
-    journeys = int(sums[0] or 0)
-    conversions = int(sums[1] or 0)
-    gross_conversions = float(sums[2] or 0.0)
-    net_conversions = float(sums[3] or 0.0)
-    gross_revenue = float(sums[4] or 0.0)
-    net_revenue = float(sums[5] or 0.0)
-    p50_weighted_sum = float(sums[6] or 0.0)
-    if metric == "conversion_rate":
-        return (float(conversions) / float(journeys)) if journeys > 0 else None
-    if metric == "count_journeys":
-        return float(journeys)
-    if metric == "gross_conversions_total":
-        return gross_conversions
-    if metric == "net_conversions_total":
-        return net_conversions
-    if metric == "gross_revenue_total":
-        return gross_revenue
-    if metric == "net_revenue_total":
-        return net_revenue
-    if metric == "p50_time_to_convert_sec":
-        return (p50_weighted_sum / float(conversions)) if conversions > 0 else None
-    return None
+        mode="conversion_only",
+        path_hash=path_hash or None,
+        channel_group=filters.get("channel_group"),
+        campaign_id=filters.get("campaign_id"),
+        device=filters.get("device"),
+        country=filters.get("country"),
+    )
 
 
 def _funnel_step_dropoff_for_period(
@@ -330,95 +284,25 @@ def _funnel_step_dropoff_for_period(
     from_step = steps[step_index]
     to_step = steps[step_index + 1]
     filters = _normalize_filters(scope)
-
-    base_q = db.query(JourneyTransitionDaily).filter(
-        JourneyTransitionDaily.journey_definition_id == funnel.journey_definition_id,
-        JourneyTransitionDaily.date >= date_from,
-        JourneyTransitionDaily.date <= date_to,
-        JourneyTransitionDaily.from_step == from_step,
+    journey_definition = db.get(JourneyDefinition, funnel.journey_definition_id)
+    if not journey_definition or journey_definition.is_archived:
+        return None
+    denom, numer = compute_transition_pair_counts_from_outputs(
+        db,
+        journey_definition=journey_definition,
+        from_step=from_step,
+        to_step=to_step,
+        date_from=date_from,
+        date_to=date_to,
+        channel_group=str(filters["channel_group"]) if filters.get("channel_group") else None,
+        campaign_id=str(filters["campaign_id"]) if filters.get("campaign_id") else None,
+        device=str(filters["device"]) if filters.get("device") else None,
+        country=str(filters["country"]) if filters.get("country") else None,
     )
-    if filters.get("channel_group"):
-        base_q = base_q.filter(JourneyTransitionDaily.channel_group == str(filters["channel_group"]))
-    if filters.get("campaign_id"):
-        base_q = base_q.filter(JourneyTransitionDaily.campaign_id == str(filters["campaign_id"]))
-    if filters.get("device"):
-        base_q = base_q.filter(JourneyTransitionDaily.device == str(filters["device"]))
-    if filters.get("country"):
-        base_q = base_q.filter(func.lower(JourneyTransitionDaily.country) == str(filters["country"]).lower())
-
-    denom = float(base_q.with_entities(func.sum(JourneyTransitionDaily.count_transitions)).scalar() or 0.0)
-    numer = float(
-        base_q.filter(JourneyTransitionDaily.to_step == to_step)
-        .with_entities(func.sum(JourneyTransitionDaily.count_transitions))
-        .scalar()
-        or 0.0
-    )
-    if denom <= 0:
-        denom, numer = _funnel_step_dropoff_from_transition_facts(
-            db,
-            journey_definition_id=funnel.journey_definition_id,
-            from_step=from_step,
-            to_step=to_step,
-            date_from=date_from,
-            date_to=date_to,
-            filters=filters,
-        )
     if denom <= 0:
         return None
     conversion_rate = numer / denom
     return max(0.0, min(1.0, 1.0 - conversion_rate))
-
-
-def _funnel_step_dropoff_from_transition_facts(
-    db: Session,
-    *,
-    journey_definition_id: str,
-    from_step: str,
-    to_step: str,
-    date_from: date,
-    date_to: date,
-    filters: Dict[str, Any],
-) -> Tuple[float, float]:
-    journey_definition = db.get(JourneyDefinition, journey_definition_id)
-    conversion_key = str((journey_definition.conversion_kpi_id if journey_definition else "") or "").strip()
-    if not conversion_key:
-        return 0.0, 0.0
-    matching_definition_ids = [
-        str(definition_id or "")
-        for (definition_id,) in db.query(JourneyDefinition.id)
-        .filter(
-            JourneyDefinition.is_archived == False,  # noqa: E712
-            JourneyDefinition.conversion_kpi_id == conversion_key,
-        )
-        .all()
-    ]
-    if matching_definition_ids != [journey_definition_id]:
-        return 0.0, 0.0
-
-    start_dt = datetime.combine(date_from, datetime.min.time())
-    end_dt = datetime.combine(date_to + timedelta(days=1), datetime.min.time())
-    denom = 0.0
-    numer = 0.0
-    for row in iter_journey_transition_rows(
-        db,
-        start_dt=start_dt,
-        end_dt=end_dt,
-        conversion_key=conversion_key,
-    ):
-        if str(row.from_step or "") != from_step:
-            continue
-        if filters.get("channel_group") and str(row.channel_group or "") != str(filters["channel_group"]):
-            continue
-        if filters.get("campaign_id") and str(row.campaign_id or "") != str(filters["campaign_id"]):
-            continue
-        if filters.get("device") and str(row.device or "") != str(filters["device"]):
-            continue
-        if filters.get("country") and str(row.country or "").lower() != str(filters["country"]).lower():
-            continue
-        denom += 1.0
-        if str(row.to_step or "") == to_step:
-            numer += 1.0
-    return denom, numer
 
 
 def _pct_delta(current: float, baseline: float) -> Optional[float]:

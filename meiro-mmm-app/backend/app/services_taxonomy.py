@@ -23,7 +23,8 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from sqlalchemy.orm import Session
 
-from .models_config_dq import ConversionPath, ConversionTaxonomyTouchpointFact, DQSnapshot
+from .models_config_dq import ConversionTaxonomyTouchpointFact, DQSnapshot
+from .services_canonical_facts import count_canonical_conversions
 from .utils.taxonomy import Taxonomy, ChannelRule, infer_source_medium_from_referrer, load_taxonomy, save_taxonomy
 
 logger = logging.getLogger(__name__)
@@ -89,14 +90,12 @@ def _query_taxonomy_touchpoint_fact_rows(
     if not rows:
         return None
 
-    raw_q = db.query(ConversionPath.id)
-    if conversion_from is not None:
-        raw_q = raw_q.filter(ConversionPath.conversion_ts >= conversion_from)
-    if conversion_to is not None:
-        raw_q = raw_q.filter(ConversionPath.conversion_ts < conversion_to)
-    if sample_limit is not None:
-        raw_q = raw_q.order_by(ConversionPath.conversion_ts.desc()).limit(sample_limit)
-    raw_count = raw_q.count()
+    raw_count = count_canonical_conversions(
+        db,
+        date_from=conversion_from,
+        date_to=conversion_to,
+        limit=sample_limit,
+    )
     observed_conversion_ids = {str(row.conversion_id or "") for row in rows}
     if raw_count > len(observed_conversion_ids):
         return None

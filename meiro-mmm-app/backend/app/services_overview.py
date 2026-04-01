@@ -30,6 +30,7 @@ from .services_conversions import (
     conversion_path_revenue_value,
     conversion_path_touchpoints,
 )
+from .services_journey_path_outputs import list_paths_from_outputs
 from .services_visit_facts import iter_touchpoint_visit_rows
 from .services_metrics import delta_pct, journey_outcome_summary
 
@@ -1000,53 +1001,98 @@ def _overview_funnels_from_daily_aggregates(
         .filter(JourneyPathDaily.date >= dt_from.date(), JourneyPathDaily.date <= dt_to.date())
         .all()
     )
-    if not rows:
-        return None
-
     aggs: Dict[str, Dict[str, Any]] = {}
     outcomes = _empty_outcomes()
     total_conversions = 0
     path_length_counts: Dict[int, int] = defaultdict(int)
 
-    for row in rows:
-        steps = _path_steps_from_daily_value(row.path_steps)
-        if not steps:
-            continue
-        conversions = int(row.count_conversions or 0)
-        revenue = float(row.gross_revenue_total or 0.0)
-        if conversions <= 0 and abs(revenue) <= 1e-9:
-            continue
+    if rows:
+        for row in rows:
+            steps = _path_steps_from_daily_value(row.path_steps)
+            if not steps:
+                continue
+            conversions = int(row.count_conversions or 0)
+            revenue = float(row.gross_revenue_total or 0.0)
+            if conversions <= 0 and abs(revenue) <= 1e-9:
+                continue
 
-        path_key = " > ".join(steps)
-        entry = aggs.setdefault(
-            path_key,
-            {
-                "path": path_key,
-                "steps": steps,
-                "conversions": 0,
-                "revenue": 0.0,
-                "median_weighted_sec": 0.0,
-                "median_weight": 0.0,
-                "path_length": len(steps),
-                "ends_with_direct": steps[-1].strip().lower() == "direct",
-            },
+            path_key = " > ".join(steps)
+            entry = aggs.setdefault(
+                path_key,
+                {
+                    "path": path_key,
+                    "steps": steps,
+                    "conversions": 0,
+                    "revenue": 0.0,
+                    "median_weighted_sec": 0.0,
+                    "median_weight": 0.0,
+                    "path_length": len(steps),
+                    "ends_with_direct": steps[-1].strip().lower() == "direct",
+                },
+            )
+            entry["conversions"] += conversions
+            entry["revenue"] += revenue
+            latency_sec = float(row.p50_time_to_convert_sec or row.avg_time_to_convert_sec or 0.0)
+            if latency_sec > 0 and conversions > 0:
+                entry["median_weighted_sec"] += latency_sec * conversions
+                entry["median_weight"] += conversions
+
+            total_conversions += conversions
+            path_length_counts[len(steps)] += conversions
+            outcomes["gross_conversions"] += float(row.gross_conversions_total or 0.0)
+            outcomes["net_conversions"] += float(row.net_conversions_total or 0.0)
+            outcomes["gross_value"] += float(row.gross_revenue_total or 0.0)
+            outcomes["net_value"] += float(row.net_revenue_total or 0.0)
+            outcomes["view_through_conversions"] += float(row.view_through_conversions_total or 0.0)
+            outcomes["click_through_conversions"] += float(row.click_through_conversions_total or 0.0)
+            outcomes["mixed_path_conversions"] += float(row.mixed_path_conversions_total or 0.0)
+    else:
+        fallback = list_paths_from_outputs(
+            db,
+            journey_definition_id=definitions[0].id,
+            date_from=dt_from.date(),
+            date_to=dt_to.date(),
+            mode="conversion_only",
+            page=1,
+            limit=max(50, limit * 4),
         )
-        entry["conversions"] += conversions
-        entry["revenue"] += revenue
-        latency_sec = float(row.p50_time_to_convert_sec or row.avg_time_to_convert_sec or 0.0)
-        if latency_sec > 0 and conversions > 0:
-            entry["median_weighted_sec"] += latency_sec * conversions
-            entry["median_weight"] += conversions
+        if not fallback:
+            return None
+        for row in fallback.get("items") or []:
+            steps = _path_steps_from_daily_value(row.get("path_steps"))
+            if not steps:
+                continue
+            conversions = int(row.get("count_conversions") or 0)
+            revenue = float(row.get("gross_revenue") or 0.0)
+            if conversions <= 0 and abs(revenue) <= 1e-9:
+                continue
+            path_key = " > ".join(steps)
+            entry = aggs.setdefault(
+                path_key,
+                {
+                    "path": path_key,
+                    "steps": steps,
+                    "conversions": 0,
+                    "revenue": 0.0,
+                    "median_weighted_sec": 0.0,
+                    "median_weight": 0.0,
+                    "path_length": len(steps),
+                    "ends_with_direct": steps[-1].strip().lower() == "direct",
+                },
+            )
+            entry["conversions"] += conversions
+            entry["revenue"] += revenue
+            latency_sec = float(row.get("p50_time_to_convert_sec") or row.get("avg_time_to_convert_sec") or 0.0)
+            if latency_sec > 0 and conversions > 0:
+                entry["median_weighted_sec"] += latency_sec * conversions
+                entry["median_weight"] += conversions
 
-        total_conversions += conversions
-        path_length_counts[len(steps)] += conversions
-        outcomes["gross_conversions"] += float(row.gross_conversions_total or 0.0)
-        outcomes["net_conversions"] += float(row.net_conversions_total or 0.0)
-        outcomes["gross_value"] += float(row.gross_revenue_total or 0.0)
-        outcomes["net_value"] += float(row.net_revenue_total or 0.0)
-        outcomes["view_through_conversions"] += float(row.view_through_conversions_total or 0.0)
-        outcomes["click_through_conversions"] += float(row.click_through_conversions_total or 0.0)
-        outcomes["mixed_path_conversions"] += float(row.mixed_path_conversions_total or 0.0)
+            total_conversions += conversions
+            path_length_counts[len(steps)] += conversions
+            outcomes["gross_conversions"] += float(row.get("gross_conversions_total") or conversions)
+            outcomes["net_conversions"] += float(row.get("net_conversions_total") or conversions)
+            outcomes["gross_value"] += revenue
+            outcomes["net_value"] += float(row.get("net_revenue") or 0.0)
 
     if total_conversions <= 0 or not aggs:
         return None

@@ -9,7 +9,8 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from .models_config_dq import JourneyDefinition, JourneyPathDaily
+from .models_config_dq import JourneyDefinition, JourneyDefinitionInstanceFact, JourneyPathDaily
+from .services_journey_path_outputs import list_paths_from_outputs
 
 
 def _steps_from_value(path_steps: Any) -> List[str]:
@@ -74,6 +75,12 @@ def _resolve_date_bounds(
         JourneyPathDaily.journey_definition_id == definition_id
     )
     min_date, max_date = q.first() or (None, None)
+    if min_date is None or max_date is None:
+        q = db.query(
+            func.min(JourneyDefinitionInstanceFact.date),
+            func.max(JourneyDefinitionInstanceFact.date),
+        ).filter(JourneyDefinitionInstanceFact.journey_definition_id == definition_id)
+        min_date, max_date = q.first() or (None, None)
     if min_date is None or max_date is None:
         return None, None
     return date_from or min_date, date_to or max_date
@@ -173,6 +180,21 @@ def build_conversion_paths_analysis_from_daily(
         device=device,
         country=country,
     )
+    fallback = None
+    if not rows:
+        fallback = list_paths_from_outputs(
+            db,
+            journey_definition_id=definition.id,
+            date_from=start_d,
+            date_to=end_d,
+            mode=mode,
+            channel_group=channel_group,
+            campaign_id=campaign_id,
+            device=device,
+            country=country,
+            page=1,
+            limit=500,
+        )
 
     aggregated: Dict[Tuple[str, ...], Dict[str, float]] = defaultdict(lambda: {
         "count_journeys": 0.0,
@@ -189,34 +211,65 @@ def build_conversion_paths_analysis_from_daily(
     direct_touchpoints = 0
     journeys_ending_direct = 0
 
-    for row in rows:
-        raw_steps = _steps_from_value(row.path_steps)
-        steps = _apply_direct_mode(raw_steps, direct_mode)
-        if not steps:
-            continue
-        key = tuple(steps)
-        cj = int(row.count_journeys or 0)
-        cc = int(row.count_conversions or 0)
-        aggregated[key]["count_journeys"] += cj
-        aggregated[key]["count_conversions"] += cc
-        aggregated[key]["gross_revenue_total"] += float(row.gross_revenue_total or 0.0)
-        aggregated[key]["net_revenue_total"] += float(row.net_revenue_total or 0.0)
+    if rows:
+        for row in rows:
+            raw_steps = _steps_from_value(row.path_steps)
+            steps = _apply_direct_mode(raw_steps, direct_mode)
+            if not steps:
+                continue
+            key = tuple(steps)
+            cj = int(row.count_journeys or 0)
+            cc = int(row.count_conversions or 0)
+            aggregated[key]["count_journeys"] += cj
+            aggregated[key]["count_conversions"] += cc
+            aggregated[key]["gross_revenue_total"] += float(row.gross_revenue_total or 0.0)
+            aggregated[key]["net_revenue_total"] += float(row.net_revenue_total or 0.0)
 
-        if row.avg_time_to_convert_sec is not None and cc > 0:
-            aggregated[key]["ttc_weighted_sec"] += float(row.avg_time_to_convert_sec) * cc
-            aggregated[key]["ttc_weight"] += cc
-            ttc_bucket_days[int(float(row.avg_time_to_convert_sec) / 86400.0)] += cc
+            if row.avg_time_to_convert_sec is not None and cc > 0:
+                aggregated[key]["ttc_weighted_sec"] += float(row.avg_time_to_convert_sec) * cc
+                aggregated[key]["ttc_weight"] += cc
+                ttc_bucket_days[int(float(row.avg_time_to_convert_sec) / 86400.0)] += cc
 
-        path_len_counts[len(steps)] += cj
-        if _is_direct_unknown(steps[-1]):
-            journeys_ending_direct += cj
+            path_len_counts[len(steps)] += cj
+            if _is_direct_unknown(steps[-1]):
+                journeys_ending_direct += cj
 
-        for step in steps:
-            token = step.split(":", 1)[0]
-            channel_frequency[token] += cj
-            total_touchpoints += cj
-            if _is_direct_unknown(token):
-                direct_touchpoints += cj
+            for step in steps:
+                token = step.split(":", 1)[0]
+                channel_frequency[token] += cj
+                total_touchpoints += cj
+                if _is_direct_unknown(token):
+                    direct_touchpoints += cj
+    elif fallback:
+        for row in fallback.get("items") or []:
+            raw_steps = _steps_from_value(row.get("path_steps"))
+            steps = _apply_direct_mode(raw_steps, direct_mode)
+            if not steps:
+                continue
+            key = tuple(steps)
+            cj = int(row.get("count_journeys") or 0)
+            cc = int(row.get("count_conversions") or 0)
+            aggregated[key]["count_journeys"] += cj
+            aggregated[key]["count_conversions"] += cc
+            aggregated[key]["gross_revenue_total"] += float(row.get("gross_revenue") or 0.0)
+            aggregated[key]["net_revenue_total"] += float(row.get("net_revenue") or 0.0)
+
+            avg_ttc_sec = row.get("avg_time_to_convert_sec")
+            if avg_ttc_sec is not None and cc > 0:
+                aggregated[key]["ttc_weighted_sec"] += float(avg_ttc_sec) * cc
+                aggregated[key]["ttc_weight"] += cc
+                ttc_bucket_days[int(float(avg_ttc_sec) / 86400.0)] += cc
+
+            path_len_counts[len(steps)] += cj
+            if _is_direct_unknown(steps[-1]):
+                journeys_ending_direct += cj
+
+            for step in steps:
+                token = step.split(":", 1)[0]
+                channel_frequency[token] += cj
+                total_touchpoints += cj
+                if _is_direct_unknown(token):
+                    direct_touchpoints += cj
 
     total_journeys = int(sum(v["count_journeys"] for v in aggregated.values()))
     if total_journeys <= 0:
@@ -234,7 +287,7 @@ def build_conversion_paths_analysis_from_daily(
             "nba_config": nba_config or {},
             "next_best_by_prefix": {},
             "next_best_by_prefix_campaign": {},
-            "source": "journey_paths_daily",
+            "source": "journey_definition_facts" if fallback else "journey_paths_daily",
         }
 
     common_paths: List[Dict[str, Any]] = []
@@ -337,7 +390,7 @@ def build_conversion_paths_analysis_from_daily(
         "nba_config": nba_config or {},
         "next_best_by_prefix": next_best_by_prefix,
         "next_best_by_prefix_campaign": {},
-        "source": "journey_paths_daily",
+        "source": "journey_definition_facts" if fallback else "journey_paths_daily",
         "journey_definition_id": definition.id,
         "date_from": start_d.isoformat(),
         "date_to": end_d.isoformat(),

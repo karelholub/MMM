@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, Response, JSONResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any, Tuple
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 import pandas as pd
 from pathlib import Path
 import io
@@ -492,7 +492,16 @@ try:
 except Exception:
     pass
 
-app = FastAPI(title="Meiro Attribution Dashboard API", version="0.3.0")
+@asynccontextmanager
+async def _app_lifespan(_app: FastAPI):
+    _start_meiro_auto_replay_worker()
+    try:
+        yield
+    finally:
+        MEIRO_AUTO_REPLAY_STOP.set()
+
+
+app = FastAPI(title="Meiro Attribution Dashboard API", version="0.3.0", lifespan=_app_lifespan)
 MEIRO_AUTO_REPLAY_RUNNER: Dict[str, Any] = {}
 MEIRO_AUTO_REPLAY_THREAD: Optional[threading.Thread] = None
 MEIRO_AUTO_REPLAY_STOP = threading.Event()
@@ -563,16 +572,6 @@ def _start_meiro_auto_replay_worker() -> None:
         daemon=True,
     )
     MEIRO_AUTO_REPLAY_THREAD.start()
-
-
-@app.on_event("startup")
-def _on_startup_start_meiro_auto_replay_worker() -> None:
-    _start_meiro_auto_replay_worker()
-
-
-@app.on_event("shutdown")
-def _on_shutdown_stop_meiro_auto_replay_worker() -> None:
-    MEIRO_AUTO_REPLAY_STOP.set()
 
 
 @app.middleware("http")
@@ -973,7 +972,7 @@ def _get_kpi_config_model() -> KpiConfigModel:
 
 def _replace_kpi_config(cfg: KpiConfigModel) -> KpiConfigModel:
     global KPI_CONFIG
-    defs = [KpiDefinition(**d.dict()) for d in cfg.definitions]
+    defs = [KpiDefinition(**d.model_dump()) for d in cfg.definitions]
     KPI_CONFIG = KpiConfig(definitions=defs, primary_kpi_id=cfg.primary_kpi_id)
     save_kpi_config(KPI_CONFIG)
     return _get_kpi_config_model()

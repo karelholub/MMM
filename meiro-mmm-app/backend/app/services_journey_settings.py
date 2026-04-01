@@ -12,12 +12,12 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .models_config_dq import (
-    JourneyPathDaily,
     JourneySettingsStatus,
     JourneySettingsVersion,
-    JourneyTransitionDaily,
     WorkspaceSettings,
 )
+from .services_journey_path_outputs import count_recent_path_outputs
+from .services_journey_transition_outputs import count_recent_transition_from_steps, count_recent_transition_outputs
 
 DEFAULT_WORKSPACE_ID = "default"
 SCHEMA_VERSION = "1.0"
@@ -497,30 +497,9 @@ def build_journey_settings_impact_preview(
 
     end_day = datetime.utcnow().date()
     start_day = end_day - timedelta(days=7)
-    recent_paths = (
-        db.query(func.count(JourneyPathDaily.id))
-        .filter(JourneyPathDaily.date >= start_day, JourneyPathDaily.date <= end_day)
-        .scalar()
-        or 0
-    )
-    recent_transitions = (
-        db.query(func.count(JourneyTransitionDaily.id))
-        .filter(
-            JourneyTransitionDaily.date >= start_day,
-            JourneyTransitionDaily.date <= end_day,
-        )
-        .scalar()
-        or 0
-    )
-    distinct_steps = (
-        db.query(func.count(func.distinct(JourneyTransitionDaily.from_step)))
-        .filter(
-            JourneyTransitionDaily.date >= start_day,
-            JourneyTransitionDaily.date <= end_day,
-        )
-        .scalar()
-        or 0
-    )
+    recent_paths = count_recent_path_outputs(db, date_from=start_day, date_to=end_day)
+    recent_transitions = count_recent_transition_outputs(db, date_from=start_day, date_to=end_day)
+    distinct_steps = count_recent_transition_from_steps(db, date_from=start_day, date_to=end_day)
 
     baseline_rules = len((baseline.get("step_canonicalization") or {}).get("rules") or [])
     draft_rules = len((normalized.get("step_canonicalization") or {}).get("rules") or [])
@@ -628,4 +607,3 @@ def activate_journey_settings_version(
     db.refresh(item)
     invalidate_active_journey_settings_cache()
     return item
-

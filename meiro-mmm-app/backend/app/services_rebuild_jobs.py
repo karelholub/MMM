@@ -6,6 +6,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .models_config_dq import ConversionPath
+from .services_canonical_facts import resolve_canonical_history_bounds
 from .services_journey_definitions import list_active_journey_definitions
 from .services_journey_aggregates import (
     purge_journey_definition_outputs as purge_journey_definition_outputs_from_daily,
@@ -66,10 +67,12 @@ def rebuild_journey_aggregate_outputs(
     *,
     reprocess_days: Optional[int] = None,
 ) -> Dict[str, Any]:
-    history_bounds = db.query(
-        func.min(ConversionPath.conversion_ts),
-        func.max(ConversionPath.conversion_ts),
-    ).one_or_none()
+    history_bounds = resolve_canonical_history_bounds(db)
+    if not history_bounds or not history_bounds[0] or not history_bounds[1]:
+        history_bounds = db.query(
+            func.min(ConversionPath.conversion_ts),
+            func.max(ConversionPath.conversion_ts),
+        ).one_or_none()
     history_reprocess = 1
     if history_bounds:
         history_start, history_end = history_bounds
@@ -148,6 +151,7 @@ def rebuild_outputs_for_taxonomy_change(
 ) -> Dict[str, Any]:
     return {
         "taxonomy": rebuild_taxonomy_dq_outputs(db, taxonomy=taxonomy),
+        "aggregate_outputs": rebuild_journey_aggregate_outputs(db, reprocess_days=reprocess_days),
         "journey_outputs": rebuild_multiple_journey_definition_outputs(db, reprocess_days=reprocess_days),
     }
 
@@ -185,9 +189,11 @@ def rebuild_outputs_for_kpi_config_change(
         definition_ids=[definition.id for definition in affected_definitions],
         reprocess_days=reprocess_days,
     )
+    aggregate_outputs = rebuild_journey_aggregate_outputs(db, reprocess_days=reprocess_days)
     return {
         "impacted_kpi_ids": sorted(impacted_kpi_ids),
         "affected_definition_ids": [definition.id for definition in affected_definitions],
+        "aggregate_outputs": aggregate_outputs,
         "rebuild": rebuild,
     }
 

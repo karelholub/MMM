@@ -4,7 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
-from app.models_config_dq import JourneyDefinition, JourneyPathDaily
+from app.models_config_dq import JourneyDefinition, JourneyDefinitionInstanceFact, JourneyPathDaily
 from app.services_conversion_paths_adapter import (
     build_conversion_path_details_from_daily,
     build_conversion_paths_analysis_from_daily,
@@ -130,5 +130,65 @@ def test_details_returns_selected_path_summary():
         assert out["summary"]["gross_revenue"] == 800.0
         assert out["summary"]["avg_value"] == 100.0
         assert out["step_breakdown"]
+    finally:
+        db.close()
+
+
+def test_analysis_falls_back_to_definition_facts_when_daily_rows_absent():
+    db = _unit_db_session()
+    try:
+        jd = JourneyDefinition(
+            id="jd-adapter-fallback",
+            name="Adapter Journey",
+            conversion_kpi_id="purchase",
+            lookback_window_days=30,
+            mode_default="conversion_only",
+            created_by="test",
+            updated_by="test",
+            is_archived=False,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        db.add(jd)
+        db.add(
+            JourneyDefinitionInstanceFact(
+                date=date(2026, 2, 1),
+                journey_definition_id="jd-adapter-fallback",
+                conversion_id="conv-1",
+                profile_id="p-1",
+                conversion_key="purchase",
+                conversion_ts=datetime(2026, 2, 1, 12, 0, tzinfo=timezone.utc),
+                path_hash="p1",
+                steps_json=["Paid Landing", "Product View / Content View", "Purchase / Lead Won (conversion)"],
+                path_length=3,
+                channel_group="paid",
+                last_touch_channel="email",
+                campaign_id="cmp-1",
+                device="mobile",
+                country="US",
+                interaction_path_type="click_through",
+                time_to_convert_sec=172800.0,
+                gross_conversions_total=1.0,
+                net_conversions_total=1.0,
+                gross_revenue_total=100.0,
+                net_revenue_total=95.0,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+        db.commit()
+
+        out = build_conversion_paths_analysis_from_daily(
+            db,
+            definition_id="jd-adapter-fallback",
+            date_from=date(2026, 2, 1),
+            date_to=date(2026, 2, 28),
+            direct_mode="include",
+            path_scope="all",
+        )
+
+        assert out["source"] == "journey_definition_facts"
+        assert out["total_journeys"] == 1
+        assert out["common_paths"][0]["gross_revenue"] == 100.0
     finally:
         db.close()

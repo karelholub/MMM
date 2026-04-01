@@ -9,8 +9,8 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from .models_config_dq import JourneyDefinition, JourneyTransitionDaily
-from .services_journey_transition_facts import iter_journey_transition_rows
+from .models_config_dq import JourneyDefinition
+from .services_journey_transition_outputs import list_transition_edges_from_outputs
 
 OTHER_STEP = "Other"
 _STEP_ORDER = {
@@ -25,149 +25,6 @@ _STEP_ORDER = {
 
 def _step_depth(step: str) -> int:
     return _STEP_ORDER.get(step, 99)
-
-
-def _aggregate_edges(
-    db: Session,
-    *,
-    journey_definition: JourneyDefinition,
-    date_from: date,
-    date_to: date,
-    channel_group: Optional[str],
-    campaign_id: Optional[str],
-    device: Optional[str],
-    country: Optional[str],
-) -> List[Dict[str, Any]]:
-    q = (
-        db.query(
-            JourneyTransitionDaily.from_step.label("from_step"),
-            JourneyTransitionDaily.to_step.label("to_step"),
-            func.sum(JourneyTransitionDaily.count_transitions).label("count_transitions"),
-            func.sum(JourneyTransitionDaily.count_profiles).label("count_profiles"),
-            func.sum(JourneyTransitionDaily.avg_time_between_sec * JourneyTransitionDaily.count_transitions).label("weighted_avg_time_between_sec"),
-            func.sum(JourneyTransitionDaily.p50_time_between_sec * JourneyTransitionDaily.count_transitions).label("weighted_p50_time_between_sec"),
-            func.sum(JourneyTransitionDaily.p90_time_between_sec * JourneyTransitionDaily.count_transitions).label("weighted_p90_time_between_sec"),
-        )
-        .filter(
-            JourneyTransitionDaily.journey_definition_id == journey_definition.id,
-            JourneyTransitionDaily.date >= date_from,
-            JourneyTransitionDaily.date <= date_to,
-        )
-        .group_by(JourneyTransitionDaily.from_step, JourneyTransitionDaily.to_step)
-    )
-    if channel_group:
-        q = q.filter(JourneyTransitionDaily.channel_group == channel_group)
-    if campaign_id:
-        q = q.filter(JourneyTransitionDaily.campaign_id == campaign_id)
-    if device:
-        q = q.filter(JourneyTransitionDaily.device == device)
-    if country:
-        q = q.filter(JourneyTransitionDaily.country == country)
-    rows = q.all()
-    return [
-        {
-            "from_step": str(r.from_step),
-            "to_step": str(r.to_step),
-            "count_transitions": int(r.count_transitions or 0),
-            "count_profiles": int(r.count_profiles or 0),
-            "avg_time_between_sec": (
-                round(float(r.weighted_avg_time_between_sec or 0.0) / float(r.count_transitions or 1), 2)
-                if int(r.count_transitions or 0) > 0 and r.weighted_avg_time_between_sec is not None
-                else None
-            ),
-            "p50_time_between_sec": (
-                round(float(r.weighted_p50_time_between_sec or 0.0) / float(r.count_transitions or 1), 2)
-                if int(r.count_transitions or 0) > 0 and r.weighted_p50_time_between_sec is not None
-                else None
-            ),
-            "p90_time_between_sec": (
-                round(float(r.weighted_p90_time_between_sec or 0.0) / float(r.count_transitions or 1), 2)
-                if int(r.count_transitions or 0) > 0 and r.weighted_p90_time_between_sec is not None
-                else None
-            ),
-        }
-        for r in rows
-        if int(r.count_transitions or 0) > 0
-    ]
-
-
-def _can_fallback_to_transition_facts(db: Session, *, journey_definition: JourneyDefinition) -> bool:
-    conversion_key = str(journey_definition.conversion_kpi_id or "").strip()
-    if not conversion_key:
-        return False
-    matching_definition_ids = [
-        str(definition_id or "")
-        for (definition_id,) in db.query(JourneyDefinition.id)
-        .filter(
-            JourneyDefinition.is_archived == False,  # noqa: E712
-            JourneyDefinition.conversion_kpi_id == conversion_key,
-        )
-        .all()
-    ]
-    return matching_definition_ids == [journey_definition.id]
-
-
-def _aggregate_edges_from_transition_facts(
-    db: Session,
-    *,
-    journey_definition: JourneyDefinition,
-    date_from: date,
-    date_to: date,
-    channel_group: Optional[str],
-    campaign_id: Optional[str],
-    device: Optional[str],
-    country: Optional[str],
-) -> List[Dict[str, Any]]:
-    if not _can_fallback_to_transition_facts(db, journey_definition=journey_definition):
-        return []
-
-    start_dt = datetime.combine(date_from, dt_time.min)
-    end_dt = datetime.combine(date_to + timedelta(days=1), dt_time.min)
-    buckets: Dict[Tuple[str, str], Dict[str, Any]] = {}
-    for row in iter_journey_transition_rows(
-        db,
-        start_dt=start_dt,
-        end_dt=end_dt,
-        conversion_key=journey_definition.conversion_kpi_id,
-    ):
-        if channel_group and str(row.channel_group or "") != channel_group:
-            continue
-        if campaign_id and str(row.campaign_id or "") != campaign_id:
-            continue
-        if device and str(row.device or "") != device:
-            continue
-        if country and str(row.country or "") != country:
-            continue
-        key = (str(row.from_step or ""), str(row.to_step or ""))
-        bucket = buckets.setdefault(
-            key,
-            {
-                "from_step": key[0],
-                "to_step": key[1],
-                "count_transitions": 0,
-                "profiles": set(),
-                "time_values": [],
-            },
-        )
-        bucket["count_transitions"] += 1
-        if row.profile_id:
-            bucket["profiles"].add(str(row.profile_id))
-        if isinstance(row.delta_sec, (int, float)) and float(row.delta_sec) >= 0:
-            bucket["time_values"].append(float(row.delta_sec))
-
-    return [
-        {
-            "from_step": payload["from_step"],
-            "to_step": payload["to_step"],
-            "count_transitions": int(payload["count_transitions"]),
-            "count_profiles": len(payload["profiles"]),
-            "avg_time_between_sec": round(sum(payload["time_values"]) / len(payload["time_values"]), 2) if payload["time_values"] else None,
-            "p50_time_between_sec": None,
-            "p90_time_between_sec": None,
-        }
-        for payload in buckets.values()
-        if int(payload["count_transitions"] or 0) > 0
-    ]
 
 
 def list_transitions_for_journey_definition(
@@ -208,7 +65,7 @@ def list_transitions_for_journey_definition(
     max_nodes = max(2, min(int(max_nodes), 200))
     max_depth = max(1, min(int(max_depth), 20))
 
-    edges_raw = _aggregate_edges(
+    edges_raw, source = list_transition_edges_from_outputs(
         db,
         journey_definition=journey_definition,
         date_from=date_from,
@@ -218,19 +75,6 @@ def list_transitions_for_journey_definition(
         device=device,
         country=country,
     )
-    source = "aggregates"
-    if not edges_raw:
-        edges_raw = _aggregate_edges_from_transition_facts(
-            db,
-            journey_definition=journey_definition,
-            date_from=date_from,
-            date_to=date_to,
-            channel_group=channel_group,
-            campaign_id=campaign_id,
-            device=device,
-            country=country,
-        )
-        source = "transition_facts" if edges_raw else "none"
 
     edges_depth = [
         e

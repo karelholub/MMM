@@ -4,9 +4,10 @@ from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, List, Optional, Tuple
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from .models_config_dq import JourneyInstanceFact, SilverConversionFact
+from .models_config_dq import JourneyInstanceFact, SilverConversionFact, TouchpointVisitFact
 from .services_journey_instance_facts import load_journey_instance_sequences
 from .services_silver_journeys import load_silver_journeys
 from .services_visit_facts import iter_touchpoint_visit_rows
@@ -90,6 +91,34 @@ def iter_canonical_conversion_rows(
         )
 
 
+def count_canonical_conversions(
+    db: Session,
+    *,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+    limit: Optional[int] = None,
+) -> int:
+    silver_q = db.query(SilverConversionFact.id)
+    if date_from is not None:
+        silver_q = silver_q.filter(SilverConversionFact.conversion_ts >= date_from)
+    if date_to is not None:
+        silver_q = silver_q.filter(SilverConversionFact.conversion_ts < date_to)
+    if limit is not None:
+        silver_q = silver_q.order_by(SilverConversionFact.conversion_ts.desc()).limit(limit)
+    silver_count = int(silver_q.count() or 0)
+    if silver_count > 0:
+        return silver_count
+
+    instance_q = db.query(JourneyInstanceFact.id)
+    if date_from is not None:
+        instance_q = instance_q.filter(JourneyInstanceFact.conversion_ts >= date_from)
+    if date_to is not None:
+        instance_q = instance_q.filter(JourneyInstanceFact.conversion_ts < date_to)
+    if limit is not None:
+        instance_q = instance_q.order_by(JourneyInstanceFact.conversion_ts.desc()).limit(limit)
+    return int(instance_q.count() or 0)
+
+
 def load_preferred_journey_rows(
     db: Session,
     *,
@@ -139,3 +168,36 @@ def load_channel_canonical_source(
         )
     )
     return touchpoint_rows, conversion_rows
+
+
+def resolve_canonical_history_bounds(
+    db: Session,
+) -> Tuple[Optional[datetime], Optional[datetime]]:
+    conversion_min = None
+    conversion_max = None
+    silver_bounds = db.query(
+        func.min(SilverConversionFact.conversion_ts),
+        func.max(SilverConversionFact.conversion_ts),
+    ).one_or_none()
+    if silver_bounds and silver_bounds[0] and silver_bounds[1]:
+        conversion_min, conversion_max = silver_bounds
+    else:
+        instance_bounds = db.query(
+            func.min(JourneyInstanceFact.conversion_ts),
+            func.max(JourneyInstanceFact.conversion_ts),
+        ).one_or_none()
+        if instance_bounds and instance_bounds[0] and instance_bounds[1]:
+            conversion_min, conversion_max = instance_bounds
+
+    visit_min = None
+    visit_max = None
+    visit_bounds = db.query(
+        func.min(TouchpointVisitFact.touchpoint_ts),
+        func.max(TouchpointVisitFact.touchpoint_ts),
+    ).one_or_none()
+    if visit_bounds and visit_bounds[0] and visit_bounds[1]:
+        visit_min, visit_max = visit_bounds
+
+    values_min = [value for value in (conversion_min, visit_min) if value is not None]
+    values_max = [value for value in (conversion_max, visit_max) if value is not None]
+    return (min(values_min) if values_min else None, max(values_max) if values_max else None)

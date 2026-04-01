@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { BarChart, Bar, CartesianGrid, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { tokens as t } from '../theme/tokens'
 import RecommendedActionsList, { type RecommendedActionItem } from '../components/RecommendedActionsList'
-import { AnalyticsTable, type AnalyticsTableColumn } from '../components/dashboard'
+import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn } from '../components/dashboard'
 import { navigateForRecommendedAction } from '../lib/recommendedActions'
 import { apiGetJson, apiSendJson, withQuery } from '../lib/apiClient'
 
@@ -1880,70 +1880,71 @@ export default function DataQuality() {
           </div>
         </div>
 
-        {/* Alert filters */}
-        <div
-          style={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: t.space.sm,
-            marginBottom: t.space.md,
-          }}
-        >
-          {['', 'open', 'acked', 'resolved'].map((s) => (
-            <button
-              key={s || 'all'}
-              type="button"
-              onClick={() => setAlertStatusFilter(s)}
-              style={{
-                padding: '4px 10px',
-                fontSize: t.font.sizeXs,
-                borderRadius: 999,
-                border: `1px solid ${alertStatusFilter === s ? t.color.accent : t.color.border}`,
-                background: alertStatusFilter === s ? t.color.accentMuted : 'transparent',
-                color: alertStatusFilter === s ? t.color.accent : t.color.textSecondary,
-                cursor: 'pointer',
-              }}
-            >
-              {s || 'All'}
-            </button>
-          ))}
-          <select
-            value={alertSeverityFilter}
-            onChange={(e) => setAlertSeverityFilter(e.target.value)}
-            style={{
-              padding: '4px 8px',
-              fontSize: t.font.sizeXs,
-              border: `1px solid ${t.color.border}`,
-              borderRadius: t.radius.sm,
-              background: t.color.surface,
-              color: t.color.text,
-            }}
-          >
-            <option value="">All severity</option>
-            <option value="info">Info</option>
-            <option value="warn">Warning</option>
-            <option value="critical">Critical</option>
-          </select>
-          <select
-            value={alertSourceFilter}
-            onChange={(e) => setAlertSourceFilter(e.target.value)}
-            style={{
-              padding: '4px 8px',
-              fontSize: t.font.sizeXs,
-              border: `1px solid ${t.color.border}`,
-              borderRadius: t.radius.sm,
-              background: t.color.surface,
-              color: t.color.text,
-            }}
-          >
-            <option value="">All sources</option>
-            <option value="journeys">Journeys</option>
-            <option value="meiro_web">Meiro</option>
-            <option value="google_ads_cost">Google</option>
-            <option value="meta_cost">Meta</option>
-            <option value="linkedin_cost">LinkedIn</option>
-            <option value="taxonomy">Taxonomy</option>
-          </select>
+        <div style={{ marginBottom: t.space.md }}>
+          <AnalyticsToolbar
+            filters={
+              <>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: t.space.xs }}>
+                  {['', 'open', 'acked', 'resolved'].map((s) => (
+                    <button
+                      key={s || 'all'}
+                      type="button"
+                      onClick={() => setAlertStatusFilter(s)}
+                      style={{
+                        padding: '4px 10px',
+                        fontSize: t.font.sizeXs,
+                        borderRadius: 999,
+                        border: `1px solid ${alertStatusFilter === s ? t.color.accent : t.color.border}`,
+                        background: alertStatusFilter === s ? t.color.accentMuted : 'transparent',
+                        color: alertStatusFilter === s ? t.color.accent : t.color.textSecondary,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {s || 'All'}
+                    </button>
+                  ))}
+                </div>
+                <select
+                  value={alertSeverityFilter}
+                  onChange={(e) => setAlertSeverityFilter(e.target.value)}
+                  style={{
+                    padding: '4px 8px',
+                    fontSize: t.font.sizeXs,
+                    border: `1px solid ${t.color.border}`,
+                    borderRadius: t.radius.sm,
+                    background: t.color.surface,
+                    color: t.color.text,
+                  }}
+                >
+                  <option value="">All severity</option>
+                  <option value="info">Info</option>
+                  <option value="warn">Warning</option>
+                  <option value="critical">Critical</option>
+                </select>
+                <select
+                  value={alertSourceFilter}
+                  onChange={(e) => setAlertSourceFilter(e.target.value)}
+                  style={{
+                    padding: '4px 8px',
+                    fontSize: t.font.sizeXs,
+                    border: `1px solid ${t.color.border}`,
+                    borderRadius: t.radius.sm,
+                    background: t.color.surface,
+                    color: t.color.text,
+                  }}
+                >
+                  <option value="">All sources</option>
+                  <option value="journeys">Journeys</option>
+                  <option value="meiro_web">Meiro</option>
+                  <option value="google_ads_cost">Google</option>
+                  <option value="meta_cost">Meta</option>
+                  <option value="linkedin_cost">LinkedIn</option>
+                  <option value="taxonomy">Taxonomy</option>
+                </select>
+              </>
+            }
+            summary="Filter data-quality alerts by status, severity, and source without leaving the current table."
+          />
         </div>
 
         {alertsQuery.isLoading ? (

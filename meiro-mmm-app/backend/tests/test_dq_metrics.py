@@ -144,6 +144,48 @@ def test_compute_dq_snapshots_prefers_persisted_facts_when_taxonomy_disabled(mon
         db.close()
 
 
+def test_compute_dq_snapshots_uses_persisted_facts_without_conversion_paths(monkeypatch):
+    db = _make_session()
+    try:
+        monkeypatch.setattr(services_data_quality, "load_taxonomy", Taxonomy.default)
+        persist_journeys_as_conversion_paths(
+            db,
+            [
+                {
+                    "customer_id": "c1",
+                    "conversion_id": "conv-1",
+                    "kpi_type": "purchase",
+                    "touchpoints": [
+                        {"channel": "google", "timestamp": "2024-01-01T00:00:00"},
+                        {"channel": "unknown", "timestamp": "2024-01-02T00:00:00", "source": "mystery", "medium": "weird"},
+                    ],
+                    "meta": {"parser": {"used_inferred_mapping": True}},
+                    "_revenue_entries": [{"default_applied": True, "raw_value_zero": False}],
+                    "converted": True,
+                    "conversion_value": 10.0,
+                }
+            ],
+            replace=True,
+            import_source="upload",
+        )
+        db.query(services_data_quality.ConversionPath).delete(synchronize_session=False)
+        db.commit()
+
+        def _unexpected_load(_db):
+            raise AssertionError("_load_journeys should not be called when DQ facts are available")
+
+        monkeypatch.setattr(services_data_quality, "_load_journeys", _unexpected_load)
+
+        snapshots = services_data_quality.compute_dq_snapshots(db, include_taxonomy=False)
+        metrics = {snapshot.metric_key: snapshot.metric_value for snapshot in snapshots}
+
+        assert metrics["missing_profile_pct"] == 0.0
+        assert metrics["defaulted_conversion_value_pct"] == 100.0
+        assert metrics["inferred_mapping_journey_pct"] == 100.0
+    finally:
+        db.close()
+
+
 def test_load_journeys_uses_silver_when_conversion_paths_absent(monkeypatch):
     db = _make_session()
     try:

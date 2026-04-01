@@ -19,6 +19,7 @@ from .models_config_dq import (
     DQAlert,
     NotificationEndpoint,
 )
+from .services_canonical_facts import count_canonical_conversions
 from .services_conversions import conversion_path_payload
 from .services_silver_journeys import load_recent_silver_journeys
 from .utils.taxonomy import load_taxonomy
@@ -254,12 +255,7 @@ def _compute_journeys_completeness_from_facts(
     if not rows:
         return None
 
-    raw_count = (
-        db.query(ConversionPath.id)
-        .order_by(ConversionPath.conversion_ts.desc())
-        .limit(limit)
-        .count()
-    )
+    raw_count = count_canonical_conversions(db, limit=limit)
     if raw_count > len(rows):
         return None
 

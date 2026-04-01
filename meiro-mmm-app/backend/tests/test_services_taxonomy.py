@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from app.db import Base
 from app.services_conversions import v2_to_legacy
 from app.services_conversions import persist_journeys_as_conversion_paths
-from app.models_config_dq import DQSnapshot
+from app.models_config_dq import ConversionPath, DQSnapshot
 from app.services_taxonomy_suggestions import generate_taxonomy_suggestions, generate_taxonomy_suggestions_from_db
 from app.services_taxonomy import (
     backfill_taxonomy_dq_snapshots_from_db,
@@ -198,6 +198,37 @@ def test_generate_taxonomy_suggestions_from_db_uses_persisted_touchpoint_facts()
         db.close()
 
 
+def test_generate_taxonomy_suggestions_from_db_works_without_conversion_paths():
+    db = _make_session()
+    try:
+        persist_journeys_as_conversion_paths(
+            db,
+            [
+                {
+                    "customer_id": "c1",
+                    "conversion_id": "conv-1",
+                    "kpi_type": "purchase",
+                    "touchpoints": [
+                        {"source": "google", "medium": "", "campaign": None},
+                        {"source": "google", "medium": "", "campaign": None},
+                    ],
+                    "converted": True,
+                }
+            ],
+            replace=True,
+            import_source="upload",
+        )
+        db.query(ConversionPath).delete(synchronize_session=False)
+        db.commit()
+
+        out = generate_taxonomy_suggestions_from_db(db, taxonomy=Taxonomy.default(), limit=5)
+
+        assert out is not None
+        assert out["suggestions"]
+    finally:
+        db.close()
+
+
 def test_taxonomy_overview_from_db_uses_persisted_touchpoint_facts():
     db = _make_session()
     try:
@@ -224,6 +255,36 @@ def test_taxonomy_overview_from_db_uses_persisted_touchpoint_facts():
         assert overview["summary"]["total_touchpoints"] == 2
         assert overview["summary"]["unknown_count"] >= 1
         assert overview["top_unmapped_patterns"]
+    finally:
+        db.close()
+
+
+def test_taxonomy_overview_from_db_works_without_conversion_paths():
+    db = _make_session()
+    try:
+        persist_journeys_as_conversion_paths(
+            db,
+            [
+                {
+                    "customer_id": "c1",
+                    "conversion_id": "conv-1",
+                    "kpi_type": "purchase",
+                    "touchpoints": [
+                        {"source": "google", "medium": "", "campaign": None},
+                        {"source": "newsletter", "medium": "email", "campaign": "welcome"},
+                    ],
+                    "converted": True,
+                }
+            ],
+            replace=True,
+            import_source="upload",
+        )
+        db.query(ConversionPath).delete(synchronize_session=False)
+        db.commit()
+
+        overview = build_taxonomy_overview_from_db(db, taxonomy=Taxonomy.default(), suggestion_count=1)
+        assert overview is not None
+        assert overview["summary"]["total_touchpoints"] == 2
     finally:
         db.close()
 

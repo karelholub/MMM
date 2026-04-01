@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
+from app.services_canonical_facts import count_canonical_conversions
 from app.services_taxonomy import (
     compute_taxonomy_coverage,
     compute_taxonomy_coverage_from_db,
@@ -14,7 +15,7 @@ from app.services_taxonomy import (
     map_to_channel,
     _normalized_text,
 )
-from app.models_config_dq import ConversionPath, ConversionTaxonomyTouchpointFact
+from app.models_config_dq import ConversionTaxonomyTouchpointFact
 from app.utils.taxonomy import Taxonomy, load_taxonomy
 
 
@@ -126,12 +127,7 @@ def _compute_low_confidence_patterns_from_db(
     )
     if not rows:
         return None
-    raw_count = (
-        db.query(ConversionPath.id)
-        .order_by(ConversionPath.conversion_ts.desc())
-        .limit(sample_limit)
-        .count()
-    )
+    raw_count = count_canonical_conversions(db, limit=sample_limit)
     observed_conversion_ids = {str(row.conversion_id or "") for row in rows}
     if raw_count > len(observed_conversion_ids):
         return None

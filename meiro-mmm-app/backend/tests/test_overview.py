@@ -7,7 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
-from app.models_config_dq import ChannelPerformanceDaily, ConversionPath, JourneyDefinition, JourneyPathDaily, SilverConversionFact
+from app.models_config_dq import ChannelPerformanceDaily, ConversionPath, JourneyDefinition, JourneyDefinitionInstanceFact, JourneyPathDaily, SilverConversionFact
 from app.main import app
 from app import services_overview as overview
 from app.services_conversions import persist_journeys_as_conversion_paths
@@ -492,6 +492,92 @@ def test_overview_funnels_prefers_daily_aggregates_when_single_definition_exists
         assert out["tabs"]["conversions"][0]["path"] == "Paid Landing > Purchase / Lead Won (conversion)"
         assert out["tabs"]["revenue"][0]["revenue"] == 300.0
         assert out["tabs"]["speed"][0]["path"] == "Organic Landing > Purchase / Lead Won (conversion)"
+    finally:
+        db.close()
+
+
+def test_overview_funnels_falls_back_to_definition_outputs_when_daily_rows_absent():
+    db = _unit_db_session()
+    try:
+        definition = JourneyDefinition(
+            id="def-funnels-fallback",
+            name="Overview Journey",
+            conversion_kpi_id="purchase",
+            lookback_window_days=30,
+            mode_default="conversion_only",
+            created_by="test",
+            updated_by="test",
+            is_archived=False,
+            created_at=datetime(2024, 2, 1, 0, 0),
+            updated_at=datetime(2024, 2, 1, 0, 0),
+        )
+        db.add(definition)
+        db.add_all(
+            [
+                JourneyDefinitionInstanceFact(
+                    date=datetime(2024, 2, 12).date(),
+                    journey_definition_id="def-funnels-fallback",
+                    conversion_id="conv-a",
+                    profile_id="p-1",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2024, 2, 12, 12, 0),
+                    path_hash="hash-a",
+                    steps_json=["Paid Landing", "Purchase / Lead Won (conversion)"],
+                    path_length=2,
+                    channel_group="paid",
+                    last_touch_channel="google_ads",
+                    campaign_id="cmp-1",
+                    device="mobile",
+                    country="US",
+                    interaction_path_type="click_through",
+                    time_to_convert_sec=86400.0,
+                    gross_conversions_total=1.0,
+                    net_conversions_total=1.0,
+                    gross_revenue_total=300.0,
+                    net_revenue_total=250.0,
+                    created_at=datetime(2024, 2, 12, 12, 0),
+                    updated_at=datetime(2024, 2, 12, 12, 0),
+                ),
+                JourneyDefinitionInstanceFact(
+                    date=datetime(2024, 2, 13).date(),
+                    journey_definition_id="def-funnels-fallback",
+                    conversion_id="conv-b",
+                    profile_id="p-2",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2024, 2, 13, 12, 0),
+                    path_hash="hash-b",
+                    steps_json=["Organic Landing", "Purchase / Lead Won (conversion)"],
+                    path_length=2,
+                    channel_group="organic",
+                    last_touch_channel="seo",
+                    campaign_id=None,
+                    device="desktop",
+                    country="US",
+                    interaction_path_type="click_through",
+                    time_to_convert_sec=43200.0,
+                    gross_conversions_total=1.0,
+                    net_conversions_total=1.0,
+                    gross_revenue_total=100.0,
+                    net_revenue_total=90.0,
+                    created_at=datetime(2024, 2, 13, 12, 0),
+                    updated_at=datetime(2024, 2, 13, 12, 0),
+                ),
+            ]
+        )
+        db.commit()
+
+        out = get_overview_funnels(
+            db,
+            date_from="2024-02-10",
+            date_to="2024-02-15",
+            conversion_key="purchase",
+            limit=5,
+        )
+
+        assert out["tabs"]["conversions"][0]["path"] == "Paid Landing > Purchase / Lead Won (conversion)"
+        assert out["tabs"]["revenue"][0]["revenue"] == 300.0
+        assert out["tabs"]["speed"][0]["path"] == "Organic Landing > Purchase / Lead Won (conversion)"
+        assert out["summary"]["gross_revenue"] == 400.0
     finally:
         db.close()
 

@@ -83,6 +83,10 @@ class _FakeDb:
 def test_rebuild_journey_aggregate_outputs_expands_reprocess_window(monkeypatch):
     fake_db = _FakeDb((datetime(2026, 3, 1), datetime(2026, 3, 4)))
     monkeypatch.setattr(
+        "app.services_rebuild_jobs.resolve_canonical_history_bounds",
+        lambda db: (None, None),
+    )
+    monkeypatch.setattr(
         "app.services_rebuild_jobs.get_active_journey_settings",
         lambda db, use_cache=True: {"settings_json": {"performance_guardrails": {"aggregation_reprocess_window_days": 2}}},
     )
@@ -95,6 +99,27 @@ def test_rebuild_journey_aggregate_outputs_expands_reprocess_window(monkeypatch)
 
     assert out["effective_reprocess_days"] == 4
     assert out["days_processed"] == 4
+
+
+def test_rebuild_journey_aggregate_outputs_prefers_canonical_history_bounds(monkeypatch):
+    db = object()
+    monkeypatch.setattr(
+        "app.services_rebuild_jobs.resolve_canonical_history_bounds",
+        lambda db: (datetime(2026, 2, 1), datetime(2026, 2, 6)),
+    )
+    monkeypatch.setattr(
+        "app.services_rebuild_jobs.get_active_journey_settings",
+        lambda db, use_cache=True: {"settings_json": {"performance_guardrails": {"aggregation_reprocess_window_days": 2}}},
+    )
+    monkeypatch.setattr(
+        "app.services_rebuild_jobs.run_daily_journey_aggregates",
+        lambda db, reprocess_days=0: {"definitions": 1, "days_processed": reprocess_days, "source_rows_processed": 10},
+    )
+
+    out = rebuild_journey_aggregate_outputs(db, reprocess_days=1)
+
+    assert out["effective_reprocess_days"] == 6
+    assert out["days_processed"] == 6
 
 
 def test_rebuild_journey_definition_outputs_uses_guardrail_default(monkeypatch):
@@ -167,6 +192,10 @@ def test_rebuild_outputs_for_taxonomy_change_runs_taxonomy_and_definition_jobs(m
         lambda db, taxonomy=None: {"source": "db_touchpoint_facts", "taxonomy": taxonomy},
     )
     monkeypatch.setattr(
+        "app.services_rebuild_jobs.rebuild_journey_aggregate_outputs",
+        lambda db, reprocess_days=None: {"days_processed": reprocess_days or 3},
+    )
+    monkeypatch.setattr(
         "app.services_rebuild_jobs.rebuild_multiple_journey_definition_outputs",
         lambda db, reprocess_days=None: {"definitions_rebuilt": 3, "effective_reprocess_days": reprocess_days or 3},
     )
@@ -174,6 +203,7 @@ def test_rebuild_outputs_for_taxonomy_change_runs_taxonomy_and_definition_jobs(m
     out = rebuild_outputs_for_taxonomy_change(db, taxonomy="taxonomy", reprocess_days=5)
 
     assert out["taxonomy"]["taxonomy"] == "taxonomy"
+    assert out["aggregate_outputs"]["days_processed"] == 5
     assert out["journey_outputs"]["definitions_rebuilt"] == 3
     assert out["journey_outputs"]["effective_reprocess_days"] == 5
 
@@ -202,9 +232,14 @@ def test_rebuild_outputs_for_kpi_config_change_targets_impacted_definitions(monk
         "app.services_rebuild_jobs.rebuild_multiple_journey_definition_outputs",
         lambda db, definition_ids=None, reprocess_days=None: {"definition_ids": definition_ids or [], "definitions_rebuilt": len(definition_ids or [])},
     )
+    monkeypatch.setattr(
+        "app.services_rebuild_jobs.rebuild_journey_aggregate_outputs",
+        lambda db, reprocess_days=None: {"days_processed": reprocess_days or 3},
+    )
 
     out = rebuild_outputs_for_kpi_config_change(db, previous_cfg=previous_cfg, current_cfg=current_cfg)
 
     assert out["impacted_kpi_ids"] == ["purchase"]
     assert out["affected_definition_ids"] == ["def-1"]
+    assert out["aggregate_outputs"]["days_processed"] == 3
     assert out["rebuild"]["definitions_rebuilt"] == 1
