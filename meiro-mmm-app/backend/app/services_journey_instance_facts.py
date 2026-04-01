@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from .models_config_dq import JourneyInstanceFact, JourneyStepFact
 from .services_conversion_silver_facts import (
+    _campaign_token,
     _browser_token,
     _consent_opt_out,
     _has_error_event,
@@ -105,7 +106,7 @@ def build_journey_instance_and_step_facts(
                 step_name=step_name,
                 step_ts=step_ts,
                 channel=_normalized_token((matching_tp or {}).get("channel")),
-                campaign=_normalized_token((matching_tp or {}).get("campaign")),
+                campaign=_campaign_token(matching_tp or {}),
                 event_name=_normalized_token((matching_tp or {}).get("event_name") or (matching_tp or {}).get("event") or (matching_tp or {}).get("name")),
                 created_at=created_at,
                 updated_at=created_at,

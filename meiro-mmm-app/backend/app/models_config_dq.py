@@ -796,6 +796,30 @@ class SilverTouchpointFact(Base):
     )
 
 
+class TouchpointVisitFact(Base):
+    __tablename__ = "touchpoint_visit_facts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversion_id = Column(String(128), nullable=False, index=True)
+    profile_id = Column(String(128), nullable=True, index=True)
+    conversion_key = Column(String(128), nullable=True, index=True)
+    ordinal = Column(Integer, nullable=False)
+    touchpoint_ts = Column(DateTime, nullable=True, index=True)
+    channel = Column(String(128), nullable=True, index=True)
+    campaign = Column(String(255), nullable=True)
+    import_batch_id = Column(String(36), nullable=True, index=True)
+    import_source = Column(String(32), nullable=True, index=True)
+    source_snapshot_id = Column(String(36), nullable=True, index=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_touchpoint_visit_conv_ord", "conversion_id", "ordinal", unique=True),
+        Index("ix_touchpoint_visit_channel_ts", "channel", "touchpoint_ts"),
+        Index("ix_touchpoint_visit_profile_ts", "profile_id", "touchpoint_ts"),
+    )
+
+
 class JourneyInstanceFact(Base):
     __tablename__ = "journey_instance_facts"
 
@@ -835,6 +859,39 @@ class JourneyInstanceFact(Base):
     )
 
 
+class JourneyRoleFact(Base):
+    __tablename__ = "journey_role_facts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversion_id = Column(String(128), nullable=False, index=True)
+    profile_id = Column(String(128), nullable=True, index=True)
+    conversion_key = Column(String(128), nullable=True, index=True)
+    conversion_ts = Column(DateTime, nullable=False, index=True)
+    role_key = Column(String(32), nullable=False, index=True)
+    ordinal = Column(Integer, nullable=False, default=0)
+    path_hash = Column(String(128), nullable=True, index=True)
+    channel_group = Column(String(128), nullable=True, index=True)
+    channel = Column(String(128), nullable=True, index=True)
+    campaign = Column(String(255), nullable=True, index=True)
+    device = Column(String(64), nullable=True, index=True)
+    country = Column(String(64), nullable=True, index=True)
+    interaction_path_type = Column(String(32), nullable=True, index=True)
+    gross_conversions_total = Column(Float, nullable=False, default=0.0)
+    net_conversions_total = Column(Float, nullable=False, default=0.0)
+    gross_revenue_total = Column(Float, nullable=False, default=0.0)
+    net_revenue_total = Column(Float, nullable=False, default=0.0)
+    import_batch_id = Column(String(36), nullable=True, index=True)
+    import_source = Column(String(32), nullable=True, index=True)
+    source_snapshot_id = Column(String(36), nullable=True, index=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_journey_role_conv_role_ord", "conversion_id", "role_key", "ordinal", unique=True),
+        Index("ix_journey_role_dims_ts", "role_key", "channel", "campaign", "conversion_ts"),
+    )
+
+
 class JourneyStepFact(Base):
     __tablename__ = "journey_step_facts"
 
@@ -854,6 +911,37 @@ class JourneyStepFact(Base):
     __table_args__ = (
         Index("ix_journey_step_conv_ord", "conversion_id", "ordinal", unique=True),
         Index("ix_journey_step_name_ts", "step_name", "step_ts"),
+    )
+
+
+class JourneyTransitionFact(Base):
+    __tablename__ = "journey_transition_facts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversion_id = Column(String(128), nullable=False, index=True)
+    profile_id = Column(String(128), nullable=True, index=True)
+    conversion_key = Column(String(128), nullable=True, index=True)
+    conversion_ts = Column(DateTime, nullable=False, index=True)
+    ordinal = Column(Integer, nullable=False)
+    from_step = Column(String(128), nullable=False, index=True)
+    to_step = Column(String(128), nullable=False, index=True)
+    from_step_ts = Column(DateTime, nullable=True, index=True)
+    to_step_ts = Column(DateTime, nullable=True, index=True)
+    delta_sec = Column(Float, nullable=True)
+    channel_group = Column(String(128), nullable=True, index=True)
+    campaign_id = Column(String(255), nullable=True, index=True)
+    device = Column(String(64), nullable=True, index=True)
+    country = Column(String(64), nullable=True, index=True)
+    import_batch_id = Column(String(36), nullable=True, index=True)
+    import_source = Column(String(32), nullable=True, index=True)
+    source_snapshot_id = Column(String(36), nullable=True, index=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_journey_transition_conv_ord", "conversion_id", "ordinal", unique=True),
+        Index("ix_journey_transition_steps_ts", "from_step", "to_step", "conversion_ts"),
+        Index("ix_journey_transition_dims_ts", "channel_group", "campaign_id", "device", "country", "conversion_ts"),
     )
 
 

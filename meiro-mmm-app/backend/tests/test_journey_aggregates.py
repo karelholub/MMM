@@ -10,6 +10,7 @@ from app.models_config_dq import (
     JourneyDefinition,
     JourneyExampleFact,
     JourneyPathDaily,
+    JourneyTransitionFact,
     JourneyTransitionDaily,
     SilverConversionFact,
     SilverTouchpointFact,
@@ -241,13 +242,75 @@ def test_run_daily_journey_aggregates_rebuilds_daily_facts_from_silver_without_c
         transition_rows = db.query(JourneyTransitionDaily).filter(JourneyTransitionDaily.date == date(2026, 2, 8)).all()
         example_rows = db.query(JourneyExampleFact).filter(JourneyExampleFact.date == date(2026, 2, 8)).all()
 
-        assert out["channel_rows_written"] == 0
+        assert out["channel_rows_written"] >= 2
         assert out["path_rows_written"] >= 1
         assert out["transition_rows_written"] >= 1
-        assert not channel_rows
+        assert channel_rows
+        assert any(row.channel == "google_ads" and row.conversion_key is None and row.visits_total == 2 for row in channel_rows)
+        assert any(
+            row.channel == "google_ads"
+            and row.conversion_key == "purchase"
+            and float(row.gross_revenue_total or 0.0) == 150.0
+            for row in channel_rows
+        )
         assert path_rows
         assert transition_rows
         assert example_rows
         assert path_rows[0].path_steps[-1] == STEP_CONVERSION
+    finally:
+        db.close()
+
+
+def test_run_daily_journey_aggregates_rebuilds_from_instance_transition_facts_without_silver_or_paths():
+    db = _unit_db_session()
+    try:
+        definition = JourneyDefinition(
+            id="def-instance-transitions",
+            name="Instance Transition Journey",
+            conversion_kpi_id="purchase",
+            lookback_window_days=30,
+            mode_default="conversion_only",
+            created_by="test",
+            updated_by="test",
+            is_archived=False,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        db.add(definition)
+        db.commit()
+
+        inserted = persist_journeys_as_conversion_paths(
+            db,
+            [
+                {
+                    "_schema": "v2",
+                    "customer": {"id": "cust-1"},
+                    "touchpoints": [
+                        {"ts": "2026-02-08T09:00:00Z", "channel": "google_ads", "interaction_type": "click"},
+                        {"ts": "2026-02-08T10:00:00Z", "channel": "google_ads", "event_name": "page_view"},
+                    ],
+                    "conversions": [
+                        {"id": "conv-instance", "name": "purchase", "ts": "2026-02-08T12:00:00Z", "value": 150.0}
+                    ],
+                }
+            ],
+            replace=True,
+            import_source="meiro_events_replay",
+            import_batch_id="instance-transition-batch",
+        )
+        assert inserted == 1
+        assert db.query(JourneyTransitionFact).count() >= 1
+
+        db.query(ConversionPath).delete(synchronize_session=False)
+        db.query(SilverTouchpointFact).delete(synchronize_session=False)
+        db.query(SilverConversionFact).delete(synchronize_session=False)
+        db.commit()
+
+        out = run_daily_journey_aggregates(db, as_of_date=date(2026, 2, 9), reprocess_days=1)
+
+        transition_rows = db.query(JourneyTransitionDaily).filter(JourneyTransitionDaily.date == date(2026, 2, 8)).all()
+        assert out["transition_rows_written"] >= 1
+        assert transition_rows
+        assert any(float(row.avg_time_between_sec or 0.0) > 0.0 for row in transition_rows)
     finally:
         db.close()

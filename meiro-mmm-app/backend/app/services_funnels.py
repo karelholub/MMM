@@ -16,10 +16,9 @@ from .models_config_dq import (
     JourneyDefinition,
     JourneyTransitionDaily,
 )
+from .services_canonical_facts import load_preferred_journey_rows
 from .services_conversions import conversion_path_payload
-from .services_journey_instance_facts import load_journey_instance_sequences
 from .services_journey_steps import STEP_ORGANIC_LANDING, STEP_PAID_LANDING, map_touchpoint_step
-from .services_silver_journeys import load_silver_journeys
 
 
 def _percentile(values: Sequence[float], q: float) -> Optional[float]:
@@ -161,6 +160,83 @@ def _extract_steps_with_ts(path_payload: Dict[str, Any], conversion_ts: datetime
     return out
 
 
+def _row_channel_group_from_sequence(seq: Sequence[Tuple[str, datetime]]) -> str:
+    first_step = seq[0][0] if seq else ""
+    return "paid" if first_step == STEP_PAID_LANDING else "organic"
+
+
+def _canonical_sequence_row_from_instance(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    sequence = [
+        (str(step.get("step_name") or ""), step.get("step_ts"))
+        for step in (row.get("steps") or [])
+        if isinstance(step.get("step_ts"), datetime)
+    ]
+    if not sequence:
+        return None
+    channel_group = str(row.get("channel_group") or "").strip().lower() or _row_channel_group_from_sequence(sequence)
+    return {
+        "conversion_id": str(row.get("conversion_id") or ""),
+        "profile_id": row.get("profile_id"),
+        "conversion_key": row.get("conversion_key"),
+        "conversion_ts": row.get("conversion_ts"),
+        "channel_group": channel_group,
+        "campaign_id": row.get("campaign_id"),
+        "device": str(row.get("device") or "").strip().lower() or None,
+        "country": str(row.get("country") or "").strip().upper() or None,
+        "browser": str(row.get("browser") or "").strip().lower() or None,
+        "consent_opt_out": row.get("consent_opt_out"),
+        "landing_page_group": str(row.get("landing_page_group") or "").strip().lower() or None,
+        "has_error_event": row.get("has_error_event"),
+        "sequence": sequence,
+    }
+
+
+def _canonical_sequence_row_from_payload(conversion_ts: datetime, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    seq = _extract_steps_with_ts(payload, conversion_ts)
+    if not seq:
+        return None
+    return {
+        "conversion_id": str(payload.get("journey_id") or payload.get("conversion_id") or ""),
+        "profile_id": ((payload.get("customer") or {}) if isinstance(payload.get("customer"), dict) else {}).get("id"),
+        "conversion_key": payload.get("kpi_type") or payload.get("conversion_key"),
+        "conversion_ts": conversion_ts,
+        "channel_group": _row_channel_group_from_sequence(seq),
+        "campaign_id": _last_touchpoint_campaign_id(payload),
+        "device": str(payload.get("device") or "").strip().lower() or None,
+        "country": str(payload.get("country") or "").strip().upper() or None,
+        "browser": _extract_browser(payload),
+        "consent_opt_out": _extract_consent_opt_out(payload),
+        "landing_page_group": _extract_landing_group(payload),
+        "has_error_event": _has_error_event(payload),
+        "sequence": seq,
+    }
+
+
+def _passes_sequence_filters(
+    row: Dict[str, Any],
+    *,
+    device: Optional[str],
+    channel_group: Optional[str],
+    country: Optional[str],
+    campaign_id: Optional[str],
+) -> bool:
+    payload_device = str(row.get("device") or "").strip().lower()
+    payload_country = str(row.get("country") or "").strip().upper()
+    payload_channel_group = str(row.get("channel_group") or "").strip().lower()
+    payload_campaign_id = str(row.get("campaign_id") or "").strip()
+    if device and payload_device and payload_device != device.lower():
+        return False
+    if country and payload_country and payload_country != country.upper():
+        return False
+    if channel_group and payload_channel_group and payload_channel_group != channel_group.lower():
+        return False
+    if campaign_id and payload_campaign_id and payload_campaign_id != campaign_id:
+        return False
+    if campaign_id and not payload_campaign_id:
+        return False
+    return True
+
+
 def _compute_results_from_transitions(
     db: Session,
     *,
@@ -283,23 +359,21 @@ def _compute_results_from_raw(
     by_device: Dict[str, int] = {}
     by_channel: Dict[str, int] = {}
 
-    used_instance = False
-    for row in _iter_filtered_instance_sequences(
+    used_canonical = False
+    for row in _iter_filtered_canonical_sequences(
         db,
         journey_definition=journey_definition,
         date_from=date_from,
         date_to=date_to,
     ):
-        used_instance = True
-        payload_device = str(row.get("device") or "").strip()
-        payload_country = str(row.get("country") or "").strip().upper()
-        if device and payload_device and payload_device != device:
-            continue
-        if country and payload_country and payload_country != country.upper():
-            continue
-        if channel_group and str(row.get("channel_group") or "").lower() != channel_group.lower():
-            continue
-        if campaign_id and (row.get("campaign_id") or "") != campaign_id:
+        used_canonical = True
+        if not _passes_sequence_filters(
+            row,
+            device=device,
+            channel_group=channel_group,
+            country=country,
+            campaign_id=campaign_id,
+        ):
             continue
         seq = row.get("sequence") or []
         if not seq:
@@ -309,6 +383,7 @@ def _compute_results_from_raw(
         for idx in range(len(matched_positions)):
             step_counts[idx] += 1
         if matched_positions:
+            payload_device = str(row.get("device") or "").strip().lower()
             by_device[payload_device or "unknown"] = by_device.get(payload_device or "unknown", 0) + 1
             first_group = str(row.get("channel_group") or "organic")
             by_channel[first_group] = by_channel.get(first_group, 0) + 1
@@ -321,50 +396,6 @@ def _compute_results_from_raw(
                 delta = (t2 - t1).total_seconds()
                 if delta >= 0:
                     pair_times[(s1, s2)].append(delta)
-    if not used_instance:
-        for conversion_ts, payload in _iter_filtered_payloads(
-        db,
-        journey_definition=journey_definition,
-        date_from=date_from,
-        date_to=date_to,
-        ):
-            payload_device = str(payload.get("device") or "").strip()
-            payload_country = str(payload.get("country") or "").strip().upper()
-            if device and payload_device and payload_device != device:
-                continue
-            if country and payload_country and payload_country != country.upper():
-                continue
-            seq = _extract_steps_with_ts(payload, conversion_ts)
-            if not seq:
-                continue
-            mapped_steps = [s for s, _ in seq]
-            if channel_group:
-                first = mapped_steps[0] if mapped_steps else ""
-                if channel_group == "paid" and first != STEP_PAID_LANDING:
-                    continue
-                if channel_group == "organic" and first != STEP_ORGANIC_LANDING:
-                    continue
-            if campaign_id:
-                if _last_touchpoint_campaign_id(payload) != campaign_id:
-                    continue
-
-            matched_positions = _match_ordered_positions(mapped_steps, steps)
-            for idx in range(len(matched_positions)):
-                step_counts[idx] += 1
-            if matched_positions:
-                by_device[payload_device or "unknown"] = by_device.get(payload_device or "unknown", 0) + 1
-                first_step = mapped_steps[matched_positions[0]]
-                first_group = "paid" if first_step == STEP_PAID_LANDING else "organic"
-                by_channel[first_group] = by_channel.get(first_group, 0) + 1
-            if len(matched_positions) >= 2:
-                for idx in range(1, len(matched_positions)):
-                    s1 = steps[idx - 1]
-                    s2 = steps[idx]
-                    t1 = seq[matched_positions[idx - 1]][1]
-                    t2 = seq[matched_positions[idx]][1]
-                    delta = (t2 - t1).total_seconds()
-                    if delta >= 0:
-                        pair_times[(s1, s2)].append(delta)
 
     time_between = []
     for a, b in zip(steps, steps[1:]):
@@ -417,27 +448,6 @@ def _iter_filtered_raw_payloads(
         yield conversion_ts, payload
 
 
-def _iter_filtered_silver_payloads(
-    db: Session,
-    *,
-    journey_definition: JourneyDefinition,
-    date_from: date,
-    date_to: date,
-):
-    start_dt = datetime.combine(date_from, dt_time.min)
-    end_dt = datetime.combine(date_to + timedelta(days=1), dt_time.min)
-    for journey in load_silver_journeys(
-        db,
-        start_dt=start_dt,
-        end_dt=end_dt,
-        conversion_key=journey_definition.conversion_kpi_id,
-    ):
-        payload = journey["payload"]
-        if not payload.get("touchpoints"):
-            continue
-        yield journey["conversion_ts"], payload
-
-
 def _iter_filtered_payloads(
     db: Session,
     *,
@@ -445,17 +455,6 @@ def _iter_filtered_payloads(
     date_from: date,
     date_to: date,
 ):
-    used_silver = False
-    for row in _iter_filtered_silver_payloads(
-        db,
-        journey_definition=journey_definition,
-        date_from=date_from,
-        date_to=date_to,
-    ):
-        used_silver = True
-        yield row
-    if used_silver:
-        return
     yield from _iter_filtered_raw_payloads(
         db,
         journey_definition=journey_definition,
@@ -464,7 +463,7 @@ def _iter_filtered_payloads(
     )
 
 
-def _iter_filtered_instance_sequences(
+def _iter_filtered_canonical_sequences(
     db: Session,
     *,
     journey_definition: JourneyDefinition,
@@ -473,35 +472,33 @@ def _iter_filtered_instance_sequences(
 ):
     start_dt = datetime.combine(date_from, dt_time.min)
     end_dt = datetime.combine(date_to + timedelta(days=1), dt_time.min)
-    for row in load_journey_instance_sequences(
+    source_name, rows = load_preferred_journey_rows(
         db,
         start_dt=start_dt,
         end_dt=end_dt,
         conversion_key=journey_definition.conversion_kpi_id,
+    )
+    if source_name == "instance":
+        for row in rows:
+            canonical_row = _canonical_sequence_row_from_instance(row)
+            if canonical_row is not None:
+                yield canonical_row
+        return
+    if source_name == "silver":
+        for journey in rows:
+            canonical_row = _canonical_sequence_row_from_payload(journey["conversion_ts"], journey["payload"])
+            if canonical_row is not None:
+                yield canonical_row
+        return
+    for conversion_ts, payload in _iter_filtered_payloads(
+        db,
+        journey_definition=journey_definition,
+        date_from=date_from,
+        date_to=date_to,
     ):
-        conversion_id = str(row["conversion_id"] or "")
-        sequence = [
-            (str(step.get("step_name") or ""), step.get("step_ts"))
-            for step in (row.get("steps") or [])
-            if isinstance(step.get("step_ts"), datetime)
-        ]
-        if not sequence:
-            continue
-        yield {
-            "conversion_id": conversion_id,
-            "profile_id": row["profile_id"],
-            "conversion_key": row["conversion_key"],
-            "conversion_ts": row["conversion_ts"],
-            "channel_group": row["channel_group"],
-            "campaign_id": row["campaign_id"],
-            "device": row["device"],
-            "country": row["country"],
-            "browser": row["browser"],
-            "consent_opt_out": row["consent_opt_out"],
-            "landing_page_group": row["landing_page_group"],
-            "has_error_event": row["has_error_event"],
-            "sequence": sequence,
-        }
+        canonical_row = _canonical_sequence_row_from_payload(conversion_ts, payload)
+        if canonical_row is not None:
+            yield canonical_row
 
 
 def _match_ordered_positions(mapped_steps: Sequence[str], target_steps: Sequence[str]) -> List[int]:
@@ -757,23 +754,19 @@ def _cohort_metrics_for_step(
     error_known = 0
     error_true = 0
 
-    used_instance = False
-    for row in _iter_filtered_instance_sequences(
+    for row in _iter_filtered_canonical_sequences(
         db,
         journey_definition=journey_definition,
         date_from=date_from,
         date_to=date_to,
     ):
-        used_instance = True
-        payload_device = str(row.get("device") or "").strip().lower()
-        payload_country = str(row.get("country") or "").strip().upper()
-        if device and payload_device and payload_device != device.lower():
-            continue
-        if country and payload_country and payload_country != country.upper():
-            continue
-        if channel_group and str(row.get("channel_group") or "").lower() != channel_group.lower():
-            continue
-        if campaign_id and (row.get("campaign_id") or "") != campaign_id:
+        if not _passes_sequence_filters(
+            row,
+            device=device,
+            channel_group=channel_group,
+            country=country,
+            campaign_id=campaign_id,
+        ):
             continue
         seq = row.get("sequence") or []
         mapped_steps = [s for s, _ in seq]
@@ -783,6 +776,8 @@ def _cohort_metrics_for_step(
             continue
         reached += 1
 
+        payload_device = str(row.get("device") or "").strip().lower()
+        payload_country = str(row.get("country") or "").strip().upper()
         device_key = payload_device or "unknown"
         device_counts[device_key] = device_counts.get(device_key, 0) + 1
         geo_key = payload_country or "unknown"
@@ -809,68 +804,6 @@ def _cohort_metrics_for_step(
             delta = (seq[to_pos][1] - seq[from_pos][1]).total_seconds()
             if delta >= 0:
                 times_to_next.append(delta)
-
-    if not used_instance:
-        for conversion_ts, payload in _iter_filtered_payloads(
-        db,
-        journey_definition=journey_definition,
-        date_from=date_from,
-        date_to=date_to,
-        ):
-            payload_device = str(payload.get("device") or "").strip().lower()
-            payload_country = str(payload.get("country") or "").strip().upper()
-            if device and payload_device and payload_device != device.lower():
-                continue
-            if country and payload_country and payload_country != country.upper():
-                continue
-            seq = _extract_steps_with_ts(payload, conversion_ts)
-            if not seq:
-                continue
-            mapped_steps = [s for s, _ in seq]
-            if channel_group:
-                first = mapped_steps[0] if mapped_steps else ""
-                if channel_group == "paid" and first != STEP_PAID_LANDING:
-                    continue
-                if channel_group == "organic" and first != STEP_ORGANIC_LANDING:
-                    continue
-            if campaign_id:
-                if _last_touchpoint_campaign_id(payload) != campaign_id:
-                    continue
-
-            matched_positions = _match_ordered_positions(mapped_steps, steps)
-
-            if len(matched_positions) <= step_index:
-                continue
-            reached += 1
-
-            device_key = payload_device or "unknown"
-            device_counts[device_key] = device_counts.get(device_key, 0) + 1
-            geo_key = payload_country or "unknown"
-            geo_counts[geo_key] = geo_counts.get(geo_key, 0) + 1
-            browser_key = _extract_browser(payload) or "unknown"
-            browser_counts[browser_key] = browser_counts.get(browser_key, 0) + 1
-            landing_key = _extract_landing_group(payload)
-            if landing_key:
-                landing_counts[landing_key] = landing_counts.get(landing_key, 0) + 1
-
-            consent = _extract_consent_opt_out(payload)
-            if consent is not None:
-                consent_known += 1
-                if consent:
-                    consent_opt_out += 1
-            err = _has_error_event(payload)
-            if err is not None:
-                error_known += 1
-                if err:
-                    error_true += 1
-
-            if len(matched_positions) > step_index + 1:
-                advanced += 1
-                from_pos = matched_positions[step_index]
-                to_pos = matched_positions[step_index + 1]
-                delta = (seq[to_pos][1] - seq[from_pos][1]).total_seconds()
-                if delta >= 0:
-                    times_to_next.append(delta)
 
     dropoff = ((reached - advanced) / reached) if reached > 0 else None
     return {

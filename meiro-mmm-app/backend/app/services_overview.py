@@ -21,16 +21,16 @@ from .models_config_dq import (
     ConversionPath,
     JourneyDefinition,
     JourneyPathDaily,
-    SilverConversionFact,
-    SilverTouchpointFact,
 )
 from .models_overview_alerts import AlertEvent, AlertRule
+from .services_canonical_facts import iter_canonical_conversion_rows
 from .services_conversions import (
     conversion_path_is_converted as _conversion_path_is_converted,
     conversion_path_payload,
     conversion_path_revenue_value,
     conversion_path_touchpoints,
 )
+from .services_visit_facts import iter_touchpoint_visit_rows
 from .services_metrics import delta_pct, journey_outcome_summary
 
 
@@ -120,71 +120,27 @@ def _iter_silver_conversion_rows(
     date_to: Optional[datetime] = None,
     conversion_key: Optional[str] = None,
 ):
-    q = db.query(
-        SilverConversionFact.conversion_id,
-        SilverConversionFact.conversion_key,
-        SilverConversionFact.conversion_ts,
-        SilverConversionFact.interaction_path_type,
-        SilverConversionFact.gross_conversions_total,
-        SilverConversionFact.net_conversions_total,
-        SilverConversionFact.gross_revenue_total,
-        SilverConversionFact.net_revenue_total,
-        SilverConversionFact.refunded_value,
-        SilverConversionFact.cancelled_value,
-        SilverConversionFact.invalid_leads,
-        SilverConversionFact.valid_leads,
+    yield from iter_canonical_conversion_rows(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+        conversion_key=conversion_key,
     )
-    if date_from is not None:
-        q = q.filter(SilverConversionFact.conversion_ts >= date_from)
-    if date_to is not None:
-        q = q.filter(SilverConversionFact.conversion_ts <= date_to)
-    if conversion_key:
-        q = q.filter(SilverConversionFact.conversion_key == conversion_key)
-    for row in q.order_by(SilverConversionFact.conversion_ts.desc()).yield_per(1000):
-        yield SimpleNamespace(
-            conversion_id=row[0],
-            conversion_key=row[1],
-            conversion_ts=row[2],
-            interaction_path_type=row[3],
-            gross_conversions_total=float(row[4] or 0.0),
-            net_conversions_total=float(row[5] or 0.0),
-            gross_revenue_total=float(row[6] or 0.0),
-            net_revenue_total=float(row[7] or 0.0),
-            refunded_value=float(row[8] or 0.0),
-            cancelled_value=float(row[9] or 0.0),
-            invalid_leads=float(row[10] or 0.0),
-            valid_leads=float(row[11] or 0.0),
-        )
 
 
-def _iter_silver_touchpoint_rows(
+def _iter_visit_rows(
     db: Session,
     *,
     conversion_ids: Optional[List[str]] = None,
     touchpoint_from: Optional[datetime] = None,
     touchpoint_to: Optional[datetime] = None,
 ):
-    q = db.query(
-        SilverTouchpointFact.conversion_id,
-        SilverTouchpointFact.touchpoint_ts,
-        SilverTouchpointFact.channel,
-        SilverTouchpointFact.campaign,
-        SilverTouchpointFact.ordinal,
+    yield from iter_touchpoint_visit_rows(
+        db,
+        conversion_ids=conversion_ids,
+        touchpoint_from=touchpoint_from,
+        touchpoint_to=touchpoint_to,
     )
-    if conversion_ids:
-        q = q.filter(SilverTouchpointFact.conversion_id.in_(conversion_ids))
-    if touchpoint_from is not None:
-        q = q.filter(SilverTouchpointFact.touchpoint_ts >= touchpoint_from)
-    if touchpoint_to is not None:
-        q = q.filter(SilverTouchpointFact.touchpoint_ts <= touchpoint_to)
-    for row in q.order_by(SilverTouchpointFact.conversion_id.asc(), SilverTouchpointFact.ordinal.asc()).yield_per(1000):
-        yield SimpleNamespace(
-            conversion_id=row[0],
-            touchpoint_ts=row[1],
-            channel=row[2],
-            campaign=row[3],
-            ordinal=row[4],
-        )
 
 
 def _empty_outcomes() -> Dict[str, float]:
@@ -883,7 +839,7 @@ def _series_from_silver_touchpoint_facts(
 ) -> Optional[Dict[str, Any]]:
     visit_map: Dict[str, float] = {}
     observed_points = 0
-    for row in _iter_silver_touchpoint_rows(
+    for row in _iter_visit_rows(
         db,
         touchpoint_from=start,
         touchpoint_to=end,
@@ -2056,7 +2012,7 @@ def _aggregate_channel_metrics_from_silver_facts(
         if str(row.conversion_id or "")
     }
     touchpoints_by_conversion: Dict[str, List[str]] = defaultdict(list)
-    for row in _iter_silver_touchpoint_rows(db, conversion_ids=conversion_ids):
+    for row in _iter_visit_rows(db, conversion_ids=conversion_ids):
         conversion_id = str(row.conversion_id or "")
         if not conversion_id:
             continue
@@ -2096,7 +2052,7 @@ def _channel_driver_rollups_from_silver_facts(
     if not conversion_ids:
         return None
     touchpoints_by_conversion: Dict[str, List[SimpleNamespace]] = defaultdict(list)
-    for row in _iter_silver_touchpoint_rows(db, conversion_ids=conversion_ids):
+    for row in _iter_visit_rows(db, conversion_ids=conversion_ids):
         conversion_id = str(row.conversion_id or "")
         if not conversion_id:
             continue
@@ -2133,7 +2089,7 @@ def _channel_visits_from_silver_touchpoints(
 ) -> Optional[Dict[str, int]]:
     visits: Dict[str, int] = {}
     seen = False
-    for row in _iter_silver_touchpoint_rows(
+    for row in _iter_visit_rows(
         db,
         touchpoint_from=dt_from,
         touchpoint_to=dt_to,
@@ -2165,7 +2121,7 @@ def _campaign_driver_rollups_from_silver_facts(
     if not conversion_ids:
         return None
     last_touch_campaign: Dict[str, str] = {}
-    for row in _iter_silver_touchpoint_rows(db, conversion_ids=conversion_ids):
+    for row in _iter_visit_rows(db, conversion_ids=conversion_ids):
         conversion_id = str(row.conversion_id or "")
         if not conversion_id:
             continue
@@ -2212,7 +2168,7 @@ def _aggregate_daily_channel_revenue_from_silver_facts(
     if not conversion_ids:
         return None
     last_touch_channel: Dict[str, str] = {}
-    for row in _iter_silver_touchpoint_rows(db, conversion_ids=conversion_ids):
+    for row in _iter_visit_rows(db, conversion_ids=conversion_ids):
         conversion_id = str(row.conversion_id or "")
         if not conversion_id:
             continue

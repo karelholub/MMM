@@ -8,9 +8,10 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
-from .models_config_dq import ConversionPath, JourneyDefinition, JourneyExampleFact
+from .models_config_dq import ConversionPath, JourneyDefinition, JourneyExampleFact, JourneyInstanceFact
 from .services_conversions import conversion_path_payload, conversion_path_revenue_value, conversion_path_touchpoints
 from .services_journey_aggregates import _build_journey_steps, _path_hash
+from .services_journey_instance_facts import load_journey_instance_sequences
 
 
 def _iter_raw_examples(
@@ -45,6 +46,25 @@ def _iter_raw_examples(
         )
 
 
+def _iter_instance_examples(
+    db: Session,
+    *,
+    definition: JourneyDefinition,
+    start_dt: datetime,
+    end_dt: datetime,
+    limit: int,
+):
+    rows = load_journey_instance_sequences(
+        db,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        conversion_key=definition.conversion_kpi_id,
+    )
+    rows.sort(key=lambda row: row["conversion_ts"], reverse=True)
+    for row in rows[:limit]:
+        yield row
+
+
 def list_examples_for_journey_definition(
     db: Session,
     *,
@@ -74,14 +94,22 @@ def list_examples_for_journey_definition(
         fact_query = fact_query.filter(JourneyExampleFact.conversion_key == definition.conversion_kpi_id)
 
     fact_count = fact_query.count()
-    raw_count_query = (
-        db.query(ConversionPath.conversion_id)
-        .filter(ConversionPath.conversion_ts >= start_dt, ConversionPath.conversion_ts < end_dt)
+    source_count_query = (
+        db.query(JourneyInstanceFact.conversion_id)
+        .filter(JourneyInstanceFact.conversion_ts >= start_dt, JourneyInstanceFact.conversion_ts < end_dt)
     )
     if definition.conversion_kpi_id:
-        raw_count_query = raw_count_query.filter(ConversionPath.conversion_key == definition.conversion_kpi_id)
-    raw_count = raw_count_query.count()
-    if fact_count >= raw_count and fact_count > 0:
+        source_count_query = source_count_query.filter(JourneyInstanceFact.conversion_key == definition.conversion_kpi_id)
+    source_count = source_count_query.count()
+    if source_count <= 0:
+        raw_count_query = (
+            db.query(ConversionPath.conversion_id)
+            .filter(ConversionPath.conversion_ts >= start_dt, ConversionPath.conversion_ts < end_dt)
+        )
+        if definition.conversion_kpi_id:
+            raw_count_query = raw_count_query.filter(ConversionPath.conversion_key == definition.conversion_kpi_id)
+        source_count = raw_count_query.count()
+    if fact_count >= source_count and fact_count > 0:
         items: List[Dict[str, Any]] = []
         step_token = str(contains_step or "").strip().lower()
         for row in fact_query.limit(max(50, int(limit) * 8)).all():
@@ -131,79 +159,140 @@ def list_examples_for_journey_definition(
     items: List[Dict[str, Any]] = []
     step_token = str(contains_step or "").strip().lower()
 
-    for row in _iter_raw_examples(
+    used_instance = False
+    for row in _iter_instance_examples(
         db,
         definition=definition,
         start_dt=start_dt,
         end_dt=end_dt,
         limit=max(50, int(limit) * 8),
     ):
-        payload = conversion_path_payload(row)
-        conversion_ts = row.conversion_ts
-        if conversion_ts.tzinfo is None:
-            conversion_ts = conversion_ts.replace(tzinfo=timezone.utc)
-
-        steps, _, dims = _build_journey_steps(
-            payload,
-            conversion_ts=conversion_ts,
-            lookback_window_days=definition.lookback_window_days,
-        )
-        if not steps:
-            continue
-
-        resolved_hash = _path_hash(steps)
+        used_instance = True
+        steps = [str(step.get("step_name") or "") for step in (row.get("steps") or []) if str(step.get("step_name") or "")]
+        resolved_hash = str(row.get("path_hash") or "")
         if path_hash and resolved_hash != path_hash:
             continue
         if step_token and not any(step_token in step.lower() for step in steps):
             continue
-        if channel_group and (dims.get("channel_group") or "").lower() != channel_group.lower():
+        if channel_group and (str(row.get("channel_group") or "").lower() != channel_group.lower()):
             continue
-        if campaign_id and (dims.get("campaign_id") or "") != campaign_id:
+        if campaign_id and str(row.get("campaign_id") or "") != campaign_id:
             continue
-        if device and (dims.get("device") or "").lower() != device.lower():
+        if device and str(row.get("device") or "").lower() != device.lower():
             continue
-        if country and (dims.get("country") or "").lower() != country.lower():
+        if country and str(row.get("country") or "").lower() != country.lower():
             continue
 
-        touchpoints = conversion_path_touchpoints(row)
         preview_touchpoints = []
-        for tp in touchpoints[:5]:
-            campaign = tp.get("campaign")
-            campaign_label = None
-            if isinstance(campaign, dict):
-                campaign_label = campaign.get("name") or campaign.get("id")
-            elif campaign is not None:
-                campaign_label = str(campaign)
+        for step in (row.get("steps") or [])[:5]:
+            preview_ts = step.get("step_ts")
+            if isinstance(preview_ts, datetime):
+                preview_ts = preview_ts.isoformat()
             preview_touchpoints.append(
                 {
-                    "ts": tp.get("timestamp") or tp.get("ts") or tp.get("event_ts"),
-                    "channel": tp.get("channel"),
-                    "event": tp.get("event") or tp.get("event_name") or tp.get("name"),
-                    "campaign": campaign_label,
+                    "ts": preview_ts,
+                    "channel": step.get("channel"),
+                    "event": step.get("event_name") or step.get("step_name"),
+                    "campaign": step.get("campaign"),
                 }
             )
 
         items.append(
             {
-                "conversion_id": row.conversion_id,
-                "profile_id": row.profile_id,
-                "conversion_key": row.conversion_key,
-                "conversion_ts": row.conversion_ts.isoformat() if row.conversion_ts else None,
+                "conversion_id": row.get("conversion_id"),
+                "profile_id": row.get("profile_id"),
+                "conversion_key": row.get("conversion_key"),
+                "conversion_ts": row.get("conversion_ts").isoformat() if row.get("conversion_ts") else None,
                 "path_hash": resolved_hash,
                 "steps": steps,
-                "touchpoints_count": len(touchpoints),
-                "conversion_value": round(float(conversion_path_revenue_value(row)), 2),
+                "touchpoints_count": max(0, len(steps) - 1),
+                "conversion_value": round(float(row.get("gross_revenue_total") or 0.0), 2),
                 "dimensions": {
-                    "channel_group": dims.get("channel_group"),
-                    "campaign_id": dims.get("campaign_id"),
-                    "device": dims.get("device"),
-                    "country": dims.get("country"),
+                    "channel_group": row.get("channel_group"),
+                    "campaign_id": row.get("campaign_id"),
+                    "device": row.get("device"),
+                    "country": row.get("country"),
                 },
                 "touchpoints_preview": preview_touchpoints,
             }
         )
         if len(items) >= limit:
             break
+
+    if not used_instance:
+        for row in _iter_raw_examples(
+            db,
+            definition=definition,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            limit=max(50, int(limit) * 8),
+        ):
+            payload = conversion_path_payload(row)
+            conversion_ts = row.conversion_ts
+            if conversion_ts.tzinfo is None:
+                conversion_ts = conversion_ts.replace(tzinfo=timezone.utc)
+
+            steps, _, dims = _build_journey_steps(
+                payload,
+                conversion_ts=conversion_ts,
+                lookback_window_days=definition.lookback_window_days,
+            )
+            if not steps:
+                continue
+
+            resolved_hash = _path_hash(steps)
+            if path_hash and resolved_hash != path_hash:
+                continue
+            if step_token and not any(step_token in step.lower() for step in steps):
+                continue
+            if channel_group and (dims.get("channel_group") or "").lower() != channel_group.lower():
+                continue
+            if campaign_id and (dims.get("campaign_id") or "") != campaign_id:
+                continue
+            if device and (dims.get("device") or "").lower() != device.lower():
+                continue
+            if country and (dims.get("country") or "").lower() != country.lower():
+                continue
+
+            touchpoints = conversion_path_touchpoints(row)
+            preview_touchpoints = []
+            for tp in touchpoints[:5]:
+                campaign = tp.get("campaign")
+                campaign_label = None
+                if isinstance(campaign, dict):
+                    campaign_label = campaign.get("name") or campaign.get("id")
+                elif campaign is not None:
+                    campaign_label = str(campaign)
+                preview_touchpoints.append(
+                    {
+                        "ts": tp.get("timestamp") or tp.get("ts") or tp.get("event_ts"),
+                        "channel": tp.get("channel"),
+                        "event": tp.get("event") or tp.get("event_name") or tp.get("name"),
+                        "campaign": campaign_label,
+                    }
+                )
+
+            items.append(
+                {
+                    "conversion_id": row.conversion_id,
+                    "profile_id": row.profile_id,
+                    "conversion_key": row.conversion_key,
+                    "conversion_ts": row.conversion_ts.isoformat() if row.conversion_ts else None,
+                    "path_hash": resolved_hash,
+                    "steps": steps,
+                    "touchpoints_count": len(touchpoints),
+                    "conversion_value": round(float(conversion_path_revenue_value(row)), 2),
+                    "dimensions": {
+                        "channel_group": dims.get("channel_group"),
+                        "campaign_id": dims.get("campaign_id"),
+                        "device": dims.get("device"),
+                        "country": dims.get("country"),
+                    },
+                    "touchpoints_preview": preview_touchpoints,
+                }
+            )
+            if len(items) >= limit:
+                break
 
     return {
         "items": items,

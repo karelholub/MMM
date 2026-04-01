@@ -4,7 +4,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
-from app.models_config_dq import ConversionPath, JourneyDefinition, JourneyExampleFact
+from app.models_config_dq import ConversionPath, JourneyDefinition, JourneyExampleFact, SilverConversionFact, SilverTouchpointFact
+from app.services_conversions import persist_journeys_as_conversion_paths
 from app.services_journey_examples import list_examples_for_journey_definition
 
 
@@ -122,6 +123,65 @@ def test_list_examples_for_journey_definition_prefers_persisted_example_facts():
         assert item["conversion_id"] == "conv-1"
         assert item["path_hash"] == "fact-hash-1"
         assert item["touchpoints_count"] == 2
+        assert item["conversion_value"] == 123.45
+        assert item["touchpoints_preview"][0]["campaign"] == "Brand"
+    finally:
+        db.close()
+
+
+def test_list_examples_for_journey_definition_uses_instance_facts_when_raw_and_silver_absent():
+    db = _unit_db_session()
+    try:
+        definition = JourneyDefinition(
+            id="jd-instance",
+            name="J1",
+            conversion_kpi_id="purchase",
+            lookback_window_days=30,
+            mode_default="conversion_only",
+            created_by="test",
+            updated_by="test",
+            is_archived=False,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        db.add(definition)
+        db.commit()
+
+        inserted = persist_journeys_as_conversion_paths(
+            db,
+            [
+                {
+                    "_schema": "v2",
+                    "customer": {"id": "p-1"},
+                    "touchpoints": [
+                        {"ts": "2026-02-01T09:00:00Z", "channel": "google_ads", "campaign": "Brand"},
+                        {"ts": "2026-02-03T09:00:00Z", "channel": "email", "event_name": "product_view"},
+                    ],
+                    "conversions": [{"id": "conv-1", "name": "purchase", "ts": "2026-02-05T12:00:00Z", "value": 123.45}],
+                }
+            ],
+            replace=True,
+            import_source="meiro_events_replay",
+            import_batch_id="instance-examples-batch",
+        )
+        assert inserted == 1
+
+        db.query(ConversionPath).delete(synchronize_session=False)
+        db.query(SilverTouchpointFact).delete(synchronize_session=False)
+        db.query(SilverConversionFact).delete(synchronize_session=False)
+        db.commit()
+
+        out = list_examples_for_journey_definition(
+            db,
+            definition=definition,
+            date_from=date(2026, 2, 1),
+            date_to=date(2026, 2, 10),
+            limit=10,
+        )
+
+        assert out["total"] == 1
+        item = out["items"][0]
+        assert item["conversion_id"] == "p-1-0"
         assert item["conversion_value"] == 123.45
         assert item["touchpoints_preview"][0]["campaign"] == "Brand"
     finally:

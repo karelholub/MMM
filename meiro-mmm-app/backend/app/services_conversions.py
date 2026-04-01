@@ -26,9 +26,12 @@ from .models_config_dq import (
     ConversionScopeDiagnosticFact,
     ConversionTaxonomyTouchpointFact,
     JourneyInstanceFact,
+    JourneyRoleFact,
     JourneyStepFact,
+    JourneyTransitionFact,
     SilverConversionFact,
     SilverTouchpointFact,
+    TouchpointVisitFact,
 )
 from .services_conversion_dq_facts import build_conversion_dq_fact_row
 from .services_metrics import journey_outcome_summary
@@ -42,6 +45,9 @@ from .services_conversion_signal_facts import (
     build_conversion_taxonomy_touchpoint_facts,
 )
 from .services_journey_instance_facts import build_journey_instance_and_step_facts
+from .services_journey_role_facts import build_journey_role_facts
+from .services_journey_transition_facts import build_journey_transition_facts
+from .services_visit_facts import build_touchpoint_visit_facts
 from .services_revenue_config import compute_payload_revenue_value, extract_revenue_entries, get_revenue_config
 
 
@@ -407,8 +413,11 @@ def persist_journeys_as_conversion_paths(
         taxonomy_touchpoint_q = db.query(ConversionTaxonomyTouchpointFact)
         silver_conversion_q = db.query(SilverConversionFact)
         silver_touchpoint_q = db.query(SilverTouchpointFact)
+        touchpoint_visit_q = db.query(TouchpointVisitFact)
         journey_instance_q = db.query(JourneyInstanceFact)
+        journey_role_q = db.query(JourneyRoleFact)
         journey_step_q = db.query(JourneyStepFact)
+        journey_transition_q = db.query(JourneyTransitionFact)
         if conversion_key is not None:
             q = q.filter(ConversionPath.conversion_key == conversion_key)
             facts_q = facts_q.filter(ConversionScopeDiagnosticFact.conversion_key == conversion_key)
@@ -417,8 +426,11 @@ def persist_journeys_as_conversion_paths(
             taxonomy_touchpoint_q = taxonomy_touchpoint_q.filter(ConversionTaxonomyTouchpointFact.conversion_key == conversion_key)
             silver_conversion_q = silver_conversion_q.filter(SilverConversionFact.conversion_key == conversion_key)
             silver_touchpoint_q = silver_touchpoint_q.filter(SilverTouchpointFact.conversion_key == conversion_key)
+            touchpoint_visit_q = touchpoint_visit_q.filter(TouchpointVisitFact.conversion_key == conversion_key)
             journey_instance_q = journey_instance_q.filter(JourneyInstanceFact.conversion_key == conversion_key)
+            journey_role_q = journey_role_q.filter(JourneyRoleFact.conversion_key == conversion_key)
             journey_step_q = journey_step_q.filter(JourneyStepFact.conversion_key == conversion_key)
+            journey_transition_q = journey_transition_q.filter(JourneyTransitionFact.conversion_key == conversion_key)
         if normalized_replace_profile_ids:
             q = q.filter(ConversionPath.profile_id.in_(normalized_replace_profile_ids))
             facts_q = facts_q.filter(ConversionScopeDiagnosticFact.profile_id.in_(normalized_replace_profile_ids))
@@ -427,8 +439,11 @@ def persist_journeys_as_conversion_paths(
             taxonomy_touchpoint_q = taxonomy_touchpoint_q.filter(ConversionTaxonomyTouchpointFact.profile_id.in_(normalized_replace_profile_ids))
             silver_conversion_q = silver_conversion_q.filter(SilverConversionFact.profile_id.in_(normalized_replace_profile_ids))
             silver_touchpoint_q = silver_touchpoint_q.filter(SilverTouchpointFact.profile_id.in_(normalized_replace_profile_ids))
+            touchpoint_visit_q = touchpoint_visit_q.filter(TouchpointVisitFact.profile_id.in_(normalized_replace_profile_ids))
             journey_instance_q = journey_instance_q.filter(JourneyInstanceFact.profile_id.in_(normalized_replace_profile_ids))
+            journey_role_q = journey_role_q.filter(JourneyRoleFact.profile_id.in_(normalized_replace_profile_ids))
             journey_step_q = journey_step_q.filter(JourneyStepFact.profile_id.in_(normalized_replace_profile_ids))
+            journey_transition_q = journey_transition_q.filter(JourneyTransitionFact.profile_id.in_(normalized_replace_profile_ids))
         q.delete(synchronize_session=False)
         facts_q.delete(synchronize_session=False)
         dq_facts_q.delete(synchronize_session=False)
@@ -436,7 +451,10 @@ def persist_journeys_as_conversion_paths(
         taxonomy_touchpoint_q.delete(synchronize_session=False)
         silver_conversion_q.delete(synchronize_session=False)
         silver_touchpoint_q.delete(synchronize_session=False)
+        touchpoint_visit_q.delete(synchronize_session=False)
         journey_step_q.delete(synchronize_session=False)
+        journey_transition_q.delete(synchronize_session=False)
+        journey_role_q.delete(synchronize_session=False)
         journey_instance_q.delete(synchronize_session=False)
         db.commit()
     else:
@@ -468,8 +486,11 @@ def persist_journeys_as_conversion_paths(
     taxonomy_touchpoint_rows: List[ConversionTaxonomyTouchpointFact] = []
     silver_conversion_rows: List[SilverConversionFact] = []
     silver_touchpoint_rows: List[SilverTouchpointFact] = []
+    touchpoint_visit_rows: List[TouchpointVisitFact] = []
     journey_instance_rows: List[JourneyInstanceFact] = []
+    journey_role_rows: List[JourneyRoleFact] = []
     journey_step_rows: List[JourneyStepFact] = []
+    journey_transition_rows: List[JourneyTransitionFact] = []
     for idx, j in enumerate(journeys):
         identity = _journey_identity(j, idx=idx)
         profile_id = str(identity.get("profile_id") or f"anon-{idx}")
@@ -574,6 +595,18 @@ def persist_journeys_as_conversion_paths(
                 created_at=now,
             )
         )
+        touchpoint_visit_rows.extend(
+            build_touchpoint_visit_facts(
+                journey=j,
+                conversion_id=conv_id,
+                profile_id=profile_id,
+                conversion_key=effective_key,
+                import_batch_id=effective_import_batch_id,
+                import_source=import_source,
+                source_snapshot_id=source_snapshot_id,
+                created_at=now,
+            )
+        )
         journey_instance_row, journey_step_fact_rows = build_journey_instance_and_step_facts(
             journey=j,
             conversion_id=conv_id,
@@ -587,7 +620,21 @@ def persist_journeys_as_conversion_paths(
             created_at=now,
         )
         journey_instance_rows.append(journey_instance_row)
+        journey_role_rows.extend(
+            build_journey_role_facts(
+                instance_row=journey_instance_row,
+                step_rows=journey_step_fact_rows,
+                created_at=now,
+            )
+        )
         journey_step_rows.extend(journey_step_fact_rows)
+        journey_transition_rows.extend(
+            build_journey_transition_facts(
+                instance_row=journey_instance_row,
+                step_rows=journey_step_fact_rows,
+                created_at=now,
+            )
+        )
         inserted += 1
 
     for fact_row in fact_rows:
@@ -602,10 +649,16 @@ def persist_journeys_as_conversion_paths(
         db.add(silver_conversion_row)
     for silver_touchpoint_row in silver_touchpoint_rows:
         db.add(silver_touchpoint_row)
+    for touchpoint_visit_row in touchpoint_visit_rows:
+        db.add(touchpoint_visit_row)
     for journey_instance_row in journey_instance_rows:
         db.add(journey_instance_row)
+    for journey_role_row in journey_role_rows:
+        db.add(journey_role_row)
     for journey_step_row in journey_step_rows:
         db.add(journey_step_row)
+    for journey_transition_row in journey_transition_rows:
+        db.add(journey_transition_row)
     db.commit()
     return inserted
 

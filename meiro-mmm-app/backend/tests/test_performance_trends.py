@@ -10,7 +10,7 @@ from app.services_performance_trends import (
     resolve_period_windows,
 )
 from app.db import Base
-from app.models_config_dq import ChannelPerformanceDaily, JourneyDefinition, JourneyPathDaily
+from app.models_config_dq import ChannelPerformanceDaily, JourneyDefinition, JourneyPathDaily, SilverConversionFact, SilverTouchpointFact
 from app.services_conversions import persist_journeys_as_conversion_paths
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -269,6 +269,45 @@ def test_build_channel_aggregate_overlay_falls_back_to_silver_when_channel_daily
         assert overlay["current_store"]["google_ads"]["2026-02-01"]["revenue"] == 120.0
         assert overlay["previous_store"]["email"]["2026-01-31"]["revenue"] == 80.0
         assert overlay["current_outcomes"]["google_ads"]["gross_revenue"] == 120.0
+    finally:
+        db.close()
+
+
+def test_build_channel_aggregate_overlay_falls_back_to_instance_facts_when_silver_missing():
+    db = _unit_db_session()
+    try:
+        inserted = persist_journeys_as_conversion_paths(
+            db,
+            [
+                {
+                    "_schema": "v2",
+                    "customer": {"id": "cust-current"},
+                    "touchpoints": [{"channel": "google_ads", "interaction_type": "click", "ts": "2026-02-01T10:00:00Z"}],
+                    "conversions": [{"id": "conv-current", "name": "purchase", "ts": "2026-02-01T12:00:00Z", "value": 120.0}],
+                },
+            ],
+            replace=True,
+            import_source="meiro_events_replay",
+            import_batch_id="instance-channel-overlay-batch",
+        )
+        assert inserted == 1
+        db.query(SilverTouchpointFact).delete(synchronize_session=False)
+        db.query(SilverConversionFact).delete(synchronize_session=False)
+        db.commit()
+
+        overlay = build_channel_aggregate_overlay(
+            db,
+            date_from="2026-02-01",
+            date_to="2026-02-01",
+            timezone="UTC",
+            compare=False,
+            conversion_key="purchase",
+        )
+
+        assert overlay is not None
+        assert overlay["current_store"]["google_ads"]["2026-02-01"]["visits"] == 1.0
+        assert overlay["current_store"]["google_ads"]["2026-02-01"]["conversions"] == 1.0
+        assert overlay["current_store"]["google_ads"]["2026-02-01"]["revenue"] == 120.0
     finally:
         db.close()
 
@@ -703,6 +742,60 @@ def test_build_campaign_aggregate_overlay_falls_back_to_silver_when_journey_dail
         assert overlay["current_store"]["meta_ads:Spring"]["2026-02-01"]["revenue"] == 150.0
         assert overlay["previous_store"]["meta_ads:Winter"]["2026-01-31"]["revenue"] == 90.0
         assert overlay["meta"]["meta_ads:Spring"]["campaign_name"] == "Spring"
+    finally:
+        db.close()
+
+
+def test_build_campaign_aggregate_overlay_falls_back_to_instance_facts_when_silver_missing():
+    db = _unit_db_session()
+    try:
+        db.add(
+            JourneyDefinition(
+                id="jd-instance-campaign",
+                name="Campaign Journey",
+                conversion_kpi_id="purchase",
+                lookback_window_days=30,
+                mode_default="conversion_only",
+                created_by="test",
+                updated_by="test",
+                is_archived=False,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            )
+        )
+        db.commit()
+        inserted = persist_journeys_as_conversion_paths(
+            db,
+            [
+                {
+                    "_schema": "v2",
+                    "customer": {"id": "cust-current"},
+                    "touchpoints": [{"channel": "google_ads", "campaign": "Brand", "interaction_type": "click", "ts": "2026-02-01T10:00:00Z"}],
+                    "conversions": [{"id": "conv-current", "name": "purchase", "ts": "2026-02-01T12:00:00Z", "value": 120.0}],
+                },
+            ],
+            replace=True,
+            import_source="meiro_events_replay",
+            import_batch_id="instance-campaign-overlay-batch",
+        )
+        assert inserted == 1
+        db.query(SilverTouchpointFact).delete(synchronize_session=False)
+        db.query(SilverConversionFact).delete(synchronize_session=False)
+        db.commit()
+
+        overlay = build_campaign_aggregate_overlay(
+            db,
+            date_from="2026-02-01",
+            date_to="2026-02-01",
+            timezone="UTC",
+            compare=False,
+            conversion_key="purchase",
+        )
+
+        assert overlay is not None
+        key = "google_ads:Brand"
+        assert overlay["current_store"][key]["2026-02-01"]["conversions"] == 1.0
+        assert overlay["current_store"][key]["2026-02-01"]["revenue"] == 120.0
     finally:
         db.close()
 

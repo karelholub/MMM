@@ -22,7 +22,6 @@ from .models_config_dq import (
     JourneyPathDaily,
     JourneyTransitionDaily,
     SilverConversionFact,
-    SilverTouchpointFact,
 )
 from .services_conversions import (
     classify_journey_interaction,
@@ -32,8 +31,14 @@ from .services_conversions import (
     conversion_path_revenue_value,
     conversion_path_touchpoints,
 )
+from .services_canonical_facts import (
+    iter_canonical_conversion_rows,
+    load_channel_canonical_source,
+    load_preferred_journey_rows,
+)
 from .services_journey_instance_facts import load_journey_instance_sequences
-from .services_silver_journeys import load_silver_journeys
+from .services_journey_transition_facts import iter_journey_transition_rows
+from .services_visit_facts import iter_touchpoint_visit_rows
 
 logger = logging.getLogger(__name__)
 
@@ -364,15 +369,18 @@ def _get_channel_source_days_from_silver(
 ) -> Set[date]:
     upper_bound = datetime.combine(end_day + timedelta(days=1), dt_time.min).replace(tzinfo=timezone.utc)
     out: Set[date] = set()
-    for (raw_ts,) in db.query(SilverConversionFact.conversion_ts).filter(SilverConversionFact.conversion_ts < upper_bound).all():
-        ts = _to_utc_dt(raw_ts)
+    for row in iter_canonical_conversion_rows(
+        db,
+        date_to=upper_bound - timedelta(microseconds=1),
+    ):
+        ts = _to_utc_dt(row.conversion_ts)
         if ts is not None and ts.date() <= end_day:
             out.add(ts.date())
-    for (raw_ts,) in db.query(SilverTouchpointFact.touchpoint_ts).filter(
-        SilverTouchpointFact.touchpoint_ts.isnot(None),
-        SilverTouchpointFact.touchpoint_ts < upper_bound,
-    ).all():
-        ts = _to_utc_dt(raw_ts)
+    for row in iter_touchpoint_visit_rows(
+        db,
+        touchpoint_to=upper_bound - timedelta(microseconds=1),
+    ):
+        ts = _to_utc_dt(row.touchpoint_ts)
         if ts is not None and ts.date() <= end_day:
             out.add(ts.date())
     return out
@@ -618,20 +626,14 @@ def _aggregate_for_day_definition_from_silver(
 ) -> Optional[Dict[str, int]]:
     day_start = datetime.combine(day, dt_time.min).replace(tzinfo=timezone.utc)
     day_end = datetime.combine(day + timedelta(days=1), dt_time.min).replace(tzinfo=timezone.utc)
-    journeys = load_journey_instance_sequences(
+    source, journeys = load_preferred_journey_rows(
         db,
         start_dt=day_start,
         end_dt=day_end,
         conversion_key=definition.conversion_kpi_id,
     )
-    if journeys:
+    if source == "instance":
         return _aggregate_for_day_definition_from_instance_rows(db, day=day, definition=definition, journeys=journeys)
-    journeys = load_silver_journeys(
-        db,
-        start_dt=day_start,
-        end_dt=day_end,
-        conversion_key=definition.conversion_kpi_id,
-    )
     if not journeys:
         return None
 
@@ -863,8 +865,20 @@ def _aggregate_for_day_definition_from_instance_rows(
     journeys: List[Dict[str, Any]],
 ) -> Dict[str, int]:
     path_aggs: Dict[Tuple[str, Optional[str], Optional[str], Optional[str], Optional[str]], Dict[str, Any]] = {}
-    trans_aggs: Dict[Tuple[str, str, Optional[str], Optional[str], Optional[str], Optional[str]], Dict[str, Any]] = {}
     example_rows: List[JourneyExampleFact] = []
+    transition_by_conversion: Dict[str, List[Any]] = defaultdict(list)
+    day_start = datetime.combine(day, dt_time.min).replace(tzinfo=timezone.utc)
+    day_end = datetime.combine(day + timedelta(days=1), dt_time.min).replace(tzinfo=timezone.utc)
+
+    for transition_row in iter_journey_transition_rows(
+        db,
+        start_dt=day_start,
+        end_dt=day_end,
+        conversion_key=definition.conversion_kpi_id,
+    ):
+        transition_by_conversion[str(transition_row.conversion_id or "")].append(transition_row)
+
+    trans_aggs: Dict[Tuple[str, str, Optional[str], Optional[str], Optional[str], Optional[str]], Dict[str, Any]] = {}
 
     for journey in journeys:
         conversion_id = str(journey["conversion_id"] or "")
@@ -972,6 +986,36 @@ def _aggregate_for_day_definition_from_instance_rows(
                 updated_at=datetime.now(timezone.utc),
             )
         )
+
+        transition_rows = transition_by_conversion.get(conversion_id) or []
+        if transition_rows:
+            for transition_row in transition_rows:
+                transition_key = (
+                    str(transition_row.from_step or ""),
+                    str(transition_row.to_step or ""),
+                    transition_row.channel_group,
+                    transition_row.campaign_id,
+                    transition_row.device,
+                    transition_row.country,
+                )
+                t_bucket = trans_aggs.setdefault(
+                    transition_key,
+                    {
+                        "count_transitions": 0,
+                        "profiles": set(),
+                        "time_values": [],
+                        "channel_group": transition_row.channel_group,
+                        "campaign_id": transition_row.campaign_id,
+                        "device": transition_row.device,
+                        "country": transition_row.country,
+                    },
+                )
+                t_bucket["count_transitions"] += 1
+                if profile_id:
+                    t_bucket["profiles"].add(profile_id)
+                if isinstance(transition_row.delta_sec, (int, float)) and float(transition_row.delta_sec) >= 0:
+                    t_bucket["time_values"].append(float(transition_row.delta_sec))
+            continue
 
         for idx, (from_step, to_step) in enumerate(zip(steps, steps[1:])):
             transition_key = (
@@ -1203,40 +1247,17 @@ def _aggregate_channel_facts_for_day_from_silver(
 ) -> Optional[Dict[str, int]]:
     day_start = datetime.combine(day, dt_time.min).replace(tzinfo=timezone.utc)
     day_end = datetime.combine(day + timedelta(days=1), dt_time.min).replace(tzinfo=timezone.utc)
-    touchpoint_rows = (
-        db.query(
-            SilverTouchpointFact.conversion_id,
-            SilverTouchpointFact.touchpoint_ts,
-            SilverTouchpointFact.channel,
-            SilverTouchpointFact.ordinal,
-        )
-        .filter(
-            SilverTouchpointFact.touchpoint_ts.isnot(None),
-            SilverTouchpointFact.touchpoint_ts >= day_start,
-            SilverTouchpointFact.touchpoint_ts < day_end,
-        )
-        .order_by(SilverTouchpointFact.conversion_id.asc(), SilverTouchpointFact.ordinal.asc())
-        .all()
+    touchpoint_rows, conversion_rows = load_channel_canonical_source(
+        db,
+        start_dt=day_start,
+        end_dt=day_end - timedelta(microseconds=1),
     )
-    conversion_rows = (
-        db.query(
-            SilverConversionFact.conversion_id,
-            SilverConversionFact.conversion_key,
-            SilverConversionFact.conversion_ts,
-            SilverConversionFact.interaction_path_type,
-            SilverConversionFact.gross_conversions_total,
-            SilverConversionFact.net_conversions_total,
-            SilverConversionFact.gross_revenue_total,
-            SilverConversionFact.net_revenue_total,
-        )
-        .filter(
-            SilverConversionFact.conversion_ts >= day_start,
-            SilverConversionFact.conversion_ts < day_end,
-        )
-        .order_by(SilverConversionFact.conversion_id.asc())
-        .all()
+    source, instance_rows = load_preferred_journey_rows(
+        db,
+        start_dt=day_start,
+        end_dt=day_end,
     )
-    if not touchpoint_rows and not conversion_rows:
+    if not touchpoint_rows and not conversion_rows and not instance_rows:
         return None
 
     aggs: Dict[Tuple[str, Optional[str]], Dict[str, Any]] = {}
@@ -1261,21 +1282,54 @@ def _aggregate_channel_facts_for_day_from_silver(
         )
 
     last_touch_channel: Dict[str, str] = {}
-    for conversion_id, _touchpoint_ts, channel, ordinal in touchpoint_rows:
-        ch = str(channel or "unknown")
+    for row in touchpoint_rows:
+        conversion_id = row.conversion_id
+        ch = str(row.channel or "unknown")
         _bucket(ch, None)["visits_total"] += 1
         if conversion_id:
             last_touch_channel[str(conversion_id)] = ch
 
-    for row in conversion_rows:
-        conversion_id = str(row[0] or "")
-        conversion_key = str(row[1] or "").strip() or None
-        channel = last_touch_channel.get(conversion_id, "unknown")
-        interaction_path_type = str(row[3] or "").strip().lower()
-        gross_conversions = float(row[4] or 0.0)
-        net_conversions = float(row[5] or 0.0)
-        gross_revenue = float(row[6] or 0.0)
-        net_revenue = float(row[7] or 0.0)
+    conversion_metrics: List[Tuple[str, Optional[str], str, str, float, float, float, float]] = []
+    if source == "instance":
+        for row in instance_rows:
+            conversion_id = str(row.get("conversion_id") or "")
+            conversion_key = str(row.get("conversion_key") or "").strip() or None
+            channel = str(
+                row.get("last_touch_channel")
+                or last_touch_channel.get(conversion_id)
+                or "unknown"
+            )
+            conversion_metrics.append(
+                (
+                    conversion_id,
+                    conversion_key,
+                    channel,
+                    str(row.get("interaction_path_type") or "").strip().lower(),
+                    float(row.get("gross_conversions_total") or 0.0),
+                    float(row.get("net_conversions_total") or 0.0),
+                    float(row.get("gross_revenue_total") or 0.0),
+                    float(row.get("net_revenue_total") or 0.0),
+                )
+            )
+    else:
+        for row in conversion_rows:
+            conversion_id = str(getattr(row, "conversion_id", "") or "")
+            conversion_key = str(getattr(row, "conversion_key", "") or "").strip() or None
+            channel = last_touch_channel.get(conversion_id, "unknown")
+            conversion_metrics.append(
+                (
+                    conversion_id,
+                    conversion_key,
+                    channel,
+                    str(getattr(row, "interaction_path_type", "") or "").strip().lower(),
+                    float(getattr(row, "gross_conversions_total", 0.0) or 0.0),
+                    float(getattr(row, "net_conversions_total", 0.0) or 0.0),
+                    float(getattr(row, "gross_revenue_total", 0.0) or 0.0),
+                    float(getattr(row, "net_revenue_total", 0.0) or 0.0),
+                )
+            )
+
+    for _conversion_id, conversion_key, channel, interaction_path_type, gross_conversions, net_conversions, gross_revenue, net_revenue in conversion_metrics:
         keys_to_update: List[Optional[str]] = [None]
         if conversion_key:
             keys_to_update.append(conversion_key)
@@ -1316,7 +1370,7 @@ def _aggregate_channel_facts_for_day_from_silver(
         )
     db.commit()
     return {
-        "source_rows": len(touchpoint_rows) + len(conversion_rows),
+        "source_rows": len(touchpoint_rows) + max(len(conversion_rows), len(instance_rows)),
         "channel_rows_written": len(aggs),
     }
 

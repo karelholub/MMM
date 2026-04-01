@@ -8,10 +8,8 @@ from .models_config_dq import (
     ChannelPerformanceDaily,
     JourneyDefinition,
     JourneyPathDaily,
-    SilverConversionFact,
-    SilverTouchpointFact,
 )
-from .services_silver_journeys import load_silver_journeys
+from .services_canonical_facts import load_channel_canonical_source, load_preferred_journey_rows
 from app.services_metrics import (
     SUPPORTED_KPIS,
     journey_outcome_summary,
@@ -328,7 +326,7 @@ def _build_campaign_aggregate_overlay_from_silver(
     start_day = prev_from if compare else curr_from
     day_start = datetime.combine(start_day, datetime.min.time())
     day_end = datetime.combine(curr_to + timedelta(days=1), datetime.min.time())
-    journeys = load_silver_journeys(
+    _source, journeys = load_preferred_journey_rows(
         db,
         start_dt=day_start,
         end_dt=day_end,
@@ -349,11 +347,16 @@ def _build_campaign_aggregate_overlay_from_silver(
     for journey in journeys:
         conversion_ts = journey["conversion_ts"]
         day = conversion_ts.date()
-        touchpoints = (journey["payload"] or {}).get("touchpoints") or []
-        last_touch = touchpoints[-1] if touchpoints else {}
-        channel = str(last_touch.get("channel") or "unknown")
-        campaign_raw = last_touch.get("campaign")
-        campaign = str(campaign_raw).strip() if campaign_raw not in (None, "") else None
+        if "payload" in journey:
+            touchpoints = (journey["payload"] or {}).get("touchpoints") or []
+            last_touch = touchpoints[-1] if touchpoints else {}
+            channel = str(last_touch.get("channel") or "unknown")
+            campaign_raw = last_touch.get("campaign")
+            campaign = str(campaign_raw).strip() if campaign_raw not in (None, "") else None
+        else:
+            channel = str(journey.get("last_touch_channel") or "unknown")
+            campaign_raw = journey.get("campaign_id")
+            campaign = str(campaign_raw).strip() if campaign_raw not in (None, "") else None
         if filter_channels and channel not in allowed_channels:
             continue
         key = _campaign_key(channel, campaign)
@@ -524,35 +527,25 @@ def _build_channel_aggregate_overlay_from_silver(
 ) -> Optional[Dict[str, Any]]:
     touchpoint_start = prev_from if compare else curr_from
     day_start = datetime.combine(touchpoint_start, datetime.min.time())
-    day_end = datetime.combine(curr_to + timedelta(days=1), datetime.min.time())
-
-    touchpoint_rows = (
-        db.query(
-            SilverTouchpointFact.touchpoint_ts,
-            SilverTouchpointFact.channel,
-        )
-        .filter(
-            SilverTouchpointFact.touchpoint_ts.isnot(None),
-            SilverTouchpointFact.touchpoint_ts >= day_start,
-            SilverTouchpointFact.touchpoint_ts < day_end,
-        )
-        .all()
-    )
-    journeys = load_silver_journeys(
+    day_end_exclusive = datetime.combine(curr_to + timedelta(days=1), datetime.min.time())
+    touchpoint_rows, conversion_rows = load_channel_canonical_source(
         db,
         start_dt=day_start,
-        end_dt=day_end,
+        end_dt=day_end_exclusive - timedelta(microseconds=1),
         conversion_key=conversion_key,
     )
-    if not touchpoint_rows and not journeys:
+    if not touchpoint_rows and not conversion_rows:
         return None
 
     curr_store: Dict[str, Dict[str, Dict[str, float]]] = {}
     prev_store: Dict[str, Dict[str, Dict[str, float]]] = {}
     curr_outcomes: Dict[str, Dict[str, float]] = {}
     prev_outcomes: Dict[str, Dict[str, float]] = {}
+    last_touch_channel_by_conversion: Dict[str, str] = {}
 
-    for touchpoint_ts, channel_raw in touchpoint_rows:
+    for row in touchpoint_rows:
+        touchpoint_ts = row.touchpoint_ts
+        channel_raw = row.channel
         if not isinstance(touchpoint_ts, datetime):
             continue
         day = touchpoint_ts.date()
@@ -564,13 +557,16 @@ def _build_channel_aggregate_overlay_from_silver(
             _add_metric_rollup(curr_store, channel, bucket, visits=1.0)
         elif compare and prev_from <= day <= prev_to:
             _add_metric_rollup(prev_store, channel, bucket, visits=1.0)
+        conversion_id = str(row.conversion_id or "")
+        if conversion_id:
+            last_touch_channel_by_conversion[conversion_id] = channel
 
-    for journey in journeys:
-        conversion_ts = journey["conversion_ts"]
+    for journey in conversion_rows:
+        conversion_ts = journey.conversion_ts
+        if not isinstance(conversion_ts, datetime):
+            continue
         day = conversion_ts.date()
-        touchpoints = (journey["payload"] or {}).get("touchpoints") or []
-        last_touch = touchpoints[-1] if touchpoints else {}
-        channel = str(last_touch.get("channel") or "unknown")
+        channel = str(last_touch_channel_by_conversion.get(str(journey.conversion_id or ""), "unknown") or "unknown")
         if filter_channels and channel not in allowed_channels:
             continue
         bucket = _bucket_start(day, resolved_grain).isoformat()
@@ -587,15 +583,15 @@ def _build_channel_aggregate_overlay_from_silver(
             channel,
             bucket,
             conversions=1.0,
-            revenue=float(journey["gross_revenue_total"] or 0.0),
+            revenue=float(journey.gross_revenue_total or 0.0),
         )
         outcome = target_outcomes.setdefault(channel, _empty_outcome_metrics())
-        outcome["gross_conversions"] += float(journey["gross_conversions_total"] or 0.0)
-        outcome["net_conversions"] += float(journey["net_conversions_total"] or 0.0)
-        outcome["gross_revenue"] += float(journey["gross_revenue_total"] or 0.0)
-        outcome["net_revenue"] += float(journey["net_revenue_total"] or 0.0)
-        path_type = str(journey["interaction_path_type"] or "").strip().lower()
-        net_conversions = float(journey["net_conversions_total"] or 0.0)
+        outcome["gross_conversions"] += float(journey.gross_conversions_total or 0.0)
+        outcome["net_conversions"] += float(journey.net_conversions_total or 0.0)
+        outcome["gross_revenue"] += float(journey.gross_revenue_total or 0.0)
+        outcome["net_revenue"] += float(journey.net_revenue_total or 0.0)
+        path_type = str(journey.interaction_path_type or "").strip().lower()
+        net_conversions = float(journey.net_conversions_total or 0.0)
         if path_type == "click_through":
             outcome["click_through_conversions"] += net_conversions
         elif path_type == "view_through":

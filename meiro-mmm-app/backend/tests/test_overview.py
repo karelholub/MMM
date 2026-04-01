@@ -7,7 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
-from app.models_config_dq import ChannelPerformanceDaily, ConversionPath, JourneyDefinition, JourneyPathDaily
+from app.models_config_dq import ChannelPerformanceDaily, ConversionPath, JourneyDefinition, JourneyPathDaily, SilverConversionFact
 from app.main import app
 from app import services_overview as overview
 from app.services_conversions import persist_journeys_as_conversion_paths
@@ -419,6 +419,107 @@ def test_overview_funnels_prefers_daily_aggregates_when_single_definition_exists
         assert out["tabs"]["conversions"][0]["path"] == "Paid Landing > Purchase / Lead Won (conversion)"
         assert out["tabs"]["revenue"][0]["revenue"] == 300.0
         assert out["tabs"]["speed"][0]["path"] == "Organic Landing > Purchase / Lead Won (conversion)"
+    finally:
+        db.close()
+
+
+def test_overview_summary_uses_instance_facts_when_conversion_and_silver_rows_are_missing():
+    db = _unit_db_session()
+    try:
+        inserted = persist_journeys_as_conversion_paths(
+            db,
+            [
+                {
+                    "_schema": "v2",
+                    "customer": {"id": "cust-1"},
+                    "touchpoints": [
+                        {"ts": "2026-02-01T10:00:00Z", "channel": "google_ads", "interaction_type": "click"},
+                    ],
+                    "conversions": [{"id": "conv-1", "name": "purchase", "ts": "2026-02-01T12:00:00Z", "value": 120.0}],
+                }
+            ],
+            replace=True,
+            import_source="meiro_events_replay",
+            import_batch_id="overview-instance-summary-batch",
+        )
+        assert inserted == 1
+        db.query(ConversionPath).delete(synchronize_session=False)
+        db.query(SilverConversionFact).delete(synchronize_session=False)
+        db.commit()
+
+        out = get_overview_summary(
+            db,
+            date_from="2026-02-01",
+            date_to="2026-02-01",
+            expenses={},
+        )
+
+        tiles = {tile["kpi_key"]: tile for tile in out["kpi_tiles"]}
+        assert tiles["visits"]["value"] == 1
+        assert tiles["conversions"]["value"] == 1
+        assert tiles["revenue"]["value"] == 120.0
+        assert out["outcomes"]["current"]["gross_value"] == 120.0
+        assert out["outcomes"]["current"]["net_value"] == 120.0
+    finally:
+        db.close()
+
+
+def test_overview_drivers_uses_instance_facts_when_conversion_and_silver_rows_are_missing():
+    db = _unit_db_session()
+    try:
+        inserted = persist_journeys_as_conversion_paths(
+            db,
+            [
+                {
+                        "_schema": "v2",
+                        "customer": {"id": "cust-prev"},
+                        "touchpoints": [
+                            {
+                                "ts": "2026-01-30T10:00:00Z",
+                                "channel": "email",
+                                "campaign": {"id": "cmp-prev", "name": "Prev"},
+                                "interaction_type": "click",
+                            },
+                        ],
+                        "conversions": [{"id": "conv-prev", "name": "purchase", "ts": "2026-01-30T12:00:00Z", "value": 80.0}],
+                    },
+                {
+                    "_schema": "v2",
+                    "customer": {"id": "cust-1"},
+                    "touchpoints": [
+                        {
+                            "ts": "2026-02-01T10:00:00Z",
+                            "channel": "google_ads",
+                            "campaign": {"id": "cmp-1", "name": "Brand"},
+                            "interaction_type": "click",
+                        },
+                    ],
+                    "conversions": [{"id": "conv-1", "name": "purchase", "ts": "2026-02-01T12:00:00Z", "value": 120.0}],
+                }
+            ],
+            replace=True,
+            import_source="meiro_events_replay",
+            import_batch_id="overview-instance-drivers-batch",
+        )
+        assert inserted == 2
+        db.query(ConversionPath).delete(synchronize_session=False)
+        db.query(SilverConversionFact).delete(synchronize_session=False)
+        db.commit()
+
+        out = get_overview_drivers(
+            db,
+            date_from="2026-02-01",
+            date_to="2026-02-02",
+            expenses={},
+            top_campaigns_n=5,
+        )
+
+        assert out["by_channel"]
+        by_channel = {row["channel"]: row for row in out["by_channel"]}
+        assert by_channel["google_ads"]["revenue"] == 120.0
+        assert out["by_campaign"]
+        by_campaign = {row["campaign"]: row for row in out["by_campaign"]}
+        assert by_campaign["Brand"]["revenue"] == 120.0
     finally:
         db.close()
 
