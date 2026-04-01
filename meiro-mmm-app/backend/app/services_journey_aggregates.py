@@ -17,6 +17,7 @@ from .models_config_dq import (
     ChannelPerformanceDaily,
     ConversionPath,
     JourneyDefinition,
+    JourneyDefinitionInstanceFact,
     JourneyExampleFact,
     JourneyInstanceFact,
     JourneyPathDaily,
@@ -36,6 +37,7 @@ from .services_canonical_facts import (
     load_channel_canonical_source,
     load_preferred_journey_rows,
 )
+from .services_journey_definition_facts import build_journey_definition_instance_fact, iter_definition_instance_rows
 from .services_journey_instance_facts import load_journey_instance_sequences
 from .services_journey_transition_facts import iter_journey_transition_rows
 from .services_visit_facts import iter_touchpoint_visit_rows
@@ -258,6 +260,21 @@ def _path_hash(steps: Sequence[str]) -> str:
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
 
+def _replace_definition_day_fact_rows(
+    db: Session,
+    *,
+    definition: JourneyDefinition,
+    day: date,
+    fact_rows: List[JourneyDefinitionInstanceFact],
+) -> None:
+    db.query(JourneyDefinitionInstanceFact).filter(
+        JourneyDefinitionInstanceFact.journey_definition_id == definition.id,
+        JourneyDefinitionInstanceFact.date == day,
+    ).delete(synchronize_session=False)
+    for fact_row in fact_rows:
+        db.add(fact_row)
+
+
 def _get_source_days(
     db: Session,
     *,
@@ -286,7 +303,9 @@ def _get_source_days(
                 out.add(datetime.fromisoformat(str(raw_day)[:10]).date())
             except Exception:
                 continue
-    return out
+    if out:
+        return out
+    return _get_source_days_from_definition_facts(db, definition=definition, end_day=end_day)
 
 
 def _get_source_days_from_instance_facts(
@@ -322,6 +341,27 @@ def _get_source_days_from_silver(
         ts = _to_utc_dt(raw_ts)
         if ts is not None and ts.date() <= end_day:
             out.add(ts.date())
+    return out
+
+
+def _get_source_days_from_definition_facts(
+    db: Session,
+    *,
+    definition: JourneyDefinition,
+    end_day: date,
+) -> Set[date]:
+    out: Set[date] = set()
+    for (raw_day,) in (
+        db.query(JourneyDefinitionInstanceFact.date)
+        .filter(
+            JourneyDefinitionInstanceFact.journey_definition_id == definition.id,
+            JourneyDefinitionInstanceFact.date <= end_day,
+        )
+        .distinct()
+        .all()
+    ):
+        if isinstance(raw_day, date):
+            out.add(raw_day)
     return out
 
 
@@ -404,9 +444,14 @@ def _aggregate_for_day_definition(
     if definition.conversion_kpi_id:
         q = q.filter(ConversionPath.conversion_key == definition.conversion_kpi_id)
     rows = q.all()
+    if not rows:
+        definition_stats = _aggregate_for_day_definition_from_definition_facts(db, day=day, definition=definition)
+        if definition_stats is not None:
+            return definition_stats
 
     path_aggs: Dict[Tuple[str, Optional[str], Optional[str], Optional[str], Optional[str]], Dict[str, Any]] = {}
     trans_aggs: Dict[Tuple[str, str, Optional[str], Optional[str], Optional[str], Optional[str]], Dict[str, Any]] = {}
+    definition_fact_rows: List[JourneyDefinitionInstanceFact] = []
     example_rows: List[JourneyExampleFact] = []
 
     for row in rows:
@@ -509,6 +554,29 @@ def _aggregate_for_day_definition(
                 updated_at=datetime.now(timezone.utc),
             )
         )
+        definition_fact_rows.append(
+            build_journey_definition_instance_fact(
+                journey_definition_id=definition.id,
+                conversion_id=str(row.conversion_id or ""),
+                profile_id=str(row.profile_id or "") or None,
+                conversion_key=row.conversion_key,
+                conversion_ts=conversion_ts,
+                path_hash=phash,
+                steps=steps,
+                channel_group=dims.get("channel_group"),
+                last_touch_channel=dims.get("last_touch_channel"),
+                campaign_id=dims.get("campaign_id"),
+                device=dims.get("device"),
+                country=dims.get("country"),
+                interaction_path_type=path_type or None,
+                time_to_convert_sec=ttc_sec,
+                gross_conversions_total=float(outcome.get("gross_conversions", 0.0) or 0.0),
+                net_conversions_total=float(outcome.get("net_conversions", 0.0) or 0.0),
+                gross_revenue_total=float(outcome.get("gross_value", 0.0) or 0.0),
+                net_revenue_total=float(outcome.get("net_value", 0.0) or 0.0),
+                created_at=datetime.now(timezone.utc),
+            )
+        )
 
         profile_id = str(row.profile_id or "")
         for idx, (from_step, to_step) in enumerate(zip(steps, steps[1:])):
@@ -552,6 +620,7 @@ def _aggregate_for_day_definition(
         JourneyExampleFact.journey_definition_id == definition.id,
         JourneyExampleFact.date == day,
     ).delete(synchronize_session=False)
+    _replace_definition_day_fact_rows(db, definition=definition, day=day, fact_rows=definition_fact_rows)
 
     now = datetime.now(timezone.utc)
     for _path_key, payload in path_aggs.items():
@@ -614,6 +683,7 @@ def _aggregate_for_day_definition(
         "source_rows": len(rows),
         "path_rows_written": len(path_aggs),
         "transition_rows_written": len(trans_aggs),
+        "definition_rows_written": len(definition_fact_rows),
         "example_rows_written": len(example_rows),
     }
 
@@ -639,6 +709,7 @@ def _aggregate_for_day_definition_from_silver(
 
     path_aggs: Dict[Tuple[str, Optional[str], Optional[str], Optional[str], Optional[str]], Dict[str, Any]] = {}
     trans_aggs: Dict[Tuple[str, str, Optional[str], Optional[str], Optional[str], Optional[str]], Dict[str, Any]] = {}
+    definition_fact_rows: List[JourneyDefinitionInstanceFact] = []
     example_rows: List[JourneyExampleFact] = []
 
     for journey in journeys:
@@ -749,6 +820,29 @@ def _aggregate_for_day_definition_from_silver(
                 updated_at=datetime.now(timezone.utc),
             )
         )
+        definition_fact_rows.append(
+            build_journey_definition_instance_fact(
+                journey_definition_id=definition.id,
+                conversion_id=conversion_id,
+                profile_id=profile_id or None,
+                conversion_key=conversion_key,
+                conversion_ts=conversion_ts,
+                path_hash=phash,
+                steps=steps,
+                channel_group=dims.get("channel_group"),
+                last_touch_channel=dims.get("last_touch_channel"),
+                campaign_id=dims.get("campaign_id"),
+                device=dims.get("device"),
+                country=dims.get("country"),
+                interaction_path_type=path_type or None,
+                time_to_convert_sec=ttc_sec,
+                gross_conversions_total=float(outcome.get("gross_conversions", 0.0) or 0.0),
+                net_conversions_total=float(outcome.get("net_conversions", 0.0) or 0.0),
+                gross_revenue_total=float(outcome.get("gross_value", 0.0) or 0.0),
+                net_revenue_total=float(outcome.get("net_value", 0.0) or 0.0),
+                created_at=datetime.now(timezone.utc),
+            )
+        )
 
         for idx, (from_step, to_step) in enumerate(zip(steps, steps[1:])):
             transition_key = (
@@ -791,6 +885,7 @@ def _aggregate_for_day_definition_from_silver(
         JourneyExampleFact.journey_definition_id == definition.id,
         JourneyExampleFact.date == day,
     ).delete(synchronize_session=False)
+    _replace_definition_day_fact_rows(db, definition=definition, day=day, fact_rows=definition_fact_rows)
 
     now = datetime.now(timezone.utc)
     for payload in path_aggs.values():
@@ -853,6 +948,7 @@ def _aggregate_for_day_definition_from_silver(
         "source_rows": len(journeys),
         "path_rows_written": len(path_aggs),
         "transition_rows_written": len(trans_aggs),
+        "definition_rows_written": len(definition_fact_rows),
         "example_rows_written": len(example_rows),
     }
 
@@ -865,6 +961,7 @@ def _aggregate_for_day_definition_from_instance_rows(
     journeys: List[Dict[str, Any]],
 ) -> Dict[str, int]:
     path_aggs: Dict[Tuple[str, Optional[str], Optional[str], Optional[str], Optional[str]], Dict[str, Any]] = {}
+    definition_fact_rows: List[JourneyDefinitionInstanceFact] = []
     example_rows: List[JourneyExampleFact] = []
     transition_by_conversion: Dict[str, List[Any]] = defaultdict(list)
     day_start = datetime.combine(day, dt_time.min).replace(tzinfo=timezone.utc)
@@ -986,6 +1083,29 @@ def _aggregate_for_day_definition_from_instance_rows(
                 updated_at=datetime.now(timezone.utc),
             )
         )
+        definition_fact_rows.append(
+            build_journey_definition_instance_fact(
+                journey_definition_id=definition.id,
+                conversion_id=conversion_id,
+                profile_id=profile_id or None,
+                conversion_key=conversion_key,
+                conversion_ts=conversion_ts,
+                path_hash=phash,
+                steps=steps,
+                channel_group=dims.get("channel_group"),
+                last_touch_channel=dims.get("last_touch_channel"),
+                campaign_id=dims.get("campaign_id"),
+                device=dims.get("device"),
+                country=dims.get("country"),
+                interaction_path_type=path_type or None,
+                time_to_convert_sec=ttc_sec if isinstance(ttc_sec, (int, float)) else None,
+                gross_conversions_total=float(journey.get("gross_conversions_total") or 0.0),
+                net_conversions_total=float(journey.get("net_conversions_total") or 0.0),
+                gross_revenue_total=float(journey.get("gross_revenue_total") or 0.0),
+                net_revenue_total=float(journey.get("net_revenue_total") or 0.0),
+                created_at=datetime.now(timezone.utc),
+            )
+        )
 
         transition_rows = transition_by_conversion.get(conversion_id) or []
         if transition_rows:
@@ -1058,6 +1178,7 @@ def _aggregate_for_day_definition_from_instance_rows(
         JourneyExampleFact.journey_definition_id == definition.id,
         JourneyExampleFact.date == day,
     ).delete(synchronize_session=False)
+    _replace_definition_day_fact_rows(db, definition=definition, day=day, fact_rows=definition_fact_rows)
 
     now = datetime.now(timezone.utc)
     for payload in path_aggs.values():
@@ -1120,6 +1241,237 @@ def _aggregate_for_day_definition_from_instance_rows(
         "source_rows": len(journeys),
         "path_rows_written": len(path_aggs),
         "transition_rows_written": len(trans_aggs),
+        "definition_rows_written": len(definition_fact_rows),
+        "example_rows_written": len(example_rows),
+    }
+
+
+def _aggregate_for_day_definition_from_definition_facts(
+    db: Session,
+    *,
+    day: date,
+    definition: JourneyDefinition,
+) -> Optional[Dict[str, int]]:
+    rows = list(
+        iter_definition_instance_rows(
+            db,
+            journey_definition_id=definition.id,
+            date_from=day,
+            date_to=day,
+        )
+    )
+    if not rows:
+        return None
+
+    path_aggs: Dict[Tuple[str, Optional[str], Optional[str], Optional[str], Optional[str]], Dict[str, Any]] = {}
+    trans_aggs: Dict[Tuple[str, str, Optional[str], Optional[str], Optional[str], Optional[str]], Dict[str, Any]] = {}
+    example_rows: List[JourneyExampleFact] = []
+    definition_fact_rows: List[JourneyDefinitionInstanceFact] = []
+    conversion_ids = {str(row.conversion_id or "") for row in rows if str(row.conversion_id or "")}
+    transition_by_conversion: Dict[str, List[Any]] = defaultdict(list)
+    day_start = datetime.combine(day, dt_time.min).replace(tzinfo=timezone.utc)
+    day_end = datetime.combine(day + timedelta(days=1), dt_time.min).replace(tzinfo=timezone.utc)
+
+    for transition_row in iter_journey_transition_rows(
+        db,
+        start_dt=day_start,
+        end_dt=day_end,
+        conversion_key=definition.conversion_kpi_id,
+    ):
+        conversion_id = str(transition_row.conversion_id or "")
+        if conversion_id and conversion_id in conversion_ids:
+            transition_by_conversion[conversion_id].append(transition_row)
+
+    for row in rows:
+        conversion_id = str(row.conversion_id or "")
+        profile_id = str(row.profile_id or "")
+        conversion_key = str(row.conversion_key or "").strip() or None
+        conversion_ts = _to_utc_dt(row.conversion_ts)
+        steps = [str(step) for step in (row.steps_json or []) if str(step)]
+        if conversion_ts is None or not steps:
+            continue
+        dims = {
+            "channel_group": row.channel_group,
+            "last_touch_channel": row.last_touch_channel,
+            "campaign_id": row.campaign_id,
+            "device": row.device,
+            "country": row.country,
+        }
+        phash = str(row.path_hash or _path_hash(steps))
+        path_key = (
+            phash,
+            dims.get("channel_group"),
+            dims.get("campaign_id"),
+            dims.get("device"),
+            dims.get("country"),
+        )
+        bucket = path_aggs.setdefault(
+            path_key,
+            {
+                "path_hash": phash,
+                "path_steps": steps,
+                "path_length": len(steps),
+                "count_journeys": 0,
+                "count_conversions": 0,
+                "gross_conversions_total": 0.0,
+                "net_conversions_total": 0.0,
+                "gross_revenue_total": 0.0,
+                "net_revenue_total": 0.0,
+                "view_through_conversions_total": 0.0,
+                "click_through_conversions_total": 0.0,
+                "mixed_path_conversions_total": 0.0,
+                "ttc_values": [],
+                "channel_group": dims.get("channel_group"),
+                "last_touch_channel": dims.get("last_touch_channel"),
+                "campaign_id": dims.get("campaign_id"),
+                "device": dims.get("device"),
+                "country": dims.get("country"),
+            },
+        )
+        bucket["count_journeys"] += 1
+        bucket["count_conversions"] += 1
+        bucket["gross_conversions_total"] += float(row.gross_conversions_total or 0.0)
+        bucket["net_conversions_total"] += float(row.net_conversions_total or 0.0)
+        bucket["gross_revenue_total"] += float(row.gross_revenue_total or 0.0)
+        bucket["net_revenue_total"] += float(row.net_revenue_total or 0.0)
+        path_type = str(row.interaction_path_type or "").strip().lower()
+        if path_type == "view_through":
+            bucket["view_through_conversions_total"] += float(row.net_conversions_total or 0.0)
+        elif path_type == "click_through":
+            bucket["click_through_conversions_total"] += float(row.net_conversions_total or 0.0)
+        elif path_type == "mixed_path":
+            bucket["mixed_path_conversions_total"] += float(row.net_conversions_total or 0.0)
+        if isinstance(row.time_to_convert_sec, (int, float)) and float(row.time_to_convert_sec) >= 0:
+            bucket["ttc_values"].append(float(row.time_to_convert_sec))
+
+        preview_touchpoints = [
+            {"ts": None, "channel": None, "event": step_name, "campaign": dims.get("campaign_id")}
+            for step_name in steps[:5]
+        ]
+        example_rows.append(
+            JourneyExampleFact(
+                date=day,
+                journey_definition_id=definition.id,
+                conversion_id=conversion_id,
+                profile_id=profile_id,
+                conversion_key=conversion_key,
+                conversion_ts=conversion_ts,
+                path_hash=phash,
+                steps_json=steps,
+                touchpoints_count=max(0, len(steps) - 1),
+                conversion_value=round(float(row.gross_revenue_total or 0.0), 2),
+                channel_group=dims.get("channel_group"),
+                campaign_id=dims.get("campaign_id"),
+                device=dims.get("device"),
+                country=dims.get("country"),
+                touchpoints_preview_json=preview_touchpoints,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+        definition_fact_rows.append(row)
+
+        transition_rows = transition_by_conversion.get(conversion_id) or []
+        for transition_row in transition_rows:
+            transition_key = (
+                str(transition_row.from_step or ""),
+                str(transition_row.to_step or ""),
+                transition_row.channel_group,
+                transition_row.campaign_id,
+                transition_row.device,
+                transition_row.country,
+            )
+            t_bucket = trans_aggs.setdefault(
+                transition_key,
+                {
+                    "count_transitions": 0,
+                    "profiles": set(),
+                    "time_values": [],
+                    "channel_group": transition_row.channel_group,
+                    "campaign_id": transition_row.campaign_id,
+                    "device": transition_row.device,
+                    "country": transition_row.country,
+                },
+            )
+            t_bucket["count_transitions"] += 1
+            if profile_id:
+                t_bucket["profiles"].add(profile_id)
+            if isinstance(transition_row.delta_sec, (int, float)) and float(transition_row.delta_sec) >= 0:
+                t_bucket["time_values"].append(float(transition_row.delta_sec))
+
+    db.query(JourneyPathDaily).filter(
+        JourneyPathDaily.journey_definition_id == definition.id,
+        JourneyPathDaily.date == day,
+    ).delete(synchronize_session=False)
+    db.query(JourneyTransitionDaily).filter(
+        JourneyTransitionDaily.journey_definition_id == definition.id,
+        JourneyTransitionDaily.date == day,
+    ).delete(synchronize_session=False)
+    db.query(JourneyExampleFact).filter(
+        JourneyExampleFact.journey_definition_id == definition.id,
+        JourneyExampleFact.date == day,
+    ).delete(synchronize_session=False)
+    _replace_definition_day_fact_rows(db, definition=definition, day=day, fact_rows=definition_fact_rows)
+
+    now = datetime.now(timezone.utc)
+    for payload in path_aggs.values():
+        ttc_values = payload["ttc_values"]
+        db.add(
+            JourneyPathDaily(
+                date=day,
+                journey_definition_id=definition.id,
+                path_hash=payload["path_hash"],
+                path_steps=payload["path_steps"],
+                path_length=payload["path_length"],
+                count_journeys=payload["count_journeys"],
+                count_conversions=payload["count_conversions"],
+                gross_conversions_total=payload["gross_conversions_total"],
+                net_conversions_total=payload["net_conversions_total"],
+                gross_revenue_total=payload["gross_revenue_total"],
+                net_revenue_total=payload["net_revenue_total"],
+                view_through_conversions_total=payload["view_through_conversions_total"],
+                click_through_conversions_total=payload["click_through_conversions_total"],
+                mixed_path_conversions_total=payload["mixed_path_conversions_total"],
+                avg_time_to_convert_sec=(sum(ttc_values) / len(ttc_values)) if ttc_values else None,
+                p50_time_to_convert_sec=_percentile(ttc_values, 0.5),
+                p90_time_to_convert_sec=_percentile(ttc_values, 0.9),
+                channel_group=payload["channel_group"],
+                last_touch_channel=payload["last_touch_channel"],
+                campaign_id=payload["campaign_id"],
+                device=payload["device"],
+                country=payload["country"],
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    for (from_step, to_step, _channel_group, _campaign_id, _device, _country), payload in trans_aggs.items():
+        db.add(
+            JourneyTransitionDaily(
+                date=day,
+                journey_definition_id=definition.id,
+                from_step=from_step,
+                to_step=to_step,
+                count_transitions=payload["count_transitions"],
+                count_profiles=len(payload["profiles"]),
+                avg_time_between_sec=(sum(payload["time_values"]) / len(payload["time_values"])) if payload["time_values"] else None,
+                p50_time_between_sec=_percentile(payload["time_values"], 0.5),
+                p90_time_between_sec=_percentile(payload["time_values"], 0.9),
+                channel_group=payload["channel_group"],
+                campaign_id=payload["campaign_id"],
+                device=payload["device"],
+                country=payload["country"],
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    for example_row in example_rows:
+        db.add(example_row)
+    db.commit()
+    return {
+        "source_rows": len(rows),
+        "path_rows_written": len(path_aggs),
+        "transition_rows_written": len(trans_aggs),
+        "definition_rows_written": len(definition_fact_rows),
         "example_rows_written": len(example_rows),
     }
 
@@ -1411,6 +1763,7 @@ def run_daily_journey_aggregates(
     total_transitions = 0
     total_channel_rows = 0
     total_examples = 0
+    total_definition_rows = 0
     max_source_ts: Optional[datetime] = None
 
     for definition in defs:
@@ -1433,8 +1786,18 @@ def run_daily_journey_aggregates(
             )
             .all()
         }
+        existing_definition_days = {
+            d
+            for (d,) in db.query(JourneyDefinitionInstanceFact.date)
+            .filter(
+                JourneyDefinitionInstanceFact.journey_definition_id == definition.id,
+                JourneyDefinitionInstanceFact.date <= latest_complete_day,
+            )
+            .all()
+        }
         obsolete_path_days = sorted(d for d in existing_path_days if d not in source_days)
         obsolete_transition_days = sorted(d for d in existing_transition_days if d not in source_days)
+        obsolete_definition_days = sorted(d for d in existing_definition_days if d not in source_days)
         if obsolete_path_days:
             db.query(JourneyPathDaily).filter(
                 JourneyPathDaily.journey_definition_id == definition.id,
@@ -1445,7 +1808,12 @@ def run_daily_journey_aggregates(
                 JourneyTransitionDaily.journey_definition_id == definition.id,
                 JourneyTransitionDaily.date.in_(obsolete_transition_days),
             ).delete(synchronize_session=False)
-        if obsolete_path_days or obsolete_transition_days:
+        if obsolete_definition_days:
+            db.query(JourneyDefinitionInstanceFact).filter(
+                JourneyDefinitionInstanceFact.journey_definition_id == definition.id,
+                JourneyDefinitionInstanceFact.date.in_(obsolete_definition_days),
+            ).delete(synchronize_session=False)
+        if obsolete_path_days or obsolete_transition_days or obsolete_definition_days:
             db.commit()
         if not source_days:
             continue
@@ -1464,6 +1832,7 @@ def run_daily_journey_aggregates(
             total_paths += stats["path_rows_written"]
             total_transitions += stats["transition_rows_written"]
             total_examples += stats.get("example_rows_written", 0)
+            total_definition_rows += stats.get("definition_rows_written", 0)
 
         max_ts_q = db.query(func.max(ConversionPath.conversion_ts))
         if definition.conversion_kpi_id:
@@ -1509,6 +1878,7 @@ def run_daily_journey_aggregates(
         "transition_rows_written": total_transitions,
         "channel_rows_written": total_channel_rows,
         "example_rows_written": total_examples,
+        "definition_rows_written": total_definition_rows,
         "lag_minutes": lag_minutes,
         "duration_ms": duration_ms,
     }

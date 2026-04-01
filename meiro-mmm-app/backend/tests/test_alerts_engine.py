@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 from app.db import Base
 from app.models_config_dq import ChannelPerformanceDaily, ConversionPath
 from app.models_overview_alerts import AlertEvent, AlertRule, MetricSnapshot
+from app.services_conversions import persist_journeys_as_conversion_paths
 from app.services_alerts_engine import (
     make_fingerprint,
     period_id_for_schedule,
@@ -431,6 +432,29 @@ def test_get_current_kpi_from_paths_and_expenses_falls_back_to_paths_for_partial
             last_touch_ts=datetime(2024, 2, 15, 13, 30, 0),
         )
     )
+    db_session.commit()
+
+    assert get_current_kpi_from_paths_and_expenses(db_session, "default", "conversions", fixed_now) == 1.0
+    assert get_current_kpi_from_paths_and_expenses(db_session, "default", "revenue", fixed_now) == 10.0
+
+
+def test_get_current_kpi_from_paths_and_expenses_uses_canonical_facts_when_paths_absent(db_session, fixed_now):
+    inserted = persist_journeys_as_conversion_paths(
+        db_session,
+        [
+            {
+                "_schema": "v2",
+                "customer": {"id": "profile-1"},
+                "touchpoints": [{"channel": "paid_social", "ts": "2024-02-15T13:30:00Z"}],
+                "conversions": [{"id": "conv-canonical", "name": "purchase", "ts": "2024-02-15T14:00:00Z", "value": 10.0}],
+            }
+        ],
+        replace=True,
+        import_source="meiro_events_replay",
+        import_batch_id="alerts-canonical-batch",
+    )
+    assert inserted == 1
+    db_session.query(ConversionPath).delete(synchronize_session=False)
     db_session.commit()
 
     assert get_current_kpi_from_paths_and_expenses(db_session, "default", "conversions", fixed_now) == 1.0

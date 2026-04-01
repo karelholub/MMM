@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
@@ -170,3 +170,29 @@ def load_silver_journeys(
             }
         )
     return out
+
+
+def load_recent_silver_journeys(
+    db: Session,
+    *,
+    limit: int = 10000,
+) -> List[Dict[str, Any]]:
+    rows = (
+        db.query(SilverConversionFact.conversion_ts)
+        .order_by(SilverConversionFact.conversion_ts.desc())
+        .limit(max(1, int(limit)))
+        .all()
+    )
+    if not rows:
+        return []
+    end_dt = _aware_dt(rows[0][0])
+    start_dt = _aware_dt(rows[-1][0])
+    if end_dt is None or start_dt is None:
+        return []
+    journeys = load_silver_journeys(
+        db,
+        start_dt=start_dt,
+        end_dt=end_dt + timedelta(microseconds=1),
+    )
+    journeys.sort(key=lambda row: row["conversion_ts"], reverse=True)
+    return journeys[: max(1, int(limit))]

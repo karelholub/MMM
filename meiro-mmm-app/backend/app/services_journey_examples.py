@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
-from .models_config_dq import ConversionPath, JourneyDefinition, JourneyExampleFact, JourneyInstanceFact
+from .models_config_dq import ConversionPath, JourneyDefinition, JourneyDefinitionInstanceFact, JourneyExampleFact, JourneyInstanceFact
 from .services_conversions import conversion_path_payload, conversion_path_revenue_value, conversion_path_touchpoints
 from .services_journey_aggregates import _build_journey_steps, _path_hash
 from .services_journey_instance_facts import load_journey_instance_sequences
@@ -65,6 +65,29 @@ def _iter_instance_examples(
         yield row
 
 
+def _iter_definition_fact_examples(
+    db: Session,
+    *,
+    definition: JourneyDefinition,
+    date_from: date,
+    date_to: date,
+    limit: int,
+):
+    q = (
+        db.query(JourneyDefinitionInstanceFact)
+        .filter(
+            JourneyDefinitionInstanceFact.journey_definition_id == definition.id,
+            JourneyDefinitionInstanceFact.date >= date_from,
+            JourneyDefinitionInstanceFact.date <= date_to,
+        )
+        .order_by(JourneyDefinitionInstanceFact.conversion_ts.desc())
+    )
+    if definition.conversion_kpi_id:
+        q = q.filter(JourneyDefinitionInstanceFact.conversion_key == definition.conversion_kpi_id)
+    for row in q.limit(limit).all():
+        yield row
+
+
 def list_examples_for_journey_definition(
     db: Session,
     *,
@@ -109,6 +132,16 @@ def list_examples_for_journey_definition(
         if definition.conversion_kpi_id:
             raw_count_query = raw_count_query.filter(ConversionPath.conversion_key == definition.conversion_kpi_id)
         source_count = raw_count_query.count()
+    definition_fact_count = (
+        db.query(JourneyDefinitionInstanceFact.conversion_id)
+        .filter(
+            JourneyDefinitionInstanceFact.journey_definition_id == definition.id,
+            JourneyDefinitionInstanceFact.date >= date_from,
+            JourneyDefinitionInstanceFact.date <= date_to,
+        )
+        .count()
+    )
+    source_count = max(source_count, definition_fact_count)
     if fact_count >= source_count and fact_count > 0:
         items: List[Dict[str, Any]] = []
         step_token = str(contains_step or "").strip().lower()
@@ -160,58 +193,49 @@ def list_examples_for_journey_definition(
     step_token = str(contains_step or "").strip().lower()
 
     used_instance = False
-    for row in _iter_instance_examples(
+    used_definition_facts = False
+    for row in _iter_definition_fact_examples(
         db,
         definition=definition,
-        start_dt=start_dt,
-        end_dt=end_dt,
+        date_from=date_from,
+        date_to=date_to,
         limit=max(50, int(limit) * 8),
     ):
-        used_instance = True
-        steps = [str(step.get("step_name") or "") for step in (row.get("steps") or []) if str(step.get("step_name") or "")]
-        resolved_hash = str(row.get("path_hash") or "")
+        used_definition_facts = True
+        steps = [str(step) for step in (row.steps_json or []) if str(step)]
+        resolved_hash = str(row.path_hash or "")
         if path_hash and resolved_hash != path_hash:
             continue
         if step_token and not any(step_token in step.lower() for step in steps):
             continue
-        if channel_group and (str(row.get("channel_group") or "").lower() != channel_group.lower()):
+        if channel_group and (str(row.channel_group or "").lower() != channel_group.lower()):
             continue
-        if campaign_id and str(row.get("campaign_id") or "") != campaign_id:
+        if campaign_id and str(row.campaign_id or "") != campaign_id:
             continue
-        if device and str(row.get("device") or "").lower() != device.lower():
+        if device and str(row.device or "").lower() != device.lower():
             continue
-        if country and str(row.get("country") or "").lower() != country.lower():
+        if country and str(row.country or "").lower() != country.lower():
             continue
 
-        preview_touchpoints = []
-        for step in (row.get("steps") or [])[:5]:
-            preview_ts = step.get("step_ts")
-            if isinstance(preview_ts, datetime):
-                preview_ts = preview_ts.isoformat()
-            preview_touchpoints.append(
-                {
-                    "ts": preview_ts,
-                    "channel": step.get("channel"),
-                    "event": step.get("event_name") or step.get("step_name"),
-                    "campaign": step.get("campaign"),
-                }
-            )
-
+        preview_touchpoints = [
+            {"ts": None, "channel": None, "event": step_name, "campaign": row.campaign_id}
+            for step_name in steps[:5]
+        ]
         items.append(
             {
-                "conversion_id": row.get("conversion_id"),
-                "profile_id": row.get("profile_id"),
-                "conversion_key": row.get("conversion_key"),
-                "conversion_ts": row.get("conversion_ts").isoformat() if row.get("conversion_ts") else None,
+                "conversion_id": row.conversion_id,
+                "profile_id": row.profile_id,
+                "conversion_key": row.conversion_key,
+                "conversion_ts": row.conversion_ts.isoformat() if row.conversion_ts else None,
                 "path_hash": resolved_hash,
                 "steps": steps,
                 "touchpoints_count": max(0, len(steps) - 1),
-                "conversion_value": round(float(row.get("gross_revenue_total") or 0.0), 2),
+                "conversion_value": round(float(row.gross_revenue_total or 0.0), 2),
                 "dimensions": {
-                    "channel_group": row.get("channel_group"),
-                    "campaign_id": row.get("campaign_id"),
-                    "device": row.get("device"),
-                    "country": row.get("country"),
+                    "channel_group": row.channel_group,
+                    "campaign_id": row.campaign_id,
+                    "device": row.device,
+                    "country": row.country,
                 },
                 "touchpoints_preview": preview_touchpoints,
             }
@@ -219,7 +243,68 @@ def list_examples_for_journey_definition(
         if len(items) >= limit:
             break
 
-    if not used_instance:
+    if not used_definition_facts:
+        used_instance = False
+        for row in _iter_instance_examples(
+            db,
+            definition=definition,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            limit=max(50, int(limit) * 8),
+        ):
+            used_instance = True
+            steps = [str(step.get("step_name") or "") for step in (row.get("steps") or []) if str(step.get("step_name") or "")]
+            resolved_hash = str(row.get("path_hash") or "")
+            if path_hash and resolved_hash != path_hash:
+                continue
+            if step_token and not any(step_token in step.lower() for step in steps):
+                continue
+            if channel_group and (str(row.get("channel_group") or "").lower() != channel_group.lower()):
+                continue
+            if campaign_id and str(row.get("campaign_id") or "") != campaign_id:
+                continue
+            if device and str(row.get("device") or "").lower() != device.lower():
+                continue
+            if country and str(row.get("country") or "").lower() != country.lower():
+                continue
+
+            preview_touchpoints = []
+            for step in (row.get("steps") or [])[:5]:
+                preview_ts = step.get("step_ts")
+                if isinstance(preview_ts, datetime):
+                    preview_ts = preview_ts.isoformat()
+                preview_touchpoints.append(
+                    {
+                        "ts": preview_ts,
+                        "channel": step.get("channel"),
+                        "event": step.get("event_name") or step.get("step_name"),
+                        "campaign": step.get("campaign"),
+                    }
+                )
+
+            items.append(
+                {
+                    "conversion_id": row.get("conversion_id"),
+                    "profile_id": row.get("profile_id"),
+                    "conversion_key": row.get("conversion_key"),
+                    "conversion_ts": row.get("conversion_ts").isoformat() if row.get("conversion_ts") else None,
+                    "path_hash": resolved_hash,
+                    "steps": steps,
+                    "touchpoints_count": max(0, len(steps) - 1),
+                    "conversion_value": round(float(row.get("gross_revenue_total") or 0.0), 2),
+                    "dimensions": {
+                        "channel_group": row.get("channel_group"),
+                        "campaign_id": row.get("campaign_id"),
+                        "device": row.get("device"),
+                        "country": row.get("country"),
+                    },
+                    "touchpoints_preview": preview_touchpoints,
+                }
+            )
+            if len(items) >= limit:
+                break
+
+    if not used_definition_facts and not used_instance:
         for row in _iter_raw_examples(
             db,
             definition=definition,

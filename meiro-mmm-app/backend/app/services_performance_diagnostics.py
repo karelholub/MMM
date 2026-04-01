@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from sqlalchemy.orm import Session
 
-from app.models_config_dq import ConversionPath, ConversionScopeDiagnosticFact
+from app.models_config_dq import ConversionPath, ConversionScopeDiagnosticFact, JourneyInstanceFact, JourneyRoleFact, JourneyStepFact
 from app.services_conversions import (
     conversion_path_is_converted,
     conversion_path_payload,
@@ -19,6 +19,8 @@ from app.services_journey_aggregates import (
     STEP_CONTENT_VIEW,
     map_touchpoint_step,
 )
+
+_CONVERSION_STEP = "Purchase / Lead Won (conversion)"
 
 
 def _to_utc_dt(value: Any) -> Optional[datetime]:
@@ -73,6 +75,14 @@ def _dimension_key(tp: Dict[str, Any], scope_type: str) -> str:
         campaign_name = _campaign_name(tp)
         return f"{channel}:{campaign_name}" if campaign_name else channel
     return channel
+
+
+def _dimension_key_from_values(channel: Any, campaign: Any, scope_type: str) -> str:
+    channel_value = str(channel or "unknown")
+    if scope_type == "campaign":
+        campaign_value = str(campaign or "").strip()
+        return f"{channel_value}:{campaign_value}" if campaign_value else channel_value
+    return channel_value
 
 
 def _empty_diag() -> Dict[str, Any]:
@@ -202,6 +212,165 @@ def _aggregate_scope_diagnostics_from_facts(
     return out
 
 
+def _raw_scope_conversion_count(
+    *,
+    db: Session,
+    start: datetime,
+    end: datetime,
+    conversion_key: Optional[str],
+) -> int:
+    q = db.query(ConversionPath.conversion_id).filter(
+        ConversionPath.last_touch_ts >= start,
+        ConversionPath.first_touch_ts <= end,
+    )
+    if conversion_key:
+        q = q.filter(ConversionPath.conversion_key == conversion_key)
+    return q.count()
+
+
+def _aggregate_scope_diagnostics_from_canonical_facts(
+    *,
+    db: Session,
+    scope_type: str,
+    start: datetime,
+    end: datetime,
+    conversion_key: Optional[str],
+    channels: Optional[List[str]],
+) -> Optional[Dict[str, Dict[str, Any]]]:
+    if _raw_scope_conversion_count(db=db, start=start, end=end, conversion_key=conversion_key) > 0:
+        return None
+
+    allowed_channels = set(channels or [])
+    filter_channels = bool(allowed_channels)
+
+    candidate_ids: Set[str] = set()
+    step_q = db.query(JourneyStepFact.conversion_id).filter(
+        JourneyStepFact.step_ts >= start,
+        JourneyStepFact.step_ts <= end,
+    )
+    if conversion_key:
+        step_q = step_q.filter(JourneyStepFact.conversion_key == conversion_key)
+    candidate_ids.update(str(conversion_id or "") for (conversion_id,) in step_q.distinct().all() if str(conversion_id or ""))
+
+    instance_q = db.query(JourneyInstanceFact.conversion_id).filter(
+        JourneyInstanceFact.conversion_ts >= start,
+        JourneyInstanceFact.conversion_ts <= end,
+    )
+    if conversion_key:
+        instance_q = instance_q.filter(JourneyInstanceFact.conversion_key == conversion_key)
+    candidate_ids.update(str(conversion_id or "") for (conversion_id,) in instance_q.distinct().all() if str(conversion_id or ""))
+
+    if not candidate_ids:
+        return None
+
+    instance_rows = {
+        str(row.conversion_id or ""): row
+        for row in db.query(JourneyInstanceFact)
+        .filter(JourneyInstanceFact.conversion_id.in_(list(candidate_ids)))
+        .all()
+    }
+    step_rows_by_conversion: Dict[str, List[JourneyStepFact]] = {}
+    for row in (
+        db.query(JourneyStepFact)
+        .filter(JourneyStepFact.conversion_id.in_(list(candidate_ids)))
+        .order_by(JourneyStepFact.conversion_id.asc(), JourneyStepFact.ordinal.asc())
+        .all()
+    ):
+        step_rows_by_conversion.setdefault(str(row.conversion_id or ""), []).append(row)
+
+    role_rows_by_conversion: Dict[str, List[JourneyRoleFact]] = {}
+    role_q = db.query(JourneyRoleFact).filter(
+        JourneyRoleFact.conversion_id.in_(list(candidate_ids)),
+        JourneyRoleFact.conversion_ts >= start,
+        JourneyRoleFact.conversion_ts <= end,
+    )
+    if conversion_key:
+        role_q = role_q.filter(JourneyRoleFact.conversion_key == conversion_key)
+    for row in role_q.order_by(JourneyRoleFact.conversion_id.asc(), JourneyRoleFact.role_key.asc(), JourneyRoleFact.ordinal.asc()).all():
+        if filter_channels and str(row.channel or "unknown") not in allowed_channels:
+            continue
+        role_rows_by_conversion.setdefault(str(row.conversion_id or ""), []).append(row)
+
+    out: Dict[str, Dict[str, Any]] = {}
+    for conversion_id in candidate_ids:
+        instance_row = instance_rows.get(conversion_id)
+        step_rows = step_rows_by_conversion.get(conversion_id) or []
+        if not instance_row or not step_rows:
+            continue
+
+        dims_any: Set[str] = set()
+        dims_content: Set[str] = set()
+        dims_checkout: Set[str] = set()
+        for step_row in step_rows:
+            if str(step_row.step_name or "") == _CONVERSION_STEP:
+                continue
+            channel = str(step_row.channel or "unknown")
+            if filter_channels and channel not in allowed_channels:
+                continue
+            dim = _dimension_key_from_values(channel, step_row.campaign, scope_type)
+            dims_any.add(dim)
+            if step_row.step_name in {STEP_CONTENT_VIEW, STEP_ADD_TO_CART}:
+                dims_content.add(dim)
+            if step_row.step_name == STEP_CHECKOUT:
+                dims_checkout.add(dim)
+
+        if not dims_any:
+            continue
+
+        for dim in dims_any:
+            diag = out.setdefault(dim, _empty_diag())
+            diag["funnel"]["touch_journeys"] += 1
+        for dim in dims_content:
+            diag = out.setdefault(dim, _empty_diag())
+            diag["funnel"]["content_journeys"] += 1
+        for dim in dims_checkout:
+            diag = out.setdefault(dim, _empty_diag())
+            diag["funnel"]["checkout_journeys"] += 1
+
+        conversion_ts = _to_utc_dt(instance_row.conversion_ts)
+        if conversion_ts is not None and start <= conversion_ts <= end:
+            for dim in dims_any:
+                diag = out.setdefault(dim, _empty_diag())
+                diag["funnel"]["converted_journeys"] += 1
+
+        role_rows = role_rows_by_conversion.get(conversion_id) or []
+        if not role_rows:
+            continue
+        first_rows = [row for row in role_rows if str(row.role_key or "") == "first_touch"]
+        last_rows = [row for row in role_rows if str(row.role_key or "") == "last_touch"]
+        assist_rows = [row for row in role_rows if str(row.role_key or "") == "assist"]
+
+        for row in first_rows:
+            dim = _dimension_key_from_values(row.channel, row.campaign, scope_type)
+            diag = out.setdefault(dim, _empty_diag())
+            diag["roles"]["first_touch_conversions"] += 1
+            diag["roles"]["first_touch_revenue"] += float(row.gross_revenue_total or 0.0)
+        for row in last_rows:
+            dim = _dimension_key_from_values(row.channel, row.campaign, scope_type)
+            diag = out.setdefault(dim, _empty_diag())
+            diag["roles"]["last_touch_conversions"] += 1
+            diag["roles"]["last_touch_revenue"] += float(row.gross_revenue_total or 0.0)
+        if assist_rows:
+            assist_dims = list(
+                dict.fromkeys(
+                    _dimension_key_from_values(row.channel, row.campaign, scope_type)
+                    for row in assist_rows
+                )
+            )
+            if assist_dims:
+                assist_share = float(assist_rows[0].gross_revenue_total or 0.0) / float(len(assist_dims))
+                for dim in assist_dims:
+                    diag = out.setdefault(dim, _empty_diag())
+                    diag["roles"]["assist_conversions"] += 1
+                    diag["roles"]["assist_revenue"] += assist_share
+
+    if not out:
+        return None
+    for diag in out.values():
+        _finalize_diag(diag)
+    return out
+
+
 def build_scope_diagnostics(
     *,
     db: Session,
@@ -225,6 +394,16 @@ def build_scope_diagnostics(
     )
     if fact_result is not None:
         return fact_result
+    canonical_result = _aggregate_scope_diagnostics_from_canonical_facts(
+        db=db,
+        scope_type=scope_type,
+        start=start,
+        end=end,
+        conversion_key=conversion_key,
+        channels=channels,
+    )
+    if canonical_result is not None:
+        return canonical_result
     allowed_channels = set(channels or [])
     filter_channels = bool(allowed_channels)
 

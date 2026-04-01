@@ -945,6 +945,41 @@ class JourneyTransitionFact(Base):
     )
 
 
+class JourneyDefinitionInstanceFact(Base):
+    __tablename__ = "journey_definition_instance_facts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(Date, nullable=False, index=True)
+    journey_definition_id = Column(String(36), ForeignKey("journey_definitions.id", ondelete="CASCADE"), nullable=False)
+    conversion_id = Column(String(128), nullable=False)
+    profile_id = Column(String(128), nullable=True, index=True)
+    conversion_key = Column(String(128), nullable=True, index=True)
+    conversion_ts = Column(DateTime, nullable=False, index=True)
+    path_hash = Column(String(128), nullable=False, index=True)
+    steps_json = Column(JSON, nullable=False, default=list)
+    path_length = Column(Integer, nullable=False, default=0)
+    channel_group = Column(String(128), nullable=True, index=True)
+    last_touch_channel = Column(String(128), nullable=True, index=True)
+    campaign_id = Column(String(255), nullable=True, index=True)
+    device = Column(String(64), nullable=True, index=True)
+    country = Column(String(64), nullable=True, index=True)
+    interaction_path_type = Column(String(32), nullable=True, index=True)
+    time_to_convert_sec = Column(Float, nullable=True)
+    gross_conversions_total = Column(Float, nullable=False, default=0.0)
+    net_conversions_total = Column(Float, nullable=False, default=0.0)
+    gross_revenue_total = Column(Float, nullable=False, default=0.0)
+    net_revenue_total = Column(Float, nullable=False, default=0.0)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_journey_definition_instance_def_date", "journey_definition_id", "date"),
+        Index("ix_journey_definition_instance_def_date_hash", "journey_definition_id", "date", "path_hash"),
+        Index("ix_journey_definition_instance_def_dims", "journey_definition_id", "channel_group", "campaign_id", "device", "country"),
+        Index("ix_journey_definition_instance_def_conversion", "journey_definition_id", "conversion_id", unique=True),
+    )
+
+
 class JourneyExampleFact(Base):
     __tablename__ = "journey_example_facts"
 

@@ -4,7 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
-from app.models_config_dq import ConversionPath, JourneyDefinition, JourneyInstanceFact, JourneyRoleFact, JourneyStepFact, SilverConversionFact, SilverTouchpointFact
+from app.models_config_dq import ConversionPath, JourneyDefinition, JourneyDefinitionInstanceFact, JourneyInstanceFact, JourneyRoleFact, JourneyStepFact, SilverConversionFact, SilverTouchpointFact
 from app.services_conversions import persist_journeys_as_conversion_paths
 from app.services_journey_aggregates import _build_journey_steps, _path_hash
 from app.services_journey_attribution import build_journey_attribution_summary
@@ -162,6 +162,90 @@ def test_attribution_summary_path_hash_scopes_subset():
         assert out["path_hash"] == canonical_hash
         assert out["totals"]["journeys"] == 1
         assert out["totals"]["total_value_observed"] == 55.0
+    finally:
+        db.close()
+
+
+def test_attribution_summary_uses_definition_facts_for_path_hash_filtering():
+    db = _unit_db_session()
+    try:
+        jd = JourneyDefinition(
+            id="jd-definition-path",
+            name="Definition Path",
+            conversion_kpi_id="purchase",
+            lookback_window_days=30,
+            mode_default="conversion_only",
+            created_by="test",
+            updated_by="test",
+            is_archived=False,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        db.add(jd)
+        db.add(
+            JourneyDefinitionInstanceFact(
+                date=datetime(2026, 2, 6, tzinfo=timezone.utc).date(),
+                journey_definition_id="jd-definition-path",
+                conversion_id="cv-definition-path",
+                profile_id="c-definition",
+                conversion_key="purchase",
+                conversion_ts=datetime(2026, 2, 6, 9, 0, 0),
+                path_hash="definition-hash",
+                steps_json=["Paid Landing", "Product View / Content View", "Purchase / Lead Won (conversion)"],
+                path_length=3,
+                channel_group="paid",
+                last_touch_channel="email",
+                campaign_id="cmp-a",
+                device="mobile",
+                country="US",
+                interaction_path_type="click_through",
+                time_to_convert_sec=120.0,
+                gross_conversions_total=1.0,
+                net_conversions_total=1.0,
+                gross_revenue_total=55.0,
+                net_revenue_total=55.0,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+        db.add(
+            JourneyRoleFact(
+                conversion_id="cv-definition-path",
+                profile_id="c-definition",
+                conversion_key="purchase",
+                conversion_ts=datetime(2026, 2, 6, 9, 0, 0),
+                role_key="first_touch",
+                ordinal=0,
+                path_hash="generic-instance-hash",
+                channel_group="paid",
+                channel="google_ads",
+                campaign="cmp-a",
+                device="mobile",
+                country="US",
+                interaction_path_type="click_through",
+                gross_conversions_total=1.0,
+                net_conversions_total=1.0,
+                gross_revenue_total=55.0,
+                net_revenue_total=55.0,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+        db.commit()
+
+        out = build_journey_attribution_summary(
+            db,
+            definition=jd,
+            date_from="2026-02-01",
+            date_to="2026-02-10",
+            model="first_touch",
+            path_hash="definition-hash",
+        )
+
+        assert out["path_hash"] == "definition-hash"
+        assert out["totals"]["journeys"] == 1
+        assert out["totals"]["total_value_observed"] == 55.0
+        assert out["by_channel"][0]["channel"] == "google_ads"
     finally:
         db.close()
 

@@ -5,6 +5,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
 from app.models_config_dq import JourneyDefinition, JourneyTransitionDaily
+from app.services_conversions import persist_journeys_as_conversion_paths
 from app.services_journey_transitions import list_transitions_for_journey_definition
 
 
@@ -190,5 +191,64 @@ def test_list_transitions_applies_max_depth():
         )
         assert out["edges"]
         assert all(e["target"] != "Purchase / Lead Won (conversion)" for e in out["edges"])
+    finally:
+        db.close()
+
+
+def test_list_transitions_falls_back_to_transition_facts_when_daily_rows_absent():
+    db = _unit_db_session()
+    try:
+        jd = JourneyDefinition(
+            id="jd-facts",
+            name="Journey",
+            conversion_kpi_id="purchase",
+            lookback_window_days=30,
+            mode_default="conversion_only",
+            created_by="test",
+            updated_by="test",
+            is_archived=False,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        db.add(jd)
+        db.commit()
+
+        inserted = persist_journeys_as_conversion_paths(
+            db,
+            [
+                {
+                    "_schema": "v2",
+                    "customer": {"id": "cust-1"},
+                    "touchpoints": [
+                        {"ts": "2026-02-10T09:00:00Z", "channel": "google_ads", "interaction_type": "click"},
+                        {"ts": "2026-02-10T10:00:00Z", "channel": "google_ads", "event_name": "page_view"},
+                        {"ts": "2026-02-10T11:00:00Z", "channel": "google_ads", "event_name": "add_to_cart"},
+                    ],
+                    "conversions": [{"id": "conv-1", "name": "purchase", "ts": "2026-02-10T12:00:00Z", "value": 100.0}],
+                    "device": "mobile",
+                    "country": "US",
+                }
+            ],
+            replace=True,
+            import_source="meiro_events_replay",
+            import_batch_id="transition-facts-batch",
+        )
+        assert inserted == 1
+        db.query(JourneyTransitionDaily).delete(synchronize_session=False)
+        db.commit()
+
+        out = list_transitions_for_journey_definition(
+            db,
+            journey_definition_id="jd-facts",
+            date_from=date(2026, 2, 1),
+            date_to=date(2026, 2, 28),
+            min_count=1,
+            max_nodes=20,
+            max_depth=5,
+        )
+
+        assert out["edges"]
+        assert out["meta"]["source"] == "transition_facts"
+        assert any(edge["avg_time_between_sec"] is not None for edge in out["edges"])
     finally:
         db.close()

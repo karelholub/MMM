@@ -142,3 +142,35 @@ def test_compute_dq_snapshots_prefers_persisted_facts_when_taxonomy_disabled(mon
         assert metrics["inferred_mapping_journey_pct"] == 100.0
     finally:
         db.close()
+
+
+def test_load_journeys_uses_silver_when_conversion_paths_absent(monkeypatch):
+    db = _make_session()
+    try:
+        monkeypatch.setattr(services_data_quality, "load_taxonomy", Taxonomy.default)
+        persist_journeys_as_conversion_paths(
+            db,
+            [
+                {
+                    "_schema": "v2",
+                    "customer": {"id": "c1"},
+                    "touchpoints": [
+                        {"channel": "google", "timestamp": "2024-01-01T00:00:00Z", "source": "google", "medium": "cpc"},
+                    ],
+                    "conversions": [{"id": "conv-1", "name": "purchase", "ts": "2024-01-01T01:00:00Z", "value": 10.0}],
+                }
+            ],
+            replace=True,
+            import_source="upload",
+        )
+        db.query(services_data_quality.ConversionPath).delete(synchronize_session=False)
+        db.commit()
+
+        journeys = services_data_quality._load_journeys(db)
+
+        assert len(journeys) == 1
+        assert journeys[0]["customer"]["id"] == "c1"
+        assert journeys[0]["touchpoints"][0]["channel"] == "google"
+        assert journeys[0]["conversions"][0]["value"] == 10.0
+    finally:
+        db.close()

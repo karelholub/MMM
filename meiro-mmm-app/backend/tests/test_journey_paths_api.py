@@ -8,7 +8,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base, get_db
 from app.main import app
-from app.models_config_dq import JourneyDefinition, JourneyPathDaily
+from app.models_config_dq import JourneyDefinition, JourneyDefinitionInstanceFact, JourneyPathDaily
 
 ADMIN_HEADERS = {
     "X-User-Id": "test-admin",
@@ -241,3 +241,93 @@ def test_journey_paths_pagination_and_limits(client):
         headers=ADMIN_HEADERS,
     )
     assert invalid_limit.status_code == 422
+
+
+def test_journey_paths_fall_back_to_definition_instance_facts_when_daily_rows_absent(client):
+    test_client, session_factory = client
+    db = session_factory()
+    try:
+        db.add(
+            JourneyDefinition(
+                id="jd-facts",
+                name="Journey Facts",
+                description="",
+                conversion_kpi_id="purchase",
+                lookback_window_days=30,
+                mode_default="conversion_only",
+                created_by="seed",
+                updated_by="seed",
+                is_archived=False,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            )
+        )
+        db.add_all(
+            [
+                JourneyDefinitionInstanceFact(
+                    date=date(2026, 1, 10),
+                    journey_definition_id="jd-facts",
+                    conversion_id="conv-1",
+                    profile_id="p-1",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2026, 1, 10, 12, 0, 0),
+                    path_hash="path-facts",
+                    steps_json=["Paid Landing", "Checkout", "Purchase / Lead Won (conversion)"],
+                    path_length=3,
+                    channel_group="paid",
+                    last_touch_channel="google_ads",
+                    campaign_id="cmp-facts",
+                    device="mobile",
+                    country="US",
+                    interaction_path_type="click_through",
+                    time_to_convert_sec=120.0,
+                    gross_conversions_total=1.0,
+                    net_conversions_total=1.0,
+                    gross_revenue_total=120.0,
+                    net_revenue_total=100.0,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow(),
+                ),
+                JourneyDefinitionInstanceFact(
+                    date=date(2026, 1, 11),
+                    journey_definition_id="jd-facts",
+                    conversion_id="conv-2",
+                    profile_id="p-2",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2026, 1, 11, 12, 0, 0),
+                    path_hash="path-facts",
+                    steps_json=["Paid Landing", "Checkout", "Purchase / Lead Won (conversion)"],
+                    path_length=3,
+                    channel_group="paid",
+                    last_touch_channel="google_ads",
+                    campaign_id="cmp-facts",
+                    device="mobile",
+                    country="US",
+                    interaction_path_type="click_through",
+                    time_to_convert_sec=240.0,
+                    gross_conversions_total=1.0,
+                    net_conversions_total=1.0,
+                    gross_revenue_total=180.0,
+                    net_revenue_total=150.0,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow(),
+                ),
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    resp = test_client.get(
+        "/api/journeys/jd-facts/paths",
+        params={"date_from": "2026-01-01", "date_to": "2026-01-31", "limit": 50},
+        headers=ADMIN_HEADERS,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["summary"]["count_journeys"] == 2
+    assert body["summary"]["count_conversions"] == 2
+    assert body["summary"]["gross_revenue"] == 300.0
+    assert body["items"][0]["path_hash"] == "path-facts"
+    assert body["items"][0]["p50_time_to_convert_sec"] == 180.0

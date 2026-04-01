@@ -4,7 +4,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
-from app.models_config_dq import ConversionPath, ConversionScopeDiagnosticFact
+from app.models_config_dq import ConversionPath, ConversionScopeDiagnosticFact, JourneyInstanceFact, JourneyRoleFact, JourneyStepFact
+from app.services_conversions import persist_journeys_as_conversion_paths
 from app.services_performance_diagnostics import build_scope_diagnostics
 
 
@@ -132,6 +133,55 @@ def test_build_scope_diagnostics_prefers_persisted_scope_facts():
                 ),
             ]
         )
+        db.commit()
+
+        out = build_scope_diagnostics(
+            db=db,
+            scope_type="channel",
+            date_from="2026-02-01",
+            date_to="2026-02-10",
+            conversion_key="purchase",
+            channels=None,
+        )
+
+        assert out["google_ads"]["roles"]["first_touch_conversions"] == 1
+        assert out["direct"]["roles"]["last_touch_conversions"] == 1
+        assert out["email"]["roles"]["assist_conversions"] == 1
+        assert out["email"]["funnel"]["content_journeys"] == 1
+        assert out["direct"]["funnel"]["checkout_journeys"] == 1
+        assert out["google_ads"]["funnel"]["converted_journeys"] == 1
+    finally:
+        db.close()
+
+
+def test_build_scope_diagnostics_uses_canonical_facts_when_conversion_paths_absent():
+    db = _unit_db_session()
+    try:
+        inserted = persist_journeys_as_conversion_paths(
+            db,
+            [
+                {
+                    "_schema": "v2",
+                    "customer": {"id": "p-1"},
+                    "touchpoints": [
+                        {"channel": "google_ads", "timestamp": "2026-02-01T09:00:00Z"},
+                        {"channel": "email", "event_name": "product_view", "timestamp": "2026-02-03T09:00:00Z"},
+                        {"channel": "direct", "event_name": "form_submit", "timestamp": "2026-02-05T09:00:00Z"},
+                    ],
+                    "conversions": [{"id": "conv-1", "name": "purchase", "ts": "2026-02-05T12:00:00Z", "value": 100.0}],
+                }
+            ],
+            replace=True,
+            import_source="meiro_events_replay",
+            import_batch_id="diag-canonical-batch",
+        )
+        assert inserted == 1
+        assert db.query(JourneyInstanceFact).count() == 1
+        assert db.query(JourneyStepFact).count() >= 2
+        assert db.query(JourneyRoleFact).count() >= 2
+
+        db.query(ConversionScopeDiagnosticFact).delete(synchronize_session=False)
+        db.query(ConversionPath).delete(synchronize_session=False)
         db.commit()
 
         out = build_scope_diagnostics(

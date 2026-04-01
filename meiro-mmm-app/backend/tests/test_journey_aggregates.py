@@ -8,8 +8,11 @@ from app.models_config_dq import (
     ChannelPerformanceDaily,
     ConversionPath,
     JourneyDefinition,
+    JourneyDefinitionInstanceFact,
     JourneyExampleFact,
+    JourneyInstanceFact,
     JourneyPathDaily,
+    JourneyStepFact,
     JourneyTransitionFact,
     JourneyTransitionDaily,
     SilverConversionFact,
@@ -144,10 +147,12 @@ def test_run_daily_journey_aggregates_writes_paths_and_transitions_and_backfills
         )
         channel_rows = db.query(ChannelPerformanceDaily).all()
         example_rows = db.query(JourneyExampleFact).all()
+        definition_fact_rows = db.query(JourneyDefinitionInstanceFact).all()
         assert len(path_rows) >= 2
         assert len(transition_rows) >= 1
         assert channel_rows
         assert example_rows
+        assert definition_fact_rows
         assert any(r.from_step in {STEP_PAID_LANDING, STEP_ORGANIC_LANDING} for r in transition_rows)
         assert any(float(r.avg_time_between_sec or 0.0) > 0.0 for r in transition_rows)
         assert any(float(r.p50_time_between_sec or 0.0) > 0.0 for r in transition_rows)
@@ -163,6 +168,7 @@ def test_run_daily_journey_aggregates_writes_paths_and_transitions_and_backfills
         example_row = next(r for r in example_rows if r.conversion_id == "c1")
         assert example_row.path_hash
         assert example_row.touchpoints_count == 4
+        assert any(r.journey_definition_id == "def-1" and r.path_hash for r in definition_fact_rows)
 
         # Simulate data loss for day1 aggregates; rerun should backfill missing day1.
         day1_date = date(2026, 2, 8)
@@ -170,6 +176,7 @@ def test_run_daily_journey_aggregates_writes_paths_and_transitions_and_backfills
         db.query(JourneyTransitionDaily).filter(JourneyTransitionDaily.date == day1_date).delete(synchronize_session=False)
         db.query(ChannelPerformanceDaily).filter(ChannelPerformanceDaily.date == day1_date).delete(synchronize_session=False)
         db.query(JourneyExampleFact).filter(JourneyExampleFact.date == day1_date).delete(synchronize_session=False)
+        db.query(JourneyDefinitionInstanceFact).filter(JourneyDefinitionInstanceFact.date == day1_date).delete(synchronize_session=False)
         db.commit()
 
         out2 = run_daily_journey_aggregates(db, as_of_date=date(2026, 2, 10), reprocess_days=1)
@@ -182,6 +189,7 @@ def test_run_daily_journey_aggregates_writes_paths_and_transitions_and_backfills
         assert restored > 0
         assert db.query(ChannelPerformanceDaily).filter(ChannelPerformanceDaily.date == day1_date).count() > 0
         assert db.query(JourneyExampleFact).filter(JourneyExampleFact.date == day1_date).count() > 0
+        assert db.query(JourneyDefinitionInstanceFact).filter(JourneyDefinitionInstanceFact.date == day1_date).count() > 0
     finally:
         db.close()
 
@@ -312,5 +320,73 @@ def test_run_daily_journey_aggregates_rebuilds_from_instance_transition_facts_wi
         assert out["transition_rows_written"] >= 1
         assert transition_rows
         assert any(float(row.avg_time_between_sec or 0.0) > 0.0 for row in transition_rows)
+    finally:
+        db.close()
+
+
+def test_run_daily_journey_aggregates_rebuilds_from_definition_instance_facts_without_raw_silver_or_instance_rows():
+    db = _unit_db_session()
+    try:
+        definition = JourneyDefinition(
+            id="def-definition-facts",
+            name="Definition Fact Journey",
+            conversion_kpi_id="purchase",
+            lookback_window_days=30,
+            mode_default="conversion_only",
+            created_by="test",
+            updated_by="test",
+            is_archived=False,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        db.add(definition)
+        db.commit()
+
+        inserted = persist_journeys_as_conversion_paths(
+            db,
+            [
+                {
+                    "_schema": "v2",
+                    "customer": {"id": "cust-definition"},
+                    "touchpoints": [
+                        {"ts": "2026-02-08T09:00:00Z", "channel": "google_ads", "interaction_type": "click"},
+                        {"ts": "2026-02-08T10:00:00Z", "channel": "google_ads", "event_name": "checkout"},
+                    ],
+                    "conversions": [
+                        {"id": "conv-definition", "name": "purchase", "ts": "2026-02-08T12:00:00Z", "value": 175.0}
+                    ],
+                }
+            ],
+            replace=True,
+            import_source="meiro_events_replay",
+            import_batch_id="definition-facts-batch",
+        )
+        assert inserted == 1
+
+        first = run_daily_journey_aggregates(db, as_of_date=date(2026, 2, 9), reprocess_days=1)
+        assert first["definition_rows_written"] >= 1
+        assert db.query(JourneyDefinitionInstanceFact).filter(JourneyDefinitionInstanceFact.date == date(2026, 2, 8)).count() >= 1
+
+        db.query(JourneyPathDaily).delete(synchronize_session=False)
+        db.query(JourneyTransitionDaily).delete(synchronize_session=False)
+        db.query(JourneyExampleFact).delete(synchronize_session=False)
+        db.query(ConversionPath).delete(synchronize_session=False)
+        db.query(SilverConversionFact).delete(synchronize_session=False)
+        db.query(SilverTouchpointFact).delete(synchronize_session=False)
+        db.query(JourneyInstanceFact).delete(synchronize_session=False)
+        db.query(JourneyStepFact).delete(synchronize_session=False)
+        db.commit()
+
+        out = run_daily_journey_aggregates(db, as_of_date=date(2026, 2, 9), reprocess_days=1)
+
+        path_rows = db.query(JourneyPathDaily).filter(JourneyPathDaily.date == date(2026, 2, 8)).all()
+        transition_rows = db.query(JourneyTransitionDaily).filter(JourneyTransitionDaily.date == date(2026, 2, 8)).all()
+        example_rows = db.query(JourneyExampleFact).filter(JourneyExampleFact.date == date(2026, 2, 8)).all()
+        assert out["path_rows_written"] >= 1
+        assert out["definition_rows_written"] >= 1
+        assert path_rows
+        assert transition_rows
+        assert example_rows
+        assert any(float(row.gross_revenue_total or 0.0) == 175.0 for row in path_rows)
     finally:
         db.close()

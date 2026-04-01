@@ -13,9 +13,12 @@ from .models_config_dq import (
     FunnelDefinition,
     JourneyAlertDefinition,
     JourneyAlertEvent,
+    JourneyDefinition,
     JourneyPathDaily,
     JourneyTransitionDaily,
 )
+from .services_journey_definition_facts import compute_path_metric_from_definition_facts, has_definition_instance_facts
+from .services_journey_transition_facts import iter_journey_transition_rows
 
 ALERT_TYPES = {
     "path_cr_drop",
@@ -245,6 +248,7 @@ def _path_metric_for_period(
     if not journey_definition_id:
         return None
 
+    filters = _normalize_filters(scope)
     q = db.query(JourneyPathDaily).filter(
         JourneyPathDaily.journey_definition_id == journey_definition_id,
         JourneyPathDaily.date >= date_from,
@@ -253,7 +257,25 @@ def _path_metric_for_period(
     path_hash = (scope.get("path_hash") or "").strip()
     if path_hash:
         q = q.filter(JourneyPathDaily.path_hash == path_hash)
-    q = _apply_path_scope_filters(q, _normalize_filters(scope))
+    q = _apply_path_scope_filters(q, filters)
+    if q.limit(1).first() is None and has_definition_instance_facts(
+        db,
+        journey_definition_id=journey_definition_id,
+        date_from=date_from,
+        date_to=date_to,
+    ):
+        return compute_path_metric_from_definition_facts(
+            db,
+            journey_definition_id=journey_definition_id,
+            metric=metric,
+            date_from=date_from,
+            date_to=date_to,
+            path_hash=path_hash or None,
+            channel_group=filters.get("channel_group"),
+            campaign_id=filters.get("campaign_id"),
+            device=filters.get("device"),
+            country=filters.get("country"),
+        )
 
     sums = q.with_entities(
         func.sum(JourneyPathDaily.count_journeys),
@@ -332,9 +354,71 @@ def _funnel_step_dropoff_for_period(
         or 0.0
     )
     if denom <= 0:
+        denom, numer = _funnel_step_dropoff_from_transition_facts(
+            db,
+            journey_definition_id=funnel.journey_definition_id,
+            from_step=from_step,
+            to_step=to_step,
+            date_from=date_from,
+            date_to=date_to,
+            filters=filters,
+        )
+    if denom <= 0:
         return None
     conversion_rate = numer / denom
     return max(0.0, min(1.0, 1.0 - conversion_rate))
+
+
+def _funnel_step_dropoff_from_transition_facts(
+    db: Session,
+    *,
+    journey_definition_id: str,
+    from_step: str,
+    to_step: str,
+    date_from: date,
+    date_to: date,
+    filters: Dict[str, Any],
+) -> Tuple[float, float]:
+    journey_definition = db.get(JourneyDefinition, journey_definition_id)
+    conversion_key = str((journey_definition.conversion_kpi_id if journey_definition else "") or "").strip()
+    if not conversion_key:
+        return 0.0, 0.0
+    matching_definition_ids = [
+        str(definition_id or "")
+        for (definition_id,) in db.query(JourneyDefinition.id)
+        .filter(
+            JourneyDefinition.is_archived == False,  # noqa: E712
+            JourneyDefinition.conversion_kpi_id == conversion_key,
+        )
+        .all()
+    ]
+    if matching_definition_ids != [journey_definition_id]:
+        return 0.0, 0.0
+
+    start_dt = datetime.combine(date_from, datetime.min.time())
+    end_dt = datetime.combine(date_to + timedelta(days=1), datetime.min.time())
+    denom = 0.0
+    numer = 0.0
+    for row in iter_journey_transition_rows(
+        db,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        conversion_key=conversion_key,
+    ):
+        if str(row.from_step or "") != from_step:
+            continue
+        if filters.get("channel_group") and str(row.channel_group or "") != str(filters["channel_group"]):
+            continue
+        if filters.get("campaign_id") and str(row.campaign_id or "") != str(filters["campaign_id"]):
+            continue
+        if filters.get("device") and str(row.device or "") != str(filters["device"]):
+            continue
+        if filters.get("country") and str(row.country or "").lower() != str(filters["country"]).lower():
+            continue
+        denom += 1.0
+        if str(row.to_step or "") == to_step:
+            numer += 1.0
+    return denom, numer
 
 
 def _pct_delta(current: float, baseline: float) -> Optional[float]:

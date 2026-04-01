@@ -4,7 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
-from app.models_config_dq import ConversionPath, JourneyDefinition, JourneyExampleFact, SilverConversionFact, SilverTouchpointFact
+from app.models_config_dq import ConversionPath, JourneyDefinition, JourneyDefinitionInstanceFact, JourneyExampleFact, SilverConversionFact, SilverTouchpointFact
 from app.services_conversions import persist_journeys_as_conversion_paths
 from app.services_journey_examples import list_examples_for_journey_definition
 
@@ -184,5 +184,67 @@ def test_list_examples_for_journey_definition_uses_instance_facts_when_raw_and_s
         assert item["conversion_id"] == "p-1-0"
         assert item["conversion_value"] == 123.45
         assert item["touchpoints_preview"][0]["campaign"] == "Brand"
+    finally:
+        db.close()
+
+
+def test_list_examples_for_journey_definition_uses_definition_instance_facts_when_examples_absent():
+    db = _unit_db_session()
+    try:
+        definition = JourneyDefinition(
+            id="jd-definition-facts",
+            name="J1",
+            conversion_kpi_id="purchase",
+            lookback_window_days=30,
+            mode_default="conversion_only",
+            created_by="test",
+            updated_by="test",
+            is_archived=False,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        db.add(definition)
+        db.add(
+            JourneyDefinitionInstanceFact(
+                date=date(2026, 2, 5),
+                journey_definition_id="jd-definition-facts",
+                conversion_id="conv-definition-fact",
+                profile_id="p-1",
+                conversion_key="purchase",
+                conversion_ts=datetime(2026, 2, 5, 12, 0),
+                path_hash="definition-fact-hash",
+                steps_json=["Paid Landing", "Product View / Content View", "Purchase / Lead Won (conversion)"],
+                path_length=3,
+                channel_group="paid",
+                last_touch_channel="email",
+                campaign_id="cmp-1",
+                device="mobile",
+                country="US",
+                interaction_path_type="click_through",
+                time_to_convert_sec=321.0,
+                gross_conversions_total=1.0,
+                net_conversions_total=1.0,
+                gross_revenue_total=222.22,
+                net_revenue_total=200.0,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+        db.commit()
+
+        out = list_examples_for_journey_definition(
+            db,
+            definition=definition,
+            date_from=date(2026, 2, 1),
+            date_to=date(2026, 2, 10),
+            limit=10,
+        )
+
+        assert out["total"] == 1
+        item = out["items"][0]
+        assert item["conversion_id"] == "conv-definition-fact"
+        assert item["path_hash"] == "definition-fact-hash"
+        assert item["conversion_value"] == 222.22
+        assert item["touchpoints_preview"][0]["event"] == "Paid Landing"
     finally:
         db.close()

@@ -7,6 +7,7 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 
 from .models_config_dq import JourneyInstanceFact, JourneyStepFact, JourneyTransitionFact
+from .services_journey_steps import to_utc_dt
 
 
 def build_journey_transition_facts(
@@ -23,8 +24,10 @@ def build_journey_transition_facts(
     ]
     for idx, (from_row, to_row) in enumerate(zip(ordered_steps, ordered_steps[1:])):
         delta_sec = None
-        if isinstance(from_row.step_ts, datetime) and isinstance(to_row.step_ts, datetime):
-            candidate = (to_row.step_ts - from_row.step_ts).total_seconds()
+        from_step_ts = to_utc_dt(from_row.step_ts)
+        to_step_ts = to_utc_dt(to_row.step_ts)
+        if isinstance(from_step_ts, datetime) and isinstance(to_step_ts, datetime):
+            candidate = (to_step_ts - from_step_ts).total_seconds()
             if candidate >= 0:
                 delta_sec = float(candidate)
         rows.append(
@@ -36,8 +39,8 @@ def build_journey_transition_facts(
                 ordinal=idx,
                 from_step=from_row.step_name,
                 to_step=to_row.step_name,
-                from_step_ts=from_row.step_ts,
-                to_step_ts=to_row.step_ts,
+                from_step_ts=from_step_ts,
+                to_step_ts=to_step_ts,
                 delta_sec=delta_sec,
                 channel_group=instance_row.channel_group,
                 campaign_id=instance_row.campaign_id,

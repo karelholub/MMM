@@ -20,6 +20,7 @@ from .models_config_dq import (
     NotificationEndpoint,
 )
 from .services_conversions import conversion_path_payload
+from .services_silver_journeys import load_recent_silver_journeys
 from .utils.taxonomy import load_taxonomy
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
@@ -47,6 +48,13 @@ def _load_journeys(db: Session) -> List[Dict[str, Any]]:
             payload = payload_raw if isinstance(payload_raw, dict) else {}
             if payload:
                 journeys.append(payload)
+        if journeys:
+            return journeys
+
+    # Secondary source: canonical silver journeys reconstructed from persisted facts.
+    silver_rows = load_recent_silver_journeys(db, limit=10000)
+    if silver_rows:
+        journeys = [row["payload"] for row in silver_rows if isinstance(row.get("payload"), dict) and row["payload"]]
         if journeys:
             return journeys
 

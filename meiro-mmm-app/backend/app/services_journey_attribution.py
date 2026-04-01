@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from sqlalchemy.orm import Session
 
 from .attribution_engine import ATTRIBUTION_MODELS, run_attribution, run_attribution_campaign
-from .models_config_dq import ConversionPath, JourneyDefinition, JourneyInstanceFact, JourneyRoleFact, JourneyStepFact
+from .models_config_dq import ConversionPath, JourneyDefinition, JourneyDefinitionInstanceFact, JourneyInstanceFact, JourneyRoleFact, JourneyStepFact
 from .services_canonical_facts import load_preferred_journey_rows
 from .services_conversions import conversion_path_payload, v2_to_legacy
 from .services_journey_aggregates import _build_journey_steps, _path_hash
@@ -265,6 +265,36 @@ def _position_based_weights(step_count: int, *, first_pct: float, last_pct: floa
     return [first_pct] + ([middle_share] * (step_count - 2)) + [last_pct]
 
 
+def _load_definition_instance_rows(
+    db: Session,
+    *,
+    definition: JourneyDefinition,
+    d_from: date,
+    d_to: date,
+    channel_group: Optional[str],
+    campaign_id: Optional[str],
+    device: Optional[str],
+    country: Optional[str],
+    path_hash: Optional[str],
+) -> List[JourneyDefinitionInstanceFact]:
+    q = db.query(JourneyDefinitionInstanceFact).filter(
+        JourneyDefinitionInstanceFact.journey_definition_id == definition.id,
+        JourneyDefinitionInstanceFact.date >= d_from,
+        JourneyDefinitionInstanceFact.date <= d_to,
+    )
+    if path_hash:
+        q = q.filter(JourneyDefinitionInstanceFact.path_hash == path_hash)
+    if channel_group:
+        q = q.filter(JourneyDefinitionInstanceFact.channel_group == channel_group)
+    if campaign_id:
+        q = q.filter(JourneyDefinitionInstanceFact.campaign_id == campaign_id)
+    if device:
+        q = q.filter(JourneyDefinitionInstanceFact.device == device)
+    if country:
+        q = q.filter(JourneyDefinitionInstanceFact.country == country)
+    return q.all()
+
+
 def _build_step_fact_summary(
     db: Session,
     *,
@@ -285,42 +315,60 @@ def _build_step_fact_summary(
         return None
     start_dt = datetime.combine(d_from, dt_time.min)
     end_dt = datetime.combine(d_to + timedelta(days=1), dt_time.min)
-    q = db.query(
-        JourneyInstanceFact.conversion_id,
-        JourneyInstanceFact.path_hash,
-        JourneyInstanceFact.channel_group,
-        JourneyInstanceFact.campaign_id,
-        JourneyInstanceFact.device,
-        JourneyInstanceFact.country,
-        JourneyInstanceFact.gross_revenue_total,
-        JourneyInstanceFact.net_revenue_total,
-        JourneyInstanceFact.gross_conversions_total,
-        JourneyInstanceFact.net_conversions_total,
-    ).filter(
-        JourneyInstanceFact.conversion_ts >= start_dt,
-        JourneyInstanceFact.conversion_ts < end_dt,
+    definition_rows = _load_definition_instance_rows(
+        db,
+        definition=definition,
+        d_from=d_from,
+        d_to=d_to,
+        channel_group=channel_group,
+        campaign_id=campaign_id,
+        device=device,
+        country=country,
+        path_hash=path_hash,
     )
-    if definition.conversion_kpi_id:
-        q = q.filter(JourneyInstanceFact.conversion_key == definition.conversion_kpi_id)
-    if path_hash:
-        q = q.filter(JourneyInstanceFact.path_hash == path_hash)
-    if channel_group:
-        q = q.filter(JourneyInstanceFact.channel_group == channel_group)
-    if campaign_id:
-        q = q.filter(JourneyInstanceFact.campaign_id == campaign_id)
-    if device:
-        q = q.filter(JourneyInstanceFact.device == device)
-    if country:
-        q = q.filter(JourneyInstanceFact.country == country)
-    instance_rows = q.all()
-    if not instance_rows:
+    use_definition_rows = bool(definition_rows)
+    if use_definition_rows:
+        instance_by_conversion: Dict[str, Any] = {
+            str(row.conversion_id or ""): row
+            for row in definition_rows
+            if str(row.conversion_id or "")
+        }
+    else:
+        q = db.query(
+            JourneyInstanceFact.conversion_id,
+            JourneyInstanceFact.path_hash,
+            JourneyInstanceFact.channel_group,
+            JourneyInstanceFact.campaign_id,
+            JourneyInstanceFact.device,
+            JourneyInstanceFact.country,
+            JourneyInstanceFact.gross_revenue_total,
+            JourneyInstanceFact.net_revenue_total,
+            JourneyInstanceFact.gross_conversions_total,
+            JourneyInstanceFact.net_conversions_total,
+        ).filter(
+            JourneyInstanceFact.conversion_ts >= start_dt,
+            JourneyInstanceFact.conversion_ts < end_dt,
+        )
+        if definition.conversion_kpi_id:
+            q = q.filter(JourneyInstanceFact.conversion_key == definition.conversion_kpi_id)
+        if path_hash:
+            q = q.filter(JourneyInstanceFact.path_hash == path_hash)
+        if channel_group:
+            q = q.filter(JourneyInstanceFact.channel_group == channel_group)
+        if campaign_id:
+            q = q.filter(JourneyInstanceFact.campaign_id == campaign_id)
+        if device:
+            q = q.filter(JourneyInstanceFact.device == device)
+        if country:
+            q = q.filter(JourneyInstanceFact.country == country)
+        instance_rows = q.all()
+        instance_by_conversion = {
+            str(row[0] or ""): row
+            for row in instance_rows
+            if str(row[0] or "")
+        }
+    if not instance_by_conversion:
         return None
-
-    instance_by_conversion: Dict[str, Any] = {
-        str(row[0] or ""): row
-        for row in instance_rows
-        if str(row[0] or "")
-    }
     conversion_ids = list(instance_by_conversion.keys())
     if not conversion_ids:
         return None
@@ -359,7 +407,16 @@ def _build_step_fact_summary(
         steps = steps_by_conversion.get(conversion_id) or []
         if not steps:
             continue
-        gross_revenue = float(instance[6] or 0.0)
+        if use_definition_rows:
+            gross_revenue = float(instance.gross_revenue_total or 0.0)
+            net_revenue = float(instance.net_revenue_total or 0.0)
+            gross_conversions = float(instance.gross_conversions_total or 0.0)
+            net_conversions = float(instance.net_conversions_total or 0.0)
+        else:
+            gross_revenue = float(instance[6] or 0.0)
+            net_revenue = float(instance[7] or 0.0)
+            gross_conversions = float(instance[8] or 0.0)
+            net_conversions = float(instance[9] or 0.0)
         observed_total += gross_revenue
         journey_count += 1
         if model in {"linear", "position_based"}:
@@ -403,15 +460,15 @@ def _build_step_fact_summary(
                     "_revenue_entries": [
                         {
                             "value_in_base": gross_revenue,
-                            "net_value_in_base": float(instance[7] or 0.0),
+                            "net_value_in_base": net_revenue,
                             "gross_value": gross_revenue,
-                            "net_value": float(instance[7] or 0.0),
+                            "net_value": net_revenue,
                             "refunded_value": 0.0,
                             "cancelled_value": 0.0,
-                            "gross_conversions": float(instance[8] or 0.0),
-                            "net_conversions": float(instance[9] or 0.0),
+                            "gross_conversions": gross_conversions,
+                            "net_conversions": net_conversions,
                             "invalid_leads": 0.0,
-                            "valid_leads": float(instance[9] or 0.0),
+                            "valid_leads": net_conversions,
                         }
                     ],
                 }
@@ -518,6 +575,22 @@ def _build_role_fact_summary(
         return None
     start_dt = datetime.combine(d_from, dt_time.min)
     end_dt = datetime.combine(d_to + timedelta(days=1), dt_time.min)
+    definition_rows = _load_definition_instance_rows(
+        db,
+        definition=definition,
+        d_from=d_from,
+        d_to=d_to,
+        channel_group=channel_group,
+        campaign_id=campaign_id,
+        device=device,
+        country=country,
+        path_hash=path_hash,
+    )
+    definition_conversion_ids = [
+        str(row.conversion_id or "")
+        for row in definition_rows
+        if str(row.conversion_id or "")
+    ]
     q = db.query(JourneyRoleFact).filter(
         JourneyRoleFact.role_key == role_key,
         JourneyRoleFact.conversion_ts >= start_dt,
@@ -525,15 +598,17 @@ def _build_role_fact_summary(
     )
     if definition.conversion_kpi_id:
         q = q.filter(JourneyRoleFact.conversion_key == definition.conversion_kpi_id)
-    if path_hash:
+    if definition_conversion_ids:
+        q = q.filter(JourneyRoleFact.conversion_id.in_(definition_conversion_ids))
+    elif path_hash:
         q = q.filter(JourneyRoleFact.path_hash == path_hash)
-    if channel_group:
+    if not definition_conversion_ids and channel_group:
         q = q.filter(JourneyRoleFact.channel_group == channel_group)
-    if campaign_id:
+    if not definition_conversion_ids and campaign_id:
         q = q.filter(JourneyRoleFact.campaign == campaign_id)
-    if device:
+    if not definition_conversion_ids and device:
         q = q.filter(JourneyRoleFact.device == device)
-    if country:
+    if not definition_conversion_ids and country:
         q = q.filter(JourneyRoleFact.country == country)
     rows = q.all()
     if not rows:

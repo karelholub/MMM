@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from .models_config_dq import ConversionPath
 from .models_overview_alerts import AlertEvent, AlertRule, MetricSnapshot
+from .services_canonical_facts import iter_canonical_conversion_rows
 from .services_overview import get_freshness as overview_get_freshness
 
 logger = logging.getLogger(__name__)
@@ -163,10 +164,46 @@ def get_current_kpi_from_paths_and_expenses(
 
     if kpi_key == "conversions":
         count, _, _ = _conversions_and_revenue_from_paths(db, dt_from, dt_to, None)
-        return float(count)
+        if float(count) > 0:
+            return float(count)
+        path_rows_present = (
+            db.query(ConversionPath.conversion_id)
+            .filter(ConversionPath.conversion_ts >= dt_from, ConversionPath.conversion_ts <= dt_to)
+            .limit(1)
+            .first()
+            is not None
+        )
+        if path_rows_present:
+            return float(count)
+        canonical_count = 0.0
+        for row in iter_canonical_conversion_rows(
+            db,
+            date_from=dt_from,
+            date_to=dt_to,
+        ):
+            canonical_count += float(row.gross_conversions_total or 0.0)
+        return canonical_count
     if kpi_key == "revenue":
         _, rev, _ = _conversions_and_revenue_from_paths(db, dt_from, dt_to, None)
-        return rev
+        if float(rev or 0.0) > 0:
+            return rev
+        path_rows_present = (
+            db.query(ConversionPath.conversion_id)
+            .filter(ConversionPath.conversion_ts >= dt_from, ConversionPath.conversion_ts <= dt_to)
+            .limit(1)
+            .first()
+            is not None
+        )
+        if path_rows_present:
+            return rev
+        canonical_revenue = 0.0
+        for row in iter_canonical_conversion_rows(
+            db,
+            date_from=dt_from,
+            date_to=dt_to,
+        ):
+            canonical_revenue += float(row.gross_revenue_total or 0.0)
+        return canonical_revenue
     if kpi_key == "spend" and expenses is not None:
         by_ch = _expense_by_channel(expenses, date_from, date_to, None)
         return sum(by_ch.values())

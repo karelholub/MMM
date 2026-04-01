@@ -131,10 +131,13 @@ def build_journey_steps_with_timestamps(
     conversion_ts: datetime,
     lookback_window_days: int,
 ) -> Tuple[List[str], List[datetime], Optional[float], Dict[str, Optional[str]]]:
+    normalized_conversion_ts = to_utc_dt(conversion_ts)
+    if normalized_conversion_ts is None:
+        normalized_conversion_ts = datetime.now(timezone.utc)
     tps = payload.get("touchpoints") or []
     if not isinstance(tps, list):
         tps = []
-    lower_bound = conversion_ts - timedelta(days=max(1, int(lookback_window_days)))
+    lower_bound = normalized_conversion_ts - timedelta(days=max(1, int(lookback_window_days)))
     selected: List[Tuple[datetime, Dict[str, Any]]] = []
     for tp in tps:
         if not isinstance(tp, dict):
@@ -142,11 +145,11 @@ def build_journey_steps_with_timestamps(
         ts = touchpoint_ts(tp)
         if ts is None:
             continue
-        if lower_bound <= ts <= conversion_ts:
+        if lower_bound <= ts <= normalized_conversion_ts:
             selected.append((ts, tp))
     selected.sort(key=lambda row: row[0])
     raw_steps: List[Tuple[str, datetime]] = [(map_touchpoint_step(tp, idx), ts) for idx, (ts, tp) in enumerate(selected)]
-    raw_steps.append((STEP_CONVERSION, conversion_ts))
+    raw_steps.append((STEP_CONVERSION, normalized_conversion_ts))
     compact_steps: List[str] = []
     compact_timestamps: List[datetime] = []
     prev_step: Optional[str] = None
@@ -159,7 +162,7 @@ def build_journey_steps_with_timestamps(
         if len(compact_steps) >= MAX_STEPS:
             break
     first_step_ts = selected[0][0] if selected else None
-    ttc = (conversion_ts - first_step_ts).total_seconds() if first_step_ts else None
+    ttc = (normalized_conversion_ts - first_step_ts).total_seconds() if first_step_ts else None
     last_tp = selected[-1][1] if selected else {}
     campaign_val = last_tp.get("campaign")
     if isinstance(campaign_val, dict):
