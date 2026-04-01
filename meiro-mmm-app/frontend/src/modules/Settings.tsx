@@ -22,6 +22,7 @@ import TaxonomyOverviewPanel from '../features/taxonomy/TaxonomyOverviewPanel'
 import TaxonomyInsightsPanel from '../features/taxonomy/TaxonomyInsightsPanel'
 import TaxonomySuggestionsPanel from '../features/taxonomy/TaxonomySuggestionsPanel'
 import TaxonomyPreviewPanel from '../features/taxonomy/TaxonomyPreviewPanel'
+import { AnalyticsToolbar } from '../components/dashboard'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import type { RecommendedActionItem } from '../components/RecommendedActionsList'
 import { usePermissions } from '../hooks/usePermissions'
@@ -8402,30 +8403,11 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
             </div>
           )}
 
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              flexWrap: 'wrap',
-              gap: t.space.md,
-            }}
-          >
-            <div
-              style={{ display: 'flex', alignItems: 'center', gap: t.space.sm }}
-            >
-              <input
-                type="search"
-                value={modelConfigSearch}
-                onChange={(e) => setModelConfigSearch(e.target.value)}
-                placeholder="Search configs…"
-                style={{
-                  padding: `${t.space.xs}px ${t.space.sm}px`,
-                  borderRadius: t.radius.sm,
-                  border: `1px solid ${t.color.borderLight}`,
-                  fontSize: t.font.sizeSm,
-                }}
-              />
+          <AnalyticsToolbar
+            searchValue={modelConfigSearch}
+            onSearchChange={setModelConfigSearch}
+            searchPlaceholder="Search configs…"
+            filters={
               <select
                 value={modelConfigStatusFilter}
                 onChange={(e) =>
@@ -8444,76 +8426,84 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                 <option value="active">Active</option>
                 <option value="archived">Archived</option>
               </select>
-            </div>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: t.space.sm,
-                flexWrap: 'wrap',
-              }}
-            >
-              <button
-                type="button"
-                onClick={() => handleCreateDraft()}
-                disabled={createModelConfigMutation.isPending}
-                style={{
-                  padding: `${t.space.xs}px ${t.space.sm}px`,
-                  borderRadius: t.radius.sm,
-                  border: `1px solid ${t.color.accent}`,
-                  background: t.color.accentMuted,
-                  color: t.color.accent,
-                  fontSize: t.font.sizeXs,
-                  cursor: createModelConfigMutation.isPending ? 'wait' : 'pointer',
-                }}
-              >
-                {createModelConfigMutation.isPending ? 'Creating…' : 'New draft'}
-              </button>
-              <button
-                type="button"
-                onClick={() => createDefaultConfigMutation.mutate()}
-                disabled={createDefaultConfigMutation.isPending}
-                style={{
-                  padding: `${t.space.xs}px ${t.space.sm}px`,
-                  borderRadius: t.radius.sm,
-                  border: 'none',
-                  background: t.color.accent,
-                  color: t.color.surface,
-                  fontSize: t.font.sizeXs,
-                  cursor: createDefaultConfigMutation.isPending ? 'wait' : 'pointer',
-                }}
-              >
-                {createDefaultConfigMutation.isPending
-                  ? 'Generating…'
-                  : 'From template'}
-              </button>
-              <button
-                type="button"
-                onClick={() => handleDuplicateFromActive()}
-                disabled={!activeConfig || cloneModelConfigMutation.isPending}
-                style={{
-                  padding: `${t.space.xs}px ${t.space.sm}px`,
-                  borderRadius: t.radius.sm,
-                  border: `1px solid ${t.color.borderLight}`,
-                  background: 'transparent',
-                  color: activeConfig
-                    ? t.color.text
-                    : t.color.textMuted,
-                  fontSize: t.font.sizeXs,
-                  cursor:
-                    !activeConfig || cloneModelConfigMutation.isPending
-                      ? 'not-allowed'
-                      : 'pointer',
-                  opacity:
-                    !activeConfig || cloneModelConfigMutation.isPending ? 0.6 : 1,
-                }}
-              >
-                {cloneModelConfigMutation.isPending
-                  ? 'Duplicating…'
-                  : 'Duplicate active'}
-              </button>
-            </div>
-          </div>
+            }
+            actions={
+              <>
+                {(modelConfigSearch || modelConfigStatusFilter !== 'all') ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModelConfigSearch('')
+                      setModelConfigStatusFilter('all')
+                    }}
+                    style={{
+                      padding: `${t.space.xs}px ${t.space.sm}px`,
+                      borderRadius: t.radius.sm,
+                      border: `1px solid ${t.color.borderLight}`,
+                      background: t.color.surface,
+                      color: t.color.textSecondary,
+                      fontSize: t.font.sizeXs,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Clear filters
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => handleCreateDraft()}
+                  disabled={createModelConfigMutation.isPending}
+                  style={{
+                    padding: `${t.space.xs}px ${t.space.sm}px`,
+                    borderRadius: t.radius.sm,
+                    border: `1px solid ${t.color.accent}`,
+                    background: t.color.accentMuted,
+                    color: t.color.accent,
+                    fontSize: t.font.sizeXs,
+                    cursor: createModelConfigMutation.isPending ? 'wait' : 'pointer',
+                  }}
+                >
+                  {createModelConfigMutation.isPending ? 'Creating…' : 'New draft'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => createDefaultConfigMutation.mutate()}
+                  disabled={createDefaultConfigMutation.isPending}
+                  style={{
+                    padding: `${t.space.xs}px ${t.space.sm}px`,
+                    borderRadius: t.radius.sm,
+                    border: 'none',
+                    background: t.color.accent,
+                    color: t.color.surface,
+                    fontSize: t.font.sizeXs,
+                    cursor: createDefaultConfigMutation.isPending ? 'wait' : 'pointer',
+                  }}
+                >
+                  {createDefaultConfigMutation.isPending ? 'Generating…' : 'From template'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDuplicateFromActive()}
+                  disabled={!activeConfig || cloneModelConfigMutation.isPending}
+                  style={{
+                    padding: `${t.space.xs}px ${t.space.sm}px`,
+                    borderRadius: t.radius.sm,
+                    border: `1px solid ${t.color.borderLight}`,
+                    background: 'transparent',
+                    color: activeConfig ? t.color.text : t.color.textMuted,
+                    fontSize: t.font.sizeXs,
+                    cursor:
+                      !activeConfig || cloneModelConfigMutation.isPending ? 'not-allowed' : 'pointer',
+                    opacity: !activeConfig || cloneModelConfigMutation.isPending ? 0.6 : 1,
+                  }}
+                >
+                  {cloneModelConfigMutation.isPending ? 'Duplicating…' : 'Duplicate active'}
+                </button>
+              </>
+            }
+            summary={`Showing ${filteredModelConfigs.length} of ${modelConfigs.length} configs`}
+            padded
+          />
 
           {noConfigs ? (
             <div

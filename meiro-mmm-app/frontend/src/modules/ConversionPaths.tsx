@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { tokens } from '../theme/tokens'
-import { AnalyticsTable, type AnalyticsTableColumn } from '../components/dashboard'
+import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn } from '../components/dashboard'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import ExplainabilityPanel from '../components/ExplainabilityPanel'
 import ConfidenceBadge, { type Confidence } from '../components/ConfidenceBadge'
@@ -224,6 +224,13 @@ export default function ConversionPaths() {
     count,
     pct: totalTouchpoints > 0 ? (count / totalTouchpoints) * 100 : 0,
   }))
+  const availableChannelFilters = useMemo(
+    () =>
+      Array.from(new Set(Object.keys(channelFreq).map((channel) => channel.split(':', 1)[0]))).sort((a, b) =>
+        a.localeCompare(b),
+      ),
+    [channelFreq],
+  )
 
   const sortedFreq = useMemo(() => {
     return [...freqRows].sort((a, b) => {
@@ -1186,130 +1193,163 @@ export default function ConversionPaths() {
           <h3 style={{ margin: 0, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
             Most Common Conversion Paths
           </h3>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: t.space.sm, alignItems: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-              <span>Min count</span>
-              <input
-                type="number"
-                min={1}
-                value={minPathCount}
-                onChange={(e) => {
-                  const v = parseInt(e.target.value || '1', 10)
-                  setMinPathCount(Number.isFinite(v) && v > 0 ? v : 1)
-                }}
-                style={{
-                  width: 64,
-                  padding: `${t.space.xs}px ${t.space.sm}px`,
-                  fontSize: t.font.sizeXs,
-                  border: `1px solid ${t.color.border}`,
-                  borderRadius: t.radius.sm,
-                }}
-              />
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-              <span>Path length</span>
-              <input
-                type="number"
-                min={1}
-                value={minPathLength}
-                onChange={(e) => {
-                  const v = parseInt(e.target.value || '1', 10)
-                  setMinPathLength(Number.isFinite(v) && v > 0 ? v : 1)
-                }}
-                style={{
-                  width: 56,
-                  padding: `${t.space.xs}px ${t.space.sm}px`,
-                  fontSize: t.font.sizeXs,
-                  border: `1px solid ${t.color.border}`,
-                  borderRadius: t.radius.sm,
-                }}
-              />
-              <span>–</span>
-              <input
-                type="number"
-                min={1}
-                value={typeof maxPathLength === 'number' ? maxPathLength : ''}
-                onChange={(e) => {
-                  const raw = e.target.value
-                  if (!raw) {
-                    setMaxPathLength('')
-                    return
-                  }
-                  const v = parseInt(raw, 10)
-                  setMaxPathLength(Number.isFinite(v) && v > 0 ? v : '')
-                }}
-                placeholder="Any"
-                style={{
-                  width: 56,
-                  padding: `${t.space.xs}px ${t.space.sm}px`,
-                  fontSize: t.font.sizeXs,
-                  border: `1px solid ${t.color.border}`,
-                  borderRadius: t.radius.sm,
-                }}
-              />
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: t.font.sizeXs, color: t.color.textSecondary, flexWrap: 'wrap' }}>
-              <span>Contains channel</span>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, maxWidth: 260 }}>
-                {Object.keys(channelFreq).map((ch) => {
-                  const base = ch.split(':', 1)[0]
-                  const active = channelFilter.includes(base)
-                  return (
-                    <button
-                      key={ch}
-                      type="button"
-                      onClick={() =>
-                        setChannelFilter((prev) =>
-                          prev.includes(base) ? prev.filter((c) => c !== base) : [...prev, base],
-                        )
+        </div>
+        <div style={{ marginBottom: t.space.lg }}>
+          <AnalyticsToolbar
+            filters={
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                  <span>Min count</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={minPathCount}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value || '1', 10)
+                      setMinPathCount(Number.isFinite(v) && v > 0 ? v : 1)
+                    }}
+                    style={{
+                      width: 64,
+                      padding: `${t.space.xs}px ${t.space.sm}px`,
+                      fontSize: t.font.sizeXs,
+                      border: `1px solid ${t.color.border}`,
+                      borderRadius: t.radius.sm,
+                    }}
+                  />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                  <span>Path length</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={minPathLength}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value || '1', 10)
+                      setMinPathLength(Number.isFinite(v) && v > 0 ? v : 1)
+                    }}
+                    style={{
+                      width: 56,
+                      padding: `${t.space.xs}px ${t.space.sm}px`,
+                      fontSize: t.font.sizeXs,
+                      border: `1px solid ${t.color.border}`,
+                      borderRadius: t.radius.sm,
+                    }}
+                  />
+                  <span>–</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={typeof maxPathLength === 'number' ? maxPathLength : ''}
+                    onChange={(e) => {
+                      const raw = e.target.value
+                      if (!raw) {
+                        setMaxPathLength('')
+                        return
                       }
-                      style={{
-                        borderRadius: t.radius.full,
-                        border: `1px solid ${active ? t.color.accent : t.color.borderLight}`,
-                        padding: '1px 8px',
-                        fontSize: t.font.sizeXs,
-                        backgroundColor: active ? t.color.accentMuted : 'transparent',
-                        color: active ? t.color.accent : t.color.textSecondary,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      {base}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() =>
-              exportPathsCSV(filteredAndSortedPaths, data.next_best_by_prefix, {
-                period: periodLabel,
-                conversionKey: data.config?.conversion_key ?? null,
-                configVersion: data.config?.config_version ?? null,
-                directMode,
-                pathScope,
-                filters: {
-                  minCount: minPathCount,
-                  minPathLength,
-                  maxPathLength: typeof maxPathLength === 'number' ? maxPathLength : null,
-                  containsChannels: channelFilter,
-                },
-              })
+                      const v = parseInt(raw, 10)
+                      setMaxPathLength(Number.isFinite(v) && v > 0 ? v : '')
+                    }}
+                    placeholder="Any"
+                    style={{
+                      width: 56,
+                      padding: `${t.space.xs}px ${t.space.sm}px`,
+                      fontSize: t.font.sizeXs,
+                      border: `1px solid ${t.color.border}`,
+                      borderRadius: t.radius.sm,
+                    }}
+                  />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: t.font.sizeXs, color: t.color.textSecondary, flexWrap: 'wrap' }}>
+                  <span>Contains channel</span>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, maxWidth: 320 }}>
+                    {availableChannelFilters.map((channel) => {
+                      const active = channelFilter.includes(channel)
+                      return (
+                        <button
+                          key={channel}
+                          type="button"
+                          onClick={() =>
+                            setChannelFilter((prev) =>
+                              prev.includes(channel) ? prev.filter((value) => value !== channel) : [...prev, channel],
+                            )
+                          }
+                          style={{
+                            borderRadius: t.radius.full,
+                            border: `1px solid ${active ? t.color.accent : t.color.borderLight}`,
+                            padding: '1px 8px',
+                            fontSize: t.font.sizeXs,
+                            backgroundColor: active ? t.color.accentMuted : 'transparent',
+                            color: active ? t.color.accent : t.color.textSecondary,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {channel}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              </>
             }
-            style={{
-              padding: `${t.space.sm}px ${t.space.lg}px`,
-              fontSize: t.font.sizeSm,
-              fontWeight: t.font.weightMedium,
-              color: t.color.accent,
-              background: 'transparent',
-              border: `1px solid ${t.color.accent}`,
-              borderRadius: t.radius.sm,
-              cursor: 'pointer',
-            }}
-          >
-            Export CSV
-          </button>
+            actions={
+              <>
+                {(minPathCount > 1 || minPathLength > 1 || typeof maxPathLength === 'number' || channelFilter.length > 0) ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMinPathCount(1)
+                      setMinPathLength(1)
+                      setMaxPathLength('')
+                      setChannelFilter([])
+                    }}
+                    style={{
+                      padding: `${t.space.sm}px ${t.space.md}px`,
+                      fontSize: t.font.sizeSm,
+                      color: t.color.textSecondary,
+                      background: 'transparent',
+                      border: `1px solid ${t.color.border}`,
+                      borderRadius: t.radius.sm,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Clear filters
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() =>
+                    exportPathsCSV(filteredAndSortedPaths, data.next_best_by_prefix, {
+                      period: periodLabel,
+                      conversionKey: data.config?.conversion_key ?? null,
+                      configVersion: data.config?.config_version ?? null,
+                      directMode,
+                      pathScope,
+                      filters: {
+                        minCount: minPathCount,
+                        minPathLength,
+                        maxPathLength: typeof maxPathLength === 'number' ? maxPathLength : null,
+                        containsChannels: channelFilter,
+                      },
+                    })
+                  }
+                  style={{
+                    padding: `${t.space.sm}px ${t.space.lg}px`,
+                    fontSize: t.font.sizeSm,
+                    fontWeight: t.font.weightMedium,
+                    color: t.color.accent,
+                    background: 'transparent',
+                    border: `1px solid ${t.color.accent}`,
+                    borderRadius: t.radius.sm,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Export CSV
+                </button>
+              </>
+            }
+            summary={`Showing ${Math.min(filteredAndSortedPaths.length, 20)} of ${filteredAndSortedPaths.length} filtered paths · ${enrichedPaths.length} total`}
+            padded
+          />
         </div>
         <div style={{ overflowX: 'auto' }}>
           <AnalyticsTable
