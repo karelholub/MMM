@@ -260,10 +260,7 @@ def create_router(
 
     @router.post("/api/taxonomy")
     def update_taxonomy(payload: Dict[str, Any], db=Depends(get_db_dependency)):
-        from app.services_taxonomy import (
-            persist_taxonomy_dq_snapshots,
-            persist_taxonomy_dq_snapshots_from_db,
-        )
+        from app.services_rebuild_jobs import rebuild_taxonomy_dq_outputs
 
         parsed = _parse_taxonomy_payload(payload)
         rules = parsed.channel_rules
@@ -281,11 +278,7 @@ def create_router(
         save_taxonomy(
             parsed
         )
-        snapshots = persist_taxonomy_dq_snapshots_from_db(db, taxonomy=parsed)
-        if snapshots is None:
-            journeys = _settings_journeys(db)
-            if journeys:
-                persist_taxonomy_dq_snapshots(db, journeys, taxonomy=parsed)
+        rebuild_taxonomy_dq_outputs(db, taxonomy=parsed)
         return _serialize_taxonomy()
 
     @router.get("/api/taxonomy/overview")
@@ -453,19 +446,16 @@ def create_router(
 
     @router.post("/api/taxonomy/compute-dq")
     def compute_taxonomy_dq(db=Depends(get_db_dependency)):
-        from app.services_taxonomy import (
-            persist_taxonomy_dq_snapshots,
-            persist_taxonomy_dq_snapshots_from_db,
-        )
+        from app.services_rebuild_jobs import rebuild_taxonomy_dq_outputs
 
-        snapshots = persist_taxonomy_dq_snapshots_from_db(db)
-        if snapshots is None:
-            journeys = _settings_journeys(db)
-            if not journeys:
-                return {"computed": 0, "message": "No journeys found"}
-            snapshots = persist_taxonomy_dq_snapshots(db, journeys)
+        result = rebuild_taxonomy_dq_outputs(db)
+        snapshots = result.get("snapshots") or []
+        if not snapshots and result.get("source") == "journeys_fallback":
+            return {"computed": 0, "message": "No journeys found"}
         return {
             "computed": len(snapshots),
+            "backfill": result.get("backfill"),
+            "source": result.get("source"),
             "metrics": [
                 {
                     "source": snapshot.source,

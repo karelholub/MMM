@@ -222,12 +222,23 @@ def build_campaign_aggregate_overlay(
     curr_to = _parse_date(windows["current_period"]["date_to"])
     prev_from = _parse_date(windows["previous_period"]["date_from"])
     prev_to = _parse_date(windows["previous_period"]["date_to"])
-    journey_definition_id = _single_active_journey_definition_id(db, conversion_key=conversion_key)
-    if not journey_definition_id:
-        return None
-
     allowed_channels = set(channels or [])
     filter_channels = bool(allowed_channels)
+    journey_definition_id = _single_active_journey_definition_id(db, conversion_key=conversion_key)
+    if not journey_definition_id:
+        return _build_campaign_aggregate_overlay_from_silver(
+            db,
+            curr_from=curr_from,
+            curr_to=curr_to,
+            prev_from=prev_from,
+            prev_to=prev_to,
+            compare=compare,
+            resolved_grain=resolved_grain,
+            allowed_channels=allowed_channels,
+            filter_channels=filter_channels,
+            conversion_key=conversion_key,
+        )
+
     rows = (
         db.query(JourneyPathDaily)
         .filter(
@@ -382,7 +393,7 @@ def _build_campaign_aggregate_overlay_from_silver(
             target_store,
             key,
             bucket,
-            conversions=float(journey["gross_conversions_total"] or 0.0),
+            conversions=1.0,
             revenue=float(journey["gross_revenue_total"] or 0.0),
         )
         outcome = target_outcomes.setdefault(key, _empty_outcome_metrics())

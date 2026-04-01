@@ -86,6 +86,14 @@ interface ChannelTrendResponse {
   previous_period: { date_from: string; date_to: string }
   series: ChannelTrendRow[]
   series_prev?: ChannelTrendRow[]
+  meta?: {
+    conversion_key?: string | null
+    conversion_key_resolution?: {
+      configured_conversion_key?: string | null
+      applied_conversion_key?: string | null
+      reason?: string
+    } | null
+  } | null
 }
 
 interface ChannelSummaryItem {
@@ -176,7 +184,15 @@ interface ChannelSummaryResponse {
     }
   } | null
   consistency_warnings?: string[]
-  meta?: { query_context?: { compare?: boolean } }
+  meta?: {
+    conversion_key?: string | null
+    conversion_key_resolution?: {
+      configured_conversion_key?: string | null
+      applied_conversion_key?: string | null
+      reason?: string
+    } | null
+    query_context?: { compare?: boolean }
+  }
   notes?: string[]
 }
 
@@ -613,6 +629,8 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
       : 'current dataset'
 
   const conversionLabel =
+    summaryQuery.data?.meta?.conversion_key ||
+    trendQuery.data?.meta?.conversion_key ||
     summaryQuery.data?.config?.conversion_key ||
     'All conversions'
 
@@ -1368,7 +1386,11 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
               exportTableCSV(filteredForCharts, {
                 model,
                 periodLabel,
-                conversionKey: summaryQuery.data?.config?.conversion_key ?? null,
+                conversionKey:
+                  summaryQuery.data?.meta?.conversion_key ??
+                  trendQuery.data?.meta?.conversion_key ??
+                  summaryQuery.data?.config?.conversion_key ??
+                  null,
                 configVersion: summaryQuery.data?.config?.config_version ?? null,
                 directMode,
               })

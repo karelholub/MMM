@@ -800,6 +800,71 @@ def test_build_campaign_aggregate_overlay_falls_back_to_instance_facts_when_silv
         db.close()
 
 
+def test_build_campaign_aggregate_overlay_falls_back_to_silver_without_single_definition():
+    db = _unit_db_session()
+    try:
+        db.add_all(
+            [
+                JourneyDefinition(
+                    id="jd-campaign-a",
+                    name="Campaign Journey A",
+                    conversion_kpi_id=None,
+                    lookback_window_days=30,
+                    mode_default="conversion_only",
+                    created_by="test",
+                    updated_by="test",
+                    is_archived=False,
+                    created_at=datetime(2026, 2, 1, 0, 0),
+                    updated_at=datetime(2026, 2, 1, 0, 0),
+                ),
+                JourneyDefinition(
+                    id="jd-campaign-b",
+                    name="Campaign Journey B",
+                    conversion_kpi_id="purchase",
+                    lookback_window_days=30,
+                    mode_default="conversion_only",
+                    created_by="test",
+                    updated_by="test",
+                    is_archived=False,
+                    created_at=datetime(2026, 2, 1, 0, 1),
+                    updated_at=datetime(2026, 2, 1, 0, 1),
+                ),
+            ]
+        )
+        db.commit()
+
+        inserted = persist_journeys_as_conversion_paths(
+            db,
+            [
+                {
+                    "_schema": "v2",
+                    "customer": {"id": "cust-campaign-live"},
+                    "touchpoints": [{"channel": "meta_ads", "campaign": "Spring", "interaction_type": "click", "ts": "2026-02-01T10:00:00Z"}],
+                    "conversions": [{"id": "conv-campaign-live", "name": "purchase", "ts": "2026-02-01T12:00:00Z", "value": 150.0}],
+                },
+            ],
+            replace=True,
+            import_source="meiro_events_replay",
+            import_batch_id="silver-campaign-multi-def-batch",
+        )
+        assert inserted == 1
+
+        overlay = build_campaign_aggregate_overlay(
+            db,
+            date_from="2026-02-01",
+            date_to="2026-02-01",
+            timezone="UTC",
+            compare=False,
+            conversion_key=None,
+        )
+
+        assert overlay is not None
+        assert overlay["current_store"]["meta_ads:Spring"]["2026-02-01"]["conversions"] == 1.0
+        assert overlay["current_store"]["meta_ads:Spring"]["2026-02-01"]["revenue"] == 150.0
+    finally:
+        db.close()
+
+
 def test_build_campaign_summary_supports_aggregate_overlay():
     journeys = [
         {

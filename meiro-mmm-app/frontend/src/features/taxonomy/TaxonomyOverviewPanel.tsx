@@ -32,6 +32,8 @@ type TaxonomyOverview = {
     low_confidence_share: number
     low_confidence_count: number
   }
+  top_unmapped_patterns: Array<{ source: string; medium: string; campaign?: string | null; count: number }>
+  top_low_confidence_patterns: Array<{ source: string; medium: string; campaign?: string | null; count: number; confidence: number }>
   attention_queue: AttentionItem[]
   warnings: string[]
   recommended_actions: RecommendedAction[]
@@ -52,12 +54,23 @@ function capitalize(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1)
 }
 
+function toneForStatus(status?: string) {
+  if (status === 'blocked') return { background: t.color.dangerSubtle, color: t.color.danger }
+  if (status === 'warning') return { background: t.color.warningSubtle, color: t.color.warning }
+  return { background: t.color.successMuted, color: t.color.success }
+}
+
 export default function TaxonomyOverviewPanel({
   overview,
   loading,
   error,
   onActionClick,
 }: TaxonomyOverviewPanelProps) {
+  const statusTone = toneForStatus(overview?.status)
+  const topUnmappedPatterns = overview?.top_unmapped_patterns?.slice(0, 5) || []
+  const topLowConfidencePatterns = overview?.top_low_confidence_patterns?.slice(0, 5) || []
+  const totalUnmapped = topUnmappedPatterns.reduce((sum, item) => sum + Number(item.count || 0), 0)
+  const totalLowConfidence = topLowConfidencePatterns.reduce((sum, item) => sum + Number(item.count || 0), 0)
   const cards = [
     {
       label: 'Unknown share',
@@ -103,7 +116,7 @@ export default function TaxonomyOverviewPanel({
           </div>
           {overview && (
             <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', alignItems: 'center' }}>
-              <span style={{ padding: '4px 10px', borderRadius: 999, fontSize: t.font.sizeXs, fontWeight: t.font.weightSemibold, background: overview.status === 'blocked' ? t.color.dangerSubtle : overview.status === 'warning' ? t.color.warningSubtle : t.color.successMuted, color: overview.status === 'blocked' ? t.color.danger : overview.status === 'warning' ? t.color.warning : t.color.success }}>
+              <span style={{ padding: '4px 10px', borderRadius: 999, fontSize: t.font.sizeXs, fontWeight: t.font.weightSemibold, background: statusTone.background, color: statusTone.color }}>
                 {capitalize(overview.status)}
               </span>
               <span style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
@@ -146,6 +159,83 @@ export default function TaxonomyOverviewPanel({
               <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>{item.detail}</div>
             </div>
           )) : <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>No high-value issues found in the current sample.</div>}
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: t.space.md }}>
+          <div style={{ display: 'grid', gap: t.space.sm }}>
+            <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Top unmapped patterns</div>
+            {topUnmappedPatterns.length ? (
+              <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, overflow: 'hidden', background: t.color.bg }}>
+                {topUnmappedPatterns.map((item, idx) => {
+                  const share = totalUnmapped > 0 ? Number(item.count || 0) / totalUnmapped : 0
+                  return (
+                    <div
+                      key={`${item.source}-${item.medium}-${idx}`}
+                      style={{
+                        display: 'grid',
+                        gap: 4,
+                        padding: `${t.space.sm}px ${t.space.md}px`,
+                        borderTop: idx === 0 ? 'none' : `1px solid ${t.color.borderLight}`,
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'baseline' }}>
+                        <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+                          <strong>{item.source || '—'}</strong> / <strong>{item.medium || '—'}</strong>
+                        </div>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>{Number(item.count || 0).toLocaleString()} · {pct(share)}</div>
+                      </div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                        {item.campaign || 'No campaign sample'}
+                      </div>
+                      <div style={{ height: 6, borderRadius: 999, background: t.color.borderLight, overflow: 'hidden' }}>
+                        <div style={{ width: `${Math.max(8, share * 100)}%`, height: '100%', borderRadius: 999, background: t.color.warning }} />
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>No repeated unmapped patterns are surfacing in the latest persisted sample.</div>
+            )}
+          </div>
+
+          <div style={{ display: 'grid', gap: t.space.sm }}>
+            <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Low-confidence hotspots</div>
+            {topLowConfidencePatterns.length ? (
+              <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, overflow: 'hidden', background: t.color.bg }}>
+                {topLowConfidencePatterns.map((item, idx) => {
+                  const share = totalLowConfidence > 0 ? Number(item.count || 0) / totalLowConfidence : 0
+                  return (
+                    <div
+                      key={`${item.source}-${item.medium}-${idx}`}
+                      style={{
+                        display: 'grid',
+                        gap: 4,
+                        padding: `${t.space.sm}px ${t.space.md}px`,
+                        borderTop: idx === 0 ? 'none' : `1px solid ${t.color.borderLight}`,
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'baseline' }}>
+                        <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+                          <strong>{item.source || '—'}</strong> / <strong>{item.medium || '—'}</strong>
+                        </div>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>{Number(item.count || 0).toLocaleString()} · {pct(share)}</div>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                        <span>{item.campaign || 'No campaign sample'}</span>
+                        <span>Confidence {pct(item.confidence)}</span>
+                      </div>
+                      <div style={{ height: 6, borderRadius: 999, background: t.color.borderLight, overflow: 'hidden' }}>
+                        <div style={{ width: `${Math.max(8, (1 - Math.max(0, Math.min(1, Number(item.confidence || 0)))) * 100)}%`, height: '100%', borderRadius: 999, background: t.color.accent }} />
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>No concentrated low-confidence patterns were detected in the current taxonomy sample.</div>
+            )}
+          </div>
         </div>
 
         {overview?.warnings?.length ? (

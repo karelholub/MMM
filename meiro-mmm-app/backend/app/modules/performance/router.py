@@ -1,7 +1,9 @@
+from datetime import datetime, timedelta
 from typing import Any, Callable, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.services_canonical_facts import iter_canonical_conversion_rows
 from app.services_import_runs import get_last_successful_run, get_runs as get_import_runs
 from app.services_overview import (
     get_overview_drivers,
@@ -19,6 +21,78 @@ from app.services_performance_trends import (
     build_channel_trend_response,
 )
 from app.services_quality import load_config_and_meta
+
+
+def _selected_period_bounds(date_from: str, date_to: str) -> tuple[datetime, datetime]:
+    start = datetime.fromisoformat(str(date_from)[:10]).replace(hour=0, minute=0, second=0, microsecond=0)
+    end = datetime.fromisoformat(str(date_to)[:10]).replace(hour=23, minute=59, second=59, microsecond=999999)
+    if end < start:
+        start, end = end.replace(hour=0, minute=0, second=0, microsecond=0), start.replace(
+            hour=23,
+            minute=59,
+            second=59,
+            microsecond=999999,
+        )
+    return start, end
+
+
+def _has_canonical_conversions(
+    db: Any,
+    *,
+    date_from: str,
+    date_to: str,
+    conversion_key: Optional[str],
+) -> bool:
+    start, end = _selected_period_bounds(date_from, date_to)
+    for _row in iter_canonical_conversion_rows(
+        db,
+        date_from=start,
+        date_to=end,
+        conversion_key=conversion_key,
+    ):
+        return True
+    return False
+
+
+def _resolve_effective_conversion_key(
+    db: Any,
+    *,
+    requested_conversion_key: Optional[str],
+    configured_conversion_key: Optional[str],
+    date_from: str,
+    date_to: str,
+) -> tuple[Optional[str], Optional[dict[str, Any]]]:
+    if requested_conversion_key is not None:
+        return requested_conversion_key, None
+    configured_key = (configured_conversion_key or "").strip() or None
+    if not configured_key:
+        return None, None
+    if _has_canonical_conversions(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+        conversion_key=configured_key,
+    ):
+        return configured_key, None
+    if _has_canonical_conversions(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+        conversion_key=None,
+    ):
+        return None, {
+            "requested_conversion_key": None,
+            "configured_conversion_key": configured_key,
+            "applied_conversion_key": None,
+            "reason": "configured_conversion_key_has_no_data_in_selected_period",
+        }
+    return configured_key, None
+
+
+def _load_selected_config_meta(db: Any, model_id: Optional[str]) -> tuple[Any, Optional[dict[str, Any]]]:
+    if not model_id:
+        return None, None
+    return load_config_and_meta(db, model_id)
 
 
 def _add_summary_derivatives(items: list[dict], scope_type: str, diagnostics: dict[str, Any]) -> None:
@@ -206,6 +280,14 @@ def create_router(
                 channels=channels,
                 conversion_key=conversion_key,
             )
+            _resolved_cfg, config_meta = _load_selected_config_meta(db, query_ctx.model_id)
+            effective_conversion_key, conversion_key_resolution = _resolve_effective_conversion_key(
+                db,
+                requested_conversion_key=query_ctx.conversion_key,
+                configured_conversion_key=(config_meta.get("conversion_key") if config_meta else None),
+                date_from=query_ctx.date_from,
+                date_to=query_ctx.date_to,
+            )
             out = build_channel_trend_response(
                 journeys=journeys,
                 expenses=expenses_obj,
@@ -216,7 +298,7 @@ def create_router(
                 grain=query_ctx.grain,
                 compare=query_ctx.compare,
                 channels=query_ctx.channels,
-                conversion_key=query_ctx.conversion_key,
+                conversion_key=effective_conversion_key,
                 aggregate_overlay=build_channel_aggregate_overlay(
                     db,
                     date_from=query_ctx.date_from,
@@ -224,13 +306,15 @@ def create_router(
                     timezone=query_ctx.timezone,
                     compare=query_ctx.compare,
                     channels=query_ctx.channels,
-                    conversion_key=query_ctx.conversion_key,
+                    conversion_key=effective_conversion_key,
                     grain=query_ctx.grain,
                 ),
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-        out["meta"] = build_meta_fn(ctx=query_ctx, include_kpi=True)
+        out["meta"] = build_meta_fn(ctx=query_ctx, conversion_key=effective_conversion_key, include_kpi=True)
+        if conversion_key_resolution:
+            out["meta"]["conversion_key_resolution"] = conversion_key_resolution
         return out
 
     @router.get("/api/performance/channel/summary")
@@ -263,8 +347,14 @@ def create_router(
             channels=channels,
             conversion_key=conversion_key,
         )
-        _resolved_cfg, config_meta = load_config_and_meta(db, query_ctx.model_id)
-        effective_conversion_key = query_ctx.conversion_key or (config_meta.get("conversion_key") if config_meta else None)
+        _resolved_cfg, config_meta = _load_selected_config_meta(db, query_ctx.model_id)
+        effective_conversion_key, conversion_key_resolution = _resolve_effective_conversion_key(
+            db,
+            requested_conversion_key=query_ctx.conversion_key,
+            configured_conversion_key=(config_meta.get("conversion_key") if config_meta else None),
+            date_from=query_ctx.date_from,
+            date_to=query_ctx.date_to,
+        )
         out = build_channel_summary_response(
             journeys=journeys,
             expenses=expenses_obj,
@@ -318,6 +408,8 @@ def create_router(
         out["readiness"] = readiness
         out["consistency_warnings"] = consistency_warnings
         out["meta"] = build_meta_fn(ctx=query_ctx, conversion_key=effective_conversion_key)
+        if conversion_key_resolution:
+            out["meta"]["conversion_key_resolution"] = conversion_key_resolution
         return out
 
     @router.get("/api/performance/campaign/trend")
@@ -353,6 +445,14 @@ def create_router(
                 channels=channels,
                 conversion_key=conversion_key,
             )
+            _resolved_cfg, config_meta = _load_selected_config_meta(db, query_ctx.model_id)
+            effective_conversion_key, conversion_key_resolution = _resolve_effective_conversion_key(
+                db,
+                requested_conversion_key=query_ctx.conversion_key,
+                configured_conversion_key=(config_meta.get("conversion_key") if config_meta else None),
+                date_from=query_ctx.date_from,
+                date_to=query_ctx.date_to,
+            )
             out = build_campaign_trend_response(
                 journeys=journeys,
                 expenses=expenses_obj,
@@ -363,7 +463,7 @@ def create_router(
                 grain=query_ctx.grain,
                 compare=query_ctx.compare,
                 channels=query_ctx.channels,
-                conversion_key=query_ctx.conversion_key,
+                conversion_key=effective_conversion_key,
                 aggregate_overlay=build_campaign_aggregate_overlay(
                     db,
                     date_from=query_ctx.date_from,
@@ -371,12 +471,14 @@ def create_router(
                     timezone=query_ctx.timezone,
                     compare=query_ctx.compare,
                     channels=query_ctx.channels,
-                    conversion_key=query_ctx.conversion_key,
+                    conversion_key=effective_conversion_key,
                 ),
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-        out["meta"] = build_meta_fn(ctx=query_ctx, include_kpi=True)
+        out["meta"] = build_meta_fn(ctx=query_ctx, conversion_key=effective_conversion_key, include_kpi=True)
+        if conversion_key_resolution:
+            out["meta"]["conversion_key_resolution"] = conversion_key_resolution
         return out
 
     @router.get("/api/performance/campaign/summary")
@@ -409,8 +511,14 @@ def create_router(
             channels=channels,
             conversion_key=conversion_key,
         )
-        _resolved_cfg, config_meta = load_config_and_meta(db, query_ctx.model_id)
-        effective_conversion_key = query_ctx.conversion_key or (config_meta.get("conversion_key") if config_meta else None)
+        _resolved_cfg, config_meta = _load_selected_config_meta(db, query_ctx.model_id)
+        effective_conversion_key, conversion_key_resolution = _resolve_effective_conversion_key(
+            db,
+            requested_conversion_key=query_ctx.conversion_key,
+            configured_conversion_key=(config_meta.get("conversion_key") if config_meta else None),
+            date_from=query_ctx.date_from,
+            date_to=query_ctx.date_to,
+        )
         out = build_campaign_summary_response(
             journeys=journeys,
             expenses=expenses_obj,
@@ -463,6 +571,8 @@ def create_router(
         out["readiness"] = readiness
         out["consistency_warnings"] = consistency_warnings
         out["meta"] = build_meta_fn(ctx=query_ctx, conversion_key=effective_conversion_key)
+        if conversion_key_resolution:
+            out["meta"]["conversion_key_resolution"] = conversion_key_resolution
         return out
 
     return router

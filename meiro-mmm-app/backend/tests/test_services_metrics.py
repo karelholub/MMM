@@ -43,6 +43,6 @@ def test_summarize_rows_totals_and_derived():
             "d2": {"spend": 25.0, "conversions": 5.0, "revenue": 75.0},
         }
     )
-    assert totals == {"spend": 75.0, "conversions": 10.0, "revenue": 175.0}
+    assert totals == {"spend": 75.0, "visits": 0.0, "conversions": 10.0, "revenue": 175.0}
     assert round(derived["roas"] or 0.0, 4) == round(175.0 / 75.0, 4)
     assert round(derived["cpa"] or 0.0, 4) == 7.5

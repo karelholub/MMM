@@ -19,6 +19,7 @@ import KpiOverviewPanel from '../features/kpi/KpiOverviewPanel'
 import KpiSuggestionsPanel from '../features/kpi/KpiSuggestionsPanel'
 import KpiPreviewPanel from '../features/kpi/KpiPreviewPanel'
 import TaxonomyOverviewPanel from '../features/taxonomy/TaxonomyOverviewPanel'
+import TaxonomyInsightsPanel from '../features/taxonomy/TaxonomyInsightsPanel'
 import TaxonomySuggestionsPanel from '../features/taxonomy/TaxonomySuggestionsPanel'
 import TaxonomyPreviewPanel from '../features/taxonomy/TaxonomyPreviewPanel'
 import DecisionStatusCard from '../components/DecisionStatusCard'
@@ -327,6 +328,21 @@ interface TaxonomySuggestionItem {
 interface TaxonomySuggestionsResponse {
   summary: Record<string, any>
   suggestions: TaxonomySuggestionItem[]
+}
+
+interface TaxonomyUnknownShareResponse {
+  total_touchpoints: number
+  unknown_count: number
+  unknown_share: number
+  top_unmapped_patterns: Array<{ source: string; medium: string; campaign?: string | null; count: number }>
+}
+
+interface TaxonomyCoverageResponse {
+  source_coverage: number
+  medium_coverage: number
+  channel_distribution: Record<string, number>
+  rule_usage: Record<string, number>
+  top_unmapped_patterns: Array<{ source: string; medium: string; campaign?: string | null; count: number }>
 }
 
 type TaxonomySuggestionState = 'saved' | 'draft' | 'pending'
@@ -1266,6 +1282,16 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       queryFn: async () => apiGetJson<TaxonomySuggestionsResponse>('/api/taxonomy/suggestions?limit=8', { fallbackMessage: 'Failed to load taxonomy suggestions' }),
       enabled: activeSection === 'taxonomy',
     })
+    const taxonomyUnknownShareQuery = useQuery<TaxonomyUnknownShareResponse>({
+      queryKey: ['taxonomy', 'unknown-share'],
+      queryFn: async () => apiGetJson<TaxonomyUnknownShareResponse>('/api/taxonomy/unknown-share?limit=12', { fallbackMessage: 'Failed to load taxonomy unknown share' }),
+      enabled: activeSection === 'taxonomy' && taxonomyActiveTab === 'overview',
+    })
+    const taxonomyCoverageQuery = useQuery<TaxonomyCoverageResponse>({
+      queryKey: ['taxonomy', 'coverage'],
+      queryFn: async () => apiGetJson<TaxonomyCoverageResponse>('/api/taxonomy/coverage', { fallbackMessage: 'Failed to load taxonomy coverage' }),
+      enabled: activeSection === 'taxonomy' && taxonomyActiveTab === 'overview',
+    })
     const kpiQuery = useQuery<KpiConfig>({
       queryKey: ['kpis'],
       queryFn: async () => apiGetJson<KpiConfig>('/api/kpis', { fallbackMessage: 'Failed to load KPI config' }),
@@ -2069,33 +2095,73 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
     const handleApplyKpiSuggestion = useCallback((suggestionId: string) => {
       const suggestion = kpiSuggestionsQuery.data?.suggestions.find((item) => item.id === suggestionId)
       if (!suggestion) return
+      let definitions = [...kpiDraft.definitions]
+      let primaryKpiId = kpiDraft.primary_kpi_id ?? null
+      let changed = false
 
       if (suggestion.payload.definition) {
-        const nextDefinition = suggestion.payload.definition
-        setKpiDraft((prev) => {
-          const exists = prev.definitions.some((definition) => definition.id.trim().toLowerCase() === nextDefinition.id.trim().toLowerCase())
-          if (exists) return prev
-          return {
-            ...prev,
-            definitions: [...prev.definitions, nextDefinition],
+        const nextDefinition = normalizeKpiDefinition(suggestion.payload.definition)
+        const existingIndex = definitions.findIndex(
+          (definition) => definition.id.trim().toLowerCase() === nextDefinition.id.trim().toLowerCase(),
+        )
+        const shouldPromoteAsPrimary =
+          !primaryKpiId &&
+          !definitions.some((definition) => definition.type === 'primary')
+
+        if (existingIndex === -1) {
+          definitions = [
+            ...definitions,
+            {
+              ...nextDefinition,
+              type: shouldPromoteAsPrimary ? 'primary' : nextDefinition.type,
+            },
+          ]
+          changed = true
+          if (shouldPromoteAsPrimary) {
+            primaryKpiId = nextDefinition.id
           }
-        })
+        }
       }
 
       if (suggestion.payload.primary_kpi_id) {
-        setKpiDraft((prev) => ({
-          ...prev,
-          primary_kpi_id: suggestion.payload.primary_kpi_id ?? prev.primary_kpi_id,
-        }))
+        const targetId = suggestion.payload.primary_kpi_id
+        const targetIndex = definitions.findIndex((definition) => definition.id === targetId)
+        if (targetIndex >= 0 && definitions[targetIndex].type !== 'primary') {
+          definitions = definitions.map((definition, index) =>
+            index === targetIndex
+              ? { ...definition, type: 'primary' }
+              : definition,
+          )
+          changed = true
+        }
+        if (primaryKpiId !== targetId) {
+          primaryKpiId = targetId
+          changed = true
+        }
+      }
+
+      if (changed) {
+        setKpiDraft({
+          definitions,
+          primary_kpi_id: primaryKpiId,
+        })
       }
 
       toastIdRef.current += 1
+      if (!changed) {
+        setToast({
+          id: toastIdRef.current,
+          type: 'success',
+          message: 'Suggestion is already reflected in the draft',
+        })
+        return
+      }
       setToast({
         id: toastIdRef.current,
         type: 'success',
         message: 'Applied KPI suggestion to draft',
       })
-    }, [kpiSuggestionsQuery.data?.suggestions])
+    }, [kpiDraft, kpiSuggestionsQuery.data?.suggestions, normalizeKpiDefinition])
 
     const updateSourceAliases = useCallback(
       (updater: (rows: AliasRow[]) => AliasRow[]) => {
@@ -4216,6 +4282,18 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
             }
             if (section === 'kpi') {
               if (kpiValidation.hasErrors) {
+                const message =
+                  kpiValidation.primaryError ||
+                  Object.values(kpiValidation.rowErrors)
+                    .flatMap((errors) => Object.values(errors))
+                    .find(Boolean) ||
+                  'KPI definitions need attention before saving'
+                toastIdRef.current += 1
+                setToast({
+                  id: toastIdRef.current,
+                  type: 'error',
+                  message,
+                })
                 return false
               }
               const response = await saveKpiMutation.mutateAsync(kpiDraft)
@@ -7395,17 +7473,35 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
           </div>
 
           {taxonomyActiveTab === 'overview' && (
-            <TaxonomyOverviewPanel
-              overview={taxonomyOverviewQuery.data}
-              loading={taxonomyOverviewQuery.isLoading}
-              error={(taxonomyOverviewQuery.error as Error | undefined)?.message || null}
-              onActionClick={(action) => {
-                if (action.target_tab === 'suggestions' || action.target_tab === 'advanced') {
-                  setTaxonomyActiveTab(action.target_tab)
+            <div style={{ display: 'grid', gap: t.space.lg }}>
+              <TaxonomyOverviewPanel
+                overview={taxonomyOverviewQuery.data}
+                loading={taxonomyOverviewQuery.isLoading}
+                error={(taxonomyOverviewQuery.error as Error | undefined)?.message || null}
+                onActionClick={(action) => {
+                  if (action.target_tab === 'suggestions' || action.target_tab === 'advanced') {
+                    setTaxonomyActiveTab(action.target_tab)
+                  }
+                  navigateForRecommendedAction(action, { defaultPage: 'settings' })
+                }}
+              />
+              <TaxonomyInsightsPanel
+                unknownShare={taxonomyUnknownShareQuery.data}
+                coverage={taxonomyCoverageQuery.data}
+                suggestions={taxonomySuggestionsQuery.data}
+                loading={
+                  taxonomyUnknownShareQuery.isLoading ||
+                  taxonomyCoverageQuery.isLoading ||
+                  taxonomySuggestionsQuery.isLoading
                 }
-                navigateForRecommendedAction(action, { defaultPage: 'settings' })
-              }}
-            />
+                error={
+                  (taxonomyUnknownShareQuery.error as Error | undefined)?.message ||
+                  (taxonomyCoverageQuery.error as Error | undefined)?.message ||
+                  null
+                }
+                onApplySuggestion={handleApplyTaxonomySuggestion}
+              />
+            </div>
           )}
 
           {taxonomyActiveTab === 'suggestions' && (

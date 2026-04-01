@@ -77,6 +77,14 @@ interface CampaignTrendV2Response {
   previous_period: { date_from: string; date_to: string }
   series: CampaignTrendV2Row[]
   series_prev?: CampaignTrendV2Row[]
+  meta?: {
+    conversion_key?: string | null
+    conversion_key_resolution?: {
+      configured_conversion_key?: string | null
+      applied_conversion_key?: string | null
+      reason?: string
+    } | null
+  } | null
 }
 
 interface CampaignSummaryItem {
@@ -171,6 +179,14 @@ interface CampaignSummaryResponse {
   } | null
   consistency_warnings?: string[]
   notes?: string[]
+  meta?: {
+    conversion_key?: string | null
+    conversion_key_resolution?: {
+      configured_conversion_key?: string | null
+      applied_conversion_key?: string | null
+      reason?: string
+    } | null
+  } | null
 }
 
 const MODEL_LABELS: Record<string, string> = {
@@ -1046,12 +1062,12 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
           >
             Attribution model:{' '}
             <strong style={{ color: t.color.accent }}>{MODEL_LABELS[model] || model}</strong>
-            {summaryQuery.data?.config?.conversion_key && (
+            {(summaryQuery.data?.meta?.conversion_key || trendQuery.data?.meta?.conversion_key || summaryQuery.data?.config?.conversion_key) && (
               <>
                 {' '}
                 · Conversion:{' '}
                 <strong>
-                  {summaryQuery.data.config.conversion_key}
+                  {summaryQuery.data?.meta?.conversion_key || trendQuery.data?.meta?.conversion_key || summaryQuery.data?.config?.conversion_key}
                 </strong>
               </>
             )}

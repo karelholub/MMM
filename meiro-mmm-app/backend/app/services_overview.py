@@ -50,6 +50,12 @@ def _parse_dt(s: Optional[str]):
         return None
 
 
+def _coerce_utc_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _overview_path_type(payload: Dict[str, Any]) -> str:
     summary = ((payload.get("meta") or {}).get("interaction_summary") or {}) if isinstance(payload.get("meta"), dict) else {}
     path_type = summary.get("path_type")
@@ -702,6 +708,7 @@ def _normalize_period_bounds(date_from: str, date_to: str) -> Tuple[datetime, da
 
 
 def _bucket_key(ts: datetime, grain: str) -> str:
+    ts = _coerce_utc_datetime(ts)
     if grain == "hourly":
         return ts.replace(minute=0, second=0, microsecond=0).isoformat()
     return ts.date().isoformat()
@@ -1640,14 +1647,10 @@ def get_overview_drivers(
     dedupe_seen_current = set()
     dedupe_seen_prev = set()
 
-    dt_from = _parse_dt(date_from)
-    dt_to = _parse_dt(date_to)
-    if not dt_from or not dt_to:
-        dt_from = datetime.now(timezone.utc) - timedelta(days=30)
-        dt_to = datetime.now(timezone.utc)
-    delta_days = max((dt_to - dt_from).days, 1)
-    prev_to = dt_from - timedelta(days=1)
-    prev_from = prev_to - timedelta(days=delta_days)
+    dt_from, dt_to = _normalize_period_bounds(date_from, date_to)
+    period_span = dt_to - dt_from
+    prev_to = dt_from - timedelta(microseconds=1)
+    prev_from = prev_to - period_span
     aggregate_campaign_rollups = _campaign_rollups_from_daily_path_aggregates(
         db,
         dt_from=dt_from,
@@ -1777,9 +1780,9 @@ def get_overview_drivers(
                     camp = camp.get("name", "unknown")
                 prev_camp_rev[camp] = prev_camp_rev.get(camp, 0) + val
 
-    if fact_current_channel_rollups is not None and fact_prev_channel_rollups is not None:
+    if fact_current_channel_rollups is not None:
         current_metrics, current_fact_outcomes = fact_current_channel_rollups
-        previous_metrics, _previous_fact_outcomes = fact_prev_channel_rollups
+        previous_metrics = (fact_prev_channel_rollups or ({}, {}))[0]
         ch_rev = {key: float(value.get("revenue", 0.0) or 0.0) for key, value in current_metrics.items()}
         ch_conv = {key: int(value.get("conversions", 0.0) or 0.0) for key, value in current_metrics.items()}
         ch_outcomes = current_fact_outcomes
@@ -1787,12 +1790,18 @@ def get_overview_drivers(
         prev_ch_conv = {key: int(value.get("conversions", 0.0) or 0.0) for key, value in previous_metrics.items()}
         ch_visits = {key: int(value.get("visits", 0.0) or 0.0) for key, value in current_metrics.items()}
         prev_ch_visits = {key: int(value.get("visits", 0.0) or 0.0) for key, value in previous_metrics.items()}
-    elif silver_current_channel_rollups is not None and silver_prev_channel_rollups is not None:
+    elif silver_current_channel_rollups is not None:
         ch_rev = {key: float(value or 0.0) for key, value in silver_current_channel_rollups["revenue"].items()}
         ch_conv = {key: int(value or 0) for key, value in silver_current_channel_rollups["conversions"].items()}
         ch_outcomes = dict(silver_current_channel_rollups["outcomes"])
-        prev_ch_rev = {key: float(value or 0.0) for key, value in silver_prev_channel_rollups["revenue"].items()}
-        prev_ch_conv = {key: int(value or 0) for key, value in silver_prev_channel_rollups["conversions"].items()}
+        prev_ch_rev = {
+            key: float(value or 0.0)
+            for key, value in ((silver_prev_channel_rollups or {}).get("revenue") or {}).items()
+        }
+        prev_ch_conv = {
+            key: int(value or 0)
+            for key, value in ((silver_prev_channel_rollups or {}).get("conversions") or {}).items()
+        }
         ch_visits = dict(silver_current_channel_visits or {})
         prev_ch_visits = dict(silver_prev_channel_visits or {})
     else:
@@ -1852,11 +1861,14 @@ def get_overview_drivers(
         camp_conv = dict(aggregate_campaign_rollups["current_conversions"])
         camp_outcomes = dict(aggregate_campaign_rollups["current_outcomes"])
         prev_camp_rev = dict(aggregate_campaign_rollups["previous_revenue"])
-    elif silver_current_campaign_rollups is not None and silver_prev_campaign_rollups is not None:
+    elif silver_current_campaign_rollups is not None:
         camp_rev = {key: float(value or 0.0) for key, value in silver_current_campaign_rollups["revenue"].items()}
         camp_conv = {key: int(value or 0) for key, value in silver_current_campaign_rollups["conversions"].items()}
         camp_outcomes = dict(silver_current_campaign_rollups["outcomes"])
-        prev_camp_rev = {key: float(value or 0.0) for key, value in silver_prev_campaign_rollups["revenue"].items()}
+        prev_camp_rev = {
+            key: float(value or 0.0)
+            for key, value in ((silver_prev_campaign_rollups or {}).get("revenue") or {}).items()
+        }
     campaigns_sorted = sorted(camp_rev.keys(), key=lambda c: -camp_rev[c])[:top_campaigns_n]
     by_campaign = [
         {

@@ -37,6 +37,8 @@ def create_router(
     resolve_sort_dir_fn: Callable[..., str],
     validate_conversion_kpi_id_fn: Callable[[Optional[str]], Optional[str]],
     get_settings_obj: Callable[[], Any],
+    rebuild_journey_definition_outputs_fn: Callable[..., dict],
+    purge_journey_definition_outputs_fn: Callable[..., dict],
 ) -> APIRouter:
     router = APIRouter(tags=["journeys"])
 
@@ -171,6 +173,10 @@ def create_router(
             mode_default=body.mode_default,
             created_by=user_id,
         )
+        try:
+            rebuild_journey_definition_outputs_fn(db, definition_id=item.id)
+        except Exception as exc:
+            logger.warning("Journey definition rebuild after create failed: %s", exc, exc_info=True)
         return serialize_journey_definition(item)
 
     @router.put("/api/journeys/definitions/{definition_id}")
@@ -196,6 +202,10 @@ def create_router(
         )
         if not item:
             raise HTTPException(status_code=404, detail="Journey definition not found")
+        try:
+            rebuild_journey_definition_outputs_fn(db, definition_id=item.id)
+        except Exception as exc:
+            logger.warning("Journey definition rebuild after update failed: %s", exc, exc_info=True)
         return serialize_journey_definition(item)
 
     @router.delete("/api/journeys/definitions/{definition_id}")
@@ -208,7 +218,35 @@ def create_router(
         item = archive_journey_definition(db, definition_id, archived_by=user_id)
         if not item:
             raise HTTPException(status_code=404, detail="Journey definition not found")
+        try:
+            purge_journey_definition_outputs_fn(db, definition_id=item.id)
+        except Exception as exc:
+            logger.warning("Journey definition output purge after archive failed: %s", exc, exc_info=True)
         return {"id": item.id, "status": "archived"}
+
+    @router.post("/api/journeys/definitions/{definition_id}/rebuild")
+    def api_rebuild_journey_definition(
+        definition_id: str,
+        reprocess_days: Optional[int] = Query(None, ge=1, le=365),
+        db=Depends(get_db_dependency),
+        _ctx=Depends(require_permission_dependency("journeys.manage")),
+    ):
+        item = get_journey_definition(db, definition_id)
+        if not item or item.is_archived:
+            raise HTTPException(status_code=404, detail="Journey definition not found")
+        try:
+            metrics = rebuild_journey_definition_outputs_fn(
+                db,
+                definition_id=definition_id,
+                reprocess_days=reprocess_days,
+            )
+        except Exception as exc:
+            logger.warning("Journey definition rebuild failed: %s", exc, exc_info=True)
+            raise HTTPException(status_code=500, detail="Journey definition rebuild failed")
+        return {
+            "definition_id": definition_id,
+            "metrics": metrics,
+        }
 
     @router.get("/api/journeys/{definition_id}/paths")
     def api_get_journey_paths(

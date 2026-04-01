@@ -1767,72 +1767,18 @@ def run_daily_journey_aggregates(
     max_source_ts: Optional[datetime] = None
 
     for definition in defs:
-        source_days = _get_source_days(db, definition=definition, end_day=latest_complete_day)
-        existing_path_days = {
-            d
-            for (d,) in db.query(JourneyPathDaily.date)
-            .filter(
-                JourneyPathDaily.journey_definition_id == definition.id,
-                JourneyPathDaily.date <= latest_complete_day,
-            )
-            .all()
-        }
-        existing_transition_days = {
-            d
-            for (d,) in db.query(JourneyTransitionDaily.date)
-            .filter(
-                JourneyTransitionDaily.journey_definition_id == definition.id,
-                JourneyTransitionDaily.date <= latest_complete_day,
-            )
-            .all()
-        }
-        existing_definition_days = {
-            d
-            for (d,) in db.query(JourneyDefinitionInstanceFact.date)
-            .filter(
-                JourneyDefinitionInstanceFact.journey_definition_id == definition.id,
-                JourneyDefinitionInstanceFact.date <= latest_complete_day,
-            )
-            .all()
-        }
-        obsolete_path_days = sorted(d for d in existing_path_days if d not in source_days)
-        obsolete_transition_days = sorted(d for d in existing_transition_days if d not in source_days)
-        obsolete_definition_days = sorted(d for d in existing_definition_days if d not in source_days)
-        if obsolete_path_days:
-            db.query(JourneyPathDaily).filter(
-                JourneyPathDaily.journey_definition_id == definition.id,
-                JourneyPathDaily.date.in_(obsolete_path_days),
-            ).delete(synchronize_session=False)
-        if obsolete_transition_days:
-            db.query(JourneyTransitionDaily).filter(
-                JourneyTransitionDaily.journey_definition_id == definition.id,
-                JourneyTransitionDaily.date.in_(obsolete_transition_days),
-            ).delete(synchronize_session=False)
-        if obsolete_definition_days:
-            db.query(JourneyDefinitionInstanceFact).filter(
-                JourneyDefinitionInstanceFact.journey_definition_id == definition.id,
-                JourneyDefinitionInstanceFact.date.in_(obsolete_definition_days),
-            ).delete(synchronize_session=False)
-        if obsolete_path_days or obsolete_transition_days or obsolete_definition_days:
-            db.commit()
-        if not source_days:
-            continue
-        missing_days = {
-            d for d in source_days if d not in existing_path_days or d not in existing_transition_days
-        }
-        reprocess_set = {
-            latest_complete_day - timedelta(days=offset)
-            for offset in range(reprocess_days)
-        }
-        days_to_process = sorted(d for d in (missing_days | reprocess_set) if d <= latest_complete_day and d in source_days)
-        for day in days_to_process:
-            stats = _aggregate_for_day_definition(db, day=day, definition=definition)
-            total_days += 1
-            total_source_rows += stats["source_rows"]
-            total_paths += stats["path_rows_written"]
-            total_transitions += stats["transition_rows_written"]
-            total_examples += stats.get("example_rows_written", 0)
-            total_definition_rows += stats.get("definition_rows_written", 0)
+        definition_metrics = rebuild_journey_definition_outputs(
+            db,
+            definition=definition,
+            as_of_date=as_of_date,
+            reprocess_days=reprocess_days,
+        )
+        total_days += int(definition_metrics.get("days_processed", 0) or 0)
+        total_source_rows += int(definition_metrics.get("source_rows_processed", 0) or 0)
+        total_paths += int(definition_metrics.get("path_rows_written", 0) or 0)
+        total_transitions += int(definition_metrics.get("transition_rows_written", 0) or 0)
+        total_examples += int(definition_metrics.get("example_rows_written", 0) or 0)
+        total_definition_rows += int(definition_metrics.get("definition_rows_written", 0) or 0)
 
         max_ts_q = db.query(func.max(ConversionPath.conversion_ts))
         if definition.conversion_kpi_id:
@@ -1893,3 +1839,185 @@ def run_daily_journey_aggregates(
         metrics["duration_ms"],
     )
     return metrics
+
+
+def purge_journey_definition_outputs(
+    db: Session,
+    *,
+    definition_id: str,
+) -> Dict[str, int]:
+    path_deleted = (
+        db.query(JourneyPathDaily)
+        .filter(JourneyPathDaily.journey_definition_id == definition_id)
+        .delete(synchronize_session=False)
+    )
+    transition_deleted = (
+        db.query(JourneyTransitionDaily)
+        .filter(JourneyTransitionDaily.journey_definition_id == definition_id)
+        .delete(synchronize_session=False)
+    )
+    example_deleted = (
+        db.query(JourneyExampleFact)
+        .filter(JourneyExampleFact.journey_definition_id == definition_id)
+        .delete(synchronize_session=False)
+    )
+    definition_deleted = (
+        db.query(JourneyDefinitionInstanceFact)
+        .filter(JourneyDefinitionInstanceFact.journey_definition_id == definition_id)
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return {
+        "path_rows_deleted": int(path_deleted or 0),
+        "transition_rows_deleted": int(transition_deleted or 0),
+        "example_rows_deleted": int(example_deleted or 0),
+        "definition_rows_deleted": int(definition_deleted or 0),
+    }
+
+
+def rebuild_journey_definition_outputs(
+    db: Session,
+    *,
+    definition_id: Optional[str] = None,
+    definition: Optional[JourneyDefinition] = None,
+    as_of_date: Optional[date] = None,
+    reprocess_days: int = DEFAULT_REPROCESS_DAYS,
+) -> Dict[str, Any]:
+    if definition is None:
+        if not definition_id:
+            raise ValueError("definition_id is required when definition is not provided")
+        definition = db.get(JourneyDefinition, definition_id)
+    if not definition or getattr(definition, "is_archived", False):
+        return {
+            "definition_id": definition_id or getattr(definition, "id", None),
+            "days_processed": 0,
+            "source_rows_processed": 0,
+            "path_rows_written": 0,
+            "transition_rows_written": 0,
+            "example_rows_written": 0,
+            "definition_rows_written": 0,
+            "obsolete_days_removed": 0,
+            "source_days": 0,
+        }
+
+    latest_complete_day = (as_of_date or datetime.utcnow().date()) - timedelta(days=1)
+    if latest_complete_day < date(1970, 1, 1):
+        latest_complete_day = date(1970, 1, 1)
+
+    source_days = _get_source_days(db, definition=definition, end_day=latest_complete_day)
+    existing_path_days = {
+        d
+        for (d,) in db.query(JourneyPathDaily.date)
+        .filter(
+            JourneyPathDaily.journey_definition_id == definition.id,
+            JourneyPathDaily.date <= latest_complete_day,
+        )
+        .all()
+    }
+    existing_transition_days = {
+        d
+        for (d,) in db.query(JourneyTransitionDaily.date)
+        .filter(
+            JourneyTransitionDaily.journey_definition_id == definition.id,
+            JourneyTransitionDaily.date <= latest_complete_day,
+        )
+        .all()
+    }
+    existing_definition_days = {
+        d
+        for (d,) in db.query(JourneyDefinitionInstanceFact.date)
+        .filter(
+            JourneyDefinitionInstanceFact.journey_definition_id == definition.id,
+            JourneyDefinitionInstanceFact.date <= latest_complete_day,
+        )
+        .all()
+    }
+    existing_example_days = {
+        d
+        for (d,) in db.query(JourneyExampleFact.date)
+        .filter(
+            JourneyExampleFact.journey_definition_id == definition.id,
+            JourneyExampleFact.date <= latest_complete_day,
+        )
+        .all()
+    }
+
+    obsolete_days = {
+        "path": sorted(d for d in existing_path_days if d not in source_days),
+        "transition": sorted(d for d in existing_transition_days if d not in source_days),
+        "definition": sorted(d for d in existing_definition_days if d not in source_days),
+        "example": sorted(d for d in existing_example_days if d not in source_days),
+    }
+    if obsolete_days["path"]:
+        db.query(JourneyPathDaily).filter(
+            JourneyPathDaily.journey_definition_id == definition.id,
+            JourneyPathDaily.date.in_(obsolete_days["path"]),
+        ).delete(synchronize_session=False)
+    if obsolete_days["transition"]:
+        db.query(JourneyTransitionDaily).filter(
+            JourneyTransitionDaily.journey_definition_id == definition.id,
+            JourneyTransitionDaily.date.in_(obsolete_days["transition"]),
+        ).delete(synchronize_session=False)
+    if obsolete_days["definition"]:
+        db.query(JourneyDefinitionInstanceFact).filter(
+            JourneyDefinitionInstanceFact.journey_definition_id == definition.id,
+            JourneyDefinitionInstanceFact.date.in_(obsolete_days["definition"]),
+        ).delete(synchronize_session=False)
+    if obsolete_days["example"]:
+        db.query(JourneyExampleFact).filter(
+            JourneyExampleFact.journey_definition_id == definition.id,
+            JourneyExampleFact.date.in_(obsolete_days["example"]),
+        ).delete(synchronize_session=False)
+    if any(obsolete_days.values()):
+        db.commit()
+
+    if not source_days:
+        return {
+            "definition_id": definition.id,
+            "days_processed": 0,
+            "source_rows_processed": 0,
+            "path_rows_written": 0,
+            "transition_rows_written": 0,
+            "example_rows_written": 0,
+            "definition_rows_written": 0,
+            "obsolete_days_removed": sum(len(days) for days in obsolete_days.values()),
+            "source_days": 0,
+        }
+
+    missing_days = {
+        d
+        for d in source_days
+        if d not in existing_path_days
+        or d not in existing_transition_days
+        or d not in existing_definition_days
+        or d not in existing_example_days
+    }
+    reprocess_set = {
+        latest_complete_day - timedelta(days=offset)
+        for offset in range(max(1, int(reprocess_days or 1)))
+    }
+    days_to_process = sorted(d for d in (missing_days | reprocess_set) if d <= latest_complete_day and d in source_days)
+
+    totals = {
+        "days_processed": 0,
+        "source_rows_processed": 0,
+        "path_rows_written": 0,
+        "transition_rows_written": 0,
+        "example_rows_written": 0,
+        "definition_rows_written": 0,
+    }
+    for day in days_to_process:
+        stats = _aggregate_for_day_definition(db, day=day, definition=definition)
+        totals["days_processed"] += 1
+        totals["source_rows_processed"] += int(stats.get("source_rows", 0) or 0)
+        totals["path_rows_written"] += int(stats.get("path_rows_written", 0) or 0)
+        totals["transition_rows_written"] += int(stats.get("transition_rows_written", 0) or 0)
+        totals["example_rows_written"] += int(stats.get("example_rows_written", 0) or 0)
+        totals["definition_rows_written"] += int(stats.get("definition_rows_written", 0) or 0)
+
+    return {
+        "definition_id": definition.id,
+        **totals,
+        "obsolete_days_removed": sum(len(days) for days in obsolete_days.values()),
+        "source_days": len(source_days),
+    }

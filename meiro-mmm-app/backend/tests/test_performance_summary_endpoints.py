@@ -1,6 +1,9 @@
+from types import SimpleNamespace
+
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.modules.performance import router as performance_router
 
 
 client = TestClient(app)
@@ -64,3 +67,32 @@ def test_campaign_summary_includes_conversion_key_meta_when_passed():
     assert res.status_code == 200
     body = res.json()
     assert body["meta"]["conversion_key"] == "purchase"
+
+
+def test_resolve_effective_conversion_key_falls_back_when_configured_key_has_no_data(monkeypatch):
+    def fake_iter_canonical_conversion_rows(db, *, date_from=None, date_to=None, conversion_key=None):
+        if conversion_key == "form_submit":
+            return iter(())
+        return iter([SimpleNamespace(conversion_id="conv-1")])
+
+    monkeypatch.setattr(
+        performance_router,
+        "iter_canonical_conversion_rows",
+        fake_iter_canonical_conversion_rows,
+    )
+
+    effective_key, resolution = performance_router._resolve_effective_conversion_key(
+        db=None,
+        requested_conversion_key=None,
+        configured_conversion_key="form_submit",
+        date_from="2026-04-01",
+        date_to="2026-04-01",
+    )
+
+    assert effective_key is None
+    assert resolution == {
+        "requested_conversion_key": None,
+        "configured_conversion_key": "form_submit",
+        "applied_conversion_key": None,
+        "reason": "configured_conversion_key_has_no_data_in_selected_period",
+    }

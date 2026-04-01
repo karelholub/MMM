@@ -78,6 +78,14 @@ function resolvePresetHiddenColumnKeys<T>(
   return preset.hiddenColumnKeys ?? fallback
 }
 
+function sameStringArray(left: string[], right: string[]) {
+  if (left.length !== right.length) return false
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false
+  }
+  return true
+}
+
 export default function AnalyticsTable<T>({
   columns,
   rows,
@@ -128,20 +136,40 @@ export default function AnalyticsTable<T>({
       const savedDensity = window.localStorage.getItem(`${persistKey}:density`)
       const savedPreset = window.localStorage.getItem(`${persistKey}:preset`)
       const preset = presets.find((item) => item.key === savedPreset) ?? defaultPreset
-      if (savedHidden) {
-        const parsed = JSON.parse(savedHidden)
-        if (Array.isArray(parsed)) setHiddenColumnKeys(parsed.filter((value): value is string => typeof value === 'string'))
-      } else {
-        setHiddenColumnKeys(resolvePresetHiddenColumnKeys(columns, preset, defaultHiddenColumnKeys))
-      }
-      if (savedDensity === 'comfortable' || savedDensity === 'compact') {
-        setCurrentDensity(savedDensity)
-      }
-      setActivePresetKey(preset?.key ?? null)
+      const nextHiddenColumnKeys = savedHidden
+        ? (() => {
+            const parsed = JSON.parse(savedHidden)
+            return Array.isArray(parsed)
+              ? parsed.filter((value): value is string => typeof value === 'string')
+              : resolvePresetHiddenColumnKeys(columns, preset, defaultHiddenColumnKeys)
+          })()
+        : resolvePresetHiddenColumnKeys(columns, preset, defaultHiddenColumnKeys)
+      const nextDensity =
+        savedDensity === 'comfortable' || savedDensity === 'compact'
+          ? savedDensity
+          : density
+      const nextPresetKey = preset?.key ?? null
+
+      setHiddenColumnKeys((current) =>
+        sameStringArray(current, nextHiddenColumnKeys) ? current : nextHiddenColumnKeys,
+      )
+      setCurrentDensity((current) =>
+        current === nextDensity ? current : nextDensity,
+      )
+      setActivePresetKey((current) =>
+        current === nextPresetKey ? current : nextPresetKey,
+      )
     } catch {
-      setHiddenColumnKeys(resolvePresetHiddenColumnKeys(columns, defaultPreset, defaultHiddenColumnKeys))
-      setCurrentDensity(density)
-      setActivePresetKey(defaultPreset?.key ?? null)
+      const fallbackHiddenColumnKeys = resolvePresetHiddenColumnKeys(columns, defaultPreset, defaultHiddenColumnKeys)
+      setHiddenColumnKeys((current) =>
+        sameStringArray(current, fallbackHiddenColumnKeys) ? current : fallbackHiddenColumnKeys,
+      )
+      setCurrentDensity((current) =>
+        current === density ? current : density,
+      )
+      setActivePresetKey((current) =>
+        current === (defaultPreset?.key ?? null) ? current : (defaultPreset?.key ?? null),
+      )
     }
   }, [columns, defaultHiddenColumnKeys, defaultPreset, density, persistKey, presets])
 

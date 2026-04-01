@@ -173,9 +173,18 @@ interface MeiroWebhookArchiveStatus {
   parser_versions: string[]
 }
 
+interface MeiroEventArchiveStatus {
+  available: boolean
+  entries: number
+  events_received?: number
+  last_received_at?: string | null
+  parser_versions: string[]
+}
+
 interface MeiroWebhookReprocessResult {
   reprocessed_profiles: number
   archive_entries_used: number
+  archive_source?: 'events' | 'profiles' | string
   parser_version: string
   mapping_version: number
   mapping_approval_status: string
@@ -384,6 +393,14 @@ export default function DataQuality() {
       }),
   })
 
+  const meiroEventArchiveStatusQuery = useQuery<MeiroEventArchiveStatus>({
+    queryKey: ['meiro-event-archive-status-dq'],
+    queryFn: async () =>
+      apiGetJson<MeiroEventArchiveStatus>('/api/connectors/meiro/events/archive-status', {
+        fallbackMessage: 'Failed to load Meiro event archive status',
+      }),
+  })
+
   const applyKpiSuggestionsMutation = useMutation({
     mutationFn: async (payload: MeiroWebhookSuggestions['apply_payloads']['kpis']) =>
       apiSendJson('/api/kpis', 'POST', payload, { fallbackMessage: 'Failed to apply KPI suggestions' }),
@@ -433,8 +450,11 @@ export default function DataQuality() {
   const reprocessWebhookArchiveMutation = useMutation({
     mutationFn: async () =>
       apiSendJson<MeiroWebhookReprocessResult>('/api/connectors/meiro/webhook/reprocess', 'POST', {
+        archive_source: meiroEventArchiveStatusQuery.data?.available ? 'events' : 'profiles',
         persist_to_attribution: true,
-        import_note: 'Reprocessed from webhook archive using current approved mapping',
+        import_note: meiroEventArchiveStatusQuery.data?.available
+          ? 'Reprocessed from raw-event archive using current approved mapping'
+          : 'Reprocessed from profile archive using current approved mapping',
       }, {
         fallbackMessage: 'Failed to reprocess Meiro webhook archive',
       }),
@@ -443,8 +463,9 @@ export default function DataQuality() {
       await queryClient.invalidateQueries({ queryKey: ['journeys-validation-summary'] })
       await queryClient.invalidateQueries({ queryKey: ['meiro-webhook-events-dq'] })
       await queryClient.invalidateQueries({ queryKey: ['meiro-webhook-archive-status'] })
+      await queryClient.invalidateQueries({ queryKey: ['meiro-event-archive-status-dq'] })
       showToast(
-        `Reprocessed ${data.reprocessed_profiles} profiles with mapping v${data.mapping_version}.`,
+        `Reprocessed ${data.reprocessed_profiles} profiles from the ${data.archive_source === 'events' ? 'raw-event' : 'profile'} archive with mapping v${data.mapping_version}.`,
         'success',
       )
     },
@@ -1739,19 +1760,25 @@ export default function DataQuality() {
                 <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>
                   {(meiroWebhookArchiveStatusQuery.error as Error)?.message || 'Failed to load webhook archive status'}
                 </div>
-              ) : meiroWebhookArchiveStatusQuery.data?.available ? (
+              ) : (meiroWebhookArchiveStatusQuery.data?.available || meiroEventArchiveStatusQuery.data?.available) ? (
                 <>
                   <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                    Archived batches: <strong>{meiroWebhookArchiveStatusQuery.data.entries}</strong>
-                    {' '}· archived payloads: <strong>{Number(meiroWebhookArchiveStatusQuery.data.profiles_received || 0).toLocaleString()}</strong>
-                    {' '}· last received: <strong>{meiroWebhookArchiveStatusQuery.data.last_received_at ? new Date(meiroWebhookArchiveStatusQuery.data.last_received_at).toLocaleString() : '—'}</strong>
+                    Profile archive: <strong>{Number(meiroWebhookArchiveStatusQuery.data?.entries || 0).toLocaleString()}</strong> batches / <strong>{Number(meiroWebhookArchiveStatusQuery.data?.profiles_received || 0).toLocaleString()}</strong> payloads
+                    {' '}· Event archive: <strong>{Number(meiroEventArchiveStatusQuery.data?.entries || 0).toLocaleString()}</strong> batches / <strong>{Number(meiroEventArchiveStatusQuery.data?.events_received || 0).toLocaleString()}</strong> events
                   </div>
                   <div style={{ marginTop: 4, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                    Parser versions in archive: <strong>{(meiroWebhookArchiveStatusQuery.data.parser_versions || []).join(', ') || '—'}</strong>
+                    Latest profile archive: <strong>{meiroWebhookArchiveStatusQuery.data?.last_received_at ? new Date(meiroWebhookArchiveStatusQuery.data.last_received_at).toLocaleString() : '—'}</strong>
+                    {' '}· latest event archive: <strong>{meiroEventArchiveStatusQuery.data?.last_received_at ? new Date(meiroEventArchiveStatusQuery.data.last_received_at).toLocaleString() : '—'}</strong>
+                  </div>
+                  <div style={{ marginTop: 4, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    Parser versions: profiles <strong>{(meiroWebhookArchiveStatusQuery.data?.parser_versions || []).join(', ') || '—'}</strong>
+                    {' '}· events <strong>{(meiroEventArchiveStatusQuery.data?.parser_versions || []).join(', ') || '—'}</strong>
                     {' '}· current parser: <strong>{meiroWebhookEventsQuery.data?.items?.[0]?.parser_version || 'current'}</strong>
                   </div>
                   <div style={{ marginTop: 4, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                    Rebuilds stored Meiro profiles from archived webhook payloads and re-imports them using the current approved mapping.
+                    {meiroEventArchiveStatusQuery.data?.available
+                      ? 'Rebuilds journeys from archived raw webhook events and re-imports them using the current approved mapping.'
+                      : 'Rebuilds stored Meiro profiles from archived webhook payloads and re-imports them using the current approved mapping.'}
                   </div>
                   <div style={{ marginTop: t.space.sm }}>
                     <button

@@ -1,11 +1,15 @@
+from datetime import datetime, timedelta
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
 from app.services_conversions import v2_to_legacy
 from app.services_conversions import persist_journeys_as_conversion_paths
+from app.models_config_dq import DQSnapshot
 from app.services_taxonomy_suggestions import generate_taxonomy_suggestions, generate_taxonomy_suggestions_from_db
 from app.services_taxonomy import (
+    backfill_taxonomy_dq_snapshots_from_db,
     compute_channel_confidence_from_db,
     compute_taxonomy_coverage_from_db,
     compute_unknown_share,
@@ -291,5 +295,50 @@ def test_persist_taxonomy_dq_snapshots_from_db_uses_persisted_touchpoint_facts()
         assert metric_map["medium_coverage"].metric_value >= 0
         assert metric_map["mean_touchpoint_confidence"].meta_json["source"] == "db_touchpoint_facts"
         assert metric_map["mean_journey_confidence"].meta_json["source"] == "db_touchpoint_facts"
+    finally:
+        db.close()
+
+
+def test_backfill_taxonomy_dq_snapshots_from_db_replaces_bucket_snapshots():
+    db = _make_session()
+    try:
+        now = datetime.utcnow().replace(minute=15, second=0, microsecond=0)
+        older = (now - timedelta(hours=2)).replace(minute=10)
+        newer = (now - timedelta(hours=1)).replace(minute=20)
+        persist_journeys_as_conversion_paths(
+            db,
+            [
+                {
+                    "_schema": "v2",
+                    "customer": {"id": "c-old"},
+                    "touchpoints": [
+                        {"ts": older.isoformat() + "Z", "source": "google", "medium": "", "campaign": None},
+                    ],
+                    "conversions": [{"id": "conv-old", "name": "purchase", "ts": older.isoformat() + "Z", "value": 10.0}],
+                },
+                {
+                    "_schema": "v2",
+                    "customer": {"id": "c-new"},
+                    "touchpoints": [
+                        {"ts": newer.isoformat() + "Z", "source": "newsletter", "medium": "email", "campaign": "welcome"},
+                    ],
+                    "conversions": [{"id": "conv-new", "name": "purchase", "ts": newer.isoformat() + "Z", "value": 20.0}],
+                },
+            ],
+            replace=True,
+            import_source="upload",
+        )
+
+        first = backfill_taxonomy_dq_snapshots_from_db(db, taxonomy=Taxonomy.default(), hours_back=4, max_buckets=10)
+        second = backfill_taxonomy_dq_snapshots_from_db(db, taxonomy=Taxonomy.default(), hours_back=4, max_buckets=10)
+
+        snapshot_rows = db.query(DQSnapshot).filter(DQSnapshot.source == "taxonomy").all()
+        bucket_metric_keys = {(row.ts_bucket, row.metric_key) for row in snapshot_rows}
+
+        assert first["buckets_processed"] >= 2
+        assert first["snapshots_written"] >= 12
+        assert second["buckets_processed"] >= 2
+        assert len(snapshot_rows) == len(bucket_metric_keys)
+        assert len(bucket_metric_keys) >= 12
     finally:
         db.close()

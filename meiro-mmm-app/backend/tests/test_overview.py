@@ -93,6 +93,41 @@ def test_overview_summary_empty_series_do_not_fake_flat_lines():
             assert tile["series"] == []
 
 
+def test_overview_summary_same_day_series_uses_naive_silver_timestamps():
+    db = _unit_db_session()
+    try:
+        db.add(
+            SilverConversionFact(
+                conversion_id="conv-hourly",
+                profile_id="p-hourly",
+                conversion_key="purchase",
+                conversion_ts=datetime(2024, 2, 15, 12, 34),
+                interaction_path_type="click_through",
+                gross_conversions_total=1.0,
+                net_conversions_total=1.0,
+                gross_revenue_total=120.0,
+                net_revenue_total=120.0,
+            )
+        )
+        db.commit()
+
+        body = get_overview_summary(
+            db,
+            date_from="2024-02-15",
+            date_to="2024-02-15",
+            timezone="UTC",
+            expenses={},
+            import_runs_get_last_successful=lambda: None,
+        )
+
+        conversions_tile = next(tile for tile in body["kpi_tiles"] if tile["kpi_key"] == "conversions")
+        revenue_tile = next(tile for tile in body["kpi_tiles"] if tile["kpi_key"] == "revenue")
+        assert any(point["value"] == 1.0 for point in conversions_tile["series"])
+        assert any(point["value"] == 120.0 for point in revenue_tile["series"])
+    finally:
+        db.close()
+
+
 def test_overview_summary_optional_params():
     """Summary accepts timezone, currency, workspace, account, model_id."""
     resp = client.get(
@@ -219,6 +254,44 @@ def test_overview_drivers_last_touch_count_uses_position_not_value_equality():
         )
         by_channel = {x["channel"]: x for x in out["by_channel"]}
         assert by_channel["email"]["conversions"] == 1
+    finally:
+        db.close()
+
+
+def test_overview_drivers_date_only_window_includes_same_day_rows():
+    db = _unit_db_session()
+    try:
+        row = ConversionPath(
+            conversion_id="conv-same-day",
+            profile_id="p-same-day",
+            conversion_key="purchase",
+            conversion_ts=datetime(2024, 2, 15, 12, 0),
+            path_json={
+                "conversion_value": 100.0,
+                "touchpoints": [
+                    {"timestamp": "2024-02-15T10:00:00Z", "channel": "paid_social", "campaign": "launch"},
+                    {"timestamp": "2024-02-15T11:00:00Z", "channel": "direct"},
+                ],
+            },
+            path_hash="same-day-hash",
+            length=2,
+            first_touch_ts=datetime(2024, 2, 15, 10, 0),
+            last_touch_ts=datetime(2024, 2, 15, 11, 0),
+        )
+        db.add(row)
+        db.commit()
+
+        out = get_overview_drivers(
+            db,
+            date_from="2024-02-15",
+            date_to="2024-02-15",
+            expenses={},
+            top_campaigns_n=10,
+        )
+
+        by_channel = {item["channel"]: item for item in out["by_channel"]}
+        assert by_channel["direct"]["conversions"] == 1
+        assert by_channel["paid_social"]["revenue"] > 0
     finally:
         db.close()
 
@@ -923,6 +996,55 @@ def test_overview_trend_insights_prefers_silver_facts_when_channel_daily_facts_a
         assert out["decomposition"]["current"]["visits"] == 1.0
         assert out["momentum"]["rising"][0]["channel"] == "email"
         assert any(row["channel"] == "email" for row in out["mix_shift"])
+    finally:
+        db.close()
+
+
+def test_overview_drivers_uses_current_silver_campaign_rollups_when_previous_period_is_empty():
+    db = _unit_db_session()
+    try:
+        inserted = persist_journeys_as_conversion_paths(
+            db,
+            [
+                {
+                    "_schema": "v2",
+                    "customer": {"id": "cust-current"},
+                    "touchpoints": [
+                        {
+                            "channel": "paid_social",
+                            "campaign": "Launch",
+                            "interaction_type": "click",
+                            "ts": "2024-02-12T10:00:00Z",
+                        }
+                    ],
+                    "conversions": [
+                        {
+                            "id": "conv-current",
+                            "name": "purchase",
+                            "ts": "2024-02-12T12:00:00Z",
+                            "value": 200.0,
+                        }
+                    ],
+                },
+            ],
+            replace=True,
+            import_source="meiro_events_replay",
+            import_batch_id="silver-campaign-drivers-batch",
+        )
+        assert inserted == 1
+
+        out = get_overview_drivers(
+            db,
+            date_from="2024-02-12",
+            date_to="2024-02-12",
+            expenses=[],
+            top_campaigns_n=5,
+        )
+
+        assert out["by_campaign"]
+        assert out["by_campaign"][0]["campaign"] == "Launch"
+        assert out["by_campaign"][0]["revenue"] == 200.0
+        assert out["by_campaign"][0]["conversions"] == 1
     finally:
         db.close()
 

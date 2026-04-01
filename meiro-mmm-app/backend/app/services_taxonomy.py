@@ -13,11 +13,12 @@ Key features:
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from sqlalchemy.orm import Session
@@ -26,6 +27,15 @@ from .models_config_dq import ConversionPath, ConversionTaxonomyTouchpointFact, 
 from .utils.taxonomy import Taxonomy, ChannelRule, infer_source_medium_from_referrer, load_taxonomy, save_taxonomy
 
 logger = logging.getLogger(__name__)
+
+_TAXONOMY_SNAPSHOT_METRIC_KEYS = {
+    "unknown_channel_share",
+    "mean_touchpoint_confidence",
+    "mean_journey_confidence",
+    "source_coverage",
+    "medium_coverage",
+    "low_confidence_touchpoint_share",
+}
 
 
 def _normalized_text(value: Any) -> str:
@@ -38,6 +48,67 @@ def _normalized_text(value: Any) -> str:
     if value is None:
         return ""
     return str(value).lower().strip()
+
+
+def _taxonomy_fingerprint(taxonomy: Taxonomy) -> str:
+    payload = {
+        "channel_rules": [
+            {
+                "name": rule.name,
+                "channel": rule.channel,
+                "priority": rule.priority,
+                "enabled": rule.enabled,
+                "source": {"operator": rule.source.normalize_operator(), "value": rule.source.value or ""},
+                "medium": {"operator": rule.medium.normalize_operator(), "value": rule.medium.value or ""},
+                "campaign": {"operator": rule.campaign.normalize_operator(), "value": rule.campaign.value or ""},
+            }
+            for rule in taxonomy.channel_rules
+        ],
+        "source_aliases": taxonomy.source_aliases,
+        "medium_aliases": taxonomy.medium_aliases,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _query_taxonomy_touchpoint_fact_rows(
+    db: Session,
+    *,
+    sample_limit: Optional[int] = 50000,
+    conversion_from: Optional[datetime] = None,
+    conversion_to: Optional[datetime] = None,
+):
+    q = db.query(ConversionTaxonomyTouchpointFact)
+    if conversion_from is not None:
+        q = q.filter(ConversionTaxonomyTouchpointFact.conversion_ts >= conversion_from)
+    if conversion_to is not None:
+        q = q.filter(ConversionTaxonomyTouchpointFact.conversion_ts < conversion_to)
+    q = q.order_by(ConversionTaxonomyTouchpointFact.conversion_ts.desc(), ConversionTaxonomyTouchpointFact.ordinal.asc())
+    if sample_limit is not None:
+        q = q.limit(sample_limit)
+    rows = q.all()
+    if not rows:
+        return None
+
+    raw_q = db.query(ConversionPath.id)
+    if conversion_from is not None:
+        raw_q = raw_q.filter(ConversionPath.conversion_ts >= conversion_from)
+    if conversion_to is not None:
+        raw_q = raw_q.filter(ConversionPath.conversion_ts < conversion_to)
+    if sample_limit is not None:
+        raw_q = raw_q.order_by(ConversionPath.conversion_ts.desc()).limit(sample_limit)
+    raw_count = raw_q.count()
+    observed_conversion_ids = {str(row.conversion_id or "") for row in rows}
+    if raw_count > len(observed_conversion_ids):
+        return None
+    return rows
+
+
+def _replace_taxonomy_snapshots_for_bucket(db: Session, *, ts_bucket: datetime) -> None:
+    db.query(DQSnapshot).filter(
+        DQSnapshot.source == "taxonomy",
+        DQSnapshot.ts_bucket == ts_bucket,
+        DQSnapshot.metric_key.in_(_TAXONOMY_SNAPSHOT_METRIC_KEYS),
+    ).delete(synchronize_session=False)
 
 
 # ---------------------------------------------------------------------------
@@ -417,26 +488,19 @@ def compute_unknown_share_from_db(
     taxonomy: Optional[Taxonomy] = None,
     sample_size: int = 20,
     sample_limit: int = 50000,
+    conversion_from: Optional[datetime] = None,
+    conversion_to: Optional[datetime] = None,
 ) -> Optional[UnknownShareReport]:
     if taxonomy is None:
         taxonomy = load_taxonomy()
 
-    rows = (
-        db.query(ConversionTaxonomyTouchpointFact)
-        .order_by(ConversionTaxonomyTouchpointFact.conversion_ts.desc(), ConversionTaxonomyTouchpointFact.ordinal.asc())
-        .limit(sample_limit)
-        .all()
+    rows = _query_taxonomy_touchpoint_fact_rows(
+        db,
+        sample_limit=sample_limit,
+        conversion_from=conversion_from,
+        conversion_to=conversion_to,
     )
     if not rows:
-        return None
-    raw_count = (
-        db.query(ConversionPath.id)
-        .order_by(ConversionPath.conversion_ts.desc())
-        .limit(sample_limit)
-        .count()
-    )
-    observed_conversion_ids = {str(row.conversion_id or "") for row in rows}
-    if raw_count > len(observed_conversion_ids):
         return None
 
     total_touchpoints = 0
@@ -574,25 +638,18 @@ def compute_channel_confidence_from_db(
     channel: str,
     taxonomy: Optional[Taxonomy] = None,
     sample_limit: int = 50000,
+    conversion_from: Optional[datetime] = None,
+    conversion_to: Optional[datetime] = None,
 ) -> Optional[Dict[str, Any]]:
     if taxonomy is None:
         taxonomy = load_taxonomy()
-    rows = (
-        db.query(ConversionTaxonomyTouchpointFact)
-        .order_by(ConversionTaxonomyTouchpointFact.conversion_ts.desc(), ConversionTaxonomyTouchpointFact.ordinal.asc())
-        .limit(sample_limit)
-        .all()
+    rows = _query_taxonomy_touchpoint_fact_rows(
+        db,
+        sample_limit=sample_limit,
+        conversion_from=conversion_from,
+        conversion_to=conversion_to,
     )
     if not rows:
-        return None
-    raw_count = (
-        db.query(ConversionPath.id)
-        .order_by(ConversionPath.conversion_ts.desc())
-        .limit(sample_limit)
-        .count()
-    )
-    observed_conversion_ids = {str(row.conversion_id or "") for row in rows}
-    if raw_count > len(observed_conversion_ids):
         return None
 
     confidences = []
@@ -720,26 +777,19 @@ def compute_taxonomy_coverage_from_db(
     db: Session,
     taxonomy: Optional[Taxonomy] = None,
     sample_limit: int = 50000,
+    conversion_from: Optional[datetime] = None,
+    conversion_to: Optional[datetime] = None,
 ) -> Optional[Dict[str, Any]]:
     if taxonomy is None:
         taxonomy = load_taxonomy()
 
-    rows = (
-        db.query(ConversionTaxonomyTouchpointFact)
-        .order_by(ConversionTaxonomyTouchpointFact.conversion_ts.desc(), ConversionTaxonomyTouchpointFact.ordinal.asc())
-        .limit(sample_limit)
-        .all()
+    rows = _query_taxonomy_touchpoint_fact_rows(
+        db,
+        sample_limit=sample_limit,
+        conversion_from=conversion_from,
+        conversion_to=conversion_to,
     )
     if not rows:
-        return None
-    raw_count = (
-        db.query(ConversionPath.id)
-        .order_by(ConversionPath.conversion_ts.desc())
-        .limit(sample_limit)
-        .count()
-    )
-    observed_conversion_ids = {str(row.conversion_id or "") for row in rows}
-    if raw_count > len(observed_conversion_ids):
         return None
 
     channel_dist = defaultdict(int)
@@ -872,6 +922,10 @@ def persist_taxonomy_dq_snapshots_from_db(
     db: Session,
     taxonomy: Optional[Taxonomy] = None,
     sample_limit: int = 50000,
+    conversion_from: Optional[datetime] = None,
+    conversion_to: Optional[datetime] = None,
+    ts_bucket: Optional[datetime] = None,
+    replace_existing: bool = False,
 ) -> Optional[List[DQSnapshot]]:
     """
     Compute and persist taxonomy-related DQ snapshots from persisted touchpoint facts.
@@ -882,28 +936,31 @@ def persist_taxonomy_dq_snapshots_from_db(
     if taxonomy is None:
         taxonomy = load_taxonomy()
 
-    rows = (
-        db.query(ConversionTaxonomyTouchpointFact)
-        .order_by(ConversionTaxonomyTouchpointFact.conversion_ts.desc(), ConversionTaxonomyTouchpointFact.ordinal.asc())
-        .limit(sample_limit)
-        .all()
+    rows = _query_taxonomy_touchpoint_fact_rows(
+        db,
+        sample_limit=sample_limit,
+        conversion_from=conversion_from,
+        conversion_to=conversion_to,
     )
     if not rows:
         return None
-
-    raw_count = (
-        db.query(ConversionPath.id)
-        .order_by(ConversionPath.conversion_ts.desc())
-        .limit(sample_limit)
-        .count()
+    ts_bucket_value = (ts_bucket or datetime.utcnow()).replace(minute=0, second=0, microsecond=0)
+    taxonomy_hash = _taxonomy_fingerprint(taxonomy)
+    unknown_report = compute_unknown_share_from_db(
+        db,
+        taxonomy=taxonomy,
+        sample_size=20,
+        sample_limit=sample_limit,
+        conversion_from=conversion_from,
+        conversion_to=conversion_to,
     )
-    observed_conversion_ids = {str(row.conversion_id or "") for row in rows}
-    if raw_count > len(observed_conversion_ids):
-        return None
-
-    ts_bucket = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
-    unknown_report = compute_unknown_share_from_db(db, taxonomy=taxonomy, sample_size=20, sample_limit=sample_limit)
-    coverage = compute_taxonomy_coverage_from_db(db, taxonomy=taxonomy, sample_limit=sample_limit)
+    coverage = compute_taxonomy_coverage_from_db(
+        db,
+        taxonomy=taxonomy,
+        sample_limit=sample_limit,
+        conversion_from=conversion_from,
+        conversion_to=conversion_to,
+    )
     if unknown_report is None or coverage is None:
         return None
 
@@ -954,31 +1011,39 @@ def persist_taxonomy_dq_snapshots_from_db(
             "unknown_count": unknown_report.unknown_count,
             "total": unknown_report.total_touchpoints,
             "source": "db_touchpoint_facts",
+            "taxonomy_hash": taxonomy_hash,
         }),
         ("taxonomy", "mean_touchpoint_confidence", mean_tp_conf, {
             "sample_size": len(touchpoint_confidences),
             "source": "db_touchpoint_facts",
+            "taxonomy_hash": taxonomy_hash,
         }),
         ("taxonomy", "mean_journey_confidence", mean_journey_conf, {
             "sample_size": len(journey_confidences),
             "source": "db_touchpoint_facts",
+            "taxonomy_hash": taxonomy_hash,
         }),
         ("taxonomy", "source_coverage", coverage["source_coverage"], {
             "source": "db_touchpoint_facts",
+            "taxonomy_hash": taxonomy_hash,
         }),
         ("taxonomy", "medium_coverage", coverage["medium_coverage"], {
             "source": "db_touchpoint_facts",
+            "taxonomy_hash": taxonomy_hash,
         }),
         ("taxonomy", "low_confidence_touchpoint_share", low_conf_share, {
             "threshold": 0.5,
             "source": "db_touchpoint_facts",
+            "taxonomy_hash": taxonomy_hash,
         }),
     ]
 
     snapshots: List[DQSnapshot] = []
+    if replace_existing:
+        _replace_taxonomy_snapshots_for_bucket(db, ts_bucket=ts_bucket_value)
     for source, metric_key, metric_value, meta in metrics:
         snap = DQSnapshot(
-            ts_bucket=ts_bucket,
+            ts_bucket=ts_bucket_value,
             source=source,
             metric_key=metric_key,
             metric_value=float(metric_value),
@@ -989,3 +1054,57 @@ def persist_taxonomy_dq_snapshots_from_db(
 
     db.commit()
     return snapshots
+
+
+def backfill_taxonomy_dq_snapshots_from_db(
+    db: Session,
+    taxonomy: Optional[Taxonomy] = None,
+    *,
+    hours_back: int = 24 * 14,
+    sample_limit: int = 50000,
+    max_buckets: int = 24 * 14,
+) -> Dict[str, Any]:
+    if taxonomy is None:
+        taxonomy = load_taxonomy()
+
+    now_bucket = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+    lower_bound = now_bucket - timedelta(hours=max(1, int(hours_back)))
+    ts_rows = (
+        db.query(ConversionTaxonomyTouchpointFact.conversion_ts)
+        .filter(
+            ConversionTaxonomyTouchpointFact.conversion_ts >= lower_bound,
+            ConversionTaxonomyTouchpointFact.conversion_ts < now_bucket,
+        )
+        .order_by(ConversionTaxonomyTouchpointFact.conversion_ts.asc())
+        .all()
+    )
+    buckets = sorted(
+        {
+            ts.replace(minute=0, second=0, microsecond=0)
+            for (ts,) in ts_rows
+            if isinstance(ts, datetime)
+        }
+    )
+    if max_buckets > 0 and len(buckets) > max_buckets:
+        buckets = buckets[-max_buckets:]
+
+    persisted: List[DQSnapshot] = []
+    for bucket in buckets:
+        snapshots = persist_taxonomy_dq_snapshots_from_db(
+            db,
+            taxonomy=taxonomy,
+            sample_limit=sample_limit,
+            conversion_from=bucket,
+            conversion_to=bucket + timedelta(hours=1),
+            ts_bucket=bucket,
+            replace_existing=True,
+        )
+        if snapshots:
+            persisted.extend(snapshots)
+
+    return {
+        "buckets_processed": len(buckets),
+        "snapshots_written": len(persisted),
+        "from": lower_bound.isoformat(),
+        "to": now_bucket.isoformat(),
+    }

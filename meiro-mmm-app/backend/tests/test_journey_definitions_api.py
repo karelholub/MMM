@@ -231,3 +231,75 @@ def test_journey_definitions_list_accepts_aliases_and_clamps_page_size(client: T
     order_alias = client.get("/api/journeys/definitions", params={"order": "asc"}, headers=view_headers)
     assert order_alias.status_code == 200
     assert order_alias.json()["per_page"] == 20
+
+
+def test_journey_definition_crud_triggers_rebuild_and_purge_hooks(client: TestClient, monkeypatch):
+    rebuild_calls = []
+    purge_calls = []
+
+    monkeypatch.setattr(
+        main_module,
+        "rebuild_journey_definition_outputs",
+        lambda db, definition_id, reprocess_days=None: rebuild_calls.append((definition_id, reprocess_days)) or {"definition_id": definition_id},
+    )
+    monkeypatch.setattr(
+        main_module,
+        "purge_journey_definition_outputs",
+        lambda db, definition_id: purge_calls.append(definition_id) or {"definition_id": definition_id},
+    )
+
+    headers = {"X-User-Role": "editor", "X-User-Id": "qa-editor"}
+    create_resp = client.post(
+        "/api/journeys/definitions",
+        headers=headers,
+        json={"name": "Hooked Journey", "conversion_kpi_id": "purchase", "lookback_window_days": 30, "mode_default": "conversion_only"},
+    )
+    assert create_resp.status_code == 200
+    definition_id = create_resp.json()["id"]
+    assert rebuild_calls == [(definition_id, None)]
+
+    update_resp = client.put(
+        f"/api/journeys/definitions/{definition_id}",
+        headers=headers,
+        json={"name": "Hooked Journey v2", "conversion_kpi_id": "lead", "lookback_window_days": 21, "mode_default": "all_journeys"},
+    )
+    assert update_resp.status_code == 200
+    assert rebuild_calls == [(definition_id, None), (definition_id, None)]
+
+    archive_resp = client.delete(
+        f"/api/journeys/definitions/{definition_id}",
+        headers=headers,
+    )
+    assert archive_resp.status_code == 200
+    assert purge_calls == [definition_id]
+
+
+def test_journey_definition_rebuild_endpoint_invokes_definition_job(client: TestClient, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        main_module,
+        "rebuild_journey_definition_outputs",
+        lambda db, definition_id, reprocess_days=None: calls.append((definition_id, reprocess_days)) or {
+            "definition_id": definition_id,
+            "days_processed": 2,
+        },
+    )
+
+    headers = {"X-User-Role": "editor", "X-User-Id": "qa-editor"}
+    create_resp = client.post(
+        "/api/journeys/definitions",
+        headers=headers,
+        json={"name": "Manual rebuild", "conversion_kpi_id": "purchase", "lookback_window_days": 30, "mode_default": "conversion_only"},
+    )
+    assert create_resp.status_code == 200
+    definition_id = create_resp.json()["id"]
+    calls.clear()
+
+    rebuild_resp = client.post(
+        f"/api/journeys/definitions/{definition_id}/rebuild",
+        headers=headers,
+        params={"reprocess_days": 7},
+    )
+    assert rebuild_resp.status_code == 200
+    assert calls == [(definition_id, 7)]
+    assert rebuild_resp.json()["metrics"]["days_processed"] == 2
