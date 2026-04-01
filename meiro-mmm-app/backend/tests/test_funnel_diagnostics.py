@@ -5,6 +5,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
 from app.models_config_dq import ConversionPath, FunnelDefinition, JourneyDefinition
+from app.services_conversions import persist_journeys_as_conversion_paths
 from app.services_funnels import get_funnel_diagnostics
 
 
@@ -353,5 +354,122 @@ def test_funnel_diagnostics_campaign_filter_matches_nested_campaign_id():
 
         assert out
         assert any("1 reached, 1 advanced" in " ".join(item.get("evidence", [])) for item in out)
+    finally:
+        db.close()
+
+
+def test_funnel_diagnostics_uses_silver_when_conversion_paths_absent():
+    db = _unit_db_session()
+    try:
+        jd = JourneyDefinition(
+            id="jd-silver-diag",
+            name="Silver Journey",
+            conversion_kpi_id="purchase",
+            lookback_window_days=30,
+            mode_default="conversion_only",
+            created_by="test",
+            updated_by="test",
+            is_archived=False,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        funnel = FunnelDefinition(
+            id="f-silver-diag",
+            journey_definition_id="jd-silver-diag",
+            workspace_id="default",
+            user_id="u1",
+            name="Checkout funnel",
+            steps_json=[
+                "Paid Landing",
+                "Product View / Content View",
+                "Add to Cart / Form Start",
+                "Purchase / Lead Won (conversion)",
+            ],
+            counting_method="ordered",
+            window_days=30,
+            is_archived=False,
+            created_by="test",
+            updated_by="test",
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        db.add_all([jd, funnel])
+        db.commit()
+
+        journeys = [
+            _mk_payload(
+                customer_id="curr-1",
+                browser="safari",
+                country="US",
+                device="mobile",
+                consent_opt_out=True,
+                landing_group="pricing",
+                has_error=True,
+                base_ts="2026-02-10T10:00:00Z",
+                add_to_cart_ts="2026-02-10T12:20:00Z",
+            ),
+            _mk_payload(
+                customer_id="curr-2",
+                browser="safari",
+                country="US",
+                device="mobile",
+                consent_opt_out=True,
+                landing_group="pricing",
+                has_error=False,
+                base_ts="2026-02-11T10:00:00Z",
+                add_to_cart_ts=None,
+            ),
+            _mk_payload(
+                customer_id="prev-1",
+                browser="chrome",
+                country="CA",
+                device="desktop",
+                consent_opt_out=False,
+                landing_group="content",
+                has_error=False,
+                base_ts="2026-02-08T10:00:00Z",
+                add_to_cart_ts="2026-02-08T10:18:00Z",
+            ),
+            _mk_payload(
+                customer_id="prev-2",
+                browser="chrome",
+                country="CA",
+                device="desktop",
+                consent_opt_out=False,
+                landing_group="content",
+                has_error=False,
+                base_ts="2026-02-09T10:00:00Z",
+                add_to_cart_ts="2026-02-09T10:20:00Z",
+            ),
+        ]
+        inserted = persist_journeys_as_conversion_paths(
+            db,
+            journeys,
+            replace=True,
+            import_source="meiro_events_replay",
+            import_batch_id="silver-diag-batch",
+        )
+        assert inserted == 4
+
+        db.query(ConversionPath).delete(synchronize_session=False)
+        db.commit()
+
+        out = get_funnel_diagnostics(
+            db,
+            funnel=funnel,
+            journey_definition=jd,
+            step="Product View / Content View",
+            date_from=date(2026, 2, 10),
+            date_to=date(2026, 2, 12),
+        )
+
+        assert isinstance(out, list)
+        assert len(out) >= 1
+        for item in out:
+            assert isinstance(item.get("title"), str) and item["title"].strip()
+            assert isinstance(item.get("evidence"), list) and item["evidence"]
+            assert isinstance(item.get("impact_estimate"), dict)
+            assert isinstance(item.get("confidence"), str) and item["confidence"] in {"low", "medium", "high"}
+            assert isinstance(item.get("next_action"), str) and item["next_action"].strip()
     finally:
         db.close()

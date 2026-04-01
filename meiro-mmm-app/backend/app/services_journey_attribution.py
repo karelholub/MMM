@@ -6,7 +6,6 @@ instances from conversion_paths with journey-definition filters.
 
 from __future__ import annotations
 
-from collections import defaultdict
 from datetime import date, datetime, time as dt_time, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -15,8 +14,9 @@ from sqlalchemy.orm import Session
 
 from .attribution_engine import ATTRIBUTION_MODELS, run_attribution, run_attribution_campaign
 from .models_config_dq import ConversionPath, JourneyDefinition
-from .services_conversions import conversion_path_payload, conversion_path_revenue_value, v2_to_legacy
+from .services_conversions import conversion_path_payload, v2_to_legacy
 from .services_journey_aggregates import _build_journey_steps, _path_hash
+from .services_silver_journeys import load_silver_journeys
 
 PAID_CHANNEL_TOKENS = {
     "google_ads",
@@ -110,6 +110,53 @@ def _filter_conversion_paths(
         if country and (dims.get("country") or "").lower() != country.lower():
             continue
         out.append((light_row, payload, dims, ph))
+    return out
+
+
+def _filter_journey_instances_from_silver(
+    db: Session,
+    *,
+    definition: JourneyDefinition,
+    date_from: date,
+    date_to: date,
+    channel_group: Optional[str],
+    campaign_id: Optional[str],
+    device: Optional[str],
+    country: Optional[str],
+    path_hash: Optional[str],
+) -> List[Tuple[Dict[str, Any], Dict[str, Optional[str]], str, float]]:
+    start_dt = datetime.combine(date_from, dt_time.min)
+    end_dt = datetime.combine(date_to + timedelta(days=1), dt_time.min)
+    journeys = load_silver_journeys(
+        db,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        conversion_key=definition.conversion_kpi_id,
+    )
+    if not journeys:
+        return []
+
+    out: List[Tuple[Dict[str, Any], Dict[str, Optional[str]], str, float]] = []
+    for journey in journeys:
+        payload = journey["payload"]
+        conversion_ts = journey["conversion_ts"]
+        steps, _, dims = _build_journey_steps(
+            payload,
+            conversion_ts=conversion_ts,
+            lookback_window_days=definition.lookback_window_days,
+        )
+        ph = _path_hash(steps) if steps else ""
+        if path_hash and ph != path_hash:
+            continue
+        if channel_group and (dims.get("channel_group") or "").lower() != channel_group.lower():
+            continue
+        if campaign_id and (dims.get("campaign_id") or "") != campaign_id:
+            continue
+        if device and (dims.get("device") or "").lower() != device.lower():
+            continue
+        if country and (dims.get("country") or "").lower() != country.lower():
+            continue
+        out.append((payload, dims, ph, float(journey["gross_revenue_total"] or 0.0)))
     return out
 
 
@@ -240,7 +287,7 @@ def build_journey_attribution_summary(
     if d_from > d_to:
         d_from, d_to = d_to, d_from
 
-    filtered_rows = _filter_conversion_paths(
+    silver_instances = _filter_journey_instances_from_silver(
         db,
         definition=definition,
         date_from=d_from,
@@ -253,8 +300,34 @@ def build_journey_attribution_summary(
     )
 
     journeys: List[Dict[str, Any]] = []
-    for _row, payload, _dims, _ph in filtered_rows:
-        journeys.append(v2_to_legacy(payload))
+    observed_total = 0.0
+    if silver_instances:
+        for payload, _dims, _ph, gross_value in silver_instances:
+            journeys.append(v2_to_legacy(payload))
+            observed_total += float(gross_value or 0.0)
+    else:
+        filtered_rows = _filter_conversion_paths(
+            db,
+            definition=definition,
+            date_from=d_from,
+            date_to=d_to,
+            channel_group=channel_group,
+            campaign_id=campaign_id,
+            device=device,
+            country=country,
+            path_hash=path_hash,
+        )
+        for row, payload, _dims, _ph in filtered_rows:
+            journeys.append(v2_to_legacy(payload))
+            fallback_value = payload.get("conversion_value")
+            if fallback_value in (None, "", []):
+                conversions = payload.get("conversions")
+                first_conversion = conversions[0] if isinstance(conversions, list) and conversions and isinstance(conversions[0], dict) else {}
+                fallback_value = first_conversion.get("value") if isinstance(first_conversion, dict) else None
+            try:
+                observed_total += float(fallback_value or 0.0)
+            except Exception:
+                continue
 
     used_compressed_journeys = False
     attribution_journeys = journeys
@@ -316,8 +389,6 @@ def build_journey_attribution_summary(
                 }
             )
 
-    dedupe_seen: set[str] = set()
-    observed_total = float(sum(conversion_path_revenue_value(row, dedupe_seen=dedupe_seen) for row, _, _, _ in filtered_rows))
     delta_abs = round(total_attr - observed_total, 4)
     delta_pct = round((delta_abs / observed_total), 6) if observed_total > 0 else 0.0
 

@@ -754,6 +754,10 @@ class SilverConversionFact(Base):
     valid_leads = Column(Float, nullable=False, default=0.0)
     device = Column(String(64), nullable=True)
     country = Column(String(64), nullable=True)
+    browser = Column(String(64), nullable=True)
+    consent_opt_out = Column(Boolean, nullable=True)
+    landing_page_group = Column(String(128), nullable=True)
+    has_error_event = Column(Boolean, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -789,6 +793,67 @@ class SilverTouchpointFact(Base):
         Index("ix_silver_touchpoint_conv_ord", "conversion_id", "ordinal", unique=True),
         Index("ix_silver_touchpoint_profile_ts", "profile_id", "touchpoint_ts"),
         Index("ix_silver_touchpoint_channel_ts", "channel", "touchpoint_ts"),
+    )
+
+
+class JourneyInstanceFact(Base):
+    __tablename__ = "journey_instance_facts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversion_id = Column(String(128), nullable=False, unique=True, index=True)
+    profile_id = Column(String(128), nullable=True, index=True)
+    conversion_key = Column(String(128), nullable=True, index=True)
+    conversion_ts = Column(DateTime, nullable=False, index=True)
+    import_batch_id = Column(String(36), nullable=True, index=True)
+    import_source = Column(String(32), nullable=True, index=True)
+    source_snapshot_id = Column(String(36), nullable=True, index=True)
+    path_hash = Column(String(128), nullable=True, index=True)
+    path_length = Column(Integer, nullable=False, default=0)
+    steps_json = Column(JSON, nullable=False, default=list)
+    channel_group = Column(String(128), nullable=True, index=True)
+    last_touch_channel = Column(String(128), nullable=True, index=True)
+    campaign_id = Column(String(255), nullable=True, index=True)
+    device = Column(String(64), nullable=True, index=True)
+    country = Column(String(64), nullable=True, index=True)
+    browser = Column(String(64), nullable=True, index=True)
+    consent_opt_out = Column(Boolean, nullable=True, index=True)
+    landing_page_group = Column(String(128), nullable=True, index=True)
+    has_error_event = Column(Boolean, nullable=True, index=True)
+    interaction_path_type = Column(String(32), nullable=True, index=True)
+    time_to_convert_sec = Column(Float, nullable=True)
+    gross_conversions_total = Column(Float, nullable=False, default=0.0)
+    net_conversions_total = Column(Float, nullable=False, default=0.0)
+    gross_revenue_total = Column(Float, nullable=False, default=0.0)
+    net_revenue_total = Column(Float, nullable=False, default=0.0)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_journey_instance_key_ts", "conversion_key", "conversion_ts"),
+        Index("ix_journey_instance_dims", "channel_group", "campaign_id", "device", "country"),
+        Index("ix_journey_instance_path_ts", "path_hash", "conversion_ts"),
+    )
+
+
+class JourneyStepFact(Base):
+    __tablename__ = "journey_step_facts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversion_id = Column(String(128), nullable=False, index=True)
+    profile_id = Column(String(128), nullable=True, index=True)
+    conversion_key = Column(String(128), nullable=True, index=True)
+    ordinal = Column(Integer, nullable=False)
+    step_name = Column(String(128), nullable=False, index=True)
+    step_ts = Column(DateTime, nullable=True, index=True)
+    channel = Column(String(128), nullable=True, index=True)
+    campaign = Column(String(255), nullable=True, index=True)
+    event_name = Column(String(255), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_journey_step_conv_ord", "conversion_id", "ordinal", unique=True),
+        Index("ix_journey_step_name_ts", "step_name", "step_ts"),
     )
 
 

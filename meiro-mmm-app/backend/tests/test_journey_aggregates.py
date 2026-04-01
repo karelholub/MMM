@@ -11,6 +11,8 @@ from app.models_config_dq import (
     JourneyExampleFact,
     JourneyPathDaily,
     JourneyTransitionDaily,
+    SilverConversionFact,
+    SilverTouchpointFact,
 )
 from app.services_journey_aggregates import (
     STEP_ADD_TO_CART,
@@ -183,7 +185,7 @@ def test_run_daily_journey_aggregates_writes_paths_and_transitions_and_backfills
         db.close()
 
 
-def test_run_daily_journey_aggregates_rebuilds_channel_facts_from_silver_without_conversion_paths():
+def test_run_daily_journey_aggregates_rebuilds_daily_facts_from_silver_without_conversion_paths():
     db = _unit_db_session()
     try:
         definition = JourneyDefinition(
@@ -223,6 +225,8 @@ def test_run_daily_journey_aggregates_rebuilds_channel_facts_from_silver_without
         assert inserted == 1
 
         db.query(ConversionPath).delete(synchronize_session=False)
+        db.query(SilverTouchpointFact).delete(synchronize_session=False)
+        db.query(SilverConversionFact).delete(synchronize_session=False)
         db.commit()
 
         out = run_daily_journey_aggregates(db, as_of_date=date(2026, 2, 9), reprocess_days=1)
@@ -233,15 +237,17 @@ def test_run_daily_journey_aggregates_rebuilds_channel_facts_from_silver_without
             .order_by(ChannelPerformanceDaily.channel.asc(), ChannelPerformanceDaily.conversion_key.asc().nullsfirst())
             .all()
         )
+        path_rows = db.query(JourneyPathDaily).filter(JourneyPathDaily.date == date(2026, 2, 8)).all()
+        transition_rows = db.query(JourneyTransitionDaily).filter(JourneyTransitionDaily.date == date(2026, 2, 8)).all()
+        example_rows = db.query(JourneyExampleFact).filter(JourneyExampleFact.date == date(2026, 2, 8)).all()
 
-        assert out["channel_rows_written"] >= 2
-        assert channel_rows
-        rollup = next(r for r in channel_rows if r.channel == "google_ads" and r.conversion_key is None)
-        keyed = next(r for r in channel_rows if r.channel == "google_ads" and r.conversion_key == "purchase")
-        assert rollup.visits_total == 2
-        assert float(rollup.gross_revenue_total or 0.0) == 150.0
-        assert keyed.count_conversions == 1
-        assert float(keyed.gross_revenue_total or 0.0) == 150.0
-        assert db.query(JourneyPathDaily).count() == 0
+        assert out["channel_rows_written"] == 0
+        assert out["path_rows_written"] >= 1
+        assert out["transition_rows_written"] >= 1
+        assert not channel_rows
+        assert path_rows
+        assert transition_rows
+        assert example_rows
+        assert path_rows[0].path_steps[-1] == STEP_CONVERSION
     finally:
         db.close()

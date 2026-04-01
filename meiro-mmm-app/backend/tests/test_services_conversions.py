@@ -4,7 +4,7 @@ from sqlalchemy.orm import sessionmaker
 from app.db import Base
 from app.models_config_dq import ConversionDataQualityFact, ConversionPath, ConversionScopeDiagnosticFact
 from app.models_config_dq import ConversionKpiSignalFact, ConversionTaxonomyTouchpointFact
-from app.models_config_dq import SilverConversionFact, SilverTouchpointFact
+from app.models_config_dq import JourneyInstanceFact, JourneyStepFact, SilverConversionFact, SilverTouchpointFact
 from app.services_conversions import (
     classify_journey_interaction,
     conversion_path_is_converted,
@@ -178,6 +178,17 @@ def test_persist_journeys_as_conversion_paths_stamps_import_metadata():
     assert len(silver_touchpoints) == 1
     assert silver_touchpoints[0].channel == "google_ads"
     assert silver_touchpoints[0].import_batch_id == "batch-123"
+    journey_instance = db.query(JourneyInstanceFact).filter(JourneyInstanceFact.conversion_id == row.conversion_id).one()
+    assert journey_instance.import_batch_id == "batch-123"
+    assert journey_instance.channel_group == "paid"
+    assert journey_instance.gross_revenue_total == 10.0
+    journey_steps = (
+        db.query(JourneyStepFact)
+        .filter(JourneyStepFact.conversion_id == row.conversion_id)
+        .order_by(JourneyStepFact.ordinal.asc())
+        .all()
+    )
+    assert [step.step_name for step in journey_steps] == ["Paid Landing", "Purchase / Lead Won (conversion)"]
 
 
 def test_persist_journeys_as_conversion_paths_append_mode_skips_existing_conversion_ids():

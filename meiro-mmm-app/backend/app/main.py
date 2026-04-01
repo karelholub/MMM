@@ -379,7 +379,7 @@ def _ensure_journey_paths_columns():
 
 
 def _ensure_conversion_path_columns():
-    """Ensure import metadata columns exist on conversion_paths for local SQLite dev DBs."""
+    """Ensure import metadata and silver fact columns exist for local SQLite dev DBs."""
     try:
         from sqlalchemy import text
         with engine.connect() as conn:
@@ -392,6 +392,10 @@ def _ensure_conversion_path_columns():
                 "CREATE INDEX IF NOT EXISTS ix_conversion_paths_import_source ON conversion_paths (import_source)",
                 "CREATE INDEX IF NOT EXISTS ix_conversion_paths_source_snapshot_id ON conversion_paths (source_snapshot_id)",
                 "CREATE INDEX IF NOT EXISTS ix_conversion_paths_imported_at ON conversion_paths (imported_at)",
+                "ALTER TABLE silver_conversion_facts ADD COLUMN browser VARCHAR(64)",
+                "ALTER TABLE silver_conversion_facts ADD COLUMN consent_opt_out BOOLEAN",
+                "ALTER TABLE silver_conversion_facts ADD COLUMN landing_page_group VARCHAR(128)",
+                "ALTER TABLE silver_conversion_facts ADD COLUMN has_error_event BOOLEAN",
             ):
                 try:
                     conn.execute(text(stmt))

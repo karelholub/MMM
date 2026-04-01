@@ -76,6 +76,79 @@ def _interaction_path_type(journey: Dict[str, Any]) -> Optional[str]:
     return "unknown"
 
 
+def _browser_token(journey: Dict[str, Any]) -> Optional[str]:
+    explicit = journey.get("browser")
+    if not explicit and isinstance(journey.get("context"), dict):
+        explicit = journey["context"].get("browser")
+    if explicit not in (None, "", []):
+        return _normalized_token(str(explicit).strip().lower())
+    for tp in journey.get("touchpoints") or []:
+        if not isinstance(tp, dict):
+            continue
+        candidate = tp.get("browser")
+        if not candidate and isinstance(tp.get("context"), dict):
+            candidate = tp["context"].get("browser")
+        if candidate not in (None, "", []):
+            return _normalized_token(str(candidate).strip().lower())
+    return None
+
+
+def _consent_opt_out(journey: Dict[str, Any]) -> Optional[bool]:
+    if "consent_opt_out" in journey:
+        return bool(journey.get("consent_opt_out"))
+    consent = journey.get("consent")
+    if isinstance(consent, dict):
+        if "opt_out" in consent:
+            return bool(consent.get("opt_out"))
+        if "tracking" in consent:
+            return not bool(consent.get("tracking"))
+    for tp in journey.get("touchpoints") or []:
+        if not isinstance(tp, dict):
+            continue
+        if "consent_opt_out" in tp:
+            return bool(tp.get("consent_opt_out"))
+    return None
+
+
+def _landing_page_group(journey: Dict[str, Any]) -> Optional[str]:
+    for key in ("landing_page_group", "landing_group", "page_group"):
+        if journey.get(key) not in (None, "", []):
+            return _normalized_token(str(journey.get(key)).strip().lower())
+    touchpoints = journey.get("touchpoints") or []
+    if not isinstance(touchpoints, list) or not touchpoints:
+        return None
+    first = touchpoints[0] if isinstance(touchpoints[0], dict) else {}
+    for key in ("landing_page_group", "landing_group", "page_group"):
+        if first.get(key) not in (None, "", []):
+            return _normalized_token(str(first.get(key)).strip().lower())
+    url = first.get("url") or first.get("landing_page")
+    if url in (None, "", []):
+        return None
+    token = str(url).strip().lower()
+    if "pricing" in token:
+        return "pricing"
+    if "blog" in token or "content" in token:
+        return "content"
+    if "product" in token:
+        return "product"
+    return "other"
+
+
+def _has_error_event(journey: Dict[str, Any]) -> Optional[bool]:
+    touchpoints = journey.get("touchpoints") or []
+    if not isinstance(touchpoints, list):
+        return None
+    seen = False
+    for tp in touchpoints:
+        if not isinstance(tp, dict):
+            continue
+        seen = True
+        event_name = str(tp.get("event_name") or tp.get("event") or tp.get("name") or tp.get("type") or "").lower()
+        if any(token in event_name for token in ("error", "fail", "exception", "timeout")):
+            return True
+    return False if seen else None
+
+
 def _safe_float(value: Any) -> float:
     try:
         return float(value or 0.0)
@@ -218,6 +291,10 @@ def build_silver_conversion_fact(
         valid_leads=float(outcome.get("valid_leads", 0.0) or 0.0),
         device=_normalized_token(journey.get("device")),
         country=_normalized_token(journey.get("country")),
+        browser=_browser_token(journey),
+        consent_opt_out=_consent_opt_out(journey),
+        landing_page_group=_landing_page_group(journey),
+        has_error_event=_has_error_event(journey),
         created_at=created_at,
         updated_at=created_at,
     )

@@ -5,6 +5,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
 from app.models_config_dq import ConversionPath, JourneyDefinition
+from app.services_conversions import persist_journeys_as_conversion_paths
 from app.services_journey_aggregates import _build_journey_steps, _path_hash
 from app.services_journey_attribution import build_journey_attribution_summary
 
@@ -223,5 +224,71 @@ def test_attribution_summary_compresses_repeated_paths_for_linear_model():
         by_channel = {row["channel"]: row["attributed_value"] for row in out["by_channel"]}
         assert by_channel["google_ads"] == 75.0
         assert by_channel["email"] == 75.0
+    finally:
+        db.close()
+
+
+def test_attribution_summary_uses_silver_when_conversion_paths_absent():
+    db = _unit_db_session()
+    try:
+        jd = JourneyDefinition(
+            id="jd-silver",
+            name="Silver Attribution",
+            conversion_kpi_id="purchase",
+            lookback_window_days=30,
+            mode_default="conversion_only",
+            created_by="test",
+            updated_by="test",
+            is_archived=False,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        db.add(jd)
+        db.commit()
+
+        inserted = persist_journeys_as_conversion_paths(
+            db,
+            [
+                {
+                    "_schema": "v2",
+                    "customer": {"id": "cust-1"},
+                    "touchpoints": [
+                        {"ts": "2026-02-01T08:00:00Z", "channel": "google_ads"},
+                        {"ts": "2026-02-02T08:00:00Z", "channel": "email"},
+                    ],
+                    "conversions": [{"id": "conv-1", "name": "purchase", "ts": "2026-02-02T09:00:00Z", "value": 120.0}],
+                },
+                {
+                    "_schema": "v2",
+                    "customer": {"id": "cust-2"},
+                    "touchpoints": [
+                        {"ts": "2026-02-03T08:00:00Z", "channel": "direct"},
+                        {"ts": "2026-02-04T08:00:00Z", "channel": "meta_ads", "campaign": "B"},
+                    ],
+                    "conversions": [{"id": "conv-2", "name": "purchase", "ts": "2026-02-04T09:00:00Z", "value": 80.0}],
+                },
+            ],
+            replace=True,
+            import_source="meiro_events_replay",
+            import_batch_id="silver-attribution-batch",
+        )
+        assert inserted == 2
+
+        db.query(ConversionPath).delete(synchronize_session=False)
+        db.commit()
+
+        out = build_journey_attribution_summary(
+            db,
+            definition=jd,
+            date_from="2026-02-01",
+            date_to="2026-02-10",
+            model="linear",
+            include_campaign=True,
+        )
+
+        assert out["totals"]["journeys"] == 2
+        assert out["totals"]["total_value_observed"] == 200.0
+        assert abs(out["totals"]["total_value_attributed"] - 200.0) <= 10.0
+        assert out["by_channel"]
     finally:
         db.close()

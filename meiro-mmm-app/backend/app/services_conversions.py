@@ -25,6 +25,8 @@ from .models_config_dq import (
     ConversionPath,
     ConversionScopeDiagnosticFact,
     ConversionTaxonomyTouchpointFact,
+    JourneyInstanceFact,
+    JourneyStepFact,
     SilverConversionFact,
     SilverTouchpointFact,
 )
@@ -39,6 +41,7 @@ from .services_conversion_signal_facts import (
     build_conversion_kpi_signal_fact,
     build_conversion_taxonomy_touchpoint_facts,
 )
+from .services_journey_instance_facts import build_journey_instance_and_step_facts
 from .services_revenue_config import compute_payload_revenue_value, extract_revenue_entries, get_revenue_config
 
 
@@ -404,6 +407,8 @@ def persist_journeys_as_conversion_paths(
         taxonomy_touchpoint_q = db.query(ConversionTaxonomyTouchpointFact)
         silver_conversion_q = db.query(SilverConversionFact)
         silver_touchpoint_q = db.query(SilverTouchpointFact)
+        journey_instance_q = db.query(JourneyInstanceFact)
+        journey_step_q = db.query(JourneyStepFact)
         if conversion_key is not None:
             q = q.filter(ConversionPath.conversion_key == conversion_key)
             facts_q = facts_q.filter(ConversionScopeDiagnosticFact.conversion_key == conversion_key)
@@ -412,6 +417,8 @@ def persist_journeys_as_conversion_paths(
             taxonomy_touchpoint_q = taxonomy_touchpoint_q.filter(ConversionTaxonomyTouchpointFact.conversion_key == conversion_key)
             silver_conversion_q = silver_conversion_q.filter(SilverConversionFact.conversion_key == conversion_key)
             silver_touchpoint_q = silver_touchpoint_q.filter(SilverTouchpointFact.conversion_key == conversion_key)
+            journey_instance_q = journey_instance_q.filter(JourneyInstanceFact.conversion_key == conversion_key)
+            journey_step_q = journey_step_q.filter(JourneyStepFact.conversion_key == conversion_key)
         if normalized_replace_profile_ids:
             q = q.filter(ConversionPath.profile_id.in_(normalized_replace_profile_ids))
             facts_q = facts_q.filter(ConversionScopeDiagnosticFact.profile_id.in_(normalized_replace_profile_ids))
@@ -420,6 +427,8 @@ def persist_journeys_as_conversion_paths(
             taxonomy_touchpoint_q = taxonomy_touchpoint_q.filter(ConversionTaxonomyTouchpointFact.profile_id.in_(normalized_replace_profile_ids))
             silver_conversion_q = silver_conversion_q.filter(SilverConversionFact.profile_id.in_(normalized_replace_profile_ids))
             silver_touchpoint_q = silver_touchpoint_q.filter(SilverTouchpointFact.profile_id.in_(normalized_replace_profile_ids))
+            journey_instance_q = journey_instance_q.filter(JourneyInstanceFact.profile_id.in_(normalized_replace_profile_ids))
+            journey_step_q = journey_step_q.filter(JourneyStepFact.profile_id.in_(normalized_replace_profile_ids))
         q.delete(synchronize_session=False)
         facts_q.delete(synchronize_session=False)
         dq_facts_q.delete(synchronize_session=False)
@@ -427,6 +436,8 @@ def persist_journeys_as_conversion_paths(
         taxonomy_touchpoint_q.delete(synchronize_session=False)
         silver_conversion_q.delete(synchronize_session=False)
         silver_touchpoint_q.delete(synchronize_session=False)
+        journey_step_q.delete(synchronize_session=False)
+        journey_instance_q.delete(synchronize_session=False)
         db.commit()
     else:
         candidate_conversion_ids = {
@@ -457,6 +468,8 @@ def persist_journeys_as_conversion_paths(
     taxonomy_touchpoint_rows: List[ConversionTaxonomyTouchpointFact] = []
     silver_conversion_rows: List[SilverConversionFact] = []
     silver_touchpoint_rows: List[SilverTouchpointFact] = []
+    journey_instance_rows: List[JourneyInstanceFact] = []
+    journey_step_rows: List[JourneyStepFact] = []
     for idx, j in enumerate(journeys):
         identity = _journey_identity(j, idx=idx)
         profile_id = str(identity.get("profile_id") or f"anon-{idx}")
@@ -561,6 +574,20 @@ def persist_journeys_as_conversion_paths(
                 created_at=now,
             )
         )
+        journey_instance_row, journey_step_fact_rows = build_journey_instance_and_step_facts(
+            journey=j,
+            conversion_id=conv_id,
+            profile_id=profile_id,
+            conversion_key=effective_key,
+            conversion_ts=conv_ts,
+            lookback_window_days=3650,
+            import_batch_id=effective_import_batch_id,
+            import_source=import_source,
+            source_snapshot_id=source_snapshot_id,
+            created_at=now,
+        )
+        journey_instance_rows.append(journey_instance_row)
+        journey_step_rows.extend(journey_step_fact_rows)
         inserted += 1
 
     for fact_row in fact_rows:
@@ -575,6 +602,10 @@ def persist_journeys_as_conversion_paths(
         db.add(silver_conversion_row)
     for silver_touchpoint_row in silver_touchpoint_rows:
         db.add(silver_touchpoint_row)
+    for journey_instance_row in journey_instance_rows:
+        db.add(journey_instance_row)
+    for journey_step_row in journey_step_rows:
+        db.add(journey_step_row)
     db.commit()
     return inserted
 
