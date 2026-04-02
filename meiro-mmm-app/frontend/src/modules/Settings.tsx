@@ -4639,6 +4639,40 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
 
     const activeMeta = SECTION_META[activeSection]
 
+    const renderSubsectionToolbar = <T extends string>(
+      activeTab: T,
+      setActiveTab: (value: T) => void,
+      tabs: Array<[T, string]>,
+      summary: string,
+    ) => (
+      <AnalyticsToolbar
+        summary={summary}
+        actions={
+          <>
+            {tabs.map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setActiveTab(key)}
+                style={{
+                  padding: `${t.space.xs}px ${t.space.sm}px`,
+                  borderRadius: t.radius.sm,
+                  border: `1px solid ${activeTab === key ? t.color.accent : t.color.borderLight}`,
+                  background: activeTab === key ? t.color.accentMuted : t.color.surface,
+                  color: activeTab === key ? t.color.accent : t.color.text,
+                  fontSize: t.font.sizeXs,
+                  cursor: 'pointer',
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </>
+        }
+        padded
+      />
+    )
+
     if (
       settingsQuery.isLoading &&
       !settingsBaseline &&
@@ -6888,31 +6922,17 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
-            {([
+          {renderSubsectionToolbar(
+            kpiActiveTab,
+            setKpiActiveTab,
+            [
               ['overview', 'Overview'],
               ['suggestions', 'Suggestions'],
               ['preview', 'Preview'],
               ['advanced', 'Advanced'],
-            ] as Array<[KpiTabKey, string]>).map(([key, label]) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setKpiActiveTab(key)}
-                style={{
-                  padding: `${t.space.xs}px ${t.space.sm}px`,
-                  borderRadius: t.radius.sm,
-                  border: `1px solid ${kpiActiveTab === key ? t.color.accent : t.color.borderLight}`,
-                  background: kpiActiveTab === key ? t.color.accentMuted : t.color.surface,
-                  color: kpiActiveTab === key ? t.color.accent : t.color.text,
-                  fontSize: t.font.sizeXs,
-                  cursor: 'pointer',
-                }}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+            ],
+            'KPI subsection navigation for readiness, suggestions, impact preview, and advanced definition management.',
+          )}
 
           {kpiActiveTab === 'overview' && (
             <KpiOverviewPanel
@@ -7441,37 +7461,17 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
             </div>
           )}
 
-          <div
-            style={{
-              display: 'flex',
-              gap: t.space.xs,
-              flexWrap: 'wrap',
-            }}
-          >
-            {([
+          {renderSubsectionToolbar(
+            taxonomyActiveTab,
+            setTaxonomyActiveTab,
+            [
               ['overview', 'Overview'],
               ['suggestions', 'Suggestions'],
               ['preview', 'Preview'],
               ['advanced', 'Advanced'],
-            ] as Array<[TaxonomyTabKey, string]>).map(([key, label]) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setTaxonomyActiveTab(key)}
-                style={{
-                  padding: `${t.space.xs}px ${t.space.sm}px`,
-                  borderRadius: t.radius.sm,
-                  border: `1px solid ${taxonomyActiveTab === key ? t.color.accent : t.color.borderLight}`,
-                  background: taxonomyActiveTab === key ? t.color.accentMuted : t.color.surface,
-                  color: taxonomyActiveTab === key ? t.color.accent : t.color.text,
-                  fontSize: t.font.sizeXs,
-                  cursor: 'pointer',
-                }}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+            ],
+            'Taxonomy subsection navigation for coverage overview, unresolved patterns, preview, and advanced rule editing.',
+          )}
 
           {taxonomyActiveTab === 'overview' && (
             <div style={{ display: 'grid', gap: t.space.lg }}>
