@@ -11,6 +11,7 @@ import type {
   MeiroWebhookDiagnostics,
   MeiroWebhookSuggestions,
 } from '../../connectors/meiroConnector'
+import { AnalyticsToolbar } from '../../components/dashboard'
 import { tokens as t } from '../../theme/tokens'
 import MeiroCdpSettings from './MeiroCdpSettings'
 import MeiroImportReplay from './MeiroImportReplay'
@@ -86,45 +87,41 @@ export default function MeiroIntegrationPanel(props: MeiroIntegrationPanelProps)
 
   return (
     <>
-      <div
-        style={{
-          display: 'inline-flex',
-          gap: t.space.xs,
-          flexWrap: 'wrap',
-          padding: t.space.xs,
-          border: `1px solid ${t.color.borderLight}`,
-          borderRadius: t.radius.md,
-          background: t.color.bgSubtle,
-        }}
-      >
-        {(
-          [
-            { id: 'overview', label: 'Overview' },
-            { id: 'cdp', label: 'CDP Pull' },
-            { id: 'pipes', label: 'Pipes Webhook' },
-            { id: 'normalization', label: 'Normalization' },
-            { id: 'import', label: 'Import & Replay' },
-          ] as const
-        ).map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            onClick={() => setMeiroTab(tab.id)}
-            style={{
-              border: `1px solid ${meiroTab === tab.id ? t.color.accent : 'transparent'}`,
-              background: meiroTab === tab.id ? t.color.accentMuted : 'transparent',
-              color: meiroTab === tab.id ? t.color.accent : t.color.textSecondary,
-              borderRadius: t.radius.sm,
-              padding: '6px 12px',
-              cursor: 'pointer',
-              fontSize: t.font.sizeSm,
-              fontWeight: meiroTab === tab.id ? t.font.weightSemibold : t.font.weightMedium,
-            }}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      <AnalyticsToolbar
+        summary="Meiro workspace navigation for connector status, pull configuration, webhook pipes, normalization, and replay tools."
+        actions={
+          <>
+            {(
+              [
+                { id: 'overview', label: 'Overview' },
+                { id: 'cdp', label: 'CDP Pull' },
+                { id: 'pipes', label: 'Pipes Webhook' },
+                { id: 'normalization', label: 'Normalization' },
+                { id: 'import', label: 'Import & Replay' },
+              ] as const
+            ).map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setMeiroTab(tab.id)}
+                style={{
+                  border: `1px solid ${meiroTab === tab.id ? t.color.accent : t.color.borderLight}`,
+                  background: meiroTab === tab.id ? t.color.accentMuted : t.color.surface,
+                  color: meiroTab === tab.id ? t.color.accent : t.color.textSecondary,
+                  borderRadius: t.radius.sm,
+                  padding: '6px 12px',
+                  cursor: 'pointer',
+                  fontSize: t.font.sizeSm,
+                  fontWeight: meiroTab === tab.id ? t.font.weightSemibold : t.font.weightMedium,
+                }}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </>
+        }
+        padded
+      />
 
       {meiroTab === 'overview' && (
         <MeiroOverview

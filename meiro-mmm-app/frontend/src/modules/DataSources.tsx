@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import DashboardPage from '../components/dashboard/DashboardPage'
 import SectionCard from '../components/dashboard/SectionCard'
-import { AnalyticsTable, type AnalyticsTableColumn } from '../components/dashboard'
+import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn } from '../components/dashboard'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import { tokens as t } from '../theme/tokens'
 import {
@@ -1113,29 +1113,37 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
               </button>
             }
           >
-            <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap', marginBottom: t.space.md }}>
-              {([
-                { id: 'sample', label: 'Sample data' },
-                { id: 'upload', label: 'Upload JSON' },
-                { id: 'meiro', label: 'Import from Meiro' },
-              ] as Array<{ id: IngestionMethod; label: string }>).map((opt) => (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => setIngestionMethod(opt.id)}
-                  style={{
-                    border: `1px solid ${ingestionMethod === opt.id ? t.color.accent : t.color.borderLight}`,
-                    background: ingestionMethod === opt.id ? t.color.accentMuted : t.color.surface,
-                    color: ingestionMethod === opt.id ? t.color.accent : t.color.text,
-                    borderRadius: t.radius.full,
-                    padding: '6px 12px',
-                    cursor: 'pointer',
-                    fontSize: t.font.sizeSm,
-                  }}
-                >
-                  {opt.label}
-                </button>
-              ))}
+            <div style={{ marginBottom: t.space.md }}>
+              <AnalyticsToolbar
+                summary={`Current ingestion method: ${ingestionMethod === 'sample' ? 'Sample data' : ingestionMethod === 'upload' ? 'Upload JSON' : 'Import from Meiro'}.`}
+                actions={
+                  <>
+                    {([
+                      { id: 'sample', label: 'Sample data' },
+                      { id: 'upload', label: 'Upload JSON' },
+                      { id: 'meiro', label: 'Import from Meiro' },
+                    ] as Array<{ id: IngestionMethod; label: string }>).map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setIngestionMethod(opt.id)}
+                        style={{
+                          border: `1px solid ${ingestionMethod === opt.id ? t.color.accent : t.color.borderLight}`,
+                          background: ingestionMethod === opt.id ? t.color.accentMuted : t.color.surface,
+                          color: ingestionMethod === opt.id ? t.color.accent : t.color.text,
+                          borderRadius: t.radius.sm,
+                          padding: '6px 12px',
+                          cursor: 'pointer',
+                          fontSize: t.font.sizeSm,
+                        }}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </>
+                }
+                padded
+              />
             </div>
 
             {ingestionMethod === 'sample' && (
@@ -1474,29 +1482,37 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
                 OAuth connection API is unavailable in this environment. Showing fallback provider rows so you can still start connections.
               </div>
             )}
-            <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap', marginBottom: t.space.md }}>
-              {([
-                { id: 'warehouses', label: 'Warehouses' },
-                { id: 'ad_platforms', label: 'Ad platforms' },
-                { id: 'cdp', label: 'CDP / Sources' },
-              ] as Array<{ id: SystemsTab; label: string }>).map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => setSystemsTab(tab.id)}
-                  style={{
-                    border: `1px solid ${systemsTab === tab.id ? t.color.accent : t.color.borderLight}`,
-                    background: systemsTab === tab.id ? t.color.accentMuted : t.color.surface,
-                    color: systemsTab === tab.id ? t.color.accent : t.color.text,
-                    borderRadius: t.radius.full,
-                    padding: '6px 12px',
-                    cursor: 'pointer',
-                    fontSize: t.font.sizeSm,
-                  }}
-                >
-                  {tab.label}
-                </button>
-              ))}
+            <div style={{ marginBottom: t.space.md }}>
+              <AnalyticsToolbar
+                summary={`Viewing ${activeSystemsItems.length} connected system${activeSystemsItems.length === 1 ? '' : 's'} in ${systemsTab === 'warehouses' ? 'Warehouses' : systemsTab === 'ad_platforms' ? 'Ad platforms' : 'CDP / Sources'}.`}
+                actions={
+                  <>
+                    {([
+                      { id: 'warehouses', label: 'Warehouses' },
+                      { id: 'ad_platforms', label: 'Ad platforms' },
+                      { id: 'cdp', label: 'CDP / Sources' },
+                    ] as Array<{ id: SystemsTab; label: string }>).map((tab) => (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setSystemsTab(tab.id)}
+                        style={{
+                          border: `1px solid ${systemsTab === tab.id ? t.color.accent : t.color.borderLight}`,
+                          background: systemsTab === tab.id ? t.color.accentMuted : t.color.surface,
+                          color: systemsTab === tab.id ? t.color.accent : t.color.text,
+                          borderRadius: t.radius.sm,
+                          padding: '6px 12px',
+                          cursor: 'pointer',
+                          fontSize: t.font.sizeSm,
+                        }}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
+                  </>
+                }
+                padded
+              />
             </div>
 
             <AnalyticsTable
