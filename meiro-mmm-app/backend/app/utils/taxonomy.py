@@ -8,6 +8,104 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 
+_BUILTIN_SOURCE_ALIASES = {
+    "fb": "facebook",
+    "facebook.com": "facebook",
+    "m.facebook.com": "facebook",
+    "l.facebook.com": "facebook",
+    "lm.facebook.com": "facebook",
+    "ig": "instagram",
+    "instagram.com": "instagram",
+    "meta_ads": "meta",
+    "google_ads": "google",
+    "adwords": "google",
+    "bing_ads": "bing",
+    "microsoft_ads": "bing",
+    "g": "google",
+}
+
+_BUILTIN_MEDIUM_ALIASES = {
+    "paid": "cpc",
+    "ppc": "cpc",
+    "paid_search": "cpc",
+    "paid search": "cpc",
+    "paidsocial": "paid_social",
+    "paid-social": "paid_social",
+    "social_paid": "paid_social",
+    "social_referral": "referral",
+    "e-mail": "email",
+    "cpm": "display",
+}
+
+_RAW_CHANNEL_CANONICAL = {
+    "direct": "direct",
+    "email": "email",
+    "e_mail": "email",
+    "organic_search": "organic_search",
+    "organic": "organic_search",
+    "referral": "referral",
+    "referrer": "referral",
+    "paid_search": "paid_search",
+    "google_ads": "paid_search",
+    "bing_ads": "paid_search",
+    "adwords": "paid_search",
+    "microsoft_ads": "paid_search",
+    "paid_social": "paid_social",
+    "meta_ads": "paid_social",
+    "facebook_ads": "paid_social",
+    "instagram_ads": "paid_social",
+    "linkedin_ads": "paid_social",
+    "display": "display",
+    "banner": "display",
+    "affiliate": "affiliate",
+}
+
+
+def _normalize_channel_token(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+
+
+def _fallback_channel_from_source_medium(source: str, medium: str) -> str:
+    source_token = _normalize_channel_token(source)
+    medium_token = _normalize_channel_token(medium)
+    if medium_token in {"email"} or source_token in {"email", "newsletter"}:
+        return "email"
+    if source_token == "direct" and medium_token in {"", "none", "direct"}:
+        return "direct"
+    if medium_token in {"referral"}:
+        return "referral"
+    if medium_token in {"organic"} and source_token in {
+        "google",
+        "bing",
+        "yahoo",
+        "duckduckgo",
+        "seznam",
+        "yandex",
+        "baidu",
+    }:
+        return "organic_search"
+    if medium_token in {"cpc", "ppc", "paid_search"}:
+        return "paid_search"
+    if medium_token in {"paid_social", "social"}:
+        return "paid_social"
+    return ""
+
+
+def _canonicalize_raw_channel(raw_channel: Any, *, source: str, medium: str) -> str:
+    token = _normalize_channel_token(raw_channel)
+    if token in _RAW_CHANNEL_CANONICAL:
+        return _RAW_CHANNEL_CANONICAL[token]
+
+    fallback = _fallback_channel_from_source_medium(source, medium)
+    if fallback:
+        return fallback
+
+    raw_text = str(raw_channel or "").strip()
+    if "." in raw_text and not source and not medium:
+        return "referral"
+    return raw_text
+
+
 @dataclass
 class MatchExpression:
     """Declarative match expression used for taxonomy rule conditions."""
@@ -294,11 +392,13 @@ def normalize_touchpoint(tp: Dict[str, Any], taxonomy: Optional[Taxonomy] = None
     raw_medium = str(tp.get("utm_medium") or tp.get("medium") or referrer_fallback.get("medium") or "").lower()
     raw_campaign = str(tp.get("utm_campaign") or tp.get("campaign") or "").lower()
 
-    source = taxonomy.source_aliases.get(raw_source, raw_source)
-    medium = taxonomy.medium_aliases.get(raw_medium, raw_medium)
+    source_aliases = {**_BUILTIN_SOURCE_ALIASES, **taxonomy.source_aliases}
+    medium_aliases = {**_BUILTIN_MEDIUM_ALIASES, **taxonomy.medium_aliases}
+    source = source_aliases.get(raw_source, raw_source)
+    medium = medium_aliases.get(raw_medium, raw_medium)
 
     # channel mapping
-    channel = str(tp.get("channel") or "")
+    channel = _canonicalize_raw_channel(tp.get("channel"), source=source, medium=medium)
     for rule in sorted(taxonomy.channel_rules, key=lambda r: (r.priority, r.name)):
         if rule.matches(source, medium, raw_campaign):
             channel = rule.channel

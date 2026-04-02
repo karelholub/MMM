@@ -130,6 +130,17 @@ def test_normalize_touchpoint_ignores_self_referrals():
     assert normalized.get("meta", {}).get("inferred_source_medium_from_referrer") is None
 
 
+def test_normalize_touchpoint_canonicalizes_noisy_raw_channel_labels():
+    assert normalize_touchpoint({"channel": "Referral"})["channel"] == "referral"
+    assert normalize_touchpoint({"channel": "Paid Search"})["channel"] == "paid_search"
+    assert normalize_touchpoint({"channel": "meta_ads"})["channel"] == "paid_social"
+
+
+def test_normalize_touchpoint_maps_host_like_raw_channel_to_referral():
+    normalized = normalize_touchpoint({"channel": "gate.gopay.com"})
+    assert normalized["channel"] == "referral"
+
+
 def test_normalize_touchpoint_with_confidence_marks_referrer_inference():
     normalized, confidence = normalize_touchpoint_with_confidence(
         {

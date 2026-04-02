@@ -347,6 +347,13 @@ interface TaxonomyCoverageResponse {
   top_unmapped_patterns: Array<{ source: string; medium: string; campaign?: string | null; count: number }>
 }
 
+type TaxonomyPatternSample = {
+  source: string
+  medium: string
+  campaign?: string | null
+  count: number
+}
+
 type TaxonomySuggestionState = 'saved' | 'draft' | 'pending'
 
 interface TaxonomyPreviewResponse {
@@ -1288,12 +1295,16 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
     const taxonomyUnknownShareQuery = useQuery<TaxonomyUnknownShareResponse>({
       queryKey: ['taxonomy', 'unknown-share'],
       queryFn: async () => apiGetJson<TaxonomyUnknownShareResponse>('/api/taxonomy/unknown-share?limit=12', { fallbackMessage: 'Failed to load taxonomy unknown share' }),
-      enabled: activeSection === 'taxonomy' && taxonomyActiveTab === 'overview',
+      enabled:
+        activeSection === 'taxonomy' &&
+        (taxonomyActiveTab === 'overview' || taxonomyActiveTab === 'advanced'),
     })
     const taxonomyCoverageQuery = useQuery<TaxonomyCoverageResponse>({
       queryKey: ['taxonomy', 'coverage'],
       queryFn: async () => apiGetJson<TaxonomyCoverageResponse>('/api/taxonomy/coverage', { fallbackMessage: 'Failed to load taxonomy coverage' }),
-      enabled: activeSection === 'taxonomy' && taxonomyActiveTab === 'overview',
+      enabled:
+        activeSection === 'taxonomy' &&
+        (taxonomyActiveTab === 'overview' || taxonomyActiveTab === 'advanced'),
     })
     const kpiQuery = useQuery<KpiConfig>({
       queryKey: ['kpis'],
@@ -1648,18 +1659,10 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
     )
     const [sourceAliasRows, setSourceAliasRows] = useState<AliasRow[]>([])
     const [mediumAliasRows, setMediumAliasRows] = useState<AliasRow[]>([])
-    const [aliasImportErrors, setAliasImportErrors] = useState<{
-      source?: string
-      medium?: string
-    }>({})
     const [aliasValidationErrors, setAliasValidationErrors] = useState<{
       source?: string
       medium?: string
     }>({})
-    const [sourceAliasImportJson, setSourceAliasImportJson] =
-      useState<string>('{}')
-    const [mediumAliasImportJson, setMediumAliasImportJson] =
-      useState<string>('{}')
     const [showRuleModal, setShowRuleModal] = useState(false)
     const [ruleModalMode, setRuleModalMode] = useState<'create' | 'edit'>(
       'create',
@@ -1703,12 +1706,6 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       null,
     )
     const [isTestingTaxonomy, setIsTestingTaxonomy] = useState(false)
-    const [isTestingDataset, setIsTestingDataset] = useState(false)
-    const [datasetTestError, setDatasetTestError] = useState<string | null>(null)
-    const [unknownPatterns, setUnknownPatterns] = useState<
-      Array<{ source: string; medium: string; campaign?: string | null; count: number }>
-    >([])
-    const [datasetTestRan, setDatasetTestRan] = useState(false)
 
     const [attributionPreview, setAttributionPreview] =
       useState<AttributionPreviewSummary | null>(null)
@@ -2319,27 +2316,6 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       }
     }, [taxonomyTestInput])
 
-    const handleTaxonomyDatasetTest = useCallback(async () => {
-      setIsTestingDataset(true)
-      setDatasetTestError(null)
-      setDatasetTestRan(false)
-      try {
-        const data = await apiGetJson<any>('/api/taxonomy/unknown-share?limit=10', {
-          fallbackMessage: 'Failed to analyse dataset',
-        })
-        setUnknownPatterns(data.top_unmapped_patterns ?? [])
-        setDatasetTestRan(true)
-      } catch (error) {
-        setUnknownPatterns([])
-        setDatasetTestError(
-          (error as Error)?.message ?? 'Unable to analyse dataset',
-        )
-        setDatasetTestRan(false)
-      } finally {
-        setIsTestingDataset(false)
-      }
-    }, [])
-
     const handleApplyTaxonomySuggestion = useCallback((suggestionId: string) => {
       const suggestion = taxonomySuggestionsQuery.data?.suggestions.find((item) => item.id === suggestionId)
       if (!suggestion) return
@@ -2443,51 +2419,120 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       updateSourceAliases,
     ])
 
-    const handleImportSourceAliases = useCallback(() => {
-      try {
-        const parsed = JSON.parse(sourceAliasImportJson) as Record<string, string>
-        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-          throw new Error('Source aliases JSON must be an object mapping alias -> canonical.')
+    const buildTaxonomySampleKey = useCallback(
+      (sample?: { source?: string; medium?: string; campaign?: string | null }) =>
+        [sample?.source ?? '', sample?.medium ?? '', sample?.campaign ?? '']
+          .map((value) => value.trim().toLowerCase())
+          .join('||'),
+      [],
+    )
+
+    const taxonomyWorkbenchPatterns = useMemo<TaxonomyPatternSample[]>(() => {
+      const merged = new Map<string, TaxonomyPatternSample>()
+      const candidates = [
+        ...(taxonomyUnknownShareQuery.data?.top_unmapped_patterns ?? []),
+        ...(taxonomyCoverageQuery.data?.top_unmapped_patterns ?? []),
+        ...(taxonomyOverviewQuery.data?.top_unmapped_patterns ?? []),
+      ]
+      candidates.forEach((pattern) => {
+        const normalized: TaxonomyPatternSample = {
+          source: pattern.source ?? '',
+          medium: pattern.medium ?? '',
+          campaign: pattern.campaign ?? null,
+          count: Number(pattern.count ?? 0),
         }
-        const rows = toAliasRows(parsed)
-        updateSourceAliases(() => rows)
-        setAliasImportErrors((prev) => ({ ...prev, source: undefined }))
-      } catch (error) {
-        setAliasImportErrors((prev) => ({
-          ...prev,
-          source: (error as Error)?.message ?? 'Invalid JSON structure',
-        }))
-      }
-    }, [sourceAliasImportJson, updateSourceAliases])
-
-    const handleImportMediumAliases = useCallback(() => {
-      try {
-        const parsed = JSON.parse(mediumAliasImportJson) as Record<string, string>
-        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-          throw new Error('Medium aliases JSON must be an object mapping alias -> canonical.')
+        const key = buildTaxonomySampleKey(normalized)
+        const existing = merged.get(key)
+        if (!existing || normalized.count > existing.count) {
+          merged.set(key, normalized)
         }
-        const rows = toAliasRows(parsed)
-        updateMediumAliases(() => rows)
-        setAliasImportErrors((prev) => ({ ...prev, medium: undefined }))
-      } catch (error) {
-        setAliasImportErrors((prev) => ({
-          ...prev,
-          medium: (error as Error)?.message ?? 'Invalid JSON structure',
-        }))
+      })
+      return Array.from(merged.values())
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 8)
+    }, [
+      buildTaxonomySampleKey,
+      taxonomyCoverageQuery.data?.top_unmapped_patterns,
+      taxonomyOverviewQuery.data?.top_unmapped_patterns,
+      taxonomyUnknownShareQuery.data?.top_unmapped_patterns,
+    ])
+
+    const taxonomySuggestionBySampleKey = useMemo(() => {
+      const mapping = new Map<string, TaxonomySuggestionItem>()
+      for (const suggestion of taxonomySuggestionsQuery.data?.suggestions ?? []) {
+        const key = buildTaxonomySampleKey(suggestion.sample)
+        if (!key || mapping.has(key)) continue
+        mapping.set(key, suggestion)
       }
-    }, [mediumAliasImportJson, updateMediumAliases])
+      return mapping
+    }, [buildTaxonomySampleKey, taxonomySuggestionsQuery.data?.suggestions])
 
-    useEffect(() => {
-      setSourceAliasImportJson(
-        JSON.stringify(buildAliasObject(sourceAliasRows), null, 2),
-      )
-    }, [sourceAliasRows])
+    const handleLoadTaxonomyPattern = useCallback((pattern: TaxonomyPatternSample) => {
+      setTaxonomyTestInput({
+        source: pattern.source ?? '',
+        medium: pattern.medium ?? '',
+        campaign: pattern.campaign ?? '',
+        utm_source: '',
+        utm_medium: '',
+        utm_campaign: '',
+      })
+      setTaxonomyTestResult(null)
+      setTaxonomyTestError(null)
+    }, [])
 
-    useEffect(() => {
-      setMediumAliasImportJson(
-        JSON.stringify(buildAliasObject(mediumAliasRows), null, 2),
-      )
-    }, [mediumAliasRows])
+    const handleDraftTaxonomyRuleFromPattern = useCallback(
+      (pattern: TaxonomyPatternSample) => {
+        const matchedSuggestion = taxonomySuggestionBySampleKey.get(
+          buildTaxonomySampleKey(pattern),
+        )
+        const nextPriority =
+          Math.max(
+            0,
+            ...taxonomyDraft.channel_rules.map((rule) =>
+              Number.isFinite(rule.priority) ? Number(rule.priority) : 0,
+            ),
+          ) + 10
+        const suggestedRule = matchedSuggestion?.payload.channel_rule
+        const channel = matchedSuggestion?.channel ?? suggestedRule?.channel ?? ''
+        setRuleModalMode('create')
+        setRuleModalIndex(null)
+        setRuleModalDraft(
+          normalizeChannelRule(
+            {
+              name:
+                suggestedRule?.name ||
+                [
+                  channel ? channel.replace(/_/g, ' ') : 'Draft rule',
+                  pattern.source || 'source',
+                  pattern.medium || 'medium',
+                ]
+                  .filter(Boolean)
+                  .join(' - '),
+              channel,
+              priority: nextPriority,
+              enabled: true,
+              source: pattern.source
+                ? { operator: 'equals', value: pattern.source }
+                : { operator: 'any', value: '' },
+              medium: pattern.medium
+                ? { operator: 'equals', value: pattern.medium }
+                : { operator: 'any', value: '' },
+              campaign: pattern.campaign
+                ? { operator: 'equals', value: pattern.campaign }
+                : { operator: 'any', value: '' },
+            },
+            nextPriority,
+          ),
+        )
+        setRuleModalErrors({})
+        setShowRuleModal(true)
+      },
+      [
+        buildTaxonomySampleKey,
+        taxonomyDraft.channel_rules,
+        taxonomySuggestionBySampleKey,
+      ],
+    )
 
     useEffect(() => {
       if (!toast) return
@@ -4301,7 +4346,6 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
               setTaxonomyDraft(deepClone(normalizedTaxonomy))
               setSourceAliasRows(toAliasRows(normalizedTaxonomy.source_aliases))
               setMediumAliasRows(toAliasRows(normalizedTaxonomy.medium_aliases))
-              setAliasImportErrors({})
               setAliasValidationErrors({})
               setLastSavedAt((prev) => ({
                 ...prev,
@@ -4466,7 +4510,6 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
               setTaxonomyDraft(restored)
               setSourceAliasRows(toAliasRows(restored.source_aliases ?? {}))
               setMediumAliasRows(toAliasRows(restored.medium_aliases ?? {}))
-              setAliasImportErrors({})
               setAliasValidationErrors({})
               }
               break
@@ -7242,10 +7285,6 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         handleRemove: (id: string) => void,
         issues: ReturnType<typeof analyzeAliasRows>,
         validationMessage?: string,
-        importJson?: string,
-        setImportJson?: (value: string) => void,
-        importError?: string,
-        handleImport?: () => void,
       ) => (
         <div
           style={{
@@ -7410,74 +7449,6 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
               {validationMessage && <span>{validationMessage}</span>}
             </div>
           )}
-
-          {importJson !== undefined &&
-            setImportJson &&
-            handleImport &&
-            (
-              <details>
-                <summary
-                  style={{
-                    fontSize: t.font.sizeXs,
-                    color: t.color.textSecondary,
-                    cursor: 'pointer',
-                  }}
-                >
-                  Advanced JSON import/export
-                </summary>
-                <div
-                  style={{
-                    display: 'grid',
-                    gap: t.space.sm,
-                    marginTop: t.space.sm,
-                  }}
-                >
-                  <textarea
-                    value={importJson}
-                    onChange={(e) => setImportJson(e.target.value)}
-                    rows={6}
-                    style={{
-                      width: '100%',
-                      fontFamily: 'monospace',
-                      fontSize: t.font.sizeXs,
-                      borderRadius: t.radius.sm,
-                      border: `1px solid ${t.color.borderLight}`,
-                      padding: t.space.sm,
-                      background: t.color.bgSubtle,
-                      whiteSpace: 'pre',
-                    }}
-                  />
-                  {importError && (
-                    <span style={{ fontSize: t.font.sizeXs, color: t.color.danger }}>
-                      {importError}
-                    </span>
-                  )}
-                  <div
-                    style={{
-                      display: 'flex',
-                      gap: t.space.sm,
-                      flexWrap: 'wrap',
-                    }}
-                  >
-                    <button
-                      type="button"
-                      onClick={handleImport}
-                      style={{
-                        padding: `${t.space.xs}px ${t.space.sm}px`,
-                        borderRadius: t.radius.sm,
-                        border: `1px solid ${t.color.accent}`,
-                        background: t.color.accentMuted,
-                        color: t.color.accent,
-                        fontSize: t.font.sizeXs,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Import JSON
-                    </button>
-                  </div>
-                </div>
-              </details>
-            )}
         </div>
       )
 
@@ -7798,7 +7769,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                   color: t.color.text,
                 }}
               >
-                Taxonomy test console
+                Taxonomy workbench
               </h3>
               <p
                 style={{
@@ -7808,11 +7779,224 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                   maxWidth: 620,
                 }}
               >
-                Test how a touchpoint would be normalized. Provide raw source, medium,
-                and campaign values (optional). Dataset analysis highlights common
-                unmapped combinations.
+                Start from real unresolved traffic instead of typing raw values by hand.
+                Load a live sample, test how it maps, then apply a suggestion or draft
+                a rule from the same pattern.
               </p>
             </div>
+
+            <div
+              style={{
+                display: 'grid',
+                gap: t.space.sm,
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: t.space.sm,
+                  flexWrap: 'wrap',
+                }}
+              >
+                <strong style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+                  Live unresolved patterns
+                </strong>
+                <span style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                  Using the same unknown-share and coverage analysis as the overview tab
+                </span>
+              </div>
+
+              {(taxonomyUnknownShareQuery.isLoading || taxonomyCoverageQuery.isLoading) && (
+                <div
+                  style={{
+                    border: `1px solid ${t.color.borderLight}`,
+                    borderRadius: t.radius.sm,
+                    padding: t.space.sm,
+                    fontSize: t.font.sizeXs,
+                    color: t.color.textSecondary,
+                    background: t.color.bgSubtle,
+                  }}
+                >
+                  Loading unresolved patterns…
+                </div>
+              )}
+
+              {((taxonomyUnknownShareQuery.error as Error | undefined)?.message ||
+                (taxonomyCoverageQuery.error as Error | undefined)?.message) && (
+                <div
+                  style={{
+                    border: `1px solid ${t.color.danger}`,
+                    background: t.color.dangerSubtle,
+                    color: t.color.danger,
+                    borderRadius: t.radius.sm,
+                    padding: t.space.sm,
+                    fontSize: t.font.sizeXs,
+                  }}
+                >
+                  {(taxonomyUnknownShareQuery.error as Error | undefined)?.message ||
+                    (taxonomyCoverageQuery.error as Error | undefined)?.message}
+                </div>
+              )}
+
+              {!taxonomyUnknownShareQuery.isLoading &&
+                !taxonomyCoverageQuery.isLoading &&
+                taxonomyWorkbenchPatterns.length === 0 && (
+                  <div
+                    style={{
+                      border: `1px solid ${t.color.borderLight}`,
+                      borderRadius: t.radius.sm,
+                      padding: t.space.sm,
+                      fontSize: t.font.sizeXs,
+                      color: t.color.textSecondary,
+                      background: t.color.bgSubtle,
+                    }}
+                  >
+                    No high-volume unresolved patterns are currently surfaced from the dataset.
+                  </div>
+                )}
+
+              {taxonomyWorkbenchPatterns.length > 0 && (
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: t.space.sm,
+                  }}
+                >
+                  {taxonomyWorkbenchPatterns.map((pattern, idx) => {
+                    const matchingSuggestion = taxonomySuggestionBySampleKey.get(
+                      buildTaxonomySampleKey(pattern),
+                    )
+                    const status = matchingSuggestion
+                      ? taxonomySuggestionStatusById[matchingSuggestion.id]
+                      : null
+                    return (
+                      <div
+                        key={`${buildTaxonomySampleKey(pattern)}:${idx}`}
+                        style={{
+                          border: `1px solid ${t.color.borderLight}`,
+                          borderRadius: t.radius.sm,
+                          padding: t.space.sm,
+                          display: 'grid',
+                          gap: t.space.xs,
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            gap: t.space.sm,
+                            flexWrap: 'wrap',
+                            alignItems: 'flex-start',
+                          }}
+                        >
+                          <div style={{ display: 'grid', gap: 4 }}>
+                            <strong style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+                              {pattern.source || '—'} / {pattern.medium || '—'}
+                              {pattern.campaign ? ` / ${pattern.campaign}` : ''}
+                            </strong>
+                            <span style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                              {pattern.count.toLocaleString()} unresolved touchpoints
+                            </span>
+                            {matchingSuggestion && (
+                              <span style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                                Suggested next step: {matchingSuggestion.title}
+                                {status ? ` (${status})` : ''}
+                              </span>
+                            )}
+                          </div>
+                          <div
+                            style={{
+                              display: 'flex',
+                              gap: t.space.xs,
+                              flexWrap: 'wrap',
+                              justifyContent: 'flex-end',
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => handleLoadTaxonomyPattern(pattern)}
+                              style={{
+                                padding: `${t.space.xs}px ${t.space.sm}px`,
+                                borderRadius: t.radius.sm,
+                                border: `1px solid ${t.color.borderLight}`,
+                                background: 'transparent',
+                                color: t.color.text,
+                                fontSize: t.font.sizeXs,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              Load sample
+                            </button>
+                            {matchingSuggestion ? (
+                              <button
+                                type="button"
+                                onClick={() => handleApplyTaxonomySuggestion(matchingSuggestion.id)}
+                                style={{
+                                  padding: `${t.space.xs}px ${t.space.sm}px`,
+                                  borderRadius: t.radius.sm,
+                                  border: `1px solid ${t.color.accent}`,
+                                  background: t.color.accentMuted,
+                                  color: t.color.accent,
+                                  fontSize: t.font.sizeXs,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                Apply suggestion
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleDraftTaxonomyRuleFromPattern(pattern)}
+                                style={{
+                                  padding: `${t.space.xs}px ${t.space.sm}px`,
+                                  borderRadius: t.radius.sm,
+                                  border: `1px solid ${t.color.borderLight}`,
+                                  background: 'transparent',
+                                  color: t.color.text,
+                                  fontSize: t.font.sizeXs,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                Draft rule
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div
+              style={{
+                display: 'grid',
+                gap: t.space.sm,
+                padding: t.space.sm,
+                borderRadius: t.radius.sm,
+                border: `1px solid ${t.color.borderLight}`,
+                background: t.color.bgSubtle,
+              }}
+            >
+              <div>
+                <strong style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+                  Rule tester
+                </strong>
+                <p
+                  style={{
+                    margin: `${t.space.xs}px 0 0`,
+                    fontSize: t.font.sizeXs,
+                    color: t.color.textSecondary,
+                    maxWidth: 620,
+                  }}
+                >
+                  Load a dataset sample above or enter values manually to see how the current
+                  draft would normalize a touchpoint.
+                </p>
+              </div>
 
             <div
               style={{
@@ -7879,22 +8063,6 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
               >
                 {isTestingTaxonomy ? 'Testing…' : 'Run test'}
               </button>
-              <button
-                type="button"
-                onClick={() => void handleTaxonomyDatasetTest()}
-                disabled={isTestingDataset}
-                style={{
-                  padding: `${t.space.sm}px ${t.space.md}px`,
-                  borderRadius: t.radius.sm,
-                  border: `1px solid ${t.color.borderLight}`,
-                  background: 'transparent',
-                  color: t.color.text,
-                  fontSize: t.font.sizeSm,
-                  cursor: isTestingDataset ? 'wait' : 'pointer',
-                }}
-              >
-                {isTestingDataset ? 'Scanning…' : 'Test against dataset'}
-              </button>
             </div>
 
             {taxonomyTestError && (
@@ -7942,68 +8110,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                 )}
               </div>
             )}
-
-            {datasetTestError && (
-              <div
-                style={{
-                  border: `1px solid ${t.color.danger}`,
-                  background: t.color.dangerSubtle,
-                  color: t.color.danger,
-                  borderRadius: t.radius.sm,
-                  padding: t.space.sm,
-                  fontSize: t.font.sizeXs,
-                }}
-              >
-                {datasetTestError}
-              </div>
-            )}
-
-            {datasetTestRan && !datasetTestError && unknownPatterns.length === 0 && (
-              <div
-                style={{
-                  border: `1px solid ${t.color.borderLight}`,
-                  borderRadius: t.radius.sm,
-                  padding: t.space.sm,
-                  fontSize: t.font.sizeXs,
-                  color: t.color.textSecondary,
-                  background: t.color.bgSubtle,
-                }}
-              >
-                All sampled touchpoints were matched by existing rules.
-              </div>
-            )}
-
-            {unknownPatterns.length > 0 && (
-              <div
-                style={{
-                  border: `1px solid ${t.color.borderLight}`,
-                  borderRadius: t.radius.sm,
-                  padding: t.space.sm,
-                  display: 'grid',
-                  gap: t.space.xs,
-                }}
-              >
-                <strong style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
-                  Top unmapped patterns
-                </strong>
-                <ul
-                  style={{
-                    margin: 0,
-                    paddingLeft: t.space.lg,
-                    fontSize: t.font.sizeXs,
-                    color: t.color.textSecondary,
-                  }}
-                >
-                  {unknownPatterns.map((pattern, idx) => (
-                    <li key={`${pattern.source}-${pattern.medium}-${idx}`}>
-                      {pattern.source || '—'} / {pattern.medium || '—'}
-                      {pattern.campaign ? ` / ${pattern.campaign}` : ''} —{' '}
-                      {pattern.count} touchpoints
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
+            </div>
           </div>
 
           <div style={cardStyle}>
@@ -8047,10 +8154,6 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                 handleRemoveSourceAlias,
                 sourceAliasIssues,
                 aliasValidationErrors.source,
-                sourceAliasImportJson,
-                setSourceAliasImportJson,
-                aliasImportErrors.source,
-                handleImportSourceAliases,
               )}
               {renderAliasSection(
                 'Medium aliases',
@@ -8061,10 +8164,6 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                 handleRemoveMediumAlias,
                 mediumAliasIssues,
                 aliasValidationErrors.medium,
-                mediumAliasImportJson,
-                setMediumAliasImportJson,
-                aliasImportErrors.medium,
-                handleImportMediumAliases,
               )}
             </div>
           </div>
