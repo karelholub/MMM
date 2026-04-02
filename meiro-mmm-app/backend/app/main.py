@@ -1590,6 +1590,8 @@ def mmm_defaults_preview(
     db=Depends(get_db),
 ) -> MMMDefaultsPreviewResponse:
     """Return readiness and impact context for MMM default aggregation frequency."""
+    if not getattr(SETTINGS.feature_flags, "mmm_enabled", False):
+        raise HTTPException(status_code=404, detail="mmm_enabled flag is off")
     journeys = load_cached_journeys(db, loader_fn=load_journeys_from_db, limit=50000)
     preview = build_mmm_defaults_preview(
         journeys=journeys,

@@ -157,6 +157,7 @@ interface NBASettings {
 }
 
 interface FeatureFlags {
+  mmm_enabled: boolean
   journeys_enabled: boolean
   journey_examples_enabled: boolean
   funnel_builder_enabled: boolean
@@ -851,6 +852,7 @@ const DEFAULT_SETTINGS: Settings = {
     excluded_channels: ['direct'],
   },
   feature_flags: {
+    mmm_enabled: true,
     journeys_enabled: false,
     journey_examples_enabled: false,
     funnel_builder_enabled: false,
@@ -1327,13 +1329,14 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         (!rbacEnabled || permissions.hasAnyPermission(['audit.view', 'settings.manage'])) &&
         currentFlags.audit_log_enabled
       return SECTION_ORDER.filter((section) => {
+        if (section === 'mmm') return currentFlags.mmm_enabled
         if (section === 'journeys') return canManageSettings
         if (section === 'access-control-users') return canUsers
         if (section === 'access-control-roles') return canRoles
         if (section === 'access-control-audit-log') return canAudit
         return true
       })
-    }, [currentFlags.audit_log_enabled, permissions, rbacEnabled])
+    }, [currentFlags.audit_log_enabled, currentFlags.mmm_enabled, permissions, rbacEnabled])
     const modelConfigsQuery = useQuery<ModelConfigSummary[]>({
       queryKey: ['model-configs'],
       queryFn: async () => apiGetJson<ModelConfigSummary[]>('/api/model-configs', { fallbackMessage: 'Failed to load model configs' }),

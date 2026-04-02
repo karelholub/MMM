@@ -27,8 +27,13 @@ def create_router(
 ) -> APIRouter:
     router = APIRouter(tags=["mmm"])
 
+    def _ensure_mmm_enabled() -> None:
+        if not getattr(get_settings_obj().feature_flags, "mmm_enabled", False):
+            raise HTTPException(status_code=404, detail="mmm_enabled flag is off")
+
     @router.get("/api/mmm/platform-options")
     def get_mmm_platform_options():
+        _ensure_mmm_enabled()
         channels = set()
         for exp in get_expenses_obj().values():
             if getattr(exp, "status", "active") == "deleted":
@@ -40,6 +45,7 @@ def create_router(
 
     @router.post("/api/mmm/datasets/build-from-platform")
     def build_mmm_dataset_from_platform_endpoint(body: BuildFromPlatformRequest, db=Depends(get_db_dependency)):
+        _ensure_mmm_enabled()
         journeys = ensure_journeys_loaded_fn(db)
         expenses_list = list(get_expenses_obj().values())
         try:
@@ -93,6 +99,7 @@ def create_router(
 
     @router.post("/api/mmm/datasets/{dataset_id}/validate-mapping")
     def validate_mapping_endpoint(dataset_id: str, body: ValidateMappingRequest):
+        _ensure_mmm_enabled()
         dataset_info = get_datasets_obj().get(dataset_id)
         if not dataset_info:
             raise HTTPException(status_code=404, detail="Dataset not found")
@@ -117,6 +124,7 @@ def create_router(
 
     @router.post("/api/models")
     def run_model(cfg: ModelConfig, tasks: BackgroundTasks):
+        _ensure_mmm_enabled()
         datasets = get_datasets_obj()
         if cfg.dataset_id not in datasets:
             raise HTTPException(status_code=404, detail="dataset_id not found")
@@ -147,6 +155,7 @@ def create_router(
 
     @router.get("/api/models")
     def list_models():
+        _ensure_mmm_enabled()
         items = []
         for run_id, run in get_runs_obj().items():
             config = run.get("config") or {}
@@ -170,6 +179,7 @@ def create_router(
 
     @router.get("/api/models/compare")
     def compare_models():
+        _ensure_mmm_enabled()
         runs = get_runs_obj()
         if not runs:
             return []
@@ -190,6 +200,7 @@ def create_router(
 
     @router.get("/api/models/{run_id}")
     def get_model(run_id: str):
+        _ensure_mmm_enabled()
         res = get_runs_obj().get(run_id)
         if not res:
             raise HTTPException(status_code=404, detail="run_id not found")
@@ -197,14 +208,17 @@ def create_router(
 
     @router.get("/api/models/{run_id}/contrib")
     def channel_contrib(run_id: str):
+        _ensure_mmm_enabled()
         return get_runs_obj().get(run_id, {}).get("contrib", [])
 
     @router.get("/api/models/{run_id}/roi")
     def roi(run_id: str):
+        _ensure_mmm_enabled()
         return get_runs_obj().get(run_id, {}).get("roi", [])
 
     @router.post("/api/models/{run_id}/what_if")
     def what_if_scenario(run_id: str, scenario: Dict[str, float] = Body(..., embed=False)):
+        _ensure_mmm_enabled()
         run = get_runs_obj().get(run_id)
         if not run:
             raise HTTPException(status_code=404, detail="Model not found")
@@ -237,6 +251,7 @@ def create_router(
 
     @router.get("/api/models/{run_id}/summary/channel")
     def get_channel_summary(run_id: str):
+        _ensure_mmm_enabled()
         res = get_runs_obj().get(run_id)
         if not res:
             raise HTTPException(status_code=404, detail="Model not found")
@@ -244,6 +259,7 @@ def create_router(
 
     @router.get("/api/models/{run_id}/summary/campaign")
     def get_campaign_summary(run_id: str):
+        _ensure_mmm_enabled()
         res = get_runs_obj().get(run_id)
         if not res:
             raise HTTPException(status_code=404, detail="Model not found")
@@ -251,6 +267,7 @@ def create_router(
 
     @router.get("/api/models/{run_id}/export.csv")
     def export_campaign_plan(run_id: str):
+        _ensure_mmm_enabled()
         res = get_runs_obj().get(run_id)
         if not res:
             raise HTTPException(status_code=404, detail="Model not found")
@@ -267,6 +284,7 @@ def create_router(
 
     @router.post("/api/models/{run_id}/optimize")
     def optimize_budget(run_id: str, scenario: Dict[str, float]):
+        _ensure_mmm_enabled()
         run = get_runs_obj().get(run_id)
         if not run:
             raise HTTPException(status_code=404, detail="Model not found")
@@ -279,6 +297,7 @@ def create_router(
 
     @router.post("/api/models/{run_id}/optimize/auto")
     def optimize_auto(run_id: str, request: OptimizeRequest = OptimizeRequest()):
+        _ensure_mmm_enabled()
         from scipy.optimize import minimize
         import numpy as np
 

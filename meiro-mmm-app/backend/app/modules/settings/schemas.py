@@ -30,6 +30,7 @@ class NBASettings(BaseModel):
 
 
 class FeatureFlags(BaseModel):
+    mmm_enabled: bool = True
     journeys_enabled: bool = False
     journey_examples_enabled: bool = False
     funnel_builder_enabled: bool = False

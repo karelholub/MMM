@@ -50,6 +50,7 @@ const PAGE_FALLBACK = (
 )
 
 interface FeatureFlags {
+  mmm_enabled: boolean
   journeys_enabled: boolean
   journey_examples_enabled: boolean
   funnel_builder_enabled: boolean
@@ -66,6 +67,7 @@ interface AppSettings {
 }
 
 const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
+  mmm_enabled: true,
   journeys_enabled: false,
   journey_examples_enabled: false,
   funnel_builder_enabled: false,
@@ -169,6 +171,7 @@ export default function App() {
   const featureFlags = useMemo<FeatureFlags>(() => {
     const incoming = settingsQuery.data?.feature_flags ?? {}
     return {
+      mmm_enabled: incoming.mmm_enabled ?? DEFAULT_FEATURE_FLAGS.mmm_enabled,
       journeys_enabled: incoming.journeys_enabled ?? DEFAULT_FEATURE_FLAGS.journeys_enabled,
       journey_examples_enabled:
         incoming.journey_examples_enabled ?? DEFAULT_FEATURE_FLAGS.journey_examples_enabled,
@@ -401,10 +404,11 @@ export default function App() {
     () =>
       NAV_ITEMS.filter(
         (item) =>
+          (item.key !== 'mmm' || featureFlags.mmm_enabled) &&
           (item.key !== 'analytics_journeys' || featureFlags.journeys_enabled) &&
           canAccessPage(item.key),
       ),
-    [canAccessPage, featureFlags.journeys_enabled],
+    [canAccessPage, featureFlags.journeys_enabled, featureFlags.mmm_enabled],
   )
 
   const navigateToPage = useCallback((next: AppPage) => {
@@ -501,11 +505,15 @@ export default function App() {
     },
     [createMmmRunMutation],
   )
-  const pageBlockedByFeature = page === 'analytics_journeys' && !featureFlags.journeys_enabled
+  const pageBlockedByFeature =
+    (page === 'analytics_journeys' && !featureFlags.journeys_enabled) ||
+    (page === 'mmm' && !featureFlags.mmm_enabled)
   const pageBlockedByPermissions = !canAccessPage(page)
   const showNoAccess = !permissions.isLoading && (pageBlockedByFeature || pageBlockedByPermissions)
   const blockedReason = pageBlockedByFeature
-    ? 'Journeys feature is disabled for this workspace.'
+    ? page === 'mmm'
+      ? 'MMM feature is disabled for this workspace.'
+      : 'Journeys feature is disabled for this workspace.'
     : 'Your role does not have permission to view this page.'
   const showLogin = !permissions.isLoading && permissions.auth?.authenticated !== true
 
