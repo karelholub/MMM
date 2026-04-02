@@ -119,6 +119,22 @@ def import_journeys_from_cdp_source(
     cleaning_report = ((result.get("import_summary") or {}).get("cleaning_report") or {})
     import_batch_id = str(uuid.uuid4())
     source_snapshot_id = replay_snapshot.get("snapshot_id") if replay_snapshot else None
+    attributable_profile_ids = {
+        str(
+            profile.get("customer_id")
+            or ((profile.get("customer") or {}) if isinstance(profile.get("customer"), dict) else {}).get("id")
+            or ""
+        ).strip()
+        for profile in profiles
+        if isinstance(profile, dict)
+        and bool(profile.get("touchpoints"))
+        and bool(profile.get("conversions"))
+        and str(
+            profile.get("customer_id")
+            or ((profile.get("customer") or {}) if isinstance(profile.get("customer"), dict) else {}).get("id")
+            or ""
+        ).strip()
+    }
     replace_profile_ids = []
     if replay_snapshot:
         snapshot_context = replay_snapshot.get("context_json") or {}
@@ -151,6 +167,21 @@ def import_journeys_from_cdp_source(
         for journey in journeys
         if bool(journey.get("conversions")) or bool(journey.get("converted", False))
     )
+    persisted_profile_ids = {
+        str(
+            journey.get("customer_id")
+            or ((journey.get("customer") or {}) if isinstance(journey.get("customer"), dict) else {}).get("id")
+            or ""
+        ).strip()
+        for journey in journeys
+        if isinstance(journey, dict)
+        and str(
+            journey.get("customer_id")
+            or ((journey.get("customer") or {}) if isinstance(journey.get("customer"), dict) else {}).get("id")
+            or ""
+        ).strip()
+    }
+    persisted_attributable_profile_count = len(persisted_profile_ids & attributable_profile_ids)
     channels_detected = sorted(
         {
             touchpoint.get("channel", "unknown")
@@ -221,4 +252,6 @@ def import_journeys_from_cdp_source(
         "message": f"Parsed {len(journeys)} journeys from CDP data",
         "import_summary": summary,
         "quarantine_count": len(quarantine_records),
+        "persisted_profile_count": len(persisted_profile_ids),
+        "persisted_attributable_profile_count": persisted_attributable_profile_count,
     }

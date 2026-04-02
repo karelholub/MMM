@@ -214,6 +214,71 @@ def test_webhook_suggestions_include_raw_event_ingests(monkeypatch, tmp_path):
     assert any(item["event_name"] == "purchase" for item in payload["conversion_event_suggestions"])
 
 
+def test_meiro_dry_run_prefers_event_archive_replay_source(monkeypatch, tmp_path):
+    monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(meiro_config, "CONFIG_PATH", tmp_path / "meiro_config.json")
+    monkeypatch.setattr(meiro_config, "WEBHOOK_ARCHIVE_PATH", tmp_path / "meiro_webhook_archive.jsonl")
+    monkeypatch.setattr(meiro_config, "EVENT_ARCHIVE_PATH", tmp_path / "meiro_event_archive.jsonl")
+    _clear_meiro_raw_batches()
+    _clear_meiro_replay_runs()
+    _clear_conversion_paths()
+    meiro_config.save_pull_config(
+        {
+            "primary_ingest_source": "events",
+            "replay_archive_source": "events",
+            "replay_mode": "last_n",
+            "replay_archive_limit": 5000,
+        }
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/connectors/meiro/events",
+        json={
+            "events": [
+                {
+                    "event_payload": {
+                        "event_id": "evt-page",
+                        "customer_id": "cust-1",
+                        "timestamp": "2026-03-27T10:00:00Z",
+                        "event_name": "page_view",
+                        "source": "google",
+                        "medium": "cpc",
+                        "campaign": "brand",
+                        "click_id": "gclid-1",
+                        "session_id": "sess-1",
+                    },
+                },
+                {
+                    "event_payload": {
+                        "event_id": "evt-conv",
+                        "customer_id": "cust-1",
+                        "timestamp": "2026-03-27T10:05:00Z",
+                        "event_name": "purchase",
+                        "conversion_id": "conv-1",
+                        "value": 120.0,
+                        "currency": "EUR",
+                        "session_id": "sess-1",
+                    },
+                },
+            ],
+            "replace": False,
+        },
+    )
+    assert response.status_code == 200
+
+    dry_run = client.post("/api/connectors/meiro/dry-run")
+    assert dry_run.status_code == 200
+    payload = dry_run.json()
+    assert payload["archive_source"] == "events"
+    assert payload["archive_entries_used"] >= 1
+    assert payload["count"] >= 1
+
+    _clear_meiro_raw_batches()
+    _clear_meiro_replay_runs()
+    _clear_conversion_paths()
+
+
 def test_profiles_webhook_persists_db_raw_batch(monkeypatch, tmp_path):
     monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(meiro_config, "CONFIG_PATH", tmp_path / "meiro_config.json")

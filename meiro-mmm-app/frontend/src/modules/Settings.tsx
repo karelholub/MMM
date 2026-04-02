@@ -852,7 +852,7 @@ const DEFAULT_SETTINGS: Settings = {
     excluded_channels: ['direct'],
   },
   feature_flags: {
-    mmm_enabled: true,
+    mmm_enabled: false,
     journeys_enabled: false,
     journey_examples_enabled: false,
     funnel_builder_enabled: false,
@@ -1730,6 +1730,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       useState<MMMDefaultsPreviewSummary['decision'] | null>(null)
 
     const toastIdRef = useRef(0)
+    const saveErrorMessageRef = useRef<string | null>(null)
     const [toast, setToast] = useState<{
       id: number
       type: 'success' | 'error'
@@ -2130,15 +2131,30 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       if (suggestion.payload.primary_kpi_id) {
         const targetId = suggestion.payload.primary_kpi_id
         const targetIndex = definitions.findIndex((definition) => definition.id === targetId)
-        if (targetIndex >= 0 && definitions[targetIndex].type !== 'primary') {
-          definitions = definitions.map((definition, index) =>
-            index === targetIndex
-              ? { ...definition, type: 'primary' }
-              : definition,
-          )
+        if (targetIndex >= 0) {
+          definitions = definitions.map((definition, index) => ({
+            ...definition,
+            type:
+              index === targetIndex
+                ? 'primary'
+                : definition.type === 'primary'
+                  ? 'micro'
+                  : definition.type,
+          }))
           changed = true
-        }
-        if (primaryKpiId !== targetId) {
+          if (primaryKpiId !== targetId) {
+            primaryKpiId = targetId
+            changed = true
+          }
+        } else if (!suggestion.payload.definition) {
+          toastIdRef.current += 1
+          setToast({
+            id: toastIdRef.current,
+            type: 'error',
+            message: 'Suggestion references a KPI definition that is not present in the draft',
+          })
+          return
+        } else if (primaryKpiId !== targetId) {
           primaryKpiId = targetId
           changed = true
         }
@@ -3947,6 +3963,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       async (sections?: SectionKey[]) => {
         const target = sections?.length ? sections : dirtySections
         if (!target.length) return true
+        saveErrorMessageRef.current = null
 
         const settingsSections = target.filter((key) =>
           ['attribution', 'nba', 'mmm'].includes(key),
@@ -4261,7 +4278,14 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                 source_aliases: nextSourceAliases,
                 medium_aliases: nextMediumAliases,
               }
-              const response = await saveTaxonomyMutation.mutateAsync(payload)
+              let response: Taxonomy
+              try {
+                response = await saveTaxonomyMutation.mutateAsync(payload)
+              } catch (error) {
+                saveErrorMessageRef.current =
+                  (error as Error)?.message ?? 'Failed to save taxonomy'
+                return false
+              }
               const saved = response ?? payload
 
               const normalizedRules = (saved.channel_rules ?? []).map(
@@ -4300,7 +4324,14 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                 })
                 return false
               }
-              const response = await saveKpiMutation.mutateAsync(kpiDraft)
+              let response: KpiConfig
+              try {
+                response = await saveKpiMutation.mutateAsync(kpiDraft)
+              } catch (error) {
+                saveErrorMessageRef.current =
+                  (error as Error)?.message ?? 'Failed to save KPI config'
+                return false
+              }
               const saved = response ?? kpiDraft
               setKpiBaseline(deepClone(saved))
               setKpiDraft(deepClone(saved))
@@ -4600,7 +4631,9 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
           type: success ? 'success' : 'error',
           message: success
             ? successMessages[section] ?? 'Changes saved'
-            : errorMessages[section] ?? 'Unable to save changes',
+            : saveErrorMessageRef.current ||
+              errorMessages[section] ||
+              'Unable to save changes',
         })
         return success
       },

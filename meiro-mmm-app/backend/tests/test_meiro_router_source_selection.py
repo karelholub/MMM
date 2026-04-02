@@ -76,6 +76,8 @@ def test_build_event_replay_reconstruction_diagnostics_explains_attrition():
         ],
         import_result={
             "count": 0,
+            "persisted_profile_count": 0,
+            "persisted_attributable_profile_count": 0,
             "quarantine_count": 1,
             "import_summary": {
                 "valid": 1,
@@ -100,3 +102,37 @@ def test_build_event_replay_reconstruction_diagnostics_explains_attrition():
     assert diagnostics["journeys_persisted"] == 0
     assert any("quarantined" in item for item in diagnostics["warnings"])
     assert any("Top unresolved replay issues" in item for item in diagnostics["warnings"])
+
+
+def test_build_event_replay_reconstruction_diagnostics_uses_profile_retention_share():
+    diagnostics = _build_event_replay_reconstruction_diagnostics(
+        archive_entries=[
+            {
+                "events": [
+                    {"event_payload": {"event_name": "page_view"}},
+                    {"event_payload": {"event_name": "purchase"}},
+                ]
+            }
+        ],
+        archived_profiles=[
+            {"customer_id": "cust-1", "touchpoints": [{"id": "tp-1"}], "conversions": [{"id": "cv-1"}]},
+        ],
+        import_result={
+            "count": 3,
+            "persisted_profile_count": 2,
+            "persisted_attributable_profile_count": 1,
+            "quarantine_count": 0,
+            "import_summary": {
+                "valid": 3,
+                "quarantined": 0,
+                "invalid": 0,
+                "converted": 3,
+                "cleaning_report": {},
+            },
+        },
+    )
+
+    assert diagnostics["journeys_persisted"] == 3
+    assert diagnostics["persisted_profiles"] == 2
+    assert diagnostics["persisted_attributable_profiles"] == 1
+    assert diagnostics["persisted_from_attributable_share"] == 1.0

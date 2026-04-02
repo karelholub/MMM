@@ -479,6 +479,10 @@ def _build_event_replay_reconstruction_diagnostics(
         summary = (import_result or {}).get("import_summary") or {}
         cleaning_report = summary.get("cleaning_report") or {}
         journeys_persisted = int(import_result.get("count", 0) or 0)
+        persisted_profile_count = int(import_result.get("persisted_profile_count", journeys_persisted) or 0)
+        persisted_attributable_profile_count = int(
+            import_result.get("persisted_attributable_profile_count", min(persisted_profile_count, attributable_profiles)) or 0
+        )
         journeys_valid = int(summary.get("valid", journeys_persisted) or 0)
         journeys_quarantined = int(summary.get("quarantined", import_result.get("quarantine_count", 0)) or 0)
         journeys_invalid = int(summary.get("invalid", 0) or 0)
@@ -489,8 +493,12 @@ def _build_event_replay_reconstruction_diagnostics(
                 "journeys_quarantined": journeys_quarantined,
                 "journeys_invalid": journeys_invalid,
                 "journeys_persisted": journeys_persisted,
+                "persisted_profiles": persisted_profile_count,
+                "persisted_attributable_profiles": persisted_attributable_profile_count,
                 "journeys_converted": journeys_converted,
-                "persisted_from_attributable_share": round((journeys_persisted / attributable_profiles), 4) if attributable_profiles > 0 else 0.0,
+                "persisted_from_attributable_share": round((persisted_attributable_profile_count / attributable_profiles), 4)
+                if attributable_profiles > 0
+                else 0.0,
             }
         )
         if attributable_profiles > 0 and journeys_persisted == 0:
@@ -2503,7 +2511,7 @@ def create_router(
         return {"count": len(journeys), "message": f"Pulled {len(journeys)} journeys from Meiro"}
 
     @router.post("/api/connectors/meiro/dry-run")
-    def meiro_dry_run(limit: int = 100):
+    def meiro_dry_run(limit: int = 100, db=Depends(get_db_dependency)):
         data_dir = get_data_dir_obj()
         cdp_json_path = data_dir / "meiro_cdp_profiles.json"
         cdp_path = data_dir / "meiro_cdp.csv"
@@ -2519,18 +2527,36 @@ def create_router(
             campaign_field=saved.get("campaign_field", "campaign"),
             currency_field=saved.get("currency_field", "currency"),
         )
-        if cdp_json_path.exists():
+        pull_cfg = get_pull_config()
+        replay_mode = str(pull_cfg.get("replay_mode") or "last_n").strip().lower()
+        if replay_mode not in {"all", "last_n", "date_range"}:
+            replay_mode = "last_n"
+        replay_archive_source = str(pull_cfg.get("replay_archive_source") or "auto").strip().lower()
+        archive_limit = int(pull_cfg.get("replay_archive_limit") or 5000)
+        date_from = pull_cfg.get("replay_date_from") if replay_mode == "date_range" else None
+        date_to = pull_cfg.get("replay_date_to") if replay_mode == "date_range" else None
+        archive_entries, archived_profiles, use_event_archive, _ = _load_archived_profiles_for_replay(
+            db,
+            replay_mode=replay_mode,
+            archive_source=replay_archive_source,
+            archive_limit=archive_limit,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        profiles: list[Dict[str, Any]]
+        if archived_profiles:
+            profiles = archived_profiles
+        elif cdp_json_path.exists():
             profiles = json.loads(cdp_json_path.read_text())
         elif cdp_path.exists():
             df = pd.read_csv(cdp_path)
             profiles = df.to_dict(orient="records")
         else:
-            raise HTTPException(status_code=404, detail="No CDP data found. Fetch or push profiles first.")
-        profiles = profiles[:limit] if isinstance(profiles, list) else []
+            raise HTTPException(status_code=404, detail="No archived replay data or CDP data found.")
+        profiles = profiles if isinstance(profiles, list) else []
         if not profiles:
             return {"count": 0, "preview": [], "warnings": ["No profiles to process"], "validation": {}}
         try:
-            pull_cfg = get_pull_config()
             settings = get_settings_obj()
             revenue_config = settings.revenue_config
             result = canonicalize_meiro_profiles_fn(
@@ -2572,6 +2598,8 @@ def create_router(
             "import_summary": summary,
             "cleaning_report": cleaning_report,
             "quarantine_count": int(summary.get("quarantined", 0) or 0),
+            "archive_source": "events" if archived_profiles and use_event_archive else ("profiles" if archived_profiles else "cdp"),
+            "archive_entries_used": len(archive_entries),
         }
 
     if register_auto_replay_runner_fn:

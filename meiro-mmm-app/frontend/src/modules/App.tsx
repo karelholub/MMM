@@ -67,7 +67,7 @@ interface AppSettings {
 }
 
 const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
-  mmm_enabled: true,
+  mmm_enabled: false,
   journeys_enabled: false,
   journey_examples_enabled: false,
   funnel_builder_enabled: false,
