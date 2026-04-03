@@ -1215,6 +1215,67 @@ class AdsEntityMap(Base):
     )
 
 
+class BudgetScenario(Base):
+    __tablename__ = "budget_scenarios"
+
+    id = Column(String(36), primary_key=True)
+    run_id = Column(String(64), nullable=False, index=True)
+    objective = Column(String(64), nullable=False, index=True)
+    total_budget_change_pct = Column(Float, nullable=False, default=0.0)
+    multipliers_json = Column(JSON, nullable=False, default={})
+    summary_json = Column(JSON, nullable=False, default={})
+    created_by = Column(String(255), nullable=False, default="system")
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_budget_scenarios_run_created", "run_id", "created_at"),
+    )
+
+
+class BudgetRecommendation(Base):
+    __tablename__ = "budget_recommendations"
+
+    id = Column(String(36), primary_key=True)
+    scenario_id = Column(String(36), ForeignKey("budget_scenarios.id", ondelete="CASCADE"), nullable=True, index=True)
+    run_id = Column(String(64), nullable=False, index=True)
+    objective = Column(String(64), nullable=False, index=True)
+    rank = Column(Integer, nullable=False, default=0)
+    scope = Column(String(32), nullable=False, default="channel")
+    status = Column(String(32), nullable=False, default="warning", index=True)
+    title = Column(String(255), nullable=False)
+    summary = Column(Text, nullable=False)
+    expected_impact_json = Column(JSON, nullable=False, default={})
+    confidence_json = Column(JSON, nullable=False, default={})
+    risk_json = Column(JSON, nullable=False, default={})
+    evidence_json = Column(JSON, nullable=False, default=[])
+    decision_json = Column(JSON, nullable=False, default={})
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        Index("ix_budget_recommendations_run_objective", "run_id", "objective"),
+    )
+
+
+class BudgetRecommendationAction(Base):
+    __tablename__ = "budget_recommendation_actions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    recommendation_id = Column(
+        String(36),
+        ForeignKey("budget_recommendations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    channel = Column(String(128), nullable=False, index=True)
+    campaign_id = Column(String(128), nullable=True, index=True)
+    action = Column(String(32), nullable=False)
+    delta_pct = Column(Float, nullable=True)
+    delta_amount = Column(Float, nullable=True)
+    metadata_json = Column(JSON, nullable=False, default={})
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class AdsChangeRequest(Base):
     __tablename__ = "ads_change_requests"
 
