@@ -558,3 +558,103 @@ def list_ads_audit(
         for r in rows
     ]
     return {"items": out, "total": len(out)}
+
+
+def create_change_requests_from_budget_targets(
+    db: Session,
+    *,
+    workspace_id: str,
+    requested_by_user_id: str,
+    run_id: str,
+    scenario_id: str,
+    recommendation_id: Optional[str],
+    currency: str,
+    targets: List[Dict[str, Any]],
+    approval_required: bool,
+) -> Dict[str, Any]:
+    created: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    for target in targets:
+        provider = str(target.get("provider") or "").strip()
+        entity_id = str(target.get("entity_id") or "").strip()
+        if provider not in PROVIDER_KEYS:
+            skipped.append(
+                {
+                    "provider": provider,
+                    "entity_id": entity_id,
+                    "channel": target.get("channel"),
+                    "reason": "unsupported_provider",
+                }
+            )
+            continue
+        if not entity_id:
+            skipped.append(
+                {
+                    "provider": provider,
+                    "entity_id": entity_id,
+                    "channel": target.get("channel"),
+                    "reason": "missing_entity_id",
+                }
+            )
+            continue
+        account_id = str(target.get("account_id") or "").strip() or _default_account_for_provider(
+            db,
+            workspace_id=workspace_id,
+            provider=provider,
+        )
+        state = fetch_ads_state(
+            db,
+            workspace_id=workspace_id,
+            provider=provider,
+            account_id=account_id,
+            entity_type="campaign",
+            entity_id=entity_id,
+        )
+        current_budget = float(state.get("budget") or 0.0)
+        if current_budget <= 0:
+            skipped.append(
+                {
+                    "provider": provider,
+                    "entity_id": entity_id,
+                    "channel": target.get("channel"),
+                    "reason": "missing_current_budget",
+                    "state_error": state.get("error"),
+                }
+            )
+            continue
+        delta_pct = float(target.get("delta_pct") or 0.0)
+        payload = {
+            "daily_budget": round(max(0.0, current_budget * (1.0 + delta_pct)), 2),
+            "previous_daily_budget": round(current_budget, 2),
+            "currency": currency or state.get("currency") or "USD",
+            "source": {
+                "kind": "budget_recommendation",
+                "run_id": run_id,
+                "scenario_id": scenario_id,
+                "recommendation_id": recommendation_id,
+                "channel": target.get("channel"),
+                "entity_name": target.get("entity_name"),
+                "reason": target.get("reason"),
+                "delta_pct": delta_pct,
+            },
+        }
+        created.append(
+            create_change_request(
+                db,
+                workspace_id=workspace_id,
+                requested_by_user_id=requested_by_user_id,
+                provider=provider,
+                account_id=account_id,
+                entity_type="campaign",
+                entity_id=entity_id,
+                action_type="update_budget",
+                action_payload=payload,
+                approval_required=approval_required,
+            )
+        )
+    return {
+        "items": created,
+        "skipped": skipped,
+        "total": len(created),
+        "skipped_total": len(skipped),
+    }

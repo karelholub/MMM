@@ -5,9 +5,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.core.permissions import PermissionContext
 from app.modules.ads_governance.schemas import (
     AdsChangeRequestApplyPayload,
+    BudgetRecommendationBulkCreatePayload,
     AdsChangeRequestCreatePayload,
     AdsChangeRequestRejectPayload,
 )
+from app.services_ads_ops import create_change_requests_from_budget_targets
 
 
 def create_router(
@@ -120,6 +122,29 @@ def create_router(
                 entity_id=payload.entity_id,
                 action_type=payload.action_type,
                 action_payload=payload.action_payload,
+                approval_required=bool(governance.require_approval),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post("/api/ads/change-requests/from-budget-recommendation")
+    def create_ads_change_requests_from_budget_recommendation(
+        payload: BudgetRecommendationBulkCreatePayload,
+        db=Depends(get_db_dependency),
+        ctx: PermissionContext = Depends(require_permission_dependency("ads.propose")),
+    ):
+        workspace_id = workspace_scope_or_403_fn(ctx, None)
+        governance = get_ads_governance_settings_fn()
+        try:
+            return create_change_requests_from_budget_targets(
+                db,
+                workspace_id=workspace_id,
+                requested_by_user_id=ctx.user_id,
+                run_id=payload.run_id,
+                scenario_id=payload.scenario_id,
+                recommendation_id=payload.recommendation_id,
+                currency=payload.currency,
+                targets=[target.model_dump() for target in payload.targets],
                 approval_required=bool(governance.require_approval),
             )
         except ValueError as exc:

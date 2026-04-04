@@ -19,6 +19,7 @@ from app.services_budget_recommendations import (
     create_budget_scenario,
     serialize_budget_scenario,
 )
+from app.services_budget_realization import list_budget_realization, record_budget_realization_snapshot
 
 
 def create_router(
@@ -459,5 +460,18 @@ def create_router(
         if not row:
             raise HTTPException(status_code=404, detail="Budget scenario not found")
         return serialize_budget_scenario(db, row)
+
+    @router.get("/api/models/{run_id}/budget/realization")
+    def get_budget_realization(run_id: str, db=Depends(get_db_dependency)):
+        _ensure_mmm_enabled()
+        return list_budget_realization(db, run_id=run_id)
+
+    @router.post("/api/models/{run_id}/budget/scenarios/{scenario_id}/realization")
+    def create_budget_realization_snapshot_endpoint(run_id: str, scenario_id: str, db=Depends(get_db_dependency)):
+        _ensure_mmm_enabled()
+        try:
+            return record_budget_realization_snapshot(db, run_id=run_id, scenario_id=scenario_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return router

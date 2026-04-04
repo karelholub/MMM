@@ -7,9 +7,35 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.connectors.ads_ops.base import AdsApplyResult, AdsProviderError
 from app.db import Base, get_db
 from app.main import app
 from app import main as main_module
+
+
+class _FakeAdsAdapter:
+    key = "google_ads"
+
+    def build_deep_link(self, *, account_id: str, entity_type: str, entity_id: str) -> str:
+        return f"https://ads.example.com/{account_id}/{entity_type}/{entity_id}"
+
+    def fetch_entity_state(self, *, access_token: str, account_id: str, entity_type: str, entity_id: str):
+        return {"status": "enabled", "budget": 100.0, "currency": "USD", "name": entity_id}
+
+    def pause_entity(self, *, access_token: str, account_id: str, entity_type: str, entity_id: str, idempotency_key: str):
+        return AdsApplyResult(ok=True, provider_request_id=f"pause-{idempotency_key}")
+
+    def enable_entity(self, *, access_token: str, account_id: str, entity_type: str, entity_id: str, idempotency_key: str):
+        return AdsApplyResult(ok=True, provider_request_id=f"enable-{idempotency_key}")
+
+    def update_budget(self, *, access_token: str, account_id: str, entity_type: str, entity_id: str, daily_budget: float, currency: str | None, idempotency_key: str):
+        return AdsApplyResult(ok=True, provider_request_id=f"budget-{idempotency_key}")
+
+    def normalize_error(self, exc: Exception):
+        return AdsProviderError(code="provider_error", message=str(exc), retryable=False, needs_reauth=False)
+
+    def supports(self, action_type: str, entity_type: str) -> bool:
+        return action_type in {"pause", "enable", "update_budget"}
 
 
 def test_budget_recommendations_and_scenarios(tmp_path, monkeypatch):
@@ -62,6 +88,8 @@ def test_budget_recommendations_and_scenarios(tmp_path, monkeypatch):
         "type": "sales",
         "metadata": {"period_start": "2026-01-01", "period_end": "2026-03-19"},
     }
+    monkeypatch.setattr("app.services_ads_ops.get_ads_adapter", lambda _provider: _FakeAdsAdapter())
+    monkeypatch.setattr("app.services_ads_ops.get_access_token_for_provider", lambda *_args, **_kwargs: "token-1")
     main_module.RUNS["mmm_budget_test"] = {
         "status": "finished",
         "dataset_id": "budget-test-dataset",
@@ -129,6 +157,37 @@ def test_budget_recommendations_and_scenarios(tmp_path, monkeypatch):
             assert get_resp.status_code == 200
             loaded = get_resp.json()
             assert loaded["recommendations"][0]["actions"]
+
+            create_requests_resp = client.post(
+                "/api/ads/change-requests/from-budget-recommendation",
+                json={
+                    "run_id": "mmm_budget_test",
+                    "scenario_id": created["id"],
+                    "recommendation_id": created["recommendations"][0]["id"],
+                    "currency": "USD",
+                    "targets": [
+                        {
+                            "channel": "google_spend",
+                            "provider": "google_ads",
+                            "account_id": "acct-1",
+                            "entity_id": "brand-search",
+                            "entity_name": "Brand Search",
+                            "delta_pct": 0.08,
+                            "reason": "Top efficiency channel",
+                        }
+                    ],
+                },
+                headers={"X-User-Role": "admin", "X-User-Id": "qa-admin"},
+            )
+            assert create_requests_resp.status_code == 200
+            assert create_requests_resp.json()["total"] == 1
+
+            realization_resp = client.get("/api/models/mmm_budget_test/budget/realization")
+            assert realization_resp.status_code == 200
+            realization = realization_resp.json()
+            assert realization["total"] == 1
+            assert realization["items"][0]["execution"]["counts"]["pending_approval"] == 1
+            assert realization["items"][0]["execution"]["proposed_budget_delta_total"] == 8.0
     finally:
         app.dependency_overrides.clear()
         main_module.RUNS.clear()

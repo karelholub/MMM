@@ -1276,6 +1276,20 @@ class BudgetRecommendationAction(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
+class BudgetRealizationSnapshot(Base):
+    __tablename__ = "budget_realization_snapshots"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    scenario_id = Column(String(36), ForeignKey("budget_scenarios.id", ondelete="CASCADE"), nullable=False, index=True)
+    run_id = Column(String(64), nullable=False, index=True)
+    snapshot_json = Column(JSON, nullable=False, default={})
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        Index("ix_budget_realization_run_created", "run_id", "created_at"),
+    )
+
+
 class AdsChangeRequest(Base):
     __tablename__ = "ads_change_requests"
 
