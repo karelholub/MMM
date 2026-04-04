@@ -79,7 +79,15 @@ const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
   sso_enabled: false,
 }
 
-function parseInitialPage(pathname: string): AppPage {
+function isAppPage(value: string | null | undefined): value is AppPage {
+  if (!value) return false
+  return NAV_ITEMS.some((item) => item.key === value)
+}
+
+function parseInitialPage(pathname: string, search: string = ''): AppPage {
+  const params = new URLSearchParams(search)
+  const requested = params.get('page')
+  if (isAppPage(requested)) return requested
   if (pathname === '/analytics/journeys') return 'analytics_journeys'
   return 'overview'
 }
@@ -101,7 +109,7 @@ type JourneySourceKey = 'sample' | 'upload' | 'meiro'
 export default function App() {
   const [page, setPage] = useState<AppPage>(() => {
     if (typeof window === 'undefined') return 'overview'
-    return parseInitialPage(window.location.pathname)
+    return parseInitialPage(window.location.pathname, window.location.search)
   })
   const [lastPage, setLastPage] = useState<AppPage | null>(null)
   const settingsRef = useRef<SettingsPageHandle | null>(null)
@@ -325,7 +333,7 @@ export default function App() {
   useEffect(() => {
     if (typeof window === 'undefined') return
     const onPopState = () => {
-      setPage(parseInitialPage(window.location.pathname))
+      setPage(parseInitialPage(window.location.pathname, window.location.search))
       const params = new URLSearchParams(window.location.search)
       const dateFrom = params.get('date_from')
       const dateTo = params.get('date_to')
@@ -343,13 +351,12 @@ export default function App() {
   useEffect(() => {
     if (typeof window === 'undefined') return
     const targetPath = pageToPathname(page)
-    if (page === 'analytics_journeys' && window.location.pathname !== targetPath) {
-      window.history.pushState({}, '', targetPath)
-      return
-    }
-    if (page !== 'analytics_journeys' && window.location.pathname === '/analytics/journeys') {
-      const suffix = `${window.location.search}${window.location.hash}`
-      window.history.pushState({}, '', `/${suffix}`)
+    const params = new URLSearchParams(window.location.search)
+    if (page === 'overview') params.delete('page')
+    else params.set('page', page)
+    const next = `${targetPath}${params.toString() ? `?${params.toString()}` : ''}${window.location.hash}`
+    if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== next) {
+      window.history.pushState({}, '', next)
     }
   }, [page])
 

@@ -572,6 +572,13 @@ function formatSeconds(v: number | null | undefined): string {
   return `${(mins / 60).toFixed(1)}h`
 }
 
+function buildIncrementalityHref(experimentId: number): string {
+  const params = new URLSearchParams()
+  params.set('page', 'incrementality')
+  params.set('experiment_id', String(experimentId))
+  return `/?${params.toString()}`
+}
+
 function channelFitsGroup(channel: string, group?: string | null): boolean {
   if (!group) return true
   const ch = channel.toLowerCase()
@@ -1815,9 +1822,17 @@ export default function Journeys({
             ) : null}
           </div>
           {item.linked_experiment_id ? (
-            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
-              #{item.linked_experiment_id}
-              {experimentName ? ` · ${experimentName}` : ''}
+            <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap', alignItems: 'center' }}>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                #{item.linked_experiment_id}
+                {experimentName ? ` · ${experimentName}` : ''}
+              </div>
+              <a
+                href={buildIncrementalityHref(item.linked_experiment_id)}
+                style={{ fontSize: t.font.sizeXs, color: t.color.accent, textDecoration: 'none' }}
+              >
+                Open in Incrementality
+              </a>
             </div>
           ) : null}
         </div>
@@ -3029,23 +3044,42 @@ export default function Journeys({
                 title="Experiment detail"
                 subtitle="Inspect linked experiment status, measured results, and rollout guardrails without leaving Journey Lab."
                 actions={
-                  selectedJourneyExperimentHypothesis ? (
-                    <button
-                      type="button"
-                      onClick={() => loadHypothesisIntoDraft(selectedJourneyExperimentHypothesis)}
-                      style={{
-                        border: `1px solid ${t.color.border}`,
-                        background: t.color.surface,
-                        color: t.color.text,
-                        borderRadius: t.radius.sm,
-                        padding: '6px 10px',
-                        fontSize: t.font.sizeSm,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Open hypothesis
-                    </button>
-                  ) : undefined
+                  <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
+                    {selectedJourneyExperiment ? (
+                      <a
+                        href={buildIncrementalityHref(selectedJourneyExperiment.id)}
+                        style={{
+                          border: `1px solid ${t.color.border}`,
+                          background: t.color.surface,
+                          color: t.color.accent,
+                          borderRadius: t.radius.sm,
+                          padding: '6px 10px',
+                          fontSize: t.font.sizeSm,
+                          cursor: 'pointer',
+                          textDecoration: 'none',
+                        }}
+                      >
+                        Open in Incrementality
+                      </a>
+                    ) : null}
+                    {selectedJourneyExperimentHypothesis ? (
+                      <button
+                        type="button"
+                        onClick={() => loadHypothesisIntoDraft(selectedJourneyExperimentHypothesis)}
+                        style={{
+                          border: `1px solid ${t.color.border}`,
+                          background: t.color.surface,
+                          color: t.color.text,
+                          borderRadius: t.radius.sm,
+                          padding: '6px 10px',
+                          fontSize: t.font.sizeSm,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Open hypothesis
+                      </button>
+                    ) : null}
+                  </div>
                 }
               >
                 {!selectedJourneyExperiment ? (

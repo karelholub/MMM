@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { tokens as t } from '../theme/tokens'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
@@ -114,7 +114,13 @@ interface ExperimentHealth {
 }
 
 export default function IncrementalityPage() {
-  const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [selectedId, setSelectedId] = useState<number | null>(() => {
+    if (typeof window === 'undefined') return null
+    const params = new URLSearchParams(window.location.search)
+    const raw = params.get('experiment_id')
+    const parsed = raw ? Number(raw) : null
+    return parsed != null && Number.isFinite(parsed) ? parsed : null
+  })
   const [showPowerCalc, setShowPowerCalc] = useState(false)
   const [showTimeSeries, setShowTimeSeries] = useState(false)
   const [showAdvancedSetup, setShowAdvancedSetup] = useState(false)
@@ -300,6 +306,31 @@ export default function IncrementalityPage() {
     })
     return items
   }, [experimentsQuery.data, search, statusFilter])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const syncFromUrl = () => {
+      const params = new URLSearchParams(window.location.search)
+      const raw = params.get('experiment_id')
+      const parsed = raw ? Number(raw) : null
+      const nextSelected = parsed != null && Number.isFinite(parsed) ? parsed : null
+      setSelectedId((prev) => (prev === nextSelected ? prev : nextSelected))
+    }
+    syncFromUrl()
+    window.addEventListener('popstate', syncFromUrl)
+    return () => window.removeEventListener('popstate', syncFromUrl)
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    if (selectedId != null) params.set('experiment_id', String(selectedId))
+    else params.delete('experiment_id')
+    const next = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}${window.location.hash}`
+    if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== next) {
+      window.history.replaceState({}, '', next)
+    }
+  }, [selectedId])
 
   return (
     <div style={{ maxWidth: 1200, margin: '0 auto' }}>
