@@ -50,4 +50,9 @@ class JourneyExperimentCreatePayload(BaseModel):
     channel: Optional[str] = Field(None, max_length=64)
     notes: Optional[str] = Field(None, max_length=5000)
     experiment_type: str = Field("holdout", max_length=32)
+    proposed_step: Optional[str] = Field(None, max_length=255)
     guardrails: Dict[str, Any] = Field(default_factory=dict)
+
+
+class JourneyPolicySimulationPayload(BaseModel):
+    proposed_step: Optional[str] = Field(None, max_length=255)

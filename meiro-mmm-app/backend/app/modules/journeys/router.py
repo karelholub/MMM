@@ -9,6 +9,7 @@ from app.modules.journeys.schemas import (
     JourneyExperimentCreatePayload,
     JourneyDefinitionUpdate,
     JourneyHypothesisPayload,
+    JourneyPolicySimulationPayload,
     JourneySavedViewPayload,
 )
 from app.models_config_dq import JourneyHypothesis
@@ -39,6 +40,7 @@ from app.services_journey_saved_views import (
 )
 from app.services_journey_transitions import list_transitions_for_journey_definition
 from app.services_incrementality import create_experiment_record, serialize_experiment_summary
+from app.services_nba_policy_simulation import build_journey_policy_simulation
 
 logger = logging.getLogger(__name__)
 
@@ -282,6 +284,14 @@ def create_router(
             or str((hypothesis.segment_json or {}).get("channel_group") or "").strip()
             or "journey"
         )
+        proposed_action = dict(hypothesis.proposed_action_json or {})
+        if body.proposed_step and body.proposed_step.strip():
+            proposed_action["step"] = body.proposed_step.strip()
+            proposed_action["type"] = str(proposed_action.get("type") or "nba_intervention")
+            proposed_action["idea"] = str(
+                proposed_action.get("idea")
+                or f"Test {body.proposed_step.strip()} for this prefix."
+            )
         experiment_name = (body.name or "").strip() or f"Journey test: {hypothesis.title}"
         note_parts = [
             body.notes.strip() if body.notes else "",
@@ -304,7 +314,7 @@ def create_router(
             policy={
                 "trigger": dict(hypothesis.trigger_json or {}),
                 "current_action": dict(hypothesis.current_action_json or {}),
-                "proposed_action": dict(hypothesis.proposed_action_json or {}),
+                "proposed_action": proposed_action,
             },
             guardrails={
                 "sample_size_target": hypothesis.sample_size_target,
@@ -315,6 +325,7 @@ def create_router(
 
         hypothesis.linked_experiment_id = experiment.id
         hypothesis.status = "in_experiment"
+        hypothesis.proposed_action_json = proposed_action
         hypothesis.updated_at = datetime.utcnow()
         db.add(hypothesis)
         db.commit()
@@ -323,6 +334,26 @@ def create_router(
             "experiment": serialize_experiment_summary(experiment, source_name=hypothesis.title),
             "hypothesis": serialize_journey_hypothesis(hypothesis),
         }
+
+    @router.post("/api/journeys/hypotheses/{hypothesis_id}/simulate")
+    def api_simulate_journey_hypothesis_policy(
+        hypothesis_id: str,
+        body: Optional[JourneyPolicySimulationPayload] = None,
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        hypothesis = (
+            db.query(JourneyHypothesis)
+            .filter(JourneyHypothesis.id == hypothesis_id, JourneyHypothesis.workspace_id == ctx.workspace_id)
+            .first()
+        )
+        if not hypothesis:
+            raise HTTPException(status_code=404, detail="Journey hypothesis not found")
+        return build_journey_policy_simulation(
+            db,
+            hypothesis=hypothesis,
+            proposed_step=(body.proposed_step if body else None),
+        )
 
     @router.post("/api/journeys/definitions")
     def api_create_journey_definition(

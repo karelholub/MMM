@@ -121,6 +121,25 @@ def test_journey_insights_and_hypothesis_crud_flow(client_and_session):
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow(),
             ),
+            JourneyPathDaily(
+                journey_definition_id=definition_id,
+                date=date(2026, 3, 1),
+                path_hash="recovery-path",
+                path_steps=["Paid Social", "Product View", "Checkout", "Purchase"],
+                path_length=4,
+                count_journeys=90,
+                count_conversions=22,
+                gross_revenue_total=2200.0,
+                net_revenue_total=2200.0,
+                p50_time_to_convert_sec=4800,
+                avg_time_to_convert_sec=5400,
+                channel_group="meta_ads",
+                campaign_id="meta-retargeting",
+                device="mobile",
+                country="us",
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            ),
         ]
         session.add_all(rows)
         session.commit()
@@ -134,7 +153,7 @@ def test_journey_insights_and_hypothesis_crud_flow(client_and_session):
     )
     assert insights_resp.status_code == 200
     insights = insights_resp.json()
-    assert insights["summary"]["paths_considered"] == 3
+    assert insights["summary"]["paths_considered"] == 4
     assert len(insights["items"]) >= 2
     first_hypothesis = insights["items"][0]["suggested_hypothesis"]
 
@@ -196,6 +215,20 @@ def test_journey_insights_and_hypothesis_crud_flow(client_and_session):
     assert updated["status"] == "ready_to_test"
     assert updated["result"]["note"] == "Needs sample sizing confirmation"
 
+    simulate_policy = client.post(
+        f"/api/journeys/hypotheses/{created['id']}/simulate",
+        headers=viewer_headers,
+        json={"proposed_step": "Checkout"},
+    )
+    assert simulate_policy.status_code == 200
+    simulation = simulate_policy.json()
+    assert simulation["previewAvailable"] is True
+    assert simulation["prefix"]["label"] == "Paid Social > Product View"
+    assert simulation["selected_policy"]["step"] == "Checkout"
+    assert simulation["selected_policy"]["uplift_abs"] > 0
+    assert any(candidate["step"] == "Exit" for candidate in simulation["top_candidates"])
+    assert any(candidate["step"] == "Checkout" for candidate in simulation["top_candidates"])
+
     create_experiment = client.post(
         f"/api/journeys/hypotheses/{created['id']}/create-experiment",
         headers=viewer_headers,
@@ -203,6 +236,7 @@ def test_journey_insights_and_hypothesis_crud_flow(client_and_session):
             "start_at": "2026-04-05T00:00:00Z",
             "end_at": "2026-04-19T00:00:00Z",
             "notes": "Launch as a two-week holdout.",
+            "proposed_step": "Checkout",
             "guardrails": {"min_runtime_days": 7},
         },
     )
@@ -213,6 +247,7 @@ def test_journey_insights_and_hypothesis_crud_flow(client_and_session):
     assert experiment_payload["experiment"]["source_name"] == updated["title"]
     assert experiment_payload["hypothesis"]["linked_experiment_id"] == experiment_payload["experiment"]["id"]
     assert experiment_payload["hypothesis"]["status"] == "in_experiment"
+    assert experiment_payload["hypothesis"]["proposed_action"]["step"] == "Checkout"
 
     list_experiments = client.get("/api/experiments", headers=viewer_headers)
     assert list_experiments.status_code == 200
@@ -228,4 +263,5 @@ def test_journey_insights_and_hypothesis_crud_flow(client_and_session):
     assert detail["source_type"] == "journey_hypothesis"
     assert detail["segment"]["channel_group"] == created["segment"]["channel_group"]
     assert detail["policy"]["proposed_action"]["type"] == created["proposed_action"]["type"]
+    assert detail["policy"]["proposed_action"]["step"] == "Checkout"
     assert detail["guardrails"]["sample_size_target"] == created["sample_size_target"]
