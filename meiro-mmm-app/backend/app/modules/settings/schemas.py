@@ -27,6 +27,7 @@ class NBASettings(BaseModel):
     max_suggestions_per_prefix: int = 3
     min_uplift_pct: Optional[float] = None
     excluded_channels: List[str] = Field(default_factory=lambda: ["direct"])
+    promoted_journey_policies: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class FeatureFlags(BaseModel):

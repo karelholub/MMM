@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Tuple
 
 from app.attribution_engine import compute_next_best_action, has_any_campaign
 from app.modules.settings.schemas import NBASettings
+from app.services_nba_policy_sync import apply_promoted_policy_overrides
 from app.services_settings_decisions import build_nba_preview_decision
 
 
@@ -35,6 +36,10 @@ def filter_nba_recommendations(
     excluded_channels = {
         ch.strip().lower() for ch in (settings.excluded_channels or []) if ch
     }
+    promoted_overrides = apply_promoted_policy_overrides(
+        nba_raw,
+        list(getattr(settings, "promoted_journey_policies", []) or []),
+    )
 
     filtered: Dict[str, List[Dict[str, Any]]] = {}
 
@@ -62,29 +67,46 @@ def filter_nba_recommendations(
             count = int(rec.get("count", 0))
             conv_rate = float(rec.get("conversion_rate", 0.0))
             channel = str(rec.get("channel", "")).lower()
+            step_key = str(rec.get("step") or rec.get("channel") or "").strip().lower()
+            promoted_policy = promoted_overrides.get(f"{prefix}::{step_key}")
 
-            if count < min_next_support:
+            if count < min_next_support and not promoted_policy:
                 stats["filtered_support"] += 1
                 continue
-            if conv_rate < min_conversion_rate:
+            if conv_rate < min_conversion_rate and not promoted_policy:
                 stats["filtered_conversion"] += 1
                 continue
-            if excluded_channels and channel in excluded_channels:
+            if excluded_channels and channel in excluded_channels and not promoted_policy:
                 stats["filtered_excluded"] += 1
                 continue
             if (
                 min_uplift_pct is not None
                 and min_uplift_pct > 0
                 and baseline_rate > 0
+                and not promoted_policy
             ):
                 uplift = (conv_rate - baseline_rate) / baseline_rate
                 if uplift < min_uplift_pct:
                     stats["filtered_uplift"] += 1
                     continue
 
-            kept.append(rec)
+            kept.append(
+                {
+                    **rec,
+                    "is_promoted_policy": bool(promoted_policy),
+                    "promoted_policy_title": promoted_policy.get("title") if promoted_policy else None,
+                    "promoted_policy_hypothesis_id": promoted_policy.get("hypothesis_id") if promoted_policy else None,
+                }
+            )
 
         if kept:
+            kept.sort(
+                key=lambda rec: (
+                    not bool(rec.get("is_promoted_policy")),
+                    -float(rec.get("conversion_rate", 0.0)),
+                    -int(rec.get("count", 0)),
+                )
+            )
             if len(kept) > max_suggestions:
                 stats["trimmed_cap"] += len(kept) - max_suggestions
                 kept = kept[:max_suggestions]
