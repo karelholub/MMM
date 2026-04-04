@@ -323,6 +323,53 @@ interface JourneyPolicySimulationResponse {
   } | null
 }
 
+interface JourneyPolicyRecommendationRecord {
+  hypothesis_id: string
+  title: string
+  journey_definition_id: string
+  status: string
+  learning_stage: string
+  linked_experiment_id?: number | null
+  prefix: {
+    steps: string[]
+    label: string
+  }
+  segment: Record<string, unknown>
+  segment_label: string
+  policy: {
+    step: string
+    action: Record<string, unknown>
+  }
+  support_count: number
+  sample_size_target?: number | null
+  uplift_abs?: number | null
+  uplift_rel?: number | null
+  p_value?: number | null
+  summary?: string | null
+  recommendation: string
+  recommendation_reason: string
+  score: number
+  promotion: Record<string, unknown>
+  updated_at?: string | null
+}
+
+interface JourneyPolicyRecommendationsResponse {
+  items: JourneyPolicyRecommendationRecord[]
+  summary: {
+    total: number
+    promoted: number
+    ready_to_promote: number
+    validated: number
+    in_flight: number
+    rejected: number
+  }
+}
+
+interface JourneyPolicyPromotionResponse {
+  hypothesis: JourneyHypothesisRecord
+  policy_candidate: JourneyPolicyRecommendationRecord
+}
+
 interface JourneyHypothesisRequest {
   journey_definition_id: string
   title: string
@@ -579,6 +626,11 @@ function readResultObject(result: Record<string, unknown>, key: string): Record<
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
 }
 
+function readResultBool(result: Record<string, unknown>, key: string): boolean | null {
+  const value = result?.[key]
+  return typeof value === 'boolean' ? value : null
+}
+
 function getHypothesisLearningStage(item: JourneyHypothesisRecord): string {
   return readResultString(item.result || {}, 'learning_stage') || item.status || 'draft'
 }
@@ -589,6 +641,10 @@ function formatStageLabel(stage: string): string {
 
 function getHypothesisEvidenceSummary(item: JourneyHypothesisRecord): string | null {
   return readResultString(item.result || {}, 'summary') || readResultString(item.result || {}, 'note')
+}
+
+function getHypothesisPromotion(item: JourneyHypothesisRecord): Record<string, unknown> {
+  return readResultObject(item.result || {}, 'policy_promotion')
 }
 
 function parseDelimitedSteps(value: string): string[] {
@@ -1040,6 +1096,16 @@ export default function Journeys({
     enabled: !!sandboxHypothesisId && activeTab === 'policy' && !featureDisabled,
   })
 
+  const policyRecommendationsQuery = useQuery<JourneyPolicyRecommendationsResponse>({
+    queryKey: ['journey-policy-recommendations', selectedJourneyId],
+    queryFn: async () => {
+      return apiGetJson<JourneyPolicyRecommendationsResponse>(`/api/journeys/${selectedJourneyId}/policies?limit=10`, {
+        fallbackMessage: 'Failed to load learned journey policies',
+      })
+    },
+    enabled: !!selectedJourneyId && (activeTab === 'insights' || activeTab === 'policy' || activeTab === 'hypotheses') && !featureDisabled,
+  })
+
   const savedViewsQuery = useQuery<SavedJourneyViewsResponse>({
     queryKey: ['journey-saved-views', user.userId],
     queryFn: async () => {
@@ -1134,6 +1200,7 @@ export default function Journeys({
     },
     onSuccess: async (created) => {
       await queryClient.invalidateQueries({ queryKey: ['journey-hypotheses', selectedJourneyId] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-policy-recommendations', selectedJourneyId] })
       setEditingHypothesisId(created.id)
       setHypothesisDraft({
         title: created.title,
@@ -1162,6 +1229,7 @@ export default function Journeys({
     },
     onSuccess: async (updated) => {
       await queryClient.invalidateQueries({ queryKey: ['journey-hypotheses', selectedJourneyId] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-policy-recommendations', selectedJourneyId] })
       setEditingHypothesisId(updated.id)
       setHypothesisDraft({
         title: updated.title,
@@ -1198,6 +1266,7 @@ export default function Journeys({
     },
     onSuccess: async (payload) => {
       await queryClient.invalidateQueries({ queryKey: ['journey-hypotheses', selectedJourneyId] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-policy-recommendations', selectedJourneyId] })
       setEditingHypothesisId(payload.hypothesis.id)
       setHypothesisDraft({
         title: payload.hypothesis.title,
@@ -1216,6 +1285,42 @@ export default function Journeys({
       setHypothesisError(null)
     },
     onError: (err) => setHypothesisError((err as Error).message || 'Failed to create experiment from hypothesis'),
+  })
+
+  const promoteHypothesisPolicyMutation = useMutation({
+    mutationFn: async (payload: { hypothesisId: string; active: boolean }) => {
+      return apiSendJson<JourneyPolicyPromotionResponse>(
+        `/api/journeys/hypotheses/${payload.hypothesisId}/policy-promotion`,
+        'POST',
+        {
+          active: payload.active,
+          notes: payload.active ? 'Promoted from the Journey Lab learned policy workflow.' : 'Removed from the Journey Lab learned policy workflow.',
+        },
+        { fallbackMessage: payload.active ? 'Failed to promote journey policy' : 'Failed to remove journey policy promotion' },
+      )
+    },
+    onSuccess: async (payload) => {
+      await queryClient.invalidateQueries({ queryKey: ['journey-hypotheses', selectedJourneyId] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-policy-recommendations', selectedJourneyId] })
+      if (editingHypothesisId === payload.hypothesis.id) {
+        setHypothesisDraft({
+          title: payload.hypothesis.title,
+          target_kpi: payload.hypothesis.target_kpi || '',
+          hypothesis_text: payload.hypothesis.hypothesis_text,
+          trigger: payload.hypothesis.trigger || {},
+          segment: payload.hypothesis.segment || {},
+          current_action: payload.hypothesis.current_action || {},
+          proposed_action: payload.hypothesis.proposed_action || {},
+          support_count: payload.hypothesis.support_count || 0,
+          baseline_rate: payload.hypothesis.baseline_rate ?? null,
+          sample_size_target: payload.hypothesis.sample_size_target ?? null,
+          status: payload.hypothesis.status || 'draft',
+          result: payload.hypothesis.result || {},
+        })
+      }
+      setHypothesisError(null)
+    },
+    onError: (err) => setHypothesisError((err as Error).message || 'Failed to update journey policy promotion'),
   })
 
   const deleteSavedViewMutation = useMutation({
@@ -1491,6 +1596,7 @@ export default function Journeys({
 
   const hypotheses = hypothesesQuery.data?.items ?? []
   const insightItems = insightsQuery.data?.items ?? []
+  const policyRecommendations = policyRecommendationsQuery.data?.items ?? []
   const hypothesisResultNote = typeof hypothesisDraft.result?.['note'] === 'string' ? String(hypothesisDraft.result['note']) : ''
   const activeHypothesis = editingHypothesisId ? hypotheses.find((item) => item.id === editingHypothesisId) || null : null
   const sandboxHypothesis = sandboxHypothesisId ? hypotheses.find((item) => item.id === sandboxHypothesisId) || null : null
@@ -1506,6 +1612,10 @@ export default function Journeys({
       hypotheses.filter((item) => ['validated', 'rejected', 'inconclusive'].includes(getHypothesisLearningStage(item))).slice(0, 3),
     [hypotheses],
   )
+  const topPromotablePolicies = useMemo(
+    () => policyRecommendations.filter((item) => item.recommendation === 'promote' || item.recommendation === 'promoted').slice(0, 4),
+    [policyRecommendations],
+  )
 
   const renderHypothesisLearningCard = (item: JourneyHypothesisRecord, compact = false) => {
     const stage = getHypothesisLearningStage(item)
@@ -1516,6 +1626,7 @@ export default function Journeys({
     const pValue = readResultNumber(item.result || {}, 'p_value')
     const treatment = readResultObject(item.result || {}, 'treatment')
     const control = readResultObject(item.result || {}, 'control')
+    const promotion = getHypothesisPromotion(item)
     const stageColor =
       stage === 'validated'
         ? t.color.success
@@ -1555,6 +1666,19 @@ export default function Journeys({
                 experiment {formatStageLabel(experimentStatus)}
               </span>
             ) : null}
+            {readResultBool(promotion, 'active') ? (
+              <span
+                style={{
+                  border: `1px solid ${t.color.accent}`,
+                  color: t.color.accent,
+                  borderRadius: t.radius.full,
+                  padding: '4px 8px',
+                  fontSize: t.font.sizeXs,
+                }}
+              >
+                Promoted
+              </span>
+            ) : null}
           </div>
           {item.linked_experiment_id ? (
             <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
@@ -1573,6 +1697,93 @@ export default function Journeys({
               : ''}
           </div>
         ) : null}
+      </div>
+    )
+  }
+
+  const renderPolicyRecommendationCard = (item: JourneyPolicyRecommendationRecord) => {
+    const recommendationColor =
+      item.recommendation === 'promote' || item.recommendation === 'promoted'
+        ? t.color.success
+        : item.recommendation === 'avoid'
+        ? t.color.danger
+        : t.color.warning
+    return (
+      <div
+        key={item.hypothesis_id}
+        style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.surface, display: 'grid', gap: 8 }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'start', flexWrap: 'wrap' }}>
+          <div style={{ display: 'grid', gap: 4 }}>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightSemibold }}>{item.title}</div>
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+              {item.prefix.label} · {item.policy.step} · score {item.score.toFixed(1)}
+            </div>
+          </div>
+          <span
+            style={{
+              border: `1px solid ${recommendationColor}`,
+              color: recommendationColor,
+              borderRadius: t.radius.full,
+              padding: '4px 8px',
+              fontSize: t.font.sizeXs,
+              textTransform: 'capitalize',
+            }}
+          >
+            {formatStageLabel(item.recommendation)}
+          </span>
+        </div>
+        <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+          {item.summary || item.recommendation_reason}
+        </div>
+        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+          {item.segment_label} · support {item.support_count.toLocaleString()}
+          {typeof item.uplift_abs === 'number' ? ` · uplift ${formatPercent(item.uplift_abs)}` : ''}
+          {typeof item.p_value === 'number' ? ` · p=${item.p_value.toFixed(3)}` : ''}
+        </div>
+        <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            onClick={() => {
+              const linked = hypotheses.find((hypothesis) => hypothesis.id === item.hypothesis_id)
+              if (linked) {
+                setSandboxHypothesisId(linked.id)
+                setSandboxCandidateStep(item.policy.step || '')
+              }
+              setActiveTab('policy')
+            }}
+            style={{
+              border: `1px solid ${t.color.border}`,
+              background: t.color.surface,
+              color: t.color.text,
+              borderRadius: t.radius.sm,
+              padding: '6px 10px',
+              fontSize: t.font.sizeSm,
+              cursor: 'pointer',
+            }}
+          >
+            Open in sandbox
+          </button>
+          {item.recommendation === 'promote' || item.recommendation === 'promoted' ? (
+            <button
+              type="button"
+              onClick={() => promoteHypothesisPolicyMutation.mutate({ hypothesisId: item.hypothesis_id, active: item.recommendation !== 'promoted' })}
+              disabled={promoteHypothesisPolicyMutation.isPending}
+              style={{
+                border: `1px solid ${item.recommendation === 'promoted' ? t.color.border : t.color.accent}`,
+                background: item.recommendation === 'promoted' ? t.color.surface : t.color.accent,
+                color: item.recommendation === 'promoted' ? t.color.text : '#fff',
+                borderRadius: t.radius.sm,
+                padding: '6px 10px',
+                fontSize: t.font.sizeSm,
+                cursor: promoteHypothesisPolicyMutation.isPending ? 'wait' : 'pointer',
+                opacity: promoteHypothesisPolicyMutation.isPending ? 0.8 : 1,
+              }}
+            >
+              {item.recommendation === 'promoted' ? 'Remove promotion' : 'Promote policy'}
+            </button>
+          ) : null}
+        </div>
       </div>
     )
   }
@@ -1994,6 +2205,17 @@ export default function Journeys({
                         ))}
                       </div>
                     )}
+                    {policyRecommendationsQuery.isLoading ? (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading learned policy recommendations…</div>
+                    ) : null}
+                    {!policyRecommendationsQuery.isLoading && !!topPromotablePolicies.length ? (
+                      <div style={{ display: 'grid', gap: t.space.sm }}>
+                        <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>
+                          Top learned policies
+                        </div>
+                        {topPromotablePolicies.map((item) => renderPolicyRecommendationCard(item))}
+                      </div>
+                    ) : null}
                   </div>
                 </SectionCard>
               )}
@@ -2582,41 +2804,60 @@ export default function Journeys({
 
           {activeTab === 'policy' && (
             <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'minmax(260px, 340px) minmax(0, 1fr)' }}>
-              <SectionCard title="Hypotheses" subtitle="Pick a saved hypothesis to compare observed next-step candidates.">
-                <div style={{ display: 'grid', gap: t.space.sm }}>
-                  {!hypotheses.length && (
-                    <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                      No hypotheses yet. Save one from Insights or the Hypotheses tab first.
-                    </div>
-                  )}
-                  {hypotheses.map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => {
-                        setSandboxHypothesisId(item.id)
-                        setSandboxCandidateStep('')
-                      }}
-                      style={{
-                        textAlign: 'left',
-                        border: `1px solid ${sandboxHypothesisId === item.id ? t.color.accent : t.color.borderLight}`,
-                        background: sandboxHypothesisId === item.id ? t.color.accentMuted : t.color.surface,
-                        borderRadius: t.radius.sm,
-                        padding: '10px 12px',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>{item.title}</div>
-                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
-                        {formatStageLabel(getHypothesisLearningStage(item))} · {item.support_count.toLocaleString()} journeys
+              <div style={{ display: 'grid', gap: t.space.md }}>
+                <SectionCard title="Learned policies" subtitle="Promote validated journey policies or inspect what should be tested next.">
+                  <div style={{ display: 'grid', gap: t.space.sm }}>
+                    {policyRecommendationsQuery.isLoading ? (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading learned policies…</div>
+                    ) : null}
+                    {policyRecommendationsQuery.isError ? (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{(policyRecommendationsQuery.error as Error).message}</div>
+                    ) : null}
+                    {!policyRecommendationsQuery.isLoading && !policyRecommendations.length ? (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                        No policy evidence yet. Create hypotheses and run experiments first.
                       </div>
-                      {item.linked_experiment_id ? (
-                        <div style={{ marginTop: 8 }}>{renderHypothesisLearningCard(item, true)}</div>
-                      ) : null}
-                    </button>
-                  ))}
-                </div>
-              </SectionCard>
+                    ) : null}
+                    {policyRecommendations.slice(0, 3).map((item) => renderPolicyRecommendationCard(item))}
+                  </div>
+                </SectionCard>
+
+                <SectionCard title="Hypotheses" subtitle="Pick a saved hypothesis to compare observed next-step candidates.">
+                  <div style={{ display: 'grid', gap: t.space.sm }}>
+                    {!hypotheses.length && (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                        No hypotheses yet. Save one from Insights or the Hypotheses tab first.
+                      </div>
+                    )}
+                    {hypotheses.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => {
+                          setSandboxHypothesisId(item.id)
+                          setSandboxCandidateStep('')
+                        }}
+                        style={{
+                          textAlign: 'left',
+                          border: `1px solid ${sandboxHypothesisId === item.id ? t.color.accent : t.color.borderLight}`,
+                          background: sandboxHypothesisId === item.id ? t.color.accentMuted : t.color.surface,
+                          borderRadius: t.radius.sm,
+                          padding: '10px 12px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>{item.title}</div>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                          {formatStageLabel(getHypothesisLearningStage(item))} · {item.support_count.toLocaleString()} journeys
+                        </div>
+                        {item.linked_experiment_id ? (
+                          <div style={{ marginTop: 8 }}>{renderHypothesisLearningCard(item, true)}</div>
+                        ) : null}
+                      </button>
+                    ))}
+                  </div>
+                </SectionCard>
+              </div>
 
               <SectionCard title="Policy Sandbox" subtitle="Observational comparison of next-step candidates for the current hypothesis prefix.">
                 {!sandboxHypothesis && (
@@ -2762,6 +3003,30 @@ export default function Journeys({
                         ) : null}
 
                         <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+                          {getHypothesisLearningStage(sandboxHypothesis) === 'validated' || readResultBool(getHypothesisPromotion(sandboxHypothesis), 'active') ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                promoteHypothesisPolicyMutation.mutate({
+                                  hypothesisId: sandboxHypothesis.id,
+                                  active: !readResultBool(getHypothesisPromotion(sandboxHypothesis), 'active'),
+                                })
+                              }
+                              disabled={promoteHypothesisPolicyMutation.isPending}
+                              style={{
+                                border: `1px solid ${readResultBool(getHypothesisPromotion(sandboxHypothesis), 'active') ? t.color.border : t.color.accent}`,
+                                background: readResultBool(getHypothesisPromotion(sandboxHypothesis), 'active') ? t.color.surface : t.color.accent,
+                                color: readResultBool(getHypothesisPromotion(sandboxHypothesis), 'active') ? t.color.text : '#fff',
+                                borderRadius: t.radius.sm,
+                                padding: '8px 12px',
+                                fontSize: t.font.sizeSm,
+                                cursor: promoteHypothesisPolicyMutation.isPending ? 'wait' : 'pointer',
+                                opacity: promoteHypothesisPolicyMutation.isPending ? 0.8 : 1,
+                              }}
+                            >
+                              {readResultBool(getHypothesisPromotion(sandboxHypothesis), 'active') ? 'Remove promotion' : 'Promote policy'}
+                            </button>
+                          ) : null}
                           <button
                             type="button"
                             onClick={applySandboxCandidateToDraft}
