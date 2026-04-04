@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
@@ -40,3 +41,13 @@ class JourneyHypothesisPayload(BaseModel):
     status: str = Field("draft", max_length=32)
     linked_experiment_id: Optional[int] = Field(None, ge=1)
     result: Dict[str, Any] = Field(default_factory=dict)
+
+
+class JourneyExperimentCreatePayload(BaseModel):
+    start_at: datetime
+    end_at: datetime
+    name: Optional[str] = Field(None, max_length=255)
+    channel: Optional[str] = Field(None, max_length=64)
+    notes: Optional[str] = Field(None, max_length=5000)
+    experiment_type: str = Field("holdout", max_length=32)
+    guardrails: Dict[str, Any] = Field(default_factory=dict)

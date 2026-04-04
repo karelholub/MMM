@@ -31,6 +31,71 @@ from .models_config_dq import (
 logger = logging.getLogger(__name__)
 
 
+def create_experiment_record(
+    db: Session,
+    *,
+    name: str,
+    channel: str,
+    start_at: datetime,
+    end_at: datetime,
+    conversion_key: Optional[str] = None,
+    notes: Optional[str] = None,
+    status: str = "draft",
+    experiment_type: str = "holdout",
+    source_type: Optional[str] = None,
+    source_id: Optional[str] = None,
+    segment: Optional[Dict[str, Any]] = None,
+    policy: Optional[Dict[str, Any]] = None,
+    guardrails: Optional[Dict[str, Any]] = None,
+) -> Experiment:
+    exp = Experiment(
+        name=name.strip(),
+        channel=(channel or "journey").strip() or "journey",
+        start_at=start_at,
+        end_at=end_at,
+        status=(status or "draft").strip() or "draft",
+        experiment_type=(experiment_type or "holdout").strip() or "holdout",
+        source_type=(source_type or "").strip() or None,
+        source_id=(source_id or "").strip() or None,
+        segment_json=segment or {},
+        policy_json=policy or {},
+        guardrails_json=guardrails or {},
+        conversion_key=(conversion_key or "").strip() or None,
+        notes=notes,
+        created_at=datetime.utcnow(),
+    )
+    db.add(exp)
+    db.commit()
+    db.refresh(exp)
+    return exp
+
+
+def serialize_experiment_summary(exp: Experiment, *, source_name: Optional[str] = None) -> Dict[str, Any]:
+    return {
+        "id": exp.id,
+        "name": exp.name,
+        "channel": exp.channel,
+        "start_at": exp.start_at,
+        "end_at": exp.end_at,
+        "status": exp.status,
+        "conversion_key": exp.conversion_key,
+        "experiment_type": exp.experiment_type or "holdout",
+        "source_type": exp.source_type,
+        "source_id": exp.source_id,
+        "source_name": source_name,
+    }
+
+
+def serialize_experiment_detail(exp: Experiment, *, source_name: Optional[str] = None) -> Dict[str, Any]:
+    return {
+        **serialize_experiment_summary(exp, source_name=source_name),
+        "notes": exp.notes,
+        "segment": dict(exp.segment_json or {}),
+        "policy": dict(exp.policy_json or {}),
+        "guardrails": dict(exp.guardrails_json or {}),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Deterministic assignment
 # ---------------------------------------------------------------------------

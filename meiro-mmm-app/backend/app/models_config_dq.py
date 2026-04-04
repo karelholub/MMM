@@ -314,6 +314,12 @@ class Experiment(Base):
     start_at = Column(DateTime, nullable=False)
     end_at = Column(DateTime, nullable=False)
     status = Column(String(32), nullable=False, default="draft")  # draft/running/completed
+    experiment_type = Column(String(32), nullable=False, default="holdout", index=True)
+    source_type = Column(String(32), nullable=True, index=True)
+    source_id = Column(String(64), nullable=True, index=True)
+    segment_json = Column(JSON, nullable=False, default={})
+    policy_json = Column(JSON, nullable=False, default={})
+    guardrails_json = Column(JSON, nullable=False, default={})
     config_id = Column(String(36), nullable=True)
     config_version = Column(Integer, nullable=True)
     conversion_key = Column(String(64), nullable=True)

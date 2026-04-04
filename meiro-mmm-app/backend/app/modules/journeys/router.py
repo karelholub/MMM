@@ -6,10 +6,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.modules.journeys.schemas import (
     JourneyDefinitionCreate,
+    JourneyExperimentCreatePayload,
     JourneyDefinitionUpdate,
     JourneyHypothesisPayload,
     JourneySavedViewPayload,
 )
+from app.models_config_dq import JourneyHypothesis
 from app.services_journey_attribution import build_journey_attribution_summary
 from app.services_journey_definitions import (
     archive_journey_definition,
@@ -36,6 +38,7 @@ from app.services_journey_saved_views import (
     update_journey_saved_view,
 )
 from app.services_journey_transitions import list_transitions_for_journey_definition
+from app.services_incrementality import create_experiment_record, serialize_experiment_summary
 
 logger = logging.getLogger(__name__)
 
@@ -251,6 +254,75 @@ def create_router(
         if not item:
             raise HTTPException(status_code=404, detail="Journey hypothesis not found")
         return serialize_journey_hypothesis(item)
+
+    @router.post("/api/journeys/hypotheses/{hypothesis_id}/create-experiment")
+    def api_create_experiment_from_journey_hypothesis(
+        hypothesis_id: str,
+        body: JourneyExperimentCreatePayload,
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        if body.start_at >= body.end_at:
+            raise HTTPException(status_code=400, detail="start_at must be before end_at")
+        hypothesis = (
+            db.query(JourneyHypothesis)
+            .filter(JourneyHypothesis.id == hypothesis_id, JourneyHypothesis.workspace_id == ctx.workspace_id)
+            .first()
+        )
+        if not hypothesis:
+            raise HTTPException(status_code=404, detail="Journey hypothesis not found")
+        if hypothesis.linked_experiment_id:
+            raise HTTPException(status_code=400, detail="Journey hypothesis already linked to an experiment")
+        jd = get_journey_definition(db, hypothesis.journey_definition_id)
+        if not jd or jd.is_archived:
+            raise HTTPException(status_code=404, detail="Journey definition not found")
+
+        derived_channel = (
+            (body.channel or "").strip()
+            or str((hypothesis.segment_json or {}).get("channel_group") or "").strip()
+            or "journey"
+        )
+        experiment_name = (body.name or "").strip() or f"Journey test: {hypothesis.title}"
+        note_parts = [
+            body.notes.strip() if body.notes else "",
+            f"Created from journey hypothesis {hypothesis.id}.",
+            f"Journey definition: {hypothesis.journey_definition_id}.",
+            f"Hypothesis: {hypothesis.hypothesis_text}",
+        ]
+        experiment = create_experiment_record(
+            db,
+            name=experiment_name,
+            channel=derived_channel,
+            start_at=body.start_at,
+            end_at=body.end_at,
+            conversion_key=hypothesis.target_kpi or jd.conversion_kpi_id,
+            notes="\n\n".join(part for part in note_parts if part),
+            experiment_type=(body.experiment_type or "holdout").strip() or "holdout",
+            source_type="journey_hypothesis",
+            source_id=hypothesis.id,
+            segment=dict(hypothesis.segment_json or {}),
+            policy={
+                "trigger": dict(hypothesis.trigger_json or {}),
+                "current_action": dict(hypothesis.current_action_json or {}),
+                "proposed_action": dict(hypothesis.proposed_action_json or {}),
+            },
+            guardrails={
+                "sample_size_target": hypothesis.sample_size_target,
+                "support_count": hypothesis.support_count,
+                **(body.guardrails or {}),
+            },
+        )
+
+        hypothesis.linked_experiment_id = experiment.id
+        hypothesis.status = "in_experiment"
+        hypothesis.updated_at = datetime.utcnow()
+        db.add(hypothesis)
+        db.commit()
+        db.refresh(hypothesis)
+        return {
+            "experiment": serialize_experiment_summary(experiment, source_name=hypothesis.title),
+            "hypothesis": serialize_journey_hypothesis(hypothesis),
+        }
 
     @router.post("/api/journeys/definitions")
     def api_create_journey_definition(

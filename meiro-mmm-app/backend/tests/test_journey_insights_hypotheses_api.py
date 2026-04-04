@@ -195,3 +195,37 @@ def test_journey_insights_and_hypothesis_crud_flow(client_and_session):
     assert updated["title"].endswith("v2")
     assert updated["status"] == "ready_to_test"
     assert updated["result"]["note"] == "Needs sample sizing confirmation"
+
+    create_experiment = client.post(
+        f"/api/journeys/hypotheses/{created['id']}/create-experiment",
+        headers=viewer_headers,
+        json={
+            "start_at": "2026-04-05T00:00:00Z",
+            "end_at": "2026-04-19T00:00:00Z",
+            "notes": "Launch as a two-week holdout.",
+            "guardrails": {"min_runtime_days": 7},
+        },
+    )
+    assert create_experiment.status_code == 200
+    experiment_payload = create_experiment.json()
+    assert experiment_payload["experiment"]["source_type"] == "journey_hypothesis"
+    assert experiment_payload["experiment"]["source_id"] == created["id"]
+    assert experiment_payload["experiment"]["source_name"] == updated["title"]
+    assert experiment_payload["hypothesis"]["linked_experiment_id"] == experiment_payload["experiment"]["id"]
+    assert experiment_payload["hypothesis"]["status"] == "in_experiment"
+
+    list_experiments = client.get("/api/experiments", headers=viewer_headers)
+    assert list_experiments.status_code == 200
+    listed = list_experiments.json()
+    assert len(listed) == 1
+    assert listed[0]["source_type"] == "journey_hypothesis"
+    assert listed[0]["source_name"] == updated["title"]
+
+    experiment_detail = client.get(f"/api/experiments/{experiment_payload['experiment']['id']}", headers=viewer_headers)
+    assert experiment_detail.status_code == 200
+    detail = experiment_detail.json()
+    assert detail["experiment_type"] == "holdout"
+    assert detail["source_type"] == "journey_hypothesis"
+    assert detail["segment"]["channel_group"] == created["segment"]["channel_group"]
+    assert detail["policy"]["proposed_action"]["type"] == created["proposed_action"]["type"]
+    assert detail["guardrails"]["sample_size_target"] == created["sample_size_target"]

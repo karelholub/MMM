@@ -52,6 +52,7 @@ from app.models_config_dq import (
     ExperimentExposure,
     ExperimentOutcome,
     ExperimentResult,
+    JourneyHypothesis,
 )
 from app.services_model_config import (
     create_draft_config,
@@ -243,6 +244,7 @@ from app.services_mmm_platform import build_mmm_dataset_from_platform
 from app.services_mmm_mapping import build_smart_suggestions, validate_mapping
 from app.services_incrementality import (
     assign_profiles_deterministic,
+    create_experiment_record,
     record_exposure,
     record_exposures_batch,
     record_outcome,
@@ -253,6 +255,8 @@ from app.services_incrementality import (
     get_experiment_time_series,
     auto_assign_from_conversion_paths,
     compute_experiment_health,
+    serialize_experiment_detail,
+    serialize_experiment_summary,
 )
 from app.mmm_engine import fit_model as mmm_fit_model, engine_info
 from app.connectors import meiro_cdp
@@ -430,6 +434,31 @@ def _ensure_user_auth_columns():
         logger.debug("User auth column check skipped: %s", e)
 
 
+def _ensure_experiment_columns():
+    """Ensure experiment provenance columns exist for local SQLite dev DBs."""
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            for stmt in (
+                "ALTER TABLE experiments ADD COLUMN experiment_type VARCHAR(32) NOT NULL DEFAULT 'holdout'",
+                "ALTER TABLE experiments ADD COLUMN source_type VARCHAR(32)",
+                "ALTER TABLE experiments ADD COLUMN source_id VARCHAR(64)",
+                "ALTER TABLE experiments ADD COLUMN segment_json JSON NOT NULL DEFAULT '{}'",
+                "ALTER TABLE experiments ADD COLUMN policy_json JSON NOT NULL DEFAULT '{}'",
+                "ALTER TABLE experiments ADD COLUMN guardrails_json JSON NOT NULL DEFAULT '{}'",
+                "CREATE INDEX IF NOT EXISTS ix_experiments_experiment_type ON experiments (experiment_type)",
+                "CREATE INDEX IF NOT EXISTS ix_experiments_source_type ON experiments (source_type)",
+                "CREATE INDEX IF NOT EXISTS ix_experiments_source_id ON experiments (source_id)",
+            ):
+                try:
+                    conn.execute(text(stmt))
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+    except Exception as e:
+        logger.debug("Experiment column check skipped: %s", e)
+
+
 if "sqlite" in (os.getenv("DATABASE_URL") or "").lower() or not os.getenv("DATABASE_URL"):
     try:
         _ensure_alert_tables_columns()
@@ -437,6 +466,7 @@ if "sqlite" in (os.getenv("DATABASE_URL") or "").lower() or not os.getenv("DATAB
         _ensure_journey_paths_columns()
         _ensure_conversion_path_columns()
         _ensure_user_auth_columns()
+        _ensure_experiment_columns()
     except Exception:
         pass
 
@@ -3528,6 +3558,12 @@ class ExperimentCreate(BaseModel):
     end_at: datetime
     conversion_key: Optional[str] = None
     notes: Optional[str] = None
+    experiment_type: str = "holdout"
+    source_type: Optional[str] = None
+    source_id: Optional[str] = None
+    segment: Dict[str, Any] = Field(default_factory=dict)
+    policy: Dict[str, Any] = Field(default_factory=dict)
+    guardrails: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ExperimentSummary(BaseModel):
@@ -3538,49 +3574,49 @@ class ExperimentSummary(BaseModel):
     end_at: datetime
     status: str
     conversion_key: Optional[str] = None
+    experiment_type: str = "holdout"
+    source_type: Optional[str] = None
+    source_id: Optional[str] = None
+    source_name: Optional[str] = None
+
+
+def _resolve_experiment_source_names(db, rows: List[Experiment]) -> Dict[str, str]:
+    hypothesis_ids = sorted({str(r.source_id) for r in rows if (r.source_type or "") == "journey_hypothesis" and r.source_id})
+    if not hypothesis_ids:
+        return {}
+    items = (
+        db.query(JourneyHypothesis.id, JourneyHypothesis.title)
+        .filter(JourneyHypothesis.id.in_(hypothesis_ids))
+        .all()
+    )
+    return {str(item[0]): str(item[1]) for item in items}
 
 
 @app.get("/api/experiments", response_model=List[ExperimentSummary])
 def list_experiments(db=Depends(get_db)):
     rows = db.query(Experiment).order_by(Experiment.created_at.desc()).all()
-    return [
-        ExperimentSummary(
-            id=r.id,
-            name=r.name,
-            channel=r.channel,
-            start_at=r.start_at,
-            end_at=r.end_at,
-            status=r.status,
-            conversion_key=r.conversion_key,
-        )
-        for r in rows
-    ]
+    source_names = _resolve_experiment_source_names(db, rows)
+    return [ExperimentSummary(**serialize_experiment_summary(r, source_name=source_names.get(str(r.source_id)))) for r in rows]
 
 
 @app.post("/api/experiments", response_model=ExperimentSummary)
 def create_experiment(body: ExperimentCreate, db=Depends(get_db)):
-    exp = Experiment(
+    exp = create_experiment_record(
+        db,
         name=body.name,
         channel=body.channel,
         start_at=body.start_at,
         end_at=body.end_at,
-        status="draft",
         conversion_key=body.conversion_key,
         notes=body.notes,
-        created_at=datetime.utcnow(),
+        experiment_type=body.experiment_type,
+        source_type=body.source_type,
+        source_id=body.source_id,
+        segment=body.segment,
+        policy=body.policy,
+        guardrails=body.guardrails,
     )
-    db.add(exp)
-    db.commit()
-    db.refresh(exp)
-    return ExperimentSummary(
-        id=exp.id,
-        name=exp.name,
-        channel=exp.channel,
-        start_at=exp.start_at,
-        end_at=exp.end_at,
-        status=exp.status,
-        conversion_key=exp.conversion_key,
-    )
+    return ExperimentSummary(**serialize_experiment_summary(exp))
 
 
 @app.get("/api/experiments/{exp_id}")
@@ -3588,16 +3624,11 @@ def get_experiment(exp_id: int, db=Depends(get_db)):
     exp = db.get(Experiment, exp_id)
     if not exp:
         raise HTTPException(status_code=404, detail="Experiment not found")
-    return {
-        "id": exp.id,
-        "name": exp.name,
-        "channel": exp.channel,
-        "start_at": exp.start_at,
-        "end_at": exp.end_at,
-        "status": exp.status,
-        "conversion_key": exp.conversion_key,
-        "notes": exp.notes,
-    }
+    source_name = None
+    if (exp.source_type or "") == "journey_hypothesis" and exp.source_id:
+        linked = db.query(JourneyHypothesis.id, JourneyHypothesis.title).filter(JourneyHypothesis.id == exp.source_id).first()
+        source_name = str(linked[1]) if linked else None
+    return serialize_experiment_detail(exp, source_name=source_name)
 
 
 class ExperimentStatusUpdate(BaseModel):
@@ -3615,15 +3646,11 @@ def update_experiment_status(exp_id: int, body: ExperimentStatusUpdate, db=Depen
     db.add(exp)
     db.commit()
     db.refresh(exp)
-    return ExperimentSummary(
-        id=exp.id,
-        name=exp.name,
-        channel=exp.channel,
-        start_at=exp.start_at,
-        end_at=exp.end_at,
-        status=exp.status,
-        conversion_key=exp.conversion_key,
-    )
+    source_name = None
+    if (exp.source_type or "") == "journey_hypothesis" and exp.source_id:
+        linked = db.query(JourneyHypothesis.id, JourneyHypothesis.title).filter(JourneyHypothesis.id == exp.source_id).first()
+        source_name = str(linked[1]) if linked else None
+    return ExperimentSummary(**serialize_experiment_summary(exp, source_name=source_name))
 
 
 class AssignmentRequest(BaseModel):
