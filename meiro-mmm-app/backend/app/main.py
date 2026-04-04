@@ -625,6 +625,7 @@ async def csrf_protection_middleware(request: Request, call_next):
 class ExpenseEntry(BaseModel):
     # Core classification
     channel: str
+    campaign: Optional[str] = None
     cost_type: str = "Media Spend"  # Media Spend, Platform Fees, etc.
 
     # Amounts & currencies
@@ -1889,6 +1890,7 @@ def load_sample_journeys(req: LoadSampleRequest = Body(default=LoadSampleRequest
 def list_expenses(
     include_deleted: bool = Query(False),
     channel: Optional[str] = None,
+    campaign: Optional[str] = None,
     cost_type: Optional[str] = None,
     source_type: Optional[str] = None,
     currency: Optional[str] = None,
@@ -1906,6 +1908,8 @@ def list_expenses(
         if not include_deleted and exp.status == "deleted":
             continue
         if channel and exp.channel != channel:
+            continue
+        if campaign and (getattr(exp, "campaign", None) or None) != campaign:
             continue
         if cost_type and exp.cost_type != cost_type:
             continue
@@ -1927,6 +1931,7 @@ def list_expenses(
                         exp.notes,
                         exp.invoice_ref,
                         exp.external_link,
+                        getattr(exp, "campaign", None),
                     ],
                 )
             ).lower()

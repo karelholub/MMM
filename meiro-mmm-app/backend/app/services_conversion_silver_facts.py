@@ -182,6 +182,14 @@ def _safe_adjustment_type(value: Any) -> str:
 
 def _silver_outcome_summary(journey: Dict[str, Any], *, conversion_id: str) -> Dict[str, float]:
     payload = dict(journey)
+    if isinstance(payload.get("_revenue_entries"), list):
+        fallback = journey_outcome_summary(payload)
+        if (
+            abs(float(fallback.get("gross_value", 0.0) or 0.0)) > 1e-9
+            or abs(float(fallback.get("net_value", 0.0) or 0.0)) > 1e-9
+            or abs(float(fallback.get("gross_conversions", 0.0) or 0.0)) > 1e-9
+        ):
+            return fallback
     conversions = payload.get("conversions")
     if not isinstance(conversions, list) or not conversions:
         fallback = journey_outcome_summary(payload)
