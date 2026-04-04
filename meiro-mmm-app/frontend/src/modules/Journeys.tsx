@@ -259,6 +259,25 @@ interface JourneyHypothesesResponse {
   total: number
 }
 
+interface LinkedExperimentSummary {
+  id: number
+  name: string
+  channel: string
+  start_at: string
+  end_at: string
+  status: string
+  conversion_key?: string | null
+  experiment_type: string
+  source_type?: string | null
+  source_id?: string | null
+  source_name?: string | null
+}
+
+interface JourneyHypothesisExperimentLinkResponse {
+  experiment: LinkedExperimentSummary
+  hypothesis: JourneyHypothesisRecord
+}
+
 interface JourneyHypothesisRequest {
   journey_definition_id: string
   title: string
@@ -289,6 +308,12 @@ interface HypothesisDraft {
   sample_size_target: number | null
   status: string
   result: Record<string, unknown>
+}
+
+interface HypothesisExperimentDraft {
+  start_at: string
+  end_at: string
+  notes: string
 }
 
 type JourneysTab = 'insights' | 'hypotheses' | 'paths' | 'flow' | 'examples' | 'funnels'
@@ -501,6 +526,13 @@ function parseDelimitedSteps(value: string): string[] {
     .filter(Boolean)
 }
 
+function toDateInputValue(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 function aggregateBreakdown(
   rows: JourneyPathRow[],
   key: 'device' | 'channel_group',
@@ -584,6 +616,16 @@ export default function Journeys({
   const [editingHypothesisId, setEditingHypothesisId] = useState<string | null>(null)
   const [hypothesisError, setHypothesisError] = useState<string | null>(null)
   const [hypothesisDraft, setHypothesisDraft] = useState<HypothesisDraft>(() => defaultHypothesisDraft())
+  const [hypothesisExperimentDraft, setHypothesisExperimentDraft] = useState<HypothesisExperimentDraft>(() => {
+    const start = new Date()
+    const end = new Date()
+    end.setDate(end.getDate() + 14)
+    return {
+      start_at: toDateInputValue(start),
+      end_at: toDateInputValue(end),
+      notes: '',
+    }
+  })
   const [alertDraft, setAlertDraft] = useState<AlertDraft>({
     name: '',
     type: 'path_volume_change',
@@ -1052,6 +1094,41 @@ export default function Journeys({
     onError: (err) => setHypothesisError((err as Error).message || 'Failed to update journey hypothesis'),
   })
 
+  const createExperimentFromHypothesisMutation = useMutation({
+    mutationFn: async (payload: { hypothesisId: string; start_at: string; end_at: string; notes: string }) => {
+      return apiSendJson<JourneyHypothesisExperimentLinkResponse>(
+        `/api/journeys/hypotheses/${payload.hypothesisId}/create-experiment`,
+        'POST',
+        {
+          start_at: new Date(`${payload.start_at}T00:00:00`).toISOString(),
+          end_at: new Date(`${payload.end_at}T23:59:59`).toISOString(),
+          notes: payload.notes || null,
+        },
+        { fallbackMessage: 'Failed to create experiment from hypothesis' },
+      )
+    },
+    onSuccess: async (payload) => {
+      await queryClient.invalidateQueries({ queryKey: ['journey-hypotheses', selectedJourneyId] })
+      setEditingHypothesisId(payload.hypothesis.id)
+      setHypothesisDraft({
+        title: payload.hypothesis.title,
+        target_kpi: payload.hypothesis.target_kpi || '',
+        hypothesis_text: payload.hypothesis.hypothesis_text,
+        trigger: payload.hypothesis.trigger || {},
+        segment: payload.hypothesis.segment || {},
+        current_action: payload.hypothesis.current_action || {},
+        proposed_action: payload.hypothesis.proposed_action || {},
+        support_count: payload.hypothesis.support_count || 0,
+        baseline_rate: payload.hypothesis.baseline_rate ?? null,
+        sample_size_target: payload.hypothesis.sample_size_target ?? null,
+        status: payload.hypothesis.status || 'in_experiment',
+        result: payload.hypothesis.result || {},
+      })
+      setHypothesisError(null)
+    },
+    onError: (err) => setHypothesisError((err as Error).message || 'Failed to create experiment from hypothesis'),
+  })
+
   const deleteSavedViewMutation = useMutation({
     mutationFn: async (viewId: string) => {
       return apiSendJson<{ id: string; status: string }>(`/api/journeys/views/${viewId}`, 'DELETE', undefined, {
@@ -1312,6 +1389,7 @@ export default function Journeys({
   const hypotheses = hypothesesQuery.data?.items ?? []
   const insightItems = insightsQuery.data?.items ?? []
   const hypothesisResultNote = typeof hypothesisDraft.result?.['note'] === 'string' ? String(hypothesisDraft.result['note']) : ''
+  const activeHypothesis = editingHypothesisId ? hypotheses.find((item) => item.id === editingHypothesisId) || null : null
 
   const resetHypothesisDraft = () => {
     setEditingHypothesisId(null)
@@ -1394,6 +1472,19 @@ export default function Journeys({
       return
     }
     createHypothesisMutation.mutate(body)
+  }
+
+  const createExperimentFromHypothesis = (item: JourneyHypothesisRecord) => {
+    if (!hypothesisExperimentDraft.start_at || !hypothesisExperimentDraft.end_at) {
+      setHypothesisError('Experiment start and end dates are required')
+      return
+    }
+    createExperimentFromHypothesisMutation.mutate({
+      hypothesisId: item.id,
+      start_at: hypothesisExperimentDraft.start_at,
+      end_at: hypothesisExperimentDraft.end_at,
+      notes: hypothesisExperimentDraft.notes.trim(),
+    })
   }
 
   const buildCurrentSavedViewState = (): SavedJourneyViewStatePayload => ({
@@ -2059,13 +2150,77 @@ export default function Journeys({
                     />
                   </label>
 
+                  <div style={{ borderTop: `1px solid ${t.color.borderLight}`, paddingTop: t.space.md, display: 'grid', gap: t.space.md }}>
+                    <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>
+                      Experiment linking
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: t.space.md }}>
+                      <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                        Experiment start
+                        <input
+                          type="date"
+                          value={hypothesisExperimentDraft.start_at}
+                          onChange={(e) => setHypothesisExperimentDraft((prev) => ({ ...prev, start_at: e.target.value }))}
+                          style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                        />
+                      </label>
+                      <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                        Experiment end
+                        <input
+                          type="date"
+                          value={hypothesisExperimentDraft.end_at}
+                          onChange={(e) => setHypothesisExperimentDraft((prev) => ({ ...prev, end_at: e.target.value }))}
+                          style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                        />
+                      </label>
+                    </div>
+                    <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                      Experiment notes
+                      <textarea
+                        value={hypothesisExperimentDraft.notes}
+                        onChange={(e) => setHypothesisExperimentDraft((prev) => ({ ...prev, notes: e.target.value }))}
+                        rows={2}
+                        placeholder="Operator notes, rollout assumptions, or holdout design details."
+                        style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                      />
+                    </label>
+                    {activeHypothesis?.linked_experiment_id ? (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                        Linked experiment #{activeHypothesis.linked_experiment_id} is active for this hypothesis.
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                        Save the hypothesis first, then create an experiment that will appear in Incrementality with journey provenance.
+                      </div>
+                    )}
+                  </div>
+
                   {hypothesisError && <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{hypothesisError}</div>}
 
                   <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    {activeHypothesis && !activeHypothesis.linked_experiment_id ? (
+                      <button
+                        type="button"
+                        onClick={() => createExperimentFromHypothesis(activeHypothesis)}
+                        disabled={createExperimentFromHypothesisMutation.isPending}
+                        style={{
+                          border: `1px solid ${t.color.border}`,
+                          background: t.color.surface,
+                          color: t.color.text,
+                          borderRadius: t.radius.sm,
+                          padding: '8px 12px',
+                          fontSize: t.font.sizeSm,
+                          cursor: createExperimentFromHypothesisMutation.isPending ? 'wait' : 'pointer',
+                          opacity: createExperimentFromHypothesisMutation.isPending ? 0.8 : 1,
+                        }}
+                      >
+                        {createExperimentFromHypothesisMutation.isPending ? 'Creating experiment…' : 'Create experiment'}
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       onClick={submitHypothesis}
-                      disabled={createHypothesisMutation.isPending || updateHypothesisMutation.isPending}
+                      disabled={createHypothesisMutation.isPending || updateHypothesisMutation.isPending || createExperimentFromHypothesisMutation.isPending}
                       style={{
                         border: `1px solid ${t.color.accent}`,
                         background: t.color.accent,
@@ -2073,8 +2228,8 @@ export default function Journeys({
                         borderRadius: t.radius.sm,
                         padding: '8px 12px',
                         fontSize: t.font.sizeSm,
-                        cursor: createHypothesisMutation.isPending || updateHypothesisMutation.isPending ? 'wait' : 'pointer',
-                        opacity: createHypothesisMutation.isPending || updateHypothesisMutation.isPending ? 0.8 : 1,
+                        cursor: createHypothesisMutation.isPending || updateHypothesisMutation.isPending || createExperimentFromHypothesisMutation.isPending ? 'wait' : 'pointer',
+                        opacity: createHypothesisMutation.isPending || updateHypothesisMutation.isPending || createExperimentFromHypothesisMutation.isPending ? 0.8 : 1,
                       }}
                     >
                       {createHypothesisMutation.isPending || updateHypothesisMutation.isPending
@@ -2103,23 +2258,46 @@ export default function Journeys({
                           <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightSemibold }}>{item.title}</div>
                           <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
                             {item.status} · {item.support_count.toLocaleString()} journeys · {item.sample_size_target?.toLocaleString() || '—'} sample target
+                            {item.linked_experiment_id ? ` · experiment #${item.linked_experiment_id}` : ''}
                           </div>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => loadHypothesisIntoDraft(item)}
-                          style={{
-                            border: `1px solid ${t.color.border}`,
-                            background: t.color.surface,
-                            color: t.color.text,
-                            borderRadius: t.radius.sm,
-                            padding: '6px 10px',
-                            fontSize: t.font.sizeSm,
-                            cursor: 'pointer',
-                          }}
-                        >
-                          Edit
-                        </button>
+                        <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
+                          {!item.linked_experiment_id ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                loadHypothesisIntoDraft(item)
+                                createExperimentFromHypothesis(item)
+                              }}
+                              style={{
+                                border: `1px solid ${t.color.border}`,
+                                background: t.color.surface,
+                                color: t.color.text,
+                                borderRadius: t.radius.sm,
+                                padding: '6px 10px',
+                                fontSize: t.font.sizeSm,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              Create experiment
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => loadHypothesisIntoDraft(item)}
+                            style={{
+                              border: `1px solid ${t.color.border}`,
+                              background: t.color.surface,
+                              color: t.color.text,
+                              borderRadius: t.radius.sm,
+                              padding: '6px 10px',
+                              fontSize: t.font.sizeSm,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Edit
+                          </button>
+                        </div>
                       </div>
                       <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{item.hypothesis_text}</div>
                       <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
