@@ -42,6 +42,7 @@ interface ExperimentSummary {
   source_type?: string | null
   source_id?: string | null
   source_name?: string | null
+  source_journey_definition_id?: string | null
 }
 
 interface ExperimentDetail extends ExperimentSummary {
@@ -111,6 +112,19 @@ interface ExperimentHealth {
   }
   overlap_risk: { status: 'ok' | 'warn'; overlapping_profiles: number }
   ready_state: { label: ReadyLabel; reasons: string[] }
+}
+
+function buildJourneyLabHref(summary?: ExperimentSummary | null): string | null {
+  if (!summary || summary.source_type !== 'journey_hypothesis' || !summary.source_id || !summary.source_journey_definition_id) {
+    return null
+  }
+  const params = new URLSearchParams()
+  params.set('page', 'analytics_journeys')
+  params.set('journey_id', summary.source_journey_definition_id)
+  params.set('tab', 'experiments')
+  params.set('experiment_id', String(summary.id))
+  params.set('hypothesis_id', summary.source_id)
+  return `/?${params.toString()}`
 }
 
 export default function IncrementalityPage() {
@@ -261,6 +275,7 @@ export default function IncrementalityPage() {
 
   const selectedSummary =
     selectedId != null ? experimentsQuery.data?.find((e) => e.id === selectedId) : undefined
+  const selectedJourneyHref = buildJourneyLabHref(selectedSummary)
 
   const statusLabel = (status: string): string => {
     if (status === 'completed') return 'Stopped'
@@ -1121,6 +1136,14 @@ export default function IncrementalityPage() {
                     Source <strong>{sourceBadgeLabel(selectedSummary?.source_type) || 'Linked source'}</strong>
                     {selectedSummary?.source_name ? <> • <strong>{selectedSummary.source_name}</strong></> : null}
                     {selectedSummary?.source_id ? <> • ID <code>{selectedSummary.source_id}</code></> : null}
+                    {selectedJourneyHref ? (
+                      <>
+                        {' • '}
+                        <a href={selectedJourneyHref} style={{ color: tkn.color.accent, textDecoration: 'none' }}>
+                          Open in Journey Lab
+                        </a>
+                      </>
+                    ) : null}
                   </p>
                 )}
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: tkn.space.xs, marginTop: tkn.space.sm }}>

@@ -245,6 +245,7 @@ def test_journey_insights_and_hypothesis_crud_flow(client_and_session):
     assert experiment_payload["experiment"]["source_type"] == "journey_hypothesis"
     assert experiment_payload["experiment"]["source_id"] == created["id"]
     assert experiment_payload["experiment"]["source_name"] == updated["title"]
+    assert experiment_payload["experiment"]["source_journey_definition_id"] == definition_id
     assert experiment_payload["hypothesis"]["linked_experiment_id"] == experiment_payload["experiment"]["id"]
     assert experiment_payload["hypothesis"]["status"] == "in_experiment"
     assert experiment_payload["hypothesis"]["proposed_action"]["step"] == "Checkout"
@@ -255,6 +256,7 @@ def test_journey_insights_and_hypothesis_crud_flow(client_and_session):
     assert len(listed) == 1
     assert listed[0]["source_type"] == "journey_hypothesis"
     assert listed[0]["source_name"] == updated["title"]
+    assert listed[0]["source_journey_definition_id"] == definition_id
 
     filtered_experiments = client.get(
         "/api/experiments",
@@ -265,6 +267,7 @@ def test_journey_insights_and_hypothesis_crud_flow(client_and_session):
     filtered = filtered_experiments.json()
     assert len(filtered) == 1
     assert filtered[0]["source_id"] == created["id"]
+    assert filtered[0]["source_journey_definition_id"] == definition_id
 
     filtered_empty = client.get(
         "/api/experiments",
@@ -279,6 +282,7 @@ def test_journey_insights_and_hypothesis_crud_flow(client_and_session):
     detail = experiment_detail.json()
     assert detail["experiment_type"] == "holdout"
     assert detail["source_type"] == "journey_hypothesis"
+    assert detail["source_journey_definition_id"] == definition_id
     assert detail["segment"]["channel_group"] == created["segment"]["channel_group"]
     assert detail["policy"]["proposed_action"]["type"] == created["proposed_action"]["type"]
     assert detail["policy"]["proposed_action"]["step"] == "Checkout"

@@ -70,7 +70,12 @@ def create_experiment_record(
     return exp
 
 
-def serialize_experiment_summary(exp: Experiment, *, source_name: Optional[str] = None) -> Dict[str, Any]:
+def serialize_experiment_summary(
+    exp: Experiment,
+    *,
+    source_name: Optional[str] = None,
+    source_journey_definition_id: Optional[str] = None,
+) -> Dict[str, Any]:
     return {
         "id": exp.id,
         "name": exp.name,
@@ -83,12 +88,22 @@ def serialize_experiment_summary(exp: Experiment, *, source_name: Optional[str] 
         "source_type": exp.source_type,
         "source_id": exp.source_id,
         "source_name": source_name,
+        "source_journey_definition_id": source_journey_definition_id,
     }
 
 
-def serialize_experiment_detail(exp: Experiment, *, source_name: Optional[str] = None) -> Dict[str, Any]:
+def serialize_experiment_detail(
+    exp: Experiment,
+    *,
+    source_name: Optional[str] = None,
+    source_journey_definition_id: Optional[str] = None,
+) -> Dict[str, Any]:
     return {
-        **serialize_experiment_summary(exp, source_name=source_name),
+        **serialize_experiment_summary(
+            exp,
+            source_name=source_name,
+            source_journey_definition_id=source_journey_definition_id,
+        ),
         "notes": exp.notes,
         "segment": dict(exp.segment_json or {}),
         "policy": dict(exp.policy_json or {}),

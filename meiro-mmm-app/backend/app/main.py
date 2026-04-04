@@ -3578,18 +3578,25 @@ class ExperimentSummary(BaseModel):
     source_type: Optional[str] = None
     source_id: Optional[str] = None
     source_name: Optional[str] = None
+    source_journey_definition_id: Optional[str] = None
 
 
-def _resolve_experiment_source_names(db, rows: List[Experiment]) -> Dict[str, str]:
+def _resolve_experiment_source_context(db, rows: List[Experiment]) -> Dict[str, Dict[str, Optional[str]]]:
     hypothesis_ids = sorted({str(r.source_id) for r in rows if (r.source_type or "") == "journey_hypothesis" and r.source_id})
     if not hypothesis_ids:
         return {}
     items = (
-        db.query(JourneyHypothesis.id, JourneyHypothesis.title)
+        db.query(JourneyHypothesis.id, JourneyHypothesis.title, JourneyHypothesis.journey_definition_id)
         .filter(JourneyHypothesis.id.in_(hypothesis_ids))
         .all()
     )
-    return {str(item[0]): str(item[1]) for item in items}
+    return {
+        str(item[0]): {
+            "name": str(item[1]),
+            "journey_definition_id": str(item[2]) if item[2] else None,
+        }
+        for item in items
+    }
 
 
 @app.get("/api/experiments", response_model=List[ExperimentSummary])
@@ -3608,8 +3615,17 @@ def list_experiments(
         else:
             return []
     rows = query.order_by(Experiment.created_at.desc()).all()
-    source_names = _resolve_experiment_source_names(db, rows)
-    return [ExperimentSummary(**serialize_experiment_summary(r, source_name=source_names.get(str(r.source_id)))) for r in rows]
+    source_context = _resolve_experiment_source_context(db, rows)
+    return [
+        ExperimentSummary(
+            **serialize_experiment_summary(
+                r,
+                source_name=source_context.get(str(r.source_id), {}).get("name"),
+                source_journey_definition_id=source_context.get(str(r.source_id), {}).get("journey_definition_id"),
+            )
+        )
+        for r in rows
+    ]
 
 
 @app.post("/api/experiments", response_model=ExperimentSummary)
@@ -3638,10 +3654,20 @@ def get_experiment(exp_id: int, db=Depends(get_db)):
     if not exp:
         raise HTTPException(status_code=404, detail="Experiment not found")
     source_name = None
+    source_journey_definition_id = None
     if (exp.source_type or "") == "journey_hypothesis" and exp.source_id:
-        linked = db.query(JourneyHypothesis.id, JourneyHypothesis.title).filter(JourneyHypothesis.id == exp.source_id).first()
+        linked = (
+            db.query(JourneyHypothesis.id, JourneyHypothesis.title, JourneyHypothesis.journey_definition_id)
+            .filter(JourneyHypothesis.id == exp.source_id)
+            .first()
+        )
         source_name = str(linked[1]) if linked else None
-    return serialize_experiment_detail(exp, source_name=source_name)
+        source_journey_definition_id = str(linked[2]) if linked and linked[2] else None
+    return serialize_experiment_detail(
+        exp,
+        source_name=source_name,
+        source_journey_definition_id=source_journey_definition_id,
+    )
 
 
 class ExperimentStatusUpdate(BaseModel):
@@ -3660,10 +3686,22 @@ def update_experiment_status(exp_id: int, body: ExperimentStatusUpdate, db=Depen
     db.commit()
     db.refresh(exp)
     source_name = None
+    source_journey_definition_id = None
     if (exp.source_type or "") == "journey_hypothesis" and exp.source_id:
-        linked = db.query(JourneyHypothesis.id, JourneyHypothesis.title).filter(JourneyHypothesis.id == exp.source_id).first()
+        linked = (
+            db.query(JourneyHypothesis.id, JourneyHypothesis.title, JourneyHypothesis.journey_definition_id)
+            .filter(JourneyHypothesis.id == exp.source_id)
+            .first()
+        )
         source_name = str(linked[1]) if linked else None
-    return ExperimentSummary(**serialize_experiment_summary(exp, source_name=source_name))
+        source_journey_definition_id = str(linked[2]) if linked and linked[2] else None
+    return ExperimentSummary(
+        **serialize_experiment_summary(
+            exp,
+            source_name=source_name,
+            source_journey_definition_id=source_journey_definition_id,
+        )
+    )
 
 
 class AssignmentRequest(BaseModel):

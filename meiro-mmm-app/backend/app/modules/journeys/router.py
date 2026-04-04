@@ -337,7 +337,11 @@ def create_router(
         db.commit()
         db.refresh(hypothesis)
         return {
-            "experiment": serialize_experiment_summary(experiment, source_name=hypothesis.title),
+            "experiment": serialize_experiment_summary(
+                experiment,
+                source_name=hypothesis.title,
+                source_journey_definition_id=hypothesis.journey_definition_id,
+            ),
             "hypothesis": serialize_journey_hypothesis(hypothesis),
         }
 

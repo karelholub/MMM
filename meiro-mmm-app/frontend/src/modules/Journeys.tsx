@@ -579,6 +579,13 @@ function buildIncrementalityHref(experimentId: number): string {
   return `/?${params.toString()}`
 }
 
+function readNumericUrlParam(name: string): number | null {
+  const raw = readParams().get(name)
+  if (!raw) return null
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 function channelFitsGroup(channel: string, group?: string | null): boolean {
   if (!group) return true
   const ch = channel.toLowerCase()
@@ -802,9 +809,9 @@ export default function Journeys({
   const [editingHypothesisId, setEditingHypothesisId] = useState<string | null>(null)
   const [hypothesisError, setHypothesisError] = useState<string | null>(null)
   const [hypothesisDraft, setHypothesisDraft] = useState<HypothesisDraft>(() => defaultHypothesisDraft())
-  const [sandboxHypothesisId, setSandboxHypothesisId] = useState<string | null>(null)
+  const [sandboxHypothesisId, setSandboxHypothesisId] = useState<string | null>(() => readParams().get('hypothesis_id') || null)
   const [sandboxCandidateStep, setSandboxCandidateStep] = useState('')
-  const [selectedJourneyExperimentId, setSelectedJourneyExperimentId] = useState<number | null>(null)
+  const [selectedJourneyExperimentId, setSelectedJourneyExperimentId] = useState<number | null>(() => readNumericUrlParam('experiment_id'))
   const [hypothesisExperimentDraft, setHypothesisExperimentDraft] = useState<HypothesisExperimentDraft>(() => {
     const start = new Date()
     const end = new Date()
@@ -1448,6 +1455,8 @@ export default function Journeys({
     }
     setExamplesPathHash(params.get('examples_path_hash') || '')
     setExamplesStepFilter(params.get('examples_step') || '')
+    setSandboxHypothesisId(params.get('hypothesis_id') || null)
+    setSelectedJourneyExperimentId(readNumericUrlParam('experiment_id'))
     setFilters((prev) => ({
       ...prev,
       dateFrom: params.get('date_from') || prev.dateFrom,
@@ -1540,8 +1549,12 @@ export default function Journeys({
     else params.delete('examples_path_hash')
     if (examplesStepFilter.trim()) params.set('examples_step', examplesStepFilter.trim())
     else params.delete('examples_step')
+    if (activeTab === 'policy' && sandboxHypothesisId) params.set('hypothesis_id', sandboxHypothesisId)
+    else if (activeTab !== 'experiments') params.delete('hypothesis_id')
+    if (activeTab === 'experiments' && selectedJourneyExperimentId != null) params.set('experiment_id', String(selectedJourneyExperimentId))
+    else params.delete('experiment_id')
     window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`)
-  }, [activeTab, examplesPathHash, examplesStepFilter, filters, selectedJourneyId])
+  }, [activeTab, examplesPathHash, examplesStepFilter, filters, sandboxHypothesisId, selectedJourneyExperimentId, selectedJourneyId])
 
   useEffect(() => {
     setPathsPage(1)
