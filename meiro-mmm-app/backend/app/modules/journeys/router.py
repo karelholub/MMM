@@ -9,6 +9,7 @@ from app.modules.journeys.schemas import (
     JourneyExperimentCreatePayload,
     JourneyDefinitionUpdate,
     JourneyHypothesisPayload,
+    JourneyPolicyPromotionPayload,
     JourneyPolicySimulationPayload,
     JourneySavedViewPayload,
 )
@@ -31,6 +32,11 @@ from app.services_journey_hypotheses import (
 )
 from app.services_journey_insights import build_journey_insights
 from app.services_journey_paths import list_paths_for_journey_definition
+from app.services_journey_policy_learning import (
+    list_journey_policy_candidates,
+    serialize_journey_policy_candidate_response,
+    set_journey_policy_promotion,
+)
 from app.services_journey_saved_views import (
     create_journey_saved_view,
     delete_journey_saved_view,
@@ -354,6 +360,45 @@ def create_router(
             hypothesis=hypothesis,
             proposed_step=(body.proposed_step if body else None),
         )
+
+    @router.get("/api/journeys/{definition_id}/policies")
+    def api_list_journey_policy_candidates(
+        definition_id: str,
+        limit: int = Query(12, ge=1, le=50),
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        jd = get_journey_definition(db, definition_id)
+        if not jd or jd.is_archived:
+            raise HTTPException(status_code=404, detail="Journey definition not found")
+        return list_journey_policy_candidates(
+            db,
+            workspace_id=ctx.workspace_id,
+            journey_definition_id=definition_id,
+            limit=limit,
+        )
+
+    @router.post("/api/journeys/hypotheses/{hypothesis_id}/policy-promotion")
+    def api_set_journey_policy_promotion(
+        hypothesis_id: str,
+        body: JourneyPolicyPromotionPayload,
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        try:
+            item = set_journey_policy_promotion(
+                db,
+                workspace_id=ctx.workspace_id,
+                hypothesis_id=hypothesis_id,
+                actor_user_id=ctx.user_id,
+                active=body.active,
+                notes=body.notes,
+            )
+        except ValueError as exc:
+            message = str(exc)
+            status_code = 404 if "not found" in message.lower() else 400
+            raise HTTPException(status_code=status_code, detail=message)
+        return serialize_journey_policy_candidate_response(item)
 
     @router.post("/api/journeys/definitions")
     def api_create_journey_definition(

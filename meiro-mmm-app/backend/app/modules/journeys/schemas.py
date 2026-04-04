@@ -56,3 +56,8 @@ class JourneyExperimentCreatePayload(BaseModel):
 
 class JourneyPolicySimulationPayload(BaseModel):
     proposed_step: Optional[str] = Field(None, max_length=255)
+
+
+class JourneyPolicyPromotionPayload(BaseModel):
+    active: bool = True
+    notes: Optional[str] = Field(None, max_length=2000)

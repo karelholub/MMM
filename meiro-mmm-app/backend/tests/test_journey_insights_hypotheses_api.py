@@ -330,3 +330,33 @@ def test_journey_insights_and_hypothesis_crud_flow(client_and_session):
     assert refreshed["result"]["control"]["n"] == 40
     assert refreshed["result"]["uplift_abs"] > 0
     assert "Treatment beat control" in refreshed["result"]["summary"]
+
+    policies = client.get(
+        f"/api/journeys/{definition_id}/policies",
+        headers=viewer_headers,
+    )
+    assert policies.status_code == 200
+    policy_payload = policies.json()
+    assert policy_payload["summary"]["validated"] >= 1
+    assert policy_payload["summary"]["ready_to_promote"] >= 1
+    assert policy_payload["items"][0]["recommendation"] == "promote"
+    assert policy_payload["items"][0]["hypothesis_id"] == created["id"]
+
+    promote_policy = client.post(
+        f"/api/journeys/hypotheses/{created['id']}/policy-promotion",
+        headers=viewer_headers,
+        json={"active": True, "notes": "Promote for the mobile retargeting journey."},
+    )
+    assert promote_policy.status_code == 200
+    promoted = promote_policy.json()
+    assert promoted["hypothesis"]["result"]["policy_promotion"]["active"] is True
+    assert promoted["policy_candidate"]["recommendation"] == "promoted"
+
+    promoted_policies = client.get(
+        f"/api/journeys/{definition_id}/policies",
+        headers=viewer_headers,
+    )
+    assert promoted_policies.status_code == 200
+    promoted_policy = promoted_policies.json()["items"][0]
+    assert promoted_policy["promotion"]["active"] is True
+    assert promoted_policy["recommendation"] == "promoted"
