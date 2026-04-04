@@ -42,6 +42,33 @@ interface ExperimentSummary {
   source_id?: string | null
   source_name?: string | null
   source_journey_definition_id?: string | null
+  config_id?: string | null
+  config_version?: number | null
+}
+
+interface ExperimentSetup {
+  setup_source?: string | null
+  assignment_unit?: string | null
+  assignment_method?: string | null
+  treatment_rate?: number | null
+  baseline_rate_estimate?: number | null
+  kpi_label?: string | null
+  min_runtime_days?: number | null
+  exclusion_window_days?: number | null
+  stop_rule?: string | null
+  planner_window?: {
+    date_from?: string | null
+    date_to?: string | null
+  } | null
+  power_plan?: {
+    baseline_rate?: number | null
+    mde?: number | null
+    alpha?: number | null
+    power?: number | null
+    treatment_rate?: number | null
+  } | null
+  config_id?: string | null
+  config_version?: number | null
 }
 
 interface ExperimentDetail extends ExperimentSummary {
@@ -49,6 +76,7 @@ interface ExperimentDetail extends ExperimentSummary {
   segment?: Record<string, unknown>
   policy?: Record<string, unknown>
   guardrails?: Record<string, unknown>
+  setup?: ExperimentSetup | null
 }
 
 interface ExperimentResults {
@@ -160,9 +188,22 @@ interface SetupContext {
   warnings: string[]
 }
 
+interface ModelConfigDetail {
+  id: string
+  name: string
+  status: string
+  version: number
+}
+
 function formatRate(value?: number | null): string {
   if (value == null || !Number.isFinite(value)) return '—'
   return `${(value * 100).toFixed(1)}%`
+}
+
+function formatDateRangeLabel(dateFrom?: string | null, dateTo?: string | null): string {
+  if (!dateFrom && !dateTo) return '—'
+  if (dateFrom && dateTo) return `${dateFrom} – ${dateTo}`
+  return dateFrom || dateTo || '—'
 }
 
 function buildJourneyLabHref(summary?: ExperimentSummary | null): string | null {
@@ -179,7 +220,7 @@ function buildJourneyLabHref(summary?: ExperimentSummary | null): string | null 
 }
 
 export default function IncrementalityPage() {
-  const { globalDateFrom, globalDateTo, journeysSummary } = useWorkspaceContext()
+  const { globalDateFrom, globalDateTo, journeysSummary, selectedConfigId } = useWorkspaceContext()
   const [selectedId, setSelectedId] = useState<number | null>(() => {
     if (typeof window === 'undefined') return null
     const params = new URLSearchParams(window.location.search)
@@ -225,6 +266,15 @@ export default function IncrementalityPage() {
         fallbackMessage: 'Failed to load experiment setup context',
       })
     },
+  })
+
+  const selectedConfigQuery = useQuery<ModelConfigDetail>({
+    queryKey: ['incrementality-selected-config', selectedConfigId],
+    queryFn: async () =>
+      apiGetJson<ModelConfigDetail>(`/api/model-configs/${selectedConfigId}`, {
+        fallbackMessage: 'Failed to load selected model config',
+      }),
+    enabled: !!selectedConfigId,
   })
 
   const experimentsQuery = useQuery<ExperimentSummary[]>({
@@ -286,33 +336,25 @@ export default function IncrementalityPage() {
       }
       const selectedChannel = setupContextQuery.data?.channels.find((item) => item.channel === form.channel) ?? null
       const selectedKpi = setupContextQuery.data?.kpis.find((item) => item.id === form.conversion_key) ?? null
-      const plannedBits: string[] = []
-      plannedBits.push(`Type: holdout (unit: profile_id, assignment: random hash)`)
-      plannedBits.push(
-        `Planned split: ${(form.treatment_rate * 100).toFixed(0)}% treatment / ${(
-          (1 - form.treatment_rate) *
-          100
-        ).toFixed(0)}% control`
-      )
-      if (form.min_runtime_days) {
-        plannedBits.push(`Minimum runtime: ${form.min_runtime_days} days (not auto-enforced)`)
-      }
-      if (form.stop_rule) {
-        plannedBits.push(`Stop rule: ${form.stop_rule} (operator-reviewed, not auto-enforced)`)
-      }
-      if (form.exclusion_window_days) {
-        plannedBits.push(
-          `Exclusion rule: exclude profiles converted in last ${form.exclusion_window_days} days (not enforced yet)`
-        )
-      }
-      const planNote = plannedBits.length ? `Experiment plan (not enforced by system yet):\n- ${plannedBits.join('\n- ')}` : ''
-      const combinedNotes = [form.notes, planNote].filter(Boolean).join('\n\n')
       const body = {
         name: form.name,
         channel: form.channel,
         conversion_key: form.conversion_key,
         start_at: new Date(form.start_at).toISOString(),
         end_at: new Date(form.end_at).toISOString(),
+        setup_source: 'planner_setup_context',
+        assignment_unit: 'profile_id',
+        assignment_method: 'deterministic_hash',
+        treatment_rate: form.treatment_rate,
+        baseline_rate_estimate: selectedChannel?.baseline_conversion_rate ?? null,
+        min_runtime_days: form.min_runtime_days ? Number(form.min_runtime_days) : null,
+        exclusion_window_days: form.exclusion_window_days ? Number(form.exclusion_window_days) : null,
+        stop_rule: form.stop_rule || null,
+        alpha: powerForm.alpha,
+        power: powerForm.power,
+        mde_target: powerForm.mde,
+        config_id: selectedConfigId || null,
+        config_version: selectedConfigQuery.data?.version ?? null,
         policy: {
           setup_source: 'planner_setup_context',
           assignment_unit: 'profile_id',
@@ -337,7 +379,7 @@ export default function IncrementalityPage() {
             treatment_rate: powerForm.treatment_rate,
           },
         },
-        notes: combinedNotes || null,
+        notes: form.notes || null,
       }
       return apiSendJson<ExperimentSummary>('/api/experiments', 'POST', body, {
         fallbackMessage: 'Failed to create experiment',
@@ -367,6 +409,7 @@ export default function IncrementalityPage() {
   const selectedSummary =
     selectedId != null ? experimentsQuery.data?.find((e) => e.id === selectedId) : undefined
   const selectedJourneyHref = buildJourneyLabHref(selectedSummary)
+  const detailSetup = detailQuery.data?.setup ?? null
 
   const statusLabel = (status: string): string => {
     if (status === 'completed') return 'Stopped'
@@ -1225,7 +1268,7 @@ export default function IncrementalityPage() {
                         }}
                       />
                       <span style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>
-                        Document your operational stop rule. This dashboard does not yet enforce it automatically.
+                        Saved with the experiment plan so operators can review it alongside health and results.
                       </span>
                     </label>
                   </div>
@@ -1360,6 +1403,11 @@ export default function IncrementalityPage() {
                       {' • '}Conversion key <strong>{selectedSummary.conversion_key}</strong>
                     </>
                   )}
+                  {selectedSummary?.config_version != null && (
+                    <>
+                      {' • '}Config v<strong>{selectedSummary.config_version}</strong>
+                    </>
+                  )}
                 </p>
                 {(selectedSummary?.source_type || selectedSummary?.source_name) && (
                   <p style={{ margin: '0 0 4px', fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
@@ -1434,6 +1482,11 @@ export default function IncrementalityPage() {
                           start_at: '',
                           end_at: '',
                           notes: detailQuery.data?.notes ?? '',
+                          treatment_rate: detailQuery.data?.setup?.treatment_rate ?? f.treatment_rate,
+                          min_runtime_days: detailQuery.data?.setup?.min_runtime_days != null ? String(detailQuery.data.setup.min_runtime_days) : '',
+                          stop_rule: detailQuery.data?.setup?.stop_rule ?? '',
+                          exclusion_window_days:
+                            detailQuery.data?.setup?.exclusion_window_days != null ? String(detailQuery.data.setup.exclusion_window_days) : '',
                         }))
                       }}
                       style={{
@@ -1466,6 +1519,59 @@ export default function IncrementalityPage() {
                   <p style={{ margin: '8px 0 0', fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
                     {detailQuery.data.notes}
                   </p>
+                )}
+                {detailSetup && (
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                      gap: tkn.space.sm,
+                      marginTop: tkn.space.md,
+                      padding: tkn.space.md,
+                      border: `1px solid ${tkn.color.borderLight}`,
+                      borderRadius: tkn.radius.sm,
+                      background: tkn.color.surfaceMuted ?? tkn.color.surface,
+                    }}
+                  >
+                    <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                      <strong style={{ color: tkn.color.text }}>Planned split:</strong>{' '}
+                      {detailSetup.treatment_rate != null ? `${(detailSetup.treatment_rate * 100).toFixed(0)}% / ${((1 - detailSetup.treatment_rate) * 100).toFixed(0)}%` : '—'}
+                    </div>
+                    <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                      <strong style={{ color: tkn.color.text }}>Assignment:</strong>{' '}
+                      {[detailSetup.assignment_unit, detailSetup.assignment_method].filter(Boolean).join(' · ') || '—'}
+                    </div>
+                    <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                      <strong style={{ color: tkn.color.text }}>Baseline rate:</strong> {formatRate(detailSetup.baseline_rate_estimate)}
+                    </div>
+                    <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                      <strong style={{ color: tkn.color.text }}>Min runtime:</strong>{' '}
+                      {detailSetup.min_runtime_days != null ? `${detailSetup.min_runtime_days} days` : '—'}
+                    </div>
+                    <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                      <strong style={{ color: tkn.color.text }}>Exclusion window:</strong>{' '}
+                      {detailSetup.exclusion_window_days != null ? `${detailSetup.exclusion_window_days} days` : '—'}
+                    </div>
+                    <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                      <strong style={{ color: tkn.color.text }}>Planner window:</strong>{' '}
+                      {formatDateRangeLabel(detailSetup.planner_window?.date_from, detailSetup.planner_window?.date_to)}
+                    </div>
+                    <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                      <strong style={{ color: tkn.color.text }}>Power plan:</strong>{' '}
+                      {detailSetup.power_plan
+                        ? `${formatRate(detailSetup.power_plan.baseline_rate)} baseline · ${(Number(detailSetup.power_plan.mde ?? 0) * 100).toFixed(1)}pp MDE · α ${detailSetup.power_plan.alpha ?? '—'} · power ${detailSetup.power_plan.power ?? '—'}`
+                        : '—'}
+                    </div>
+                    <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                      <strong style={{ color: tkn.color.text }}>Config snapshot:</strong>{' '}
+                      {detailSetup.config_id ? `${detailSetup.config_id}${detailSetup.config_version != null ? ` · v${detailSetup.config_version}` : ''}` : '—'}
+                    </div>
+                    {detailSetup.stop_rule && (
+                      <div style={{ gridColumn: '1 / -1', fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                        <strong style={{ color: tkn.color.text }}>Stop rule:</strong> {detailSetup.stop_rule}
+                      </div>
+                    )}
+                  </div>
                 )}
                 {(detailQuery.data?.segment && Object.keys(detailQuery.data.segment).length > 0) ||
                 (detailQuery.data?.policy && Object.keys(detailQuery.data.policy).length > 0) ||
