@@ -142,7 +142,9 @@ def test_incrementality_setup_context_uses_settings_and_observed_journeys():
         assert channels["email"]["baseline_conversion_rate"] == 0.5
         assert channels["email"]["delivery_class"] == "owned"
         assert channels["email"]["execution"]["status"] == "planner_ready"
+        assert channels["email"]["execution"]["delivery_support"] == "planner_guided"
         assert channels["email"]["execution"]["can_auto_assign_history"] is True
+        assert channels["email"]["execution"]["launch_warnings"]
         assert "google_ads" not in channels
         assert channels["direct"]["eligible"] is False
         assert channels["direct"]["execution"]["status"] == "not_supported"
@@ -315,6 +317,7 @@ def test_incrementality_recommend_design_returns_guided_plan():
         assert payload["recommendation"]["min_runtime_days"] >= 14
         assert payload["recommendation"]["readiness"] in {"ready_to_launch", "needs_more_volume", "insufficient_signal"}
         assert payload["execution"]["status"] == "planner_ready"
+        assert payload["execution"]["launch_warnings"]
     finally:
         app.dependency_overrides.clear()
         main_module.KPI_CONFIG = original_kpi_config
@@ -394,6 +397,10 @@ def test_incrementality_health_uses_planned_sample_and_runtime():
         assert payload["plan"]["sample_target_control"] is not None
         assert payload["plan"]["sample_target_status"] == "warn"
         assert payload["runtime"]["planned_min_days"] == 30
+        assert payload["execution"]["status"] == "planner_ready"
+        assert payload["launch_readiness"]["status"] == "manual_review"
+        assert payload["launch_readiness"]["warnings"]
+        assert "Exposure logging has not been observed yet." in payload["launch_readiness"]["tracking_gaps"]
         assert payload["ready_state"]["label"] in {"not_ready", "early"}
         assert any("Planned treatment sample target" in reason for reason in payload["ready_state"]["reasons"])
     finally:

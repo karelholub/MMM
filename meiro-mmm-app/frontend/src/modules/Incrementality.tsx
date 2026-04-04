@@ -79,9 +79,22 @@ interface ExperimentExecution {
   can_auto_assign_history?: boolean
   can_log_exposures?: boolean
   can_log_outcomes?: boolean
+  can_start_with_manual_logging?: boolean
   assignment_mode?: string | null
   exposure_mode?: string | null
+  delivery_support?: string | null
+  history_support?: string | null
+  tracking_requirements?: string[]
+  launch_blockers?: string[]
+  launch_warnings?: string[]
   notes?: string[]
+}
+
+interface LaunchReadiness {
+  status?: 'ready' | 'manual_review' | 'blocked' | string
+  blockers: string[]
+  warnings: string[]
+  tracking_gaps: string[]
 }
 
 interface ExperimentDetail extends ExperimentSummary {
@@ -141,6 +154,7 @@ interface PowerAnalysisResult {
 type ReadyLabel = 'not_ready' | 'early' | 'ready'
 
 interface ExperimentHealth {
+  execution?: ExperimentExecution | null
   experiment_id: number
   sample: { treatment: number; control: number }
   exposures: { treatment: number; control: number }
@@ -167,6 +181,7 @@ interface ExperimentHealth {
     planned_min_days?: number | null
     scheduled_days?: number | null
   }
+  launch_readiness?: LaunchReadiness | null
   ready_state: { label: ReadyLabel; reasons: string[] }
 }
 
@@ -287,6 +302,24 @@ function executionStatusLabel(value?: string | null): string {
   if (value === 'planner_ready') return 'Planner-ready'
   if (value === 'manual_only') return 'Manual execution'
   if (value === 'not_supported') return 'Not supported'
+  return value || 'Unknown'
+}
+
+function executionSummaryLabel(execution?: ExperimentExecution | null): string | null {
+  if (!execution) return null
+  if (execution.status === 'not_supported') return 'Not valid for holdout'
+  if (execution.status === 'manual_only') return 'Manual delivery + logging'
+  if (execution.status === 'planner_ready') {
+    if (execution.can_auto_assign_history) return 'Planner-backed + history seeding'
+    return 'Planner-backed setup'
+  }
+  return executionStatusLabel(execution.status)
+}
+
+function launchReadinessLabel(value?: string | null): string {
+  if (value === 'ready') return 'Ready'
+  if (value === 'manual_review') return 'Needs operator review'
+  if (value === 'blocked') return 'Blocked'
   return value || 'Unknown'
 }
 
@@ -658,7 +691,8 @@ export default function IncrementalityPage() {
   const selectedJourneyHref = buildJourneyLabHref(selectedSummary)
   const detailSetup = detailQuery.data?.setup ?? null
   const designRecommendation = designRecommendationQuery.data
-  const detailExecution = detailQuery.data?.execution ?? selectedSummary?.execution ?? null
+  const detailExecution = healthQuery.data?.execution ?? detailQuery.data?.execution ?? selectedSummary?.execution ?? null
+  const launchReadiness = healthQuery.data?.launch_readiness ?? null
   const executionChecklist = useMemo(() => {
     if (!healthQuery.data) return []
     return [
@@ -1163,6 +1197,11 @@ export default function IncrementalityPage() {
                           {new Date(e.start_at).toLocaleDateString()} –{' '}
                           {new Date(e.end_at).toLocaleDateString()}
                         </div>
+                        {e.execution && (
+                          <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted, marginTop: 2 }}>
+                            {executionSummaryLabel(e.execution)}
+                          </div>
+                        )}
                         {(e.source_type || e.source_name) && (
                           <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted, marginTop: 2 }}>
                             {sourceBadgeLabel(e.source_type) || 'Linked source'}
@@ -1319,8 +1358,12 @@ export default function IncrementalityPage() {
                   )}
                   {selectedSetupChannel.execution && (
                     <div style={{ gridColumn: '1 / -1', fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
-                      Execution: <strong style={{ color: tkn.color.text }}>{executionStatusLabel(selectedSetupChannel.execution.status)}</strong>
-                      {selectedSetupChannel.execution.notes?.length ? ` · ${selectedSetupChannel.execution.notes[0]}` : ''}
+                      Execution: <strong style={{ color: tkn.color.text }}>{executionSummaryLabel(selectedSetupChannel.execution)}</strong>
+                      {selectedSetupChannel.execution.launch_warnings?.length
+                        ? ` · ${selectedSetupChannel.execution.launch_warnings[0]}`
+                        : selectedSetupChannel.execution.notes?.length
+                        ? ` · ${selectedSetupChannel.execution.notes[0]}`
+                        : ''}
                     </div>
                   )}
                 </div>
@@ -1449,8 +1492,12 @@ export default function IncrementalityPage() {
                   )}
                   {designRecommendation.execution && (
                     <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
-                      Execution path: <strong style={{ color: tkn.color.text }}>{executionStatusLabel(designRecommendation.execution.status)}</strong>
-                      {designRecommendation.execution.notes?.length ? ` · ${designRecommendation.execution.notes[0]}` : ''}
+                      Execution path: <strong style={{ color: tkn.color.text }}>{executionSummaryLabel(designRecommendation.execution)}</strong>
+                      {designRecommendation.execution.launch_warnings?.length
+                        ? ` · ${designRecommendation.execution.launch_warnings[0]}`
+                        : designRecommendation.execution.notes?.length
+                        ? ` · ${designRecommendation.execution.notes[0]}`
+                        : ''}
                     </div>
                   )}
                 </div>
@@ -1828,9 +1875,14 @@ export default function IncrementalityPage() {
                 )}
                 {detailExecution && (
                   <p style={{ margin: '0 0 4px', fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
-                    Execution <strong>{executionStatusLabel(detailExecution.status)}</strong>
+                    Execution <strong>{executionSummaryLabel(detailExecution) ?? executionStatusLabel(detailExecution.status)}</strong>
                     {detailExecution.assignment_mode ? <> • Assignment <strong>{detailExecution.assignment_mode}</strong></> : null}
                     {detailExecution.exposure_mode ? <> • Exposures <strong>{detailExecution.exposure_mode}</strong></> : null}
+                    {launchReadiness?.status ? (
+                      <>
+                        {' • '}Launch <strong>{launchReadinessLabel(launchReadiness.status)}</strong>
+                      </>
+                    ) : null}
                   </p>
                 )}
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: tkn.space.xs, marginTop: tkn.space.sm }}>
@@ -1841,6 +1893,7 @@ export default function IncrementalityPage() {
                         selectedSummary &&
                         statusMutation.mutate({ id: selectedSummary.id, nextStatus: 'running' })
                       }
+                      disabled={launchReadiness?.status === 'blocked'}
                       style={{
                         padding: `${tkn.space.xs}px ${tkn.space.md}px`,
                         fontSize: tkn.font.sizeXs,
@@ -1849,9 +1902,14 @@ export default function IncrementalityPage() {
                         backgroundColor: tkn.color.accent,
                         border: 'none',
                         borderRadius: tkn.radius.sm,
-                        cursor: 'pointer',
+                        opacity: launchReadiness?.status === 'blocked' ? 0.6 : 1,
+                        cursor: launchReadiness?.status === 'blocked' ? 'not-allowed' : 'pointer',
                       }}
-                      title="Start experiment. Make sure assignments, exposures, and outcomes are being logged."
+                      title={
+                        launchReadiness?.status === 'blocked'
+                          ? 'Resolve the launch blockers below before starting this experiment.'
+                          : 'Start experiment. Make sure assignments, exposures, and outcomes are being logged.'
+                      }
                     >
                       Start experiment
                     </button>
@@ -1961,6 +2019,47 @@ export default function IncrementalityPage() {
                     </span>
                   )}
                 </div>
+                {launchReadiness && (
+                  <div
+                    style={{
+                      marginTop: tkn.space.md,
+                      padding: tkn.space.sm,
+                      borderRadius: tkn.radius.sm,
+                      border: `1px solid ${
+                        launchReadiness.status === 'blocked'
+                          ? '#f0b2b2'
+                          : launchReadiness.status === 'manual_review'
+                          ? '#efd8a6'
+                          : tkn.color.borderLight
+                      }`,
+                      background:
+                        launchReadiness.status === 'blocked'
+                          ? '#fff3f3'
+                          : launchReadiness.status === 'manual_review'
+                          ? '#fff9ec'
+                          : tkn.color.surfaceMuted ?? tkn.color.surface,
+                    }}
+                  >
+                    <div style={{ fontSize: tkn.font.sizeSm, fontWeight: tkn.font.weightSemibold, color: tkn.color.text }}>
+                      Launch readiness: {launchReadinessLabel(launchReadiness.status)}
+                    </div>
+                    {launchReadiness.blockers.length > 0 && (
+                      <div style={{ marginTop: 4, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                        <strong style={{ color: tkn.color.text }}>Blockers:</strong> {launchReadiness.blockers.join(' • ')}
+                      </div>
+                    )}
+                    {launchReadiness.warnings.length > 0 && (
+                      <div style={{ marginTop: 4, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                        <strong style={{ color: tkn.color.text }}>Warnings:</strong> {launchReadiness.warnings.join(' • ')}
+                      </div>
+                    )}
+                    {launchReadiness.tracking_gaps.length > 0 && (
+                      <div style={{ marginTop: 4, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                        <strong style={{ color: tkn.color.text }}>Tracking gaps:</strong> {launchReadiness.tracking_gaps.join(' • ')}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {detailQuery.data?.notes && (
                   <p style={{ margin: '8px 0 0', fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
                     {detailQuery.data.notes}

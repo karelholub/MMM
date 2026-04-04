@@ -124,23 +124,35 @@ def build_experiment_execution_capability(
             "can_auto_assign_history": False,
             "can_log_exposures": False,
             "can_log_outcomes": True,
+            "can_start_with_manual_logging": False,
             "assignment_mode": "none",
             "exposure_mode": "none",
+            "delivery_support": "unsupported",
+            "history_support": "none",
+            "tracking_requirements": ["outcomes"],
+            "launch_blockers": ["Direct and unknown traffic are not valid holdout targets."],
+            "launch_warnings": [],
             "notes": ["Direct and unknown traffic are not valid holdout targets."],
         }
 
     notes: List[str] = []
+    launch_warnings: List[str] = []
     planner_ready = normalized_channel in OWNED_CHANNEL_HINTS
     if non_converted_journeys is not None and non_converted_journeys <= 0:
         notes.append("No non-converted journeys were observed for this channel in the selected window.")
     if planner_ready:
-        notes.append("This owned channel is ready for planner-guided setup.")
+        notes.append("Planner-backed setup is available for this owned channel.")
+        launch_warnings.append(
+            "Delivery and exposure capture still need operator wiring even when planner defaults are available."
+        )
     else:
         notes.append("This channel can be analyzed, but delivery and exposure instrumentation are still manual.")
+        launch_warnings.append("Assignment, delivery, and exposure logging need to be operated manually.")
     if has_observed_data:
         notes.append("Historical assignments can be seeded from observed journeys.")
     else:
         notes.append("No observed journeys available for historical auto-assignment.")
+        launch_warnings.append("Historical auto-assignment is unavailable because no observed journeys were found.")
 
     return {
         "channel": normalized_channel,
@@ -149,8 +161,14 @@ def build_experiment_execution_capability(
         "can_auto_assign_history": has_observed_data,
         "can_log_exposures": True,
         "can_log_outcomes": True,
+        "can_start_with_manual_logging": True,
         "assignment_mode": "auto_assign_from_journeys" if has_observed_data else "manual_batch",
         "exposure_mode": "manual_batch",
+        "delivery_support": "planner_guided" if planner_ready else "manual",
+        "history_support": "observed_journeys" if has_observed_data else "none",
+        "tracking_requirements": ["assignments", "exposures", "outcomes"],
+        "launch_blockers": [],
+        "launch_warnings": launch_warnings,
         "notes": notes,
     }
 
@@ -1275,6 +1293,10 @@ def compute_experiment_health(
             control_exp += 1
 
     total_n = treat_n + control_n
+    execution = build_experiment_execution_capability(
+        exp.channel,
+        has_observed_data=bool(total_n or treat_exp or control_exp or treat_conv or control_conv),
+    )
     policy = dict(exp.policy_json or {})
     expected_share = float(policy.get("treatment_rate") or 0.5)
     expected_share = min(0.99, max(0.01, expected_share))
@@ -1290,6 +1312,13 @@ def compute_experiment_health(
             "status": "ok" if (treat_exp + control_exp) > 0 else "warn"
         },
     }
+    tracking_gaps: List[str] = []
+    if data_completeness["assignments"]["status"] != "ok":
+        tracking_gaps.append("Assignments have not been logged yet.")
+    if execution.get("can_log_exposures") and data_completeness["exposures"]["status"] != "ok":
+        tracking_gaps.append("Exposure logging has not been observed yet.")
+    if execution.get("can_log_outcomes") and data_completeness["outcomes"]["status"] != "ok":
+        tracking_gaps.append("Outcome logging has not been observed yet.")
 
     # Minimal contamination / overlap heuristic:
     # any profile assigned in this experiment also appearing in another running
@@ -1396,8 +1425,37 @@ def compute_experiment_health(
     else:
         ready_label = "not_ready"
 
+    launch_blockers = list(execution.get("launch_blockers") or [])
+    launch_warnings = list(execution.get("launch_warnings") or [])
+    if exp.status in {"draft", "running"} and data_completeness["assignments"]["status"] != "ok":
+        launch_blockers.append("Assignments must be logged before this experiment can run cleanly.")
+    if exp.status in {"running", "completed"} and data_completeness["exposures"]["status"] != "ok":
+        launch_warnings.append("Exposure logging is still missing from the recorded experiment data.")
+    if exp.status in {"running", "completed"} and data_completeness["outcomes"]["status"] != "ok":
+        launch_warnings.append("Outcome logging is still missing from the recorded experiment data.")
+
+    def _dedupe(items: List[str]) -> List[str]:
+        seen: set[str] = set()
+        result: List[str] = []
+        for item in items:
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            result.append(item)
+        return result
+
+    launch_blockers = _dedupe(launch_blockers)
+    launch_warnings = _dedupe(launch_warnings)
+    tracking_gaps = _dedupe(tracking_gaps)
+    launch_status = "ready"
+    if launch_blockers:
+        launch_status = "blocked"
+    elif launch_warnings or tracking_gaps:
+        launch_status = "manual_review"
+
     return {
         "experiment_id": experiment_id,
+        "execution": execution,
         "sample": {"treatment": treat_n, "control": control_n},
         "exposures": {"treatment": treat_exp, "control": control_exp},
         "outcomes": {"treatment": treat_conv, "control": control_conv},
@@ -1433,6 +1491,12 @@ def compute_experiment_health(
             "elapsed_days": elapsed_days,
             "planned_min_days": planned_min_runtime_days,
             "scheduled_days": scheduled_days,
+        },
+        "launch_readiness": {
+            "status": launch_status,
+            "blockers": launch_blockers,
+            "warnings": launch_warnings,
+            "tracking_gaps": tracking_gaps,
         },
         "ready_state": {"label": ready_label, "reasons": reasons},
     }

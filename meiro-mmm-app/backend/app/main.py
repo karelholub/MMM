@@ -4154,6 +4154,7 @@ def run_nightly_report_endpoint(db=Depends(get_db)):
 
 class ExperimentHealth(BaseModel):
     experiment_id: int
+    execution: Dict[str, Any]
     sample: Dict[str, int]
     exposures: Dict[str, int]
     outcomes: Dict[str, int]
@@ -4162,6 +4163,7 @@ class ExperimentHealth(BaseModel):
     overlap_risk: Dict[str, Any]
     plan: Dict[str, Any]
     runtime: Dict[str, Any]
+    launch_readiness: Dict[str, Any]
     ready_state: Dict[str, Any]
 
 
