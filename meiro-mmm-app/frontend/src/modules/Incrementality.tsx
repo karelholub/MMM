@@ -138,6 +138,21 @@ interface ExperimentHealth {
     exposures: { status: 'ok' | 'warn' }
   }
   overlap_risk: { status: 'ok' | 'warn'; overlapping_profiles: number }
+  plan: {
+    treatment_rate?: number | null
+    sample_target_total?: number | null
+    sample_target_treatment?: number | null
+    sample_target_control?: number | null
+    sample_target_status?: 'ok' | 'warn' | string
+    progress_treatment?: number | null
+    progress_control?: number | null
+  }
+  runtime: {
+    status?: 'ok' | 'warn' | 'not_started' | string
+    elapsed_days?: number | null
+    planned_min_days?: number | null
+    scheduled_days?: number | null
+  }
   ready_state: { label: ReadyLabel; reasons: string[] }
 }
 
@@ -242,6 +257,13 @@ function plannerReadinessLabel(value?: string | null): string {
   if (value === 'needs_more_volume') return 'Needs more volume'
   if (value === 'insufficient_signal') return 'Insufficient signal'
   if (value === 'no_data') return 'No data'
+  return value || 'Unknown'
+}
+
+function runtimeStatusLabel(value?: string | null): string {
+  if (value === 'ok') return 'On track'
+  if (value === 'warn') return 'Below planned runtime'
+  if (value === 'not_started') return 'Not started'
   return value || 'Unknown'
 }
 
@@ -1846,7 +1868,8 @@ export default function IncrementalityPage() {
                           <strong>Balance</strong>
                           <br />
                           {healthQuery.data.balance.status === 'ok' ? 'OK' : 'Warning'} • T share:{' '}
-                          {(healthQuery.data.balance.observed_share * 100).toFixed(1)}%
+                          {(healthQuery.data.balance.observed_share * 100).toFixed(1)}% vs plan{' '}
+                          {(healthQuery.data.balance.expected_share * 100).toFixed(1)}%
                         </div>
                         <div title="Are assignments and outcomes being recorded in the underlying tables?">
                           <strong>Data completeness</strong>
@@ -1864,7 +1887,7 @@ export default function IncrementalityPage() {
                             : `Warning (${healthQuery.data.overlap_risk.overlapping_profiles} profiles)`}
                         </div>
                       </div>
-                      {powerPlans[selectedId!] && (
+                      {healthQuery.data.plan.sample_target_treatment != null && healthQuery.data.plan.sample_target_control != null ? (
                         <div
                           style={{
                             marginTop: tkn.space.xs,
@@ -1873,7 +1896,33 @@ export default function IncrementalityPage() {
                             background: tkn.color.accentMuted,
                             fontSize: tkn.font.sizeXs,
                           }}
-                          title="Target per group from the power calculator and current progress based on assignments."
+                          title="Target per group from the stored experiment plan and current assignment progress."
+                        >
+                          Target sample size:{' '}
+                          <strong>
+                            {healthQuery.data.plan.sample_target_treatment.toLocaleString()} T /{' '}
+                            {healthQuery.data.plan.sample_target_control.toLocaleString()} C
+                          </strong>
+                          <br />
+                          Progress:{' '}
+                          {Math.round(
+                            Math.min(
+                              healthQuery.data.plan.progress_treatment ?? 0,
+                              healthQuery.data.plan.progress_control ?? 0,
+                            ) * 100,
+                          )}
+                          %
+                        </div>
+                      ) : powerPlans[selectedId!] ? (
+                        <div
+                          style={{
+                            marginTop: tkn.space.xs,
+                            padding: tkn.space.xs,
+                            borderRadius: tkn.radius.sm,
+                            background: tkn.color.accentMuted,
+                            fontSize: tkn.font.sizeXs,
+                          }}
+                          title="Target per group from the local power calculator and current progress based on assignments."
                         >
                           Target sample size:{' '}
                           <strong>
@@ -1894,7 +1943,27 @@ export default function IncrementalityPage() {
                             return <>Progress: {pct}%</>
                           })()}
                         </div>
-                      )}
+                      ) : null}
+                      <div
+                        style={{
+                          marginTop: tkn.space.xs,
+                          padding: tkn.space.xs,
+                          borderRadius: tkn.radius.sm,
+                          background: tkn.color.surfaceMuted ?? tkn.color.surface,
+                          fontSize: tkn.font.sizeXs,
+                        }}
+                        title="Checks experiment progress against the stored minimum runtime plan."
+                      >
+                        Runtime: <strong>{runtimeStatusLabel(healthQuery.data.runtime.status)}</strong>
+                        {' · '}
+                        {healthQuery.data.runtime.elapsed_days ?? 0} elapsed
+                        {healthQuery.data.runtime.planned_min_days != null
+                          ? ` / ${healthQuery.data.runtime.planned_min_days} planned minimum`
+                          : ''}
+                        {healthQuery.data.runtime.scheduled_days != null
+                          ? ` · ${healthQuery.data.runtime.scheduled_days} scheduled`
+                          : ''}
+                      </div>
                       {healthQuery.data.ready_state.reasons.length > 0 && (
                         <div style={{ marginTop: tkn.space.xs }}>
                           <strong style={{ fontSize: tkn.font.sizeXs }}>Top blockers</strong>
