@@ -44,6 +44,7 @@ interface ExperimentSummary {
   source_journey_definition_id?: string | null
   config_id?: string | null
   config_version?: number | null
+  execution?: ExperimentExecution | null
 }
 
 interface ExperimentSetup {
@@ -71,12 +72,25 @@ interface ExperimentSetup {
   config_version?: number | null
 }
 
+interface ExperimentExecution {
+  channel?: string | null
+  status?: 'planner_ready' | 'manual_only' | 'not_supported' | string
+  planner_ready?: boolean
+  can_auto_assign_history?: boolean
+  can_log_exposures?: boolean
+  can_log_outcomes?: boolean
+  assignment_mode?: string | null
+  exposure_mode?: string | null
+  notes?: string[]
+}
+
 interface ExperimentDetail extends ExperimentSummary {
   notes?: string | null
   segment?: Record<string, unknown>
   policy?: Record<string, unknown>
   guardrails?: Record<string, unknown>
   setup?: ExperimentSetup | null
+  execution?: ExperimentExecution | null
 }
 
 interface ExperimentResults {
@@ -169,6 +183,7 @@ interface SetupContextChannel {
   eligible: boolean
   delivery_class: 'owned' | 'observed'
   notes: string[]
+  execution?: ExperimentExecution | null
 }
 
 interface SetupContextKpi {
@@ -238,6 +253,7 @@ interface DesignRecommendation {
     readiness?: 'ready_to_launch' | 'needs_more_volume' | 'insufficient_signal' | 'no_data' | string
     reason?: string | null
   }
+  execution?: ExperimentExecution | null
   warnings: string[]
 }
 
@@ -264,6 +280,13 @@ function runtimeStatusLabel(value?: string | null): string {
   if (value === 'ok') return 'On track'
   if (value === 'warn') return 'Below planned runtime'
   if (value === 'not_started') return 'Not started'
+  return value || 'Unknown'
+}
+
+function executionStatusLabel(value?: string | null): string {
+  if (value === 'planner_ready') return 'Planner-ready'
+  if (value === 'manual_only') return 'Manual execution'
+  if (value === 'not_supported') return 'Not supported'
   return value || 'Unknown'
 }
 
@@ -409,6 +432,30 @@ export default function IncrementalityPage() {
     },
   })
 
+  const autoAssignMutation = useMutation<
+    { treatment: number; control: number; total: number },
+    Error,
+    { id: number; channel: string; start_at: string; end_at: string; treatment_rate: number }
+  >({
+    mutationFn: async ({ id, channel, start_at, end_at, treatment_rate }) =>
+      apiSendJson<{ treatment: number; control: number; total: number }>(
+        `/api/experiments/${id}/auto-assign`,
+        'POST',
+        {
+          channel,
+          start_date: start_at,
+          end_date: end_at,
+          treatment_rate,
+        },
+        { fallbackMessage: 'Failed to auto-assign experiment from observed journeys' },
+      ),
+    onSuccess: () => {
+      healthQuery.refetch()
+      resultsQuery.refetch()
+      detailQuery.refetch()
+    },
+  })
+
   const healthQuery = useQuery<ExperimentHealth>({
     queryKey: ['experiment-health', selectedId],
     queryFn: async () => apiGetJson<ExperimentHealth>(`/api/experiments/${selectedId}/health`, {
@@ -499,6 +546,7 @@ export default function IncrementalityPage() {
   const selectedJourneyHref = buildJourneyLabHref(selectedSummary)
   const detailSetup = detailQuery.data?.setup ?? null
   const designRecommendation = designRecommendationQuery.data
+  const detailExecution = detailQuery.data?.execution ?? selectedSummary?.execution ?? null
 
   const statusLabel = (status: string): string => {
     if (status === 'completed') return 'Stopped'
@@ -1132,6 +1180,12 @@ export default function IncrementalityPage() {
                       {selectedSetupChannel.notes.join(' ')}
                     </div>
                   )}
+                  {selectedSetupChannel.execution && (
+                    <div style={{ gridColumn: '1 / -1', fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                      Execution: <strong style={{ color: tkn.color.text }}>{executionStatusLabel(selectedSetupChannel.execution.status)}</strong>
+                      {selectedSetupChannel.execution.notes?.length ? ` · ${selectedSetupChannel.execution.notes[0]}` : ''}
+                    </div>
+                  )}
                 </div>
               )}
               {!!setupContext?.warnings?.length && (
@@ -1254,6 +1308,12 @@ export default function IncrementalityPage() {
                   {!!designRecommendation.warnings.length && (
                     <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
                       {designRecommendation.warnings.join(' ')}
+                    </div>
+                  )}
+                  {designRecommendation.execution && (
+                    <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                      Execution path: <strong style={{ color: tkn.color.text }}>{executionStatusLabel(designRecommendation.execution.status)}</strong>
+                      {designRecommendation.execution.notes?.length ? ` · ${designRecommendation.execution.notes[0]}` : ''}
                     </div>
                   )}
                 </div>
@@ -1629,6 +1689,13 @@ export default function IncrementalityPage() {
                     ) : null}
                   </p>
                 )}
+                {detailExecution && (
+                  <p style={{ margin: '0 0 4px', fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                    Execution <strong>{executionStatusLabel(detailExecution.status)}</strong>
+                    {detailExecution.assignment_mode ? <> • Assignment <strong>{detailExecution.assignment_mode}</strong></> : null}
+                    {detailExecution.exposure_mode ? <> • Exposures <strong>{detailExecution.exposure_mode}</strong></> : null}
+                  </p>
+                )}
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: tkn.space.xs, marginTop: tkn.space.sm }}>
                   {selectedSummary?.status === 'draft' && (
                     <button
@@ -1674,6 +1741,33 @@ export default function IncrementalityPage() {
                       Stop experiment
                     </button>
                   )}
+                  {selectedSummary && detailExecution?.can_auto_assign_history && selectedSummary.status !== 'completed' && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        autoAssignMutation.mutate({
+                          id: selectedSummary.id,
+                          channel: selectedSummary.channel,
+                          start_at: selectedSummary.start_at,
+                          end_at: selectedSummary.end_at,
+                          treatment_rate: detailSetup?.treatment_rate ?? 0.5,
+                        })
+                      }
+                      style={{
+                        padding: `${tkn.space.xs}px ${tkn.space.md}px`,
+                        fontSize: tkn.font.sizeXs,
+                        fontWeight: tkn.font.weightMedium,
+                        color: tkn.color.accent,
+                        backgroundColor: 'transparent',
+                        border: `1px solid ${tkn.color.accent}`,
+                        borderRadius: tkn.radius.sm,
+                        cursor: autoAssignMutation.isPending ? 'wait' : 'pointer',
+                      }}
+                      title="Seed assignments from observed journeys for this channel and date window."
+                    >
+                      {autoAssignMutation.isPending ? 'Auto-assigning…' : 'Auto-assign from journeys'}
+                    </button>
+                  )}
                   {selectedSummary?.status === 'completed' && (
                     <button
                       type="button"
@@ -1717,6 +1811,16 @@ export default function IncrementalityPage() {
                   {statusMutation.isError && (
                     <span style={{ fontSize: tkn.font.sizeXs, color: tkn.color.danger }}>
                       {(statusMutation.error as Error).message}
+                    </span>
+                  )}
+                  {autoAssignMutation.isSuccess && (
+                    <span style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                      Auto-assigned {autoAssignMutation.data.total} profiles from observed journeys.
+                    </span>
+                  )}
+                  {autoAssignMutation.isError && (
+                    <span style={{ fontSize: tkn.font.sizeXs, color: tkn.color.danger }}>
+                      {autoAssignMutation.error.message}
                     </span>
                   )}
                 </div>
