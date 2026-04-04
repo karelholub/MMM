@@ -4,6 +4,10 @@ import { tokens } from '../theme/tokens'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import { navigateForRecommendedAction } from '../lib/recommendedActions'
+import {
+  createAdsChangeRequestsFromBudgetRecommendation,
+  type AdsProviderKey,
+} from '../connectors/adsManagerConnector'
 
 const t = tokens
 
@@ -106,10 +110,59 @@ interface SavedBudgetScenario {
   recommendations: BudgetRecommendationItem[]
 }
 
+interface CampaignSummaryItem {
+  channel: string
+  campaign: string
+  mean_spend: number
+  roi?: number
+}
+
+interface BudgetRealizationItem {
+  scenario_id: string
+  run_id: string
+  objective: string
+  created_at?: string | null
+  expected_impact: {
+    delta_pct?: number
+    reallocated_spend?: number
+  }
+  execution: {
+    counts: Record<string, number>
+    proposed_budget_delta_total: number
+    applied_budget_delta_total: number
+    execution_progress_pct: number
+    projected_realized_lift_pct: number
+    latest_change_at?: string | null
+  }
+  change_requests: Array<{
+    id: string
+    provider: AdsProviderKey
+    entity_id: string
+    status: string
+    proposed_daily_budget: number
+    previous_daily_budget: number
+    delta_budget: number
+    error_message?: string | null
+  }>
+}
+
+interface BudgetRealizationResponse {
+  items: BudgetRealizationItem[]
+  total: number
+}
+
 function formatCurrency(val: number): string {
   if (val >= 1_000_000) return `$${(val / 1_000_000).toFixed(1)}M`
   if (val >= 1_000) return `$${(val / 1_000).toFixed(0)}K`
   return `$${val.toFixed(0)}`
+}
+
+function providerFromBudgetChannel(channel: string): AdsProviderKey | null {
+  const key = (channel || '').toLowerCase()
+  if (key.includes('google')) return 'google_ads'
+  if (key.includes('meta') || key.includes('facebook') || key.includes('fb')) return 'meta_ads'
+  if (key.includes('linkedin')) return 'linkedin_ads'
+  return null
 }
 
 export default function BudgetOptimizer({
@@ -185,6 +238,28 @@ export default function BudgetOptimizer({
     enabled: !!runId,
   })
 
+  const campaignSummaryQuery = useQuery<CampaignSummaryItem[]>({
+    queryKey: ['budget-campaign-summary', runId],
+    queryFn: async () => {
+      if (!runId) return []
+      return apiGetJson<CampaignSummaryItem[]>(`/api/models/${runId}/summary/campaign`, {
+        fallbackMessage: 'Failed to load campaign summary',
+      }).catch(() => [])
+    },
+    enabled: !!runId,
+  })
+
+  const realizationQuery = useQuery<BudgetRealizationResponse>({
+    queryKey: ['budget-realization', runId],
+    queryFn: async () => {
+      if (!runId) return { items: [], total: 0 }
+      return apiGetJson<BudgetRealizationResponse>(`/api/models/${runId}/budget/realization`, {
+        fallbackMessage: 'Failed to load budget realization',
+      })
+    },
+    enabled: !!runId,
+  })
+
   const saveScenarioMutation = useMutation({
     mutationFn: async () => {
       if (!runId) throw new Error('Missing model run')
@@ -202,6 +277,57 @@ export default function BudgetOptimizer({
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['budget-scenarios', runId] })
+    },
+  })
+
+  const createChangeRequestsMutation = useMutation({
+    mutationFn: async () => {
+      if (!runId || !topRecommendation) throw new Error('Recommendation is unavailable')
+      const existingScenario =
+        savedScenariosQuery.data?.items?.find(
+          (item) =>
+            item.objective === recommendationObjective &&
+            Number(item.total_budget_change_pct || 0) === totalBudgetChangePct
+        ) ?? null
+      const scenario =
+        existingScenario ?? (await saveScenarioMutation.mutateAsync())
+      const recommendation =
+        scenario.recommendations.find((item) => item.id === topRecommendation.id) ??
+        scenario.recommendations[0]
+      if (!recommendation) throw new Error('Saved recommendation is unavailable')
+
+      const targets = recommendation.actions
+        .filter((action) => action.action !== 'hold')
+        .flatMap((action) => {
+          const provider = providerFromBudgetChannel(action.channel)
+          if (!provider) return []
+          const channelCampaigns = (campaignSummaryQuery.data ?? [])
+            .filter((row) => row.channel === action.channel)
+            .sort((a, b) => (Number(b.roi ?? 0) * Number(b.mean_spend ?? 0)) - (Number(a.roi ?? 0) * Number(a.mean_spend ?? 0)))
+            .slice(0, 2)
+          return channelCampaigns.map((campaign) => ({
+            channel: action.channel,
+            provider,
+            entity_id: campaign.campaign,
+            entity_name: campaign.campaign,
+            delta_pct: Number(action.delta_pct ?? 0),
+            reason: action.reason ?? recommendation.summary,
+          }))
+        })
+
+      if (!targets.length) {
+        throw new Error('No campaign targets are available for this recommendation yet')
+      }
+      return createAdsChangeRequestsFromBudgetRecommendation({
+        runId,
+        scenarioId: scenario.id,
+        recommendationId: recommendation.id,
+        targets,
+      })
+    },
+    onSuccess: async (_, _vars, _ctx) => {
+      await queryClient.invalidateQueries({ queryKey: ['budget-realization', runId] })
+      await queryClient.invalidateQueries({ queryKey: ['budget-scenarios', runId] })
     },
   })
 
@@ -722,7 +848,37 @@ export default function BudgetOptimizer({
                 >
                   Save recommendation
                 </button>
+                <button
+                  type="button"
+                  onClick={() => createChangeRequestsMutation.mutate()}
+                  disabled={!runId || createChangeRequestsMutation.isPending}
+                  style={{
+                    padding: `${t.space.sm}px ${t.space.md}px`,
+                    borderRadius: t.radius.sm,
+                    border: `1px solid ${t.color.warning}`,
+                    background: 'transparent',
+                    color: t.color.warning,
+                    cursor: !runId || createChangeRequestsMutation.isPending ? 'not-allowed' : 'pointer',
+                    fontWeight: t.font.weightMedium,
+                  }}
+                >
+                  {createChangeRequestsMutation.isPending ? 'Creating proposals…' : 'Create change requests'}
+                </button>
               </div>
+              {createChangeRequestsMutation.isError ? (
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.danger }}>
+                  {(createChangeRequestsMutation.error as Error).message}
+                </div>
+              ) : null}
+              {createChangeRequestsMutation.isSuccess ? (
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.success }}>
+                  Created {createChangeRequestsMutation.data.total} change request{createChangeRequestsMutation.data.total === 1 ? '' : 's'}
+                  {createChangeRequestsMutation.data.skipped_total
+                    ? `, skipped ${createChangeRequestsMutation.data.skipped_total}`
+                    : ''}
+                  .
+                </div>
+              ) : null}
             </div>
 
             <div style={{ display: 'grid', gap: t.space.md }}>
@@ -803,6 +959,58 @@ export default function BudgetOptimizer({
                     Scenario saved.
                   </div>
                 ) : null}
+              </div>
+
+              <div
+                style={{
+                  padding: t.space.lg,
+                  borderRadius: t.radius.md,
+                  border: `1px solid ${t.color.borderLight}`,
+                  background: t.color.surface,
+                }}
+              >
+                <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, marginBottom: t.space.sm }}>
+                  Rollout realization
+                </div>
+                {realizationQuery.data?.items?.length ? (
+                  <div style={{ display: 'grid', gap: t.space.sm }}>
+                    {realizationQuery.data.items.slice(0, 3).map((item) => (
+                      <div
+                        key={item.scenario_id}
+                        style={{
+                          padding: t.space.sm,
+                          borderRadius: t.radius.sm,
+                          border: `1px solid ${t.color.borderLight}`,
+                          background: t.color.bg,
+                          display: 'grid',
+                          gap: 4,
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm }}>
+                          <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightMedium, color: t.color.text }}>
+                            {item.objective.replace(/_/g, ' ')}
+                          </div>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                            {item.execution.execution_progress_pct.toFixed(0)}% applied
+                          </div>
+                        </div>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                          Requests: {item.execution.counts.total} total, {item.execution.counts.pending_approval} pending, {item.execution.counts.applied} applied
+                        </div>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                          Budget moved: {formatCurrency(item.execution.applied_budget_delta_total)} applied of {formatCurrency(item.execution.proposed_budget_delta_total)} proposed
+                        </div>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                          Projected realized lift: +{item.execution.projected_realized_lift_pct.toFixed(1)}%
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    No rollout tracking yet. Create change requests from a saved recommendation to start tracking execution.
+                  </div>
+                )}
               </div>
             </div>
           </div>
