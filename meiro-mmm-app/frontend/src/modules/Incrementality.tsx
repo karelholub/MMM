@@ -290,6 +290,54 @@ function executionStatusLabel(value?: string | null): string {
   return value || 'Unknown'
 }
 
+function parseProfileIdsInput(raw: string): string[] {
+  return Array.from(
+    new Set(
+      raw
+        .split(/\r?\n|,/) 
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  )
+}
+
+function parseExposureInput(raw: string): Array<{ profile_id: string; exposure_ts: string; campaign_id?: string; message_id?: string }> {
+  const nowIso = new Date().toISOString()
+  return raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [profile_id, campaign_id, message_id, exposure_ts] = line.split(',').map((part) => part.trim())
+      if (!profile_id) throw new Error('Each exposure row must start with a profile id.')
+      return {
+        profile_id,
+        campaign_id: campaign_id || undefined,
+        message_id: message_id || undefined,
+        exposure_ts: exposure_ts || nowIso,
+      }
+    })
+}
+
+function parseOutcomeInput(raw: string): Array<{ profile_id: string; conversion_ts: string; value: number }> {
+  const nowIso = new Date().toISOString()
+  return raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [profile_id, valueRaw, conversion_ts] = line.split(',').map((part) => part.trim())
+      if (!profile_id) throw new Error('Each outcome row must start with a profile id.')
+      const value = Number(valueRaw || 0)
+      if (!Number.isFinite(value)) throw new Error(`Invalid outcome value for profile ${profile_id}.`)
+      return {
+        profile_id,
+        value,
+        conversion_ts: conversion_ts || nowIso,
+      }
+    })
+}
+
 function buildJourneyLabHref(summary?: ExperimentSummary | null): string | null {
   if (!summary || summary.source_type !== 'journey_hypothesis' || !summary.source_id || !summary.source_journey_definition_id) {
     return null
@@ -318,6 +366,10 @@ export default function IncrementalityPage() {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | 'draft' | 'running' | 'stopped'>('all')
   const [powerPlans, setPowerPlans] = useState<Record<number, PowerAnalysisResult>>({})
+  const [assignmentSeedInput, setAssignmentSeedInput] = useState('')
+  const [exposureLogInput, setExposureLogInput] = useState('')
+  const [outcomeLogInput, setOutcomeLogInput] = useState('')
+  const [executionFormError, setExecutionFormError] = useState('')
   const [form, setForm] = useState({
     name: '',
     channel: '',
@@ -456,6 +508,66 @@ export default function IncrementalityPage() {
     },
   })
 
+  const manualAssignMutation = useMutation<
+    { assigned: number; treatment: number; control: number },
+    Error,
+    { id: number; profile_ids: string[]; treatment_rate: number }
+  >({
+    mutationFn: async ({ id, profile_ids, treatment_rate }) =>
+      apiSendJson<{ assigned: number; treatment: number; control: number }>(
+        `/api/experiments/${id}/assign`,
+        'POST',
+        { profile_ids, treatment_rate },
+        { fallbackMessage: 'Failed to assign profiles' },
+      ),
+    onSuccess: () => {
+      healthQuery.refetch()
+      resultsQuery.refetch()
+      setAssignmentSeedInput('')
+      setExecutionFormError('')
+    },
+  })
+
+  const exposureLogMutation = useMutation<
+    { recorded: number },
+    Error,
+    { id: number; exposures: Array<{ profile_id: string; exposure_ts: string; campaign_id?: string; message_id?: string }> }
+  >({
+    mutationFn: async ({ id, exposures }) =>
+      apiSendJson<{ recorded: number }>(
+        `/api/experiments/${id}/exposures`,
+        'POST',
+        { exposures },
+        { fallbackMessage: 'Failed to log exposures' },
+      ),
+    onSuccess: () => {
+      healthQuery.refetch()
+      resultsQuery.refetch()
+      setExposureLogInput('')
+      setExecutionFormError('')
+    },
+  })
+
+  const outcomeLogMutation = useMutation<
+    { inserted: number },
+    Error,
+    { id: number; outcomes: Array<{ profile_id: string; conversion_ts: string; value: number }> }
+  >({
+    mutationFn: async ({ id, outcomes }) =>
+      apiSendJson<{ inserted: number }>(
+        `/api/experiments/${id}/outcomes`,
+        'POST',
+        { outcomes },
+        { fallbackMessage: 'Failed to log outcomes' },
+      ),
+    onSuccess: () => {
+      healthQuery.refetch()
+      resultsQuery.refetch()
+      setOutcomeLogInput('')
+      setExecutionFormError('')
+    },
+  })
+
   const healthQuery = useQuery<ExperimentHealth>({
     queryKey: ['experiment-health', selectedId],
     queryFn: async () => apiGetJson<ExperimentHealth>(`/api/experiments/${selectedId}/health`, {
@@ -547,6 +659,31 @@ export default function IncrementalityPage() {
   const detailSetup = detailQuery.data?.setup ?? null
   const designRecommendation = designRecommendationQuery.data
   const detailExecution = detailQuery.data?.execution ?? selectedSummary?.execution ?? null
+  const executionChecklist = useMemo(() => {
+    if (!healthQuery.data) return []
+    return [
+      {
+        label: 'Assignments logged',
+        status: healthQuery.data.data_completeness.assignments.status === 'ok' ? 'done' : 'todo',
+      },
+      {
+        label: 'Exposures logged',
+        status: healthQuery.data.data_completeness.exposures.status === 'ok' ? 'done' : 'todo',
+      },
+      {
+        label: 'Outcomes logged',
+        status: healthQuery.data.data_completeness.outcomes.status === 'ok' ? 'done' : 'todo',
+      },
+      {
+        label: 'Balance within plan',
+        status: healthQuery.data.balance.status === 'ok' ? 'done' : 'warn',
+      },
+      {
+        label: 'Runtime target met',
+        status: healthQuery.data.runtime.status === 'ok' ? 'done' : 'todo',
+      },
+    ]
+  }, [healthQuery.data])
 
   const statusLabel = (status: string): string => {
     if (status === 'completed') return 'Stopped'
@@ -1903,6 +2040,266 @@ export default function IncrementalityPage() {
                     )}
                   </div>
                 ) : null}
+              </div>
+
+              {/* Health + results */}
+              <div
+                style={{
+                  background: tkn.color.surface,
+                  border: `1px solid ${tkn.color.borderLight}`,
+                  borderRadius: tkn.radius.lg,
+                  padding: tkn.space.lg,
+                  boxShadow: tkn.shadowSm,
+                  marginBottom: tkn.space.lg,
+                }}
+              >
+                <h3
+                  style={{
+                    margin: 0,
+                    fontSize: tkn.font.sizeSm,
+                    fontWeight: tkn.font.weightSemibold,
+                    color: tkn.color.text,
+                  }}
+                >
+                  Execution
+                </h3>
+                <p style={{ margin: '4px 0 10px', fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                  Seed assignments and log exposures/outcomes directly when the channel is planner-ready or still manually operated.
+                </p>
+                {detailExecution && (
+                  <div style={{ marginBottom: tkn.space.md, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                    <strong style={{ color: tkn.color.text }}>Execution mode:</strong> {executionStatusLabel(detailExecution.status)}
+                    {detailExecution.notes?.length ? ` · ${detailExecution.notes.join(' ')}` : ''}
+                  </div>
+                )}
+                {!!executionChecklist.length && (
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
+                      gap: tkn.space.xs,
+                      marginBottom: tkn.space.md,
+                    }}
+                  >
+                    {executionChecklist.map((item) => (
+                      <div
+                        key={item.label}
+                        style={{
+                          padding: tkn.space.xs,
+                          borderRadius: tkn.radius.sm,
+                          border: `1px solid ${tkn.color.borderLight}`,
+                          background:
+                            item.status === 'done'
+                              ? tkn.color.accentMuted
+                              : item.status === 'warn'
+                                ? '#fff4e5'
+                                : tkn.color.surfaceMuted ?? tkn.color.surface,
+                          fontSize: tkn.font.sizeXs,
+                          color: tkn.color.textSecondary,
+                        }}
+                      >
+                        <strong style={{ color: tkn.color.text }}>
+                          {item.status === 'done' ? 'Done' : item.status === 'warn' ? 'Warn' : 'Todo'}
+                        </strong>
+                        <br />
+                        {item.label}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                    gap: tkn.space.md,
+                  }}
+                >
+                  <div style={{ display: 'grid', gap: tkn.space.xs }}>
+                    <strong style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>Assignments</strong>
+                    <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                      Paste profile ids separated by commas or new lines.
+                    </div>
+                    <textarea
+                      rows={6}
+                      value={assignmentSeedInput}
+                      onChange={(e) => setAssignmentSeedInput(e.target.value)}
+                      placeholder={'profile_001\nprofile_002\nprofile_003'}
+                      style={{
+                        width: '100%',
+                        padding: tkn.space.sm,
+                        border: `1px solid ${tkn.color.border}`,
+                        borderRadius: tkn.radius.sm,
+                        fontSize: tkn.font.sizeSm,
+                        resize: 'vertical',
+                      }}
+                    />
+                    <button
+                      type="button"
+                      disabled={!selectedSummary || manualAssignMutation.isPending}
+                      onClick={() => {
+                        if (!selectedSummary) return
+                        const profile_ids = parseProfileIdsInput(assignmentSeedInput)
+                        if (!profile_ids.length) {
+                          setExecutionFormError('Add at least one profile id to assign.')
+                          return
+                        }
+                        setExecutionFormError('')
+                        manualAssignMutation.mutate({
+                          id: selectedSummary.id,
+                          profile_ids,
+                          treatment_rate: detailSetup?.treatment_rate ?? 0.5,
+                        })
+                      }}
+                      style={{
+                        padding: `${tkn.space.xs}px ${tkn.space.md}px`,
+                        fontSize: tkn.font.sizeXs,
+                        fontWeight: tkn.font.weightMedium,
+                        color: tkn.color.surface,
+                        backgroundColor: tkn.color.accent,
+                        border: 'none',
+                        borderRadius: tkn.radius.sm,
+                        cursor: manualAssignMutation.isPending ? 'wait' : 'pointer',
+                      }}
+                    >
+                      {manualAssignMutation.isPending ? 'Assigning…' : 'Assign profiles'}
+                    </button>
+                    {manualAssignMutation.isSuccess && (
+                      <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                        Assigned {manualAssignMutation.data.assigned} profiles.
+                      </div>
+                    )}
+                    {manualAssignMutation.isError && (
+                      <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.danger }}>
+                        {manualAssignMutation.error.message}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display: 'grid', gap: tkn.space.xs }}>
+                    <strong style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>Exposures</strong>
+                    <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                      One line per exposure: `profile_id,campaign_id,message_id,exposure_ts`
+                    </div>
+                    <textarea
+                      rows={6}
+                      value={exposureLogInput}
+                      onChange={(e) => setExposureLogInput(e.target.value)}
+                      placeholder={'profile_001,email_q2,msg_1001,2026-04-04T09:00:00Z'}
+                      style={{
+                        width: '100%',
+                        padding: tkn.space.sm,
+                        border: `1px solid ${tkn.color.border}`,
+                        borderRadius: tkn.radius.sm,
+                        fontSize: tkn.font.sizeSm,
+                        resize: 'vertical',
+                      }}
+                    />
+                    <button
+                      type="button"
+                      disabled={!selectedSummary || exposureLogMutation.isPending}
+                      onClick={() => {
+                        if (!selectedSummary) return
+                        try {
+                          const exposures = parseExposureInput(exposureLogInput)
+                          if (!exposures.length) {
+                            setExecutionFormError('Add at least one exposure row.')
+                            return
+                          }
+                          setExecutionFormError('')
+                          exposureLogMutation.mutate({ id: selectedSummary.id, exposures })
+                        } catch (error) {
+                          setExecutionFormError(error instanceof Error ? error.message : 'Failed to parse exposure rows.')
+                        }
+                      }}
+                      style={{
+                        padding: `${tkn.space.xs}px ${tkn.space.md}px`,
+                        fontSize: tkn.font.sizeXs,
+                        fontWeight: tkn.font.weightMedium,
+                        color: tkn.color.surface,
+                        backgroundColor: tkn.color.accent,
+                        border: 'none',
+                        borderRadius: tkn.radius.sm,
+                        cursor: exposureLogMutation.isPending ? 'wait' : 'pointer',
+                      }}
+                    >
+                      {exposureLogMutation.isPending ? 'Logging…' : 'Log exposures'}
+                    </button>
+                    {exposureLogMutation.isSuccess && (
+                      <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                        Logged {exposureLogMutation.data.recorded} exposures.
+                      </div>
+                    )}
+                    {exposureLogMutation.isError && (
+                      <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.danger }}>
+                        {exposureLogMutation.error.message}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display: 'grid', gap: tkn.space.xs }}>
+                    <strong style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>Outcomes</strong>
+                    <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                      One line per outcome: `profile_id,value,conversion_ts`
+                    </div>
+                    <textarea
+                      rows={6}
+                      value={outcomeLogInput}
+                      onChange={(e) => setOutcomeLogInput(e.target.value)}
+                      placeholder={'profile_001,120,2026-04-05T13:30:00Z'}
+                      style={{
+                        width: '100%',
+                        padding: tkn.space.sm,
+                        border: `1px solid ${tkn.color.border}`,
+                        borderRadius: tkn.radius.sm,
+                        fontSize: tkn.font.sizeSm,
+                        resize: 'vertical',
+                      }}
+                    />
+                    <button
+                      type="button"
+                      disabled={!selectedSummary || outcomeLogMutation.isPending}
+                      onClick={() => {
+                        if (!selectedSummary) return
+                        try {
+                          const outcomes = parseOutcomeInput(outcomeLogInput)
+                          if (!outcomes.length) {
+                            setExecutionFormError('Add at least one outcome row.')
+                            return
+                          }
+                          setExecutionFormError('')
+                          outcomeLogMutation.mutate({ id: selectedSummary.id, outcomes })
+                        } catch (error) {
+                          setExecutionFormError(error instanceof Error ? error.message : 'Failed to parse outcome rows.')
+                        }
+                      }}
+                      style={{
+                        padding: `${tkn.space.xs}px ${tkn.space.md}px`,
+                        fontSize: tkn.font.sizeXs,
+                        fontWeight: tkn.font.weightMedium,
+                        color: tkn.color.surface,
+                        backgroundColor: tkn.color.accent,
+                        border: 'none',
+                        borderRadius: tkn.radius.sm,
+                        cursor: outcomeLogMutation.isPending ? 'wait' : 'pointer',
+                      }}
+                    >
+                      {outcomeLogMutation.isPending ? 'Logging…' : 'Log outcomes'}
+                    </button>
+                    {outcomeLogMutation.isSuccess && (
+                      <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                        Logged {outcomeLogMutation.data.inserted} outcomes.
+                      </div>
+                    )}
+                    {outcomeLogMutation.isError && (
+                      <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.danger }}>
+                        {outcomeLogMutation.error.message}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                {executionFormError && (
+                  <div style={{ marginTop: tkn.space.sm, fontSize: tkn.font.sizeXs, color: tkn.color.danger }}>
+                    {executionFormError}
+                  </div>
+                )}
               </div>
 
               {/* Health + results */}
