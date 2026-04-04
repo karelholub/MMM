@@ -111,6 +111,57 @@ def test_analysis_shape_and_source():
         db.close()
 
 
+def test_analysis_applies_nba_thresholds_and_promoted_policy_overrides():
+    db = _unit_db_session()
+    try:
+        _seed(db)
+        out = build_conversion_paths_analysis_from_daily(
+            db,
+            definition_id="jd-adapter",
+            date_from=date(2026, 2, 1),
+            date_to=date(2026, 2, 28),
+            direct_mode="include",
+            path_scope="all",
+            nba_config={
+                "min_prefix_support": 1,
+                "min_conversion_rate": 0.85,
+                "max_prefix_depth": 5,
+                "min_next_support": 10,
+                "max_suggestions_per_prefix": 3,
+                "min_uplift_pct": 0.1,
+                "excluded_channels": ["direct"],
+                "promoted_journey_policies": [
+                    {
+                        "hypothesis_id": "hyp-adapter-policy",
+                        "title": "Promote checkout continuation",
+                        "journey_definition_id": "jd-adapter",
+                        "prefix": "Organic Landing > Product View / Content View",
+                        "prefix_steps": [
+                            "Organic Landing",
+                            "Product View / Content View",
+                        ],
+                        "step": "Checkout / Form Submit",
+                        "channel": "Checkout / Form Submit",
+                    }
+                ],
+            },
+        )
+
+        paid_prefix = "Paid Landing > Product View / Content View"
+        organic_prefix = "Organic Landing > Product View / Content View"
+
+        assert paid_prefix not in out["next_best_by_prefix"]
+        assert organic_prefix in out["next_best_by_prefix"]
+        kept = out["next_best_by_prefix"][organic_prefix]
+        assert len(kept) == 1
+        assert kept[0]["step"] == "Checkout / Form Submit"
+        assert kept[0]["is_promoted_policy"] is True
+        assert kept[0]["promoted_policy_hypothesis_id"] == "hyp-adapter-policy"
+        assert out["nba_config"]["promoted_journey_policies"][0]["hypothesis_id"] == "hyp-adapter-policy"
+    finally:
+        db.close()
+
+
 def test_details_returns_selected_path_summary():
     db = _unit_db_session()
     try:

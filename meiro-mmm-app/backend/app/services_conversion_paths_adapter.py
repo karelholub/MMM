@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session
 
 from .models_config_dq import JourneyDefinition, JourneyDefinitionInstanceFact, JourneyPathDaily
 from .services_journey_path_outputs import list_paths_from_outputs
+from .modules.settings.schemas import NBASettings
+from .services_nba_defaults import filter_nba_recommendations
 
 
 def _steps_from_value(path_steps: Any) -> List[str]:
@@ -149,6 +151,7 @@ def build_conversion_paths_analysis_from_daily(
     country: Optional[str] = None,
     nba_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    nba_settings = NBASettings(**(nba_config or {}))
     definition = _resolve_definition(db, definition_id)
     if not definition:
         return {
@@ -162,7 +165,7 @@ def build_conversion_paths_analysis_from_daily(
             "direct_unknown_diagnostics": {"touchpoint_share": 0.0, "journeys_ending_direct_share": 0.0},
             "config": None,
             "view_filters": {"direct_mode": direct_mode, "path_scope": path_scope},
-            "nba_config": nba_config or {},
+            "nba_config": nba_settings.model_dump(),
             "next_best_by_prefix": {},
             "next_best_by_prefix_campaign": {},
             "source": "journey_paths_daily",
@@ -182,7 +185,7 @@ def build_conversion_paths_analysis_from_daily(
             "direct_unknown_diagnostics": {"touchpoint_share": 0.0, "journeys_ending_direct_share": 0.0},
             "config": None,
             "view_filters": {"direct_mode": direct_mode, "path_scope": "all" if mode == "all_journeys" else "converted"},
-            "nba_config": nba_config or {},
+            "nba_config": nba_settings.model_dump(),
             "next_best_by_prefix": {},
             "next_best_by_prefix_campaign": {},
             "source": "journey_paths_daily",
@@ -303,7 +306,7 @@ def build_conversion_paths_analysis_from_daily(
             "direct_unknown_diagnostics": {"touchpoint_share": 0.0, "journeys_ending_direct_share": 0.0},
             "config": None,
             "view_filters": {"direct_mode": direct_mode, "path_scope": "all" if mode == "all_journeys" else "converted"},
-            "nba_config": nba_config or {},
+            "nba_config": nba_settings.model_dump(),
             "next_best_by_prefix": {},
             "next_best_by_prefix_campaign": {},
             "source": "journey_definition_facts" if fallback else "journey_paths_daily",
@@ -351,7 +354,7 @@ def build_conversion_paths_analysis_from_daily(
 
     common_paths.sort(key=lambda p: p["count"], reverse=True)
 
-    next_best_by_prefix: Dict[str, List[Dict[str, Any]]] = {}
+    next_best_raw: Dict[str, List[Dict[str, Any]]] = {}
     for prefix, recs in next_step_stats.items():
         rec_list: List[Dict[str, Any]] = []
         for step, stats in recs.items():
@@ -370,7 +373,12 @@ def build_conversion_paths_analysis_from_daily(
                 }
             )
         rec_list.sort(key=lambda r: (r["conversion_rate"], r["count"]), reverse=True)
-        next_best_by_prefix[prefix] = rec_list[:5]
+        next_best_raw[prefix] = rec_list
+
+    next_best_by_prefix, _nba_stats = filter_nba_recommendations(
+        next_best_raw,
+        nba_settings,
+    )
 
     path_len_min = min(path_len_counts) if path_len_counts else 0
     path_len_max = max(path_len_counts) if path_len_counts else 0
@@ -406,7 +414,7 @@ def build_conversion_paths_analysis_from_daily(
             "direct_mode": direct_mode,
             "path_scope": "all" if mode == "all_journeys" else "converted",
         },
-        "nba_config": nba_config or {},
+        "nba_config": nba_settings.model_dump(),
         "next_best_by_prefix": next_best_by_prefix,
         "next_best_by_prefix_campaign": {},
         "source": "journey_definition_facts" if fallback else "journey_paths_daily",
