@@ -273,6 +273,51 @@ interface LinkedExperimentSummary {
   source_name?: string | null
 }
 
+interface LinkedExperimentDetail extends LinkedExperimentSummary {
+  notes?: string | null
+  segment?: Record<string, unknown>
+  policy?: Record<string, unknown>
+  guardrails?: Record<string, unknown>
+}
+
+interface LinkedExperimentResults {
+  experiment_id: number
+  status: string
+  treatment?: {
+    n: number
+    conversions: number
+    conversion_rate: number
+    total_value: number
+  }
+  control?: {
+    n: number
+    conversions: number
+    conversion_rate: number
+    total_value: number
+  }
+  uplift_abs?: number | null
+  uplift_rel?: number | null
+  ci_low?: number | null
+  ci_high?: number | null
+  p_value?: number | null
+  insufficient_data?: boolean
+}
+
+interface LinkedExperimentHealth {
+  experiment_id: number
+  sample: { treatment: number; control: number }
+  exposures: { treatment: number; control: number }
+  outcomes: { treatment: number; control: number }
+  balance: { status: 'ok' | 'warn'; expected_share: number; observed_share: number }
+  data_completeness: {
+    assignments: { status: 'ok' | 'fail' }
+    outcomes: { status: 'ok' | 'fail' }
+    exposures: { status: 'ok' | 'warn' }
+  }
+  overlap_risk: { status: 'ok' | 'warn'; overlapping_profiles: number }
+  ready_state: { label: 'not_ready' | 'early' | 'ready'; reasons: string[] }
+}
+
 interface JourneyHypothesisExperimentLinkResponse {
   experiment: LinkedExperimentSummary
   hypothesis: JourneyHypothesisRecord
@@ -408,7 +453,7 @@ interface HypothesisExperimentDraft {
   notes: string
 }
 
-type JourneysTab = 'insights' | 'hypotheses' | 'policy' | 'paths' | 'flow' | 'examples' | 'funnels'
+type JourneysTab = 'insights' | 'hypotheses' | 'policy' | 'experiments' | 'paths' | 'flow' | 'examples' | 'funnels'
 type PathSortBy = 'journeys' | 'conversion_rate' | 'avg_time'
 
 interface SavedJourneyView {
@@ -511,6 +556,12 @@ function parseStepsText(v: string): string[] {
 function formatPercent(v: number): string {
   if (!Number.isFinite(v)) return '0.0%'
   return `${(v * 100).toFixed(1)}%`
+}
+
+function experimentStatusLabel(status: string): string {
+  const normalized = String(status || '').trim().toLowerCase()
+  if (!normalized) return 'Unknown'
+  return normalized.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase())
 }
 
 function formatSeconds(v: number | null | undefined): string {
@@ -746,6 +797,7 @@ export default function Journeys({
   const [hypothesisDraft, setHypothesisDraft] = useState<HypothesisDraft>(() => defaultHypothesisDraft())
   const [sandboxHypothesisId, setSandboxHypothesisId] = useState<string | null>(null)
   const [sandboxCandidateStep, setSandboxCandidateStep] = useState('')
+  const [selectedJourneyExperimentId, setSelectedJourneyExperimentId] = useState<number | null>(null)
   const [hypothesisExperimentDraft, setHypothesisExperimentDraft] = useState<HypothesisExperimentDraft>(() => {
     const start = new Date()
     const end = new Date()
@@ -1078,7 +1130,54 @@ export default function Journeys({
         fallbackMessage: 'Failed to load journey hypotheses',
       })
     },
-    enabled: !!selectedJourneyId && (activeTab === 'hypotheses' || activeTab === 'insights' || activeTab === 'policy') && !featureDisabled,
+    enabled: !!selectedJourneyId && (activeTab === 'hypotheses' || activeTab === 'insights' || activeTab === 'policy' || activeTab === 'experiments') && !featureDisabled,
+  })
+
+  const linkedExperimentSourceIds = useMemo(
+    () => Array.from(new Set((hypothesesQuery.data?.items ?? []).filter((item) => item.linked_experiment_id).map((item) => item.id))),
+    [hypothesesQuery.data?.items],
+  )
+
+  const linkedExperimentsQuery = useQuery<LinkedExperimentSummary[]>({
+    queryKey: ['journey-linked-experiments', selectedJourneyId, linkedExperimentSourceIds.join(',')],
+    queryFn: async () => {
+      const params = new URLSearchParams({ source_type: 'journey_hypothesis' })
+      linkedExperimentSourceIds.forEach((id) => params.append('source_id', id))
+      return apiGetJson<LinkedExperimentSummary[]>(`/api/experiments?${params.toString()}`, {
+        fallbackMessage: 'Failed to load linked journey experiments',
+      })
+    },
+    enabled: !!selectedJourneyId && activeTab === 'experiments' && linkedExperimentSourceIds.length > 0 && !featureDisabled,
+  })
+
+  const linkedExperimentDetailQuery = useQuery<LinkedExperimentDetail>({
+    queryKey: ['journey-linked-experiment-detail', selectedJourneyExperimentId],
+    queryFn: async () => {
+      return apiGetJson<LinkedExperimentDetail>(`/api/experiments/${selectedJourneyExperimentId}`, {
+        fallbackMessage: 'Failed to load journey experiment detail',
+      })
+    },
+    enabled: activeTab === 'experiments' && selectedJourneyExperimentId != null && !featureDisabled,
+  })
+
+  const linkedExperimentResultsQuery = useQuery<LinkedExperimentResults>({
+    queryKey: ['journey-linked-experiment-results', selectedJourneyExperimentId],
+    queryFn: async () => {
+      return apiGetJson<LinkedExperimentResults>(`/api/experiments/${selectedJourneyExperimentId}/results`, {
+        fallbackMessage: 'Failed to load journey experiment results',
+      })
+    },
+    enabled: activeTab === 'experiments' && selectedJourneyExperimentId != null && !featureDisabled,
+  })
+
+  const linkedExperimentHealthQuery = useQuery<LinkedExperimentHealth>({
+    queryKey: ['journey-linked-experiment-health', selectedJourneyExperimentId],
+    queryFn: async () => {
+      return apiGetJson<LinkedExperimentHealth>(`/api/experiments/${selectedJourneyExperimentId}/health`, {
+        fallbackMessage: 'Failed to load journey experiment health',
+      })
+    },
+    enabled: activeTab === 'experiments' && selectedJourneyExperimentId != null && !featureDisabled,
   })
 
   const policySimulationQuery = useQuery<JourneyPolicySimulationResponse>({
@@ -1102,7 +1201,7 @@ export default function Journeys({
         fallbackMessage: 'Failed to load learned journey policies',
       })
     },
-    enabled: !!selectedJourneyId && (activeTab === 'insights' || activeTab === 'policy' || activeTab === 'hypotheses') && !featureDisabled,
+    enabled: !!selectedJourneyId && (activeTab === 'insights' || activeTab === 'policy' || activeTab === 'hypotheses' || activeTab === 'experiments') && !featureDisabled,
   })
 
   const savedViewsQuery = useQuery<SavedJourneyViewsResponse>({
@@ -1337,7 +1436,7 @@ export default function Journeys({
     const params = readParams()
     setSelectedJourneyId(params.get('journey_id') || '')
     const tabParam = params.get('tab')
-    if (tabParam === 'insights' || tabParam === 'hypotheses' || tabParam === 'policy' || tabParam === 'paths' || tabParam === 'flow' || tabParam === 'examples' || tabParam === 'funnels') {
+    if (tabParam === 'insights' || tabParam === 'hypotheses' || tabParam === 'policy' || tabParam === 'experiments' || tabParam === 'paths' || tabParam === 'flow' || tabParam === 'examples' || tabParam === 'funnels') {
       setActiveTab(tabParam)
     }
     setExamplesPathHash(params.get('examples_path_hash') || '')
@@ -1407,6 +1506,17 @@ export default function Journeys({
   }, [hypothesesQuery.data?.items, sandboxHypothesisId])
 
   useEffect(() => {
+    const items = linkedExperimentsQuery.data ?? []
+    if (!items.length) {
+      setSelectedJourneyExperimentId(null)
+      return
+    }
+    if (!selectedJourneyExperimentId || !items.some((item) => item.id === selectedJourneyExperimentId)) {
+      setSelectedJourneyExperimentId(items[0].id)
+    }
+  }, [linkedExperimentsQuery.data, selectedJourneyExperimentId])
+
+  useEffect(() => {
     if (typeof window === 'undefined') return
     const params = readParams()
     if (selectedJourneyId) params.set('journey_id', selectedJourneyId)
@@ -1458,6 +1568,7 @@ export default function Journeys({
         { key: 'insights' as JourneysTab, label: 'Insights', visible: true, disabled: false },
         { key: 'hypotheses' as JourneysTab, label: 'Hypotheses', visible: true, disabled: false },
         { key: 'policy' as JourneysTab, label: 'Policy Sandbox', visible: true, disabled: false },
+        { key: 'experiments' as JourneysTab, label: 'Experiments', visible: true, disabled: false },
         { key: 'paths' as JourneysTab, label: 'Paths', visible: true, disabled: false },
         { key: 'flow' as JourneysTab, label: 'Flow', visible: true, disabled: false },
         { key: 'examples' as JourneysTab, label: 'Examples', visible: journeyExamplesEnabled, disabled: false },
@@ -1594,11 +1705,35 @@ export default function Journeys({
   ]
 
   const hypotheses = hypothesesQuery.data?.items ?? []
+  const linkedExperiments = linkedExperimentsQuery.data ?? []
   const insightItems = insightsQuery.data?.items ?? []
   const policyRecommendations = policyRecommendationsQuery.data?.items ?? []
   const hypothesisResultNote = typeof hypothesisDraft.result?.['note'] === 'string' ? String(hypothesisDraft.result['note']) : ''
   const activeHypothesis = editingHypothesisId ? hypotheses.find((item) => item.id === editingHypothesisId) || null : null
   const sandboxHypothesis = sandboxHypothesisId ? hypotheses.find((item) => item.id === sandboxHypothesisId) || null : null
+  const experimentHypothesisById = useMemo(
+    () =>
+      new Map(
+        hypotheses
+          .filter((item) => item.linked_experiment_id != null)
+          .map((item) => [Number(item.linked_experiment_id), item] as const),
+      ),
+    [hypotheses],
+  )
+  const selectedJourneyExperiment = selectedJourneyExperimentId != null ? linkedExperiments.find((item) => item.id === selectedJourneyExperimentId) || null : null
+  const selectedJourneyExperimentHypothesis = selectedJourneyExperimentId != null ? experimentHypothesisById.get(selectedJourneyExperimentId) || null : null
+  const linkedExperimentCounts = useMemo(
+    () =>
+      linkedExperiments.reduce(
+        (acc, item) => {
+          acc.total += 1
+          acc[item.status] = (acc[item.status] || 0) + 1
+          return acc
+        },
+        { total: 0, draft: 0, running: 0, completed: 0 } as Record<string, number>,
+      ),
+    [linkedExperiments],
+  )
   const hypothesisLearningCounts = useMemo(() => {
     return hypotheses.reduce<Record<string, number>>((acc, item) => {
       const key = getHypothesisLearningStage(item)
@@ -2797,6 +2932,232 @@ export default function Journeys({
                     </div>
                   ))}
                 </div>
+              </SectionCard>
+            </div>
+          )}
+
+          {activeTab === 'experiments' && (
+            <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'minmax(280px, 360px) minmax(0, 1fr)' }}>
+              <div style={{ display: 'grid', gap: t.space.md }}>
+                <SectionCard title="Experiment queue" subtitle="Journey hypotheses already linked into Incrementality.">
+                  <div style={{ display: 'grid', gap: t.space.sm }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: t.space.xs }}>
+                      {[
+                        { label: 'Total', value: linkedExperimentCounts.total || 0 },
+                        { label: 'Draft', value: linkedExperimentCounts.draft || 0 },
+                        { label: 'Running', value: linkedExperimentCounts.running || 0 },
+                        { label: 'Completed', value: linkedExperimentCounts.completed || 0 },
+                      ].map((metric) => (
+                        <div
+                          key={metric.label}
+                          style={{
+                            border: `1px solid ${t.color.borderLight}`,
+                            borderRadius: t.radius.sm,
+                            padding: '10px 12px',
+                            background: t.color.bg,
+                          }}
+                        >
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>{metric.label}</div>
+                          <div style={{ fontSize: t.font.sizeLg, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                            {metric.value.toLocaleString()}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    {linkedExperimentsQuery.isLoading ? (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading linked experiments…</div>
+                    ) : null}
+                    {linkedExperimentsQuery.isError ? (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{(linkedExperimentsQuery.error as Error).message}</div>
+                    ) : null}
+                    {!linkedExperimentsQuery.isLoading && !linkedExperiments.length ? (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                        No linked experiments yet. Create one from a hypothesis or the Policy Sandbox.
+                      </div>
+                    ) : null}
+                    {linkedExperiments.map((item) => {
+                      const linkedHypothesis = experimentHypothesisById.get(item.id)
+                      const isSelected = selectedJourneyExperimentId === item.id
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => setSelectedJourneyExperimentId(item.id)}
+                          style={{
+                            textAlign: 'left',
+                            border: `1px solid ${isSelected ? t.color.accent : t.color.borderLight}`,
+                            background: isSelected ? t.color.accentMuted : t.color.surface,
+                            borderRadius: t.radius.sm,
+                            padding: '10px 12px',
+                            cursor: 'pointer',
+                            display: 'grid',
+                            gap: 6,
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'center' }}>
+                            <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                              {item.name}
+                            </div>
+                            <span
+                              style={{
+                                border: `1px solid ${item.status === 'completed' ? t.color.success : item.status === 'running' ? t.color.accent : t.color.border}`,
+                                color: item.status === 'completed' ? t.color.success : item.status === 'running' ? t.color.accent : t.color.textSecondary,
+                                borderRadius: t.radius.full,
+                                padding: '2px 8px',
+                                fontSize: t.font.sizeXs,
+                              }}
+                            >
+                              {experimentStatusLabel(item.status)}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                            {item.channel} · {new Date(item.start_at).toLocaleDateString()} → {new Date(item.end_at).toLocaleDateString()}
+                          </div>
+                          {linkedHypothesis ? (
+                            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                              Hypothesis: {linkedHypothesis.title}
+                            </div>
+                          ) : null}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </SectionCard>
+              </div>
+
+              <SectionCard
+                title="Experiment detail"
+                subtitle="Inspect linked experiment status, measured results, and rollout guardrails without leaving Journey Lab."
+                actions={
+                  selectedJourneyExperimentHypothesis ? (
+                    <button
+                      type="button"
+                      onClick={() => loadHypothesisIntoDraft(selectedJourneyExperimentHypothesis)}
+                      style={{
+                        border: `1px solid ${t.color.border}`,
+                        background: t.color.surface,
+                        color: t.color.text,
+                        borderRadius: t.radius.sm,
+                        padding: '6px 10px',
+                        fontSize: t.font.sizeSm,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Open hypothesis
+                    </button>
+                  ) : undefined
+                }
+              >
+                {!selectedJourneyExperiment ? (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    Select a linked experiment to inspect its setup and measured readout.
+                  </div>
+                ) : (
+                  <div style={{ display: 'grid', gap: t.space.md }}>
+                    <div style={{ display: 'grid', gap: 6 }}>
+                      <div style={{ fontSize: t.font.sizeLg, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                        {selectedJourneyExperiment.name}
+                      </div>
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                        {selectedJourneyExperiment.channel} · {experimentStatusLabel(selectedJourneyExperiment.status)} ·{' '}
+                        {new Date(selectedJourneyExperiment.start_at).toLocaleDateString()} → {new Date(selectedJourneyExperiment.end_at).toLocaleDateString()}
+                      </div>
+                      {(selectedJourneyExperiment.source_type || selectedJourneyExperiment.source_name) && (
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                          Source: {selectedJourneyExperiment.source_type || 'linked source'}
+                          {selectedJourneyExperiment.source_name ? ` · ${selectedJourneyExperiment.source_name}` : ''}
+                        </div>
+                      )}
+                    </div>
+
+                    {linkedExperimentDetailQuery.isLoading ? (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading experiment detail…</div>
+                    ) : null}
+                    {linkedExperimentDetailQuery.isError ? (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{(linkedExperimentDetailQuery.error as Error).message}</div>
+                    ) : null}
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: t.space.sm }}>
+                      <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Ready to read</div>
+                        <div style={{ fontSize: t.font.sizeBase, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                          {linkedExperimentHealthQuery.data?.ready_state.label
+                            ? experimentStatusLabel(linkedExperimentHealthQuery.data.ready_state.label)
+                            : '—'}
+                        </div>
+                      </div>
+                      <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Sample</div>
+                        <div style={{ fontSize: t.font.sizeBase, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                          {linkedExperimentHealthQuery.data
+                            ? `${linkedExperimentHealthQuery.data.sample.treatment.toLocaleString()} / ${linkedExperimentHealthQuery.data.sample.control.toLocaleString()}`
+                            : '—'}
+                        </div>
+                      </div>
+                      <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Observed uplift</div>
+                        <div style={{ fontSize: t.font.sizeBase, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                          {linkedExperimentResultsQuery.data?.uplift_abs != null
+                            ? formatPercent(linkedExperimentResultsQuery.data.uplift_abs)
+                            : '—'}
+                        </div>
+                      </div>
+                      <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>p-value</div>
+                        <div style={{ fontSize: t.font.sizeBase, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                          {linkedExperimentResultsQuery.data?.p_value != null
+                            ? linkedExperimentResultsQuery.data.p_value.toFixed(3)
+                            : '—'}
+                        </div>
+                      </div>
+                    </div>
+
+                    {linkedExperimentResultsQuery.data?.insufficient_data ? (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>
+                        Results are not ready yet. Keep assignments and outcomes flowing before making a decision.
+                      </div>
+                    ) : null}
+
+                    {linkedExperimentHealthQuery.data?.ready_state.reasons?.length ? (
+                      <div style={{ display: 'grid', gap: 6 }}>
+                        {linkedExperimentHealthQuery.data.ready_state.reasons.map((reason, idx) => (
+                          <div key={idx} style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                            {reason}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    {linkedExperimentDetailQuery.data ? (
+                      <div style={{ display: 'grid', gap: t.space.sm }}>
+                        <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>Experiment setup</div>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                          Segment: {objectPreview(linkedExperimentDetailQuery.data.segment)}
+                        </div>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                          Policy: {objectPreview(linkedExperimentDetailQuery.data.policy)}
+                        </div>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                          Guardrails: {objectPreview(linkedExperimentDetailQuery.data.guardrails)}
+                        </div>
+                        {linkedExperimentDetailQuery.data.notes ? (
+                          <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                            Notes: {linkedExperimentDetailQuery.data.notes}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {selectedJourneyExperimentHypothesis ? (
+                      <div style={{ display: 'grid', gap: 6 }}>
+                        <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>
+                          Linked hypothesis evidence
+                        </div>
+                        {renderHypothesisLearningCard(selectedJourneyExperimentHypothesis)}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
               </SectionCard>
             </div>
           )}

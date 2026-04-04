@@ -3593,8 +3593,21 @@ def _resolve_experiment_source_names(db, rows: List[Experiment]) -> Dict[str, st
 
 
 @app.get("/api/experiments", response_model=List[ExperimentSummary])
-def list_experiments(db=Depends(get_db)):
-    rows = db.query(Experiment).order_by(Experiment.created_at.desc()).all()
+def list_experiments(
+    source_type: Optional[str] = Query(None),
+    source_id: Optional[List[str]] = Query(None),
+    db=Depends(get_db),
+):
+    query = db.query(Experiment)
+    if source_type:
+        query = query.filter(Experiment.source_type == source_type)
+    if source_id:
+        normalized_ids = [str(item).strip() for item in source_id if str(item).strip()]
+        if normalized_ids:
+            query = query.filter(Experiment.source_id.in_(normalized_ids))
+        else:
+            return []
+    rows = query.order_by(Experiment.created_at.desc()).all()
     source_names = _resolve_experiment_source_names(db, rows)
     return [ExperimentSummary(**serialize_experiment_summary(r, source_name=source_names.get(str(r.source_id)))) for r in rows]
 

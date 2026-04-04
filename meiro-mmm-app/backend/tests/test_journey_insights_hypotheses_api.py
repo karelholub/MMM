@@ -256,6 +256,24 @@ def test_journey_insights_and_hypothesis_crud_flow(client_and_session):
     assert listed[0]["source_type"] == "journey_hypothesis"
     assert listed[0]["source_name"] == updated["title"]
 
+    filtered_experiments = client.get(
+        "/api/experiments",
+        params={"source_type": "journey_hypothesis", "source_id": [created["id"]]},
+        headers=viewer_headers,
+    )
+    assert filtered_experiments.status_code == 200
+    filtered = filtered_experiments.json()
+    assert len(filtered) == 1
+    assert filtered[0]["source_id"] == created["id"]
+
+    filtered_empty = client.get(
+        "/api/experiments",
+        params={"source_type": "journey_hypothesis", "source_id": ["missing-hypothesis"]},
+        headers=viewer_headers,
+    )
+    assert filtered_empty.status_code == 200
+    assert filtered_empty.json() == []
+
     experiment_detail = client.get(f"/api/experiments/{experiment_payload['experiment']['id']}", headers=viewer_headers)
     assert experiment_detail.status_code == 200
     detail = experiment_detail.json()
