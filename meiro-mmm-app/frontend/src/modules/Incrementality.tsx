@@ -195,6 +195,37 @@ interface ModelConfigDetail {
   version: number
 }
 
+interface DesignRecommendation {
+  channel?: string | null
+  conversion_key?: string | null
+  date_from?: string | null
+  date_to?: string | null
+  observed: {
+    journeys: number
+    matching_kpi_conversions: number
+    non_converted_journeys: number
+    converted_journeys_any_kpi: number
+    observed_profiles: number
+    baseline_conversion_rate: number
+    avg_daily_eligible: number
+    window_days: number
+  }
+  recommendation: {
+    treatment_rate?: number | null
+    sample_target_total?: number | null
+    sample_target_treatment?: number | null
+    sample_target_control?: number | null
+    projected_runtime_days?: number | null
+    min_runtime_days?: number | null
+    alpha?: number | null
+    power?: number | null
+    mde?: number | null
+    readiness?: 'ready_to_launch' | 'needs_more_volume' | 'insufficient_signal' | 'no_data' | string
+    reason?: string | null
+  }
+  warnings: string[]
+}
+
 function formatRate(value?: number | null): string {
   if (value == null || !Number.isFinite(value)) return '—'
   return `${(value * 100).toFixed(1)}%`
@@ -204,6 +235,14 @@ function formatDateRangeLabel(dateFrom?: string | null, dateTo?: string | null):
   if (!dateFrom && !dateTo) return '—'
   if (dateFrom && dateTo) return `${dateFrom} – ${dateTo}`
   return dateFrom || dateTo || '—'
+}
+
+function plannerReadinessLabel(value?: string | null): string {
+  if (value === 'ready_to_launch') return 'Ready to launch'
+  if (value === 'needs_more_volume') return 'Needs more volume'
+  if (value === 'insufficient_signal') return 'Insufficient signal'
+  if (value === 'no_data') return 'No data'
+  return value || 'Unknown'
 }
 
 function buildJourneyLabHref(summary?: ExperimentSummary | null): string | null {
@@ -275,6 +314,33 @@ export default function IncrementalityPage() {
         fallbackMessage: 'Failed to load selected model config',
       }),
     enabled: !!selectedConfigId,
+  })
+
+  const designRecommendationQuery = useQuery<DesignRecommendation>({
+    queryKey: [
+      'experiment-design-recommendation',
+      form.channel,
+      form.conversion_key,
+      form.start_at,
+      form.end_at,
+      powerForm.alpha,
+      powerForm.power,
+      powerForm.mde,
+    ],
+    queryFn: async () => {
+      const params = new URLSearchParams()
+      params.set('channel', form.channel)
+      params.set('conversion_key', form.conversion_key)
+      params.set('date_from', form.start_at)
+      params.set('date_to', form.end_at)
+      params.set('alpha', String(powerForm.alpha))
+      params.set('power', String(powerForm.power))
+      params.set('mde', String(powerForm.mde))
+      return apiGetJson<DesignRecommendation>(`/api/experiments/recommend-design?${params.toString()}`, {
+        fallbackMessage: 'Failed to load experiment design recommendation',
+      })
+    },
+    enabled: !!form.channel && !!form.conversion_key && !!form.start_at && !!form.end_at,
   })
 
   const experimentsQuery = useQuery<ExperimentSummary[]>({
@@ -410,6 +476,7 @@ export default function IncrementalityPage() {
     selectedId != null ? experimentsQuery.data?.find((e) => e.id === selectedId) : undefined
   const selectedJourneyHref = buildJourneyLabHref(selectedSummary)
   const detailSetup = detailQuery.data?.setup ?? null
+  const designRecommendation = designRecommendationQuery.data
 
   const statusLabel = (status: string): string => {
     if (status === 'completed') return 'Stopped'
@@ -1056,6 +1123,122 @@ export default function IncrementalityPage() {
                   }}
                 >
                   {setupContext.warnings.join(' ')}
+                </div>
+              )}
+              {designRecommendation && (
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: tkn.space.sm,
+                    padding: tkn.space.md,
+                    border: `1px solid ${tkn.color.borderLight}`,
+                    borderRadius: tkn.radius.sm,
+                    background: tkn.color.surface,
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: tkn.space.sm, alignItems: 'center' }}>
+                    <div>
+                      <div style={{ fontSize: tkn.font.sizeSm, fontWeight: tkn.font.weightSemibold, color: tkn.color.text }}>
+                        Planner recommendation
+                      </div>
+                      <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                        {plannerReadinessLabel(designRecommendation.recommendation.readiness)}
+                        {designRecommendation.recommendation.reason ? ` · ${designRecommendation.recommendation.reason}` : ''}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setForm((prev) => ({
+                          ...prev,
+                          treatment_rate: designRecommendation.recommendation.treatment_rate ?? prev.treatment_rate,
+                          min_runtime_days:
+                            designRecommendation.recommendation.min_runtime_days != null
+                              ? String(designRecommendation.recommendation.min_runtime_days)
+                              : prev.min_runtime_days,
+                        }))
+                        setPowerForm((prev) => ({
+                          ...prev,
+                          baseline_rate: designRecommendation.observed.baseline_conversion_rate ?? prev.baseline_rate,
+                          mde: designRecommendation.recommendation.mde ?? prev.mde,
+                          alpha: designRecommendation.recommendation.alpha ?? prev.alpha,
+                          power: designRecommendation.recommendation.power ?? prev.power,
+                          treatment_rate: designRecommendation.recommendation.treatment_rate ?? prev.treatment_rate,
+                        }))
+                      }}
+                      style={{
+                        padding: `${tkn.space.xs}px ${tkn.space.md}px`,
+                        fontSize: tkn.font.sizeXs,
+                        fontWeight: tkn.font.weightMedium,
+                        color: tkn.color.accent,
+                        backgroundColor: 'transparent',
+                        border: `1px solid ${tkn.color.accent}`,
+                        borderRadius: tkn.radius.sm,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Apply recommendation
+                    </button>
+                  </div>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+                      gap: tkn.space.sm,
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>Recommended split</div>
+                      <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>
+                        {designRecommendation.recommendation.treatment_rate != null
+                          ? `${(designRecommendation.recommendation.treatment_rate * 100).toFixed(0)}% / ${((1 - designRecommendation.recommendation.treatment_rate) * 100).toFixed(0)}%`
+                          : '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>Sample target</div>
+                      <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>
+                        {designRecommendation.recommendation.sample_target_total?.toLocaleString() ?? '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>Projected runtime</div>
+                      <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>
+                        {designRecommendation.recommendation.projected_runtime_days != null
+                          ? `${designRecommendation.recommendation.projected_runtime_days} days`
+                          : '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>Observed daily volume</div>
+                      <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>
+                        {designRecommendation.observed.avg_daily_eligible}
+                      </div>
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                      gap: tkn.space.sm,
+                      fontSize: tkn.font.sizeXs,
+                      color: tkn.color.textSecondary,
+                    }}
+                  >
+                    <div>Baseline: <strong style={{ color: tkn.color.text }}>{formatRate(designRecommendation.observed.baseline_conversion_rate)}</strong></div>
+                    <div>KPI conversions: <strong style={{ color: tkn.color.text }}>{designRecommendation.observed.matching_kpi_conversions}</strong></div>
+                    <div>Profiles: <strong style={{ color: tkn.color.text }}>{designRecommendation.observed.observed_profiles}</strong></div>
+                  </div>
+                  {!!designRecommendation.warnings.length && (
+                    <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                      {designRecommendation.warnings.join(' ')}
+                    </div>
+                  )}
+                </div>
+              )}
+              {designRecommendationQuery.isLoading && form.channel && form.conversion_key && form.start_at && form.end_at && (
+                <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>
+                  Loading planner recommendation…
                 </div>
               )}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tkn.space.sm }}>
