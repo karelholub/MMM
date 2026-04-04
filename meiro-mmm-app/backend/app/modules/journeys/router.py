@@ -4,7 +4,12 @@ from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.modules.journeys.schemas import JourneyDefinitionCreate, JourneyDefinitionUpdate, JourneySavedViewPayload
+from app.modules.journeys.schemas import (
+    JourneyDefinitionCreate,
+    JourneyDefinitionUpdate,
+    JourneyHypothesisPayload,
+    JourneySavedViewPayload,
+)
 from app.services_journey_attribution import build_journey_attribution_summary
 from app.services_journey_definitions import (
     archive_journey_definition,
@@ -15,6 +20,13 @@ from app.services_journey_definitions import (
     update_journey_definition,
 )
 from app.services_journey_examples import list_examples_for_journey_definition
+from app.services_journey_hypotheses import (
+    create_journey_hypothesis,
+    list_journey_hypotheses,
+    serialize_journey_hypothesis,
+    update_journey_hypothesis,
+)
+from app.services_journey_insights import build_journey_insights
 from app.services_journey_paths import list_paths_for_journey_definition
 from app.services_journey_saved_views import (
     create_journey_saved_view,
@@ -154,6 +166,92 @@ def create_router(
             raise HTTPException(status_code=404, detail="Journey saved view not found")
         return {"id": view_id, "status": "deleted"}
 
+    @router.get("/api/journeys/hypotheses")
+    def api_list_journey_hypotheses(
+        journey_definition_id: Optional[str] = Query(None),
+        status: Optional[str] = Query(None),
+        mine_only: bool = Query(False),
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        return list_journey_hypotheses(
+            db,
+            workspace_id=ctx.workspace_id,
+            journey_definition_id=journey_definition_id,
+            status=status,
+            owner_user_id=ctx.user_id if mine_only else None,
+        )
+
+    @router.post("/api/journeys/hypotheses")
+    def api_create_journey_hypothesis(
+        body: JourneyHypothesisPayload,
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        jd = get_journey_definition(db, body.journey_definition_id)
+        if not jd or jd.is_archived:
+            raise HTTPException(status_code=404, detail="Journey definition not found")
+        if not body.title.strip():
+            raise HTTPException(status_code=400, detail="title is required")
+        if not body.hypothesis_text.strip():
+            raise HTTPException(status_code=400, detail="hypothesis_text is required")
+        item = create_journey_hypothesis(
+            db,
+            workspace_id=ctx.workspace_id,
+            owner_user_id=ctx.user_id,
+            journey_definition_id=body.journey_definition_id,
+            title=body.title,
+            target_kpi=body.target_kpi,
+            hypothesis_text=body.hypothesis_text,
+            trigger=body.trigger,
+            segment=body.segment,
+            current_action=body.current_action,
+            proposed_action=body.proposed_action,
+            support_count=body.support_count,
+            baseline_rate=body.baseline_rate,
+            sample_size_target=body.sample_size_target,
+            status=body.status,
+            linked_experiment_id=body.linked_experiment_id,
+            result=body.result,
+        )
+        return serialize_journey_hypothesis(item)
+
+    @router.put("/api/journeys/hypotheses/{hypothesis_id}")
+    def api_update_journey_hypothesis(
+        hypothesis_id: str,
+        body: JourneyHypothesisPayload,
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        jd = get_journey_definition(db, body.journey_definition_id)
+        if not jd or jd.is_archived:
+            raise HTTPException(status_code=404, detail="Journey definition not found")
+        if not body.title.strip():
+            raise HTTPException(status_code=400, detail="title is required")
+        if not body.hypothesis_text.strip():
+            raise HTTPException(status_code=400, detail="hypothesis_text is required")
+        item = update_journey_hypothesis(
+            db,
+            workspace_id=ctx.workspace_id,
+            hypothesis_id=hypothesis_id,
+            title=body.title,
+            target_kpi=body.target_kpi,
+            hypothesis_text=body.hypothesis_text,
+            trigger=body.trigger,
+            segment=body.segment,
+            current_action=body.current_action,
+            proposed_action=body.proposed_action,
+            support_count=body.support_count,
+            baseline_rate=body.baseline_rate,
+            sample_size_target=body.sample_size_target,
+            status=body.status,
+            linked_experiment_id=body.linked_experiment_id,
+            result=body.result,
+        )
+        if not item:
+            raise HTTPException(status_code=404, detail="Journey hypothesis not found")
+        return serialize_journey_hypothesis(item)
+
     @router.post("/api/journeys/definitions")
     def api_create_journey_definition(
         body: JourneyDefinitionCreate,
@@ -286,6 +384,42 @@ def create_router(
             country=country,
             page=page,
             limit=limit,
+        )
+
+    @router.get("/api/journeys/{definition_id}/insights")
+    def api_get_journey_insights(
+        definition_id: str,
+        date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
+        date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
+        mode: str = Query("conversion_only", pattern="^(conversion_only|all_journeys)$"),
+        channel_group: Optional[str] = Query(None),
+        campaign_id: Optional[str] = Query(None),
+        device: Optional[str] = Query(None),
+        country: Optional[str] = Query(None),
+        db=Depends(get_db_dependency),
+        _ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        jd = get_journey_definition(db, definition_id)
+        if not jd or jd.is_archived:
+            raise HTTPException(status_code=404, detail="Journey definition not found")
+        try:
+            d_from = datetime.fromisoformat(date_from).date()
+            d_to = datetime.fromisoformat(date_to).date()
+        except Exception:
+            raise HTTPException(status_code=400, detail="date_from/date_to must be YYYY-MM-DD")
+        if d_from > d_to:
+            raise HTTPException(status_code=400, detail="date_from must be <= date_to")
+        return build_journey_insights(
+            db,
+            journey_definition_id=definition_id,
+            date_from=d_from,
+            date_to=d_to,
+            mode=mode,
+            channel_group=channel_group,
+            campaign_id=campaign_id,
+            device=device,
+            country=country,
+            target_kpi=jd.conversion_kpi_id,
         )
 
     @router.get("/api/journeys/{definition_id}/transitions")

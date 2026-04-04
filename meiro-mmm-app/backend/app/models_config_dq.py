@@ -643,6 +643,39 @@ class JourneyTransitionDaily(Base):
     )
 
 
+class JourneyHypothesis(Base):
+    __tablename__ = "journey_hypotheses"
+
+    id = Column(String(36), primary_key=True)
+    workspace_id = Column(String(36), nullable=False, default="default", index=True)
+    journey_definition_id = Column(
+        String(36),
+        ForeignKey("journey_definitions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    owner_user_id = Column(String(128), nullable=False, index=True)
+    title = Column(String(255), nullable=False)
+    target_kpi = Column(String(64), nullable=True, index=True)
+    hypothesis_text = Column(Text, nullable=False)
+    trigger_json = Column(JSON, nullable=False, default={})
+    segment_json = Column(JSON, nullable=False, default={})
+    current_action_json = Column(JSON, nullable=False, default={})
+    proposed_action_json = Column(JSON, nullable=False, default={})
+    support_count = Column(Integer, nullable=False, default=0)
+    baseline_rate = Column(Float, nullable=True)
+    sample_size_target = Column(Integer, nullable=True)
+    status = Column(String(32), nullable=False, default="draft", index=True)
+    linked_experiment_id = Column(Integer, nullable=True, index=True)
+    result_json = Column(JSON, nullable=False, default={})
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_journey_hypotheses_ws_def_created", "workspace_id", "journey_definition_id", "created_at"),
+    )
+
+
 class ChannelPerformanceDaily(Base):
     __tablename__ = "channel_performance_daily"
 

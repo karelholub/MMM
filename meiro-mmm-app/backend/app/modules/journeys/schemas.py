@@ -23,3 +23,20 @@ class JourneySavedViewPayload(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     journey_definition_id: Optional[str] = Field(None, max_length=36)
     state: Dict[str, Any] = Field(default_factory=dict)
+
+
+class JourneyHypothesisPayload(BaseModel):
+    journey_definition_id: str = Field(..., min_length=1, max_length=36)
+    title: str = Field(..., min_length=1, max_length=255)
+    target_kpi: Optional[str] = Field(None, max_length=64)
+    hypothesis_text: str = Field(..., min_length=1, max_length=5000)
+    trigger: Dict[str, Any] = Field(default_factory=dict)
+    segment: Dict[str, Any] = Field(default_factory=dict)
+    current_action: Dict[str, Any] = Field(default_factory=dict)
+    proposed_action: Dict[str, Any] = Field(default_factory=dict)
+    support_count: int = Field(0, ge=0)
+    baseline_rate: Optional[float] = Field(None, ge=0)
+    sample_size_target: Optional[int] = Field(None, ge=0)
+    status: str = Field("draft", max_length=32)
+    linked_experiment_id: Optional[int] = Field(None, ge=1)
+    result: Dict[str, Any] = Field(default_factory=dict)
