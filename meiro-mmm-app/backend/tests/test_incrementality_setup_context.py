@@ -141,8 +141,11 @@ def test_incrementality_setup_context_uses_settings_and_observed_journeys():
         assert channels["email"]["journeys"] == 2
         assert channels["email"]["baseline_conversion_rate"] == 0.5
         assert channels["email"]["delivery_class"] == "owned"
+        assert channels["email"]["execution"]["status"] == "planner_ready"
+        assert channels["email"]["execution"]["can_auto_assign_history"] is True
         assert "google_ads" not in channels
         assert channels["direct"]["eligible"] is False
+        assert channels["direct"]["execution"]["status"] == "not_supported"
 
         kpis = {row["id"]: row for row in payload["kpis"]}
         assert kpis["purchase"]["count"] == 1
@@ -234,6 +237,7 @@ def test_incrementality_create_persists_structured_setup_and_config_snapshot():
         assert detail_payload["setup"]["assignment_unit"] == "profile_id"
         assert detail_payload["setup"]["config_id"] == "cfg-1"
         assert detail_payload["setup"]["config_version"] == 4
+        assert detail_payload["execution"]["status"] == "planner_ready"
     finally:
         app.dependency_overrides.clear()
         main_module.KPI_CONFIG = original_kpi_config
@@ -310,6 +314,7 @@ def test_incrementality_recommend_design_returns_guided_plan():
         assert payload["recommendation"]["sample_target_total"] > 0
         assert payload["recommendation"]["min_runtime_days"] >= 14
         assert payload["recommendation"]["readiness"] in {"ready_to_launch", "needs_more_volume", "insufficient_signal"}
+        assert payload["execution"]["status"] == "planner_ready"
     finally:
         app.dependency_overrides.clear()
         main_module.KPI_CONFIG = original_kpi_config

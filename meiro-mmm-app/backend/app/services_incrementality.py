@@ -109,6 +109,52 @@ def serialize_experiment_setup(exp: Experiment) -> Dict[str, Any]:
     }
 
 
+def build_experiment_execution_capability(
+    channel: Optional[str],
+    *,
+    has_observed_data: bool = True,
+    non_converted_journeys: Optional[int] = None,
+) -> Dict[str, Any]:
+    normalized_channel = str(channel or "").strip() or "unknown"
+    if normalized_channel in NON_EXPERIMENTABLE_CHANNELS:
+        return {
+            "channel": normalized_channel,
+            "status": "not_supported",
+            "planner_ready": False,
+            "can_auto_assign_history": False,
+            "can_log_exposures": False,
+            "can_log_outcomes": True,
+            "assignment_mode": "none",
+            "exposure_mode": "none",
+            "notes": ["Direct and unknown traffic are not valid holdout targets."],
+        }
+
+    notes: List[str] = []
+    planner_ready = normalized_channel in OWNED_CHANNEL_HINTS
+    if non_converted_journeys is not None and non_converted_journeys <= 0:
+        notes.append("No non-converted journeys were observed for this channel in the selected window.")
+    if planner_ready:
+        notes.append("This owned channel is ready for planner-guided setup.")
+    else:
+        notes.append("This channel can be analyzed, but delivery and exposure instrumentation are still manual.")
+    if has_observed_data:
+        notes.append("Historical assignments can be seeded from observed journeys.")
+    else:
+        notes.append("No observed journeys available for historical auto-assignment.")
+
+    return {
+        "channel": normalized_channel,
+        "status": "planner_ready" if planner_ready else "manual_only",
+        "planner_ready": planner_ready,
+        "can_auto_assign_history": has_observed_data,
+        "can_log_exposures": True,
+        "can_log_outcomes": True,
+        "assignment_mode": "auto_assign_from_journeys" if has_observed_data else "manual_batch",
+        "exposure_mode": "manual_batch",
+        "notes": notes,
+    }
+
+
 def serialize_experiment_summary(
     exp: Experiment,
     *,
@@ -130,6 +176,7 @@ def serialize_experiment_summary(
         "source_journey_definition_id": source_journey_definition_id,
         "config_id": exp.config_id,
         "config_version": exp.config_version,
+        "execution": build_experiment_execution_capability(exp.channel, has_observed_data=True),
     }
 
 
@@ -150,6 +197,10 @@ def serialize_experiment_detail(
         "policy": dict(exp.policy_json or {}),
         "guardrails": dict(exp.guardrails_json or {}),
         "setup": serialize_experiment_setup(exp),
+        "execution": build_experiment_execution_capability(
+            exp.channel,
+            has_observed_data=True,
+        ),
     }
 
 
@@ -286,6 +337,11 @@ def build_experiment_setup_context(
                 "eligible": eligible,
                 "delivery_class": "owned" if channel in OWNED_CHANNEL_HINTS else "observed",
                 "notes": notes,
+                "execution": build_experiment_execution_capability(
+                    channel,
+                    has_observed_data=journeys_count > 0,
+                    non_converted_journeys=non_converted_journeys,
+                ),
             }
         )
     channel_rows.sort(
@@ -544,6 +600,11 @@ def build_experiment_design_recommendation(
         "date_to": ((date_to - timedelta(days=1)).date().isoformat() if date_to else None),
         "observed": observed,
         "recommendation": recommendation,
+        "execution": build_experiment_execution_capability(
+            normalized_channel,
+            has_observed_data=total_journeys > 0,
+            non_converted_journeys=non_converted_journeys,
+        ),
         "warnings": warnings,
     }
 

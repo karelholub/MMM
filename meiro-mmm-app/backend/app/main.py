@@ -3644,6 +3644,7 @@ class ExperimentSummary(BaseModel):
     source_journey_definition_id: Optional[str] = None
     config_id: Optional[str] = None
     config_version: Optional[int] = None
+    execution: Dict[str, Any] = Field(default_factory=dict)
 
 
 def _resolve_experiment_source_context(db, rows: List[Experiment]) -> Dict[str, Dict[str, Optional[str]]]:
