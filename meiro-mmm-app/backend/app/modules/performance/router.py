@@ -172,6 +172,27 @@ def _build_campaign_suggestions_payload(
     }
 
 
+def _build_channel_suggestions_payload(
+    *,
+    journeys: list[dict[str, Any]],
+    settings: NBASettings,
+) -> Dict[str, Any]:
+    if not journeys:
+        return {"items": {}, "level": "channel", "eligible_journeys": 0}
+
+    nba_channel_raw = compute_next_best_action(journeys, level="channel")
+    nba_channel, _stats = filter_nba_recommendations(nba_channel_raw, settings)
+    return {
+        "items": {
+            prefix: recs[0]
+            for prefix, recs in nba_channel.items()
+            if prefix and recs
+        },
+        "level": "channel",
+        "eligible_journeys": len(journeys),
+    }
+
+
 def _add_summary_derivatives(items: list[dict], scope_type: str, diagnostics: dict[str, Any]) -> None:
     for item in items:
         current = item.get("current") or {}
@@ -698,6 +719,61 @@ def create_router(
             conversion_key=effective_conversion_key,
         )
         out = _build_campaign_suggestions_payload(
+            journeys=suggestion_journeys,
+            settings=_load_runtime_nba_settings(),
+        )
+        out["config"] = config_meta
+        out["meta"] = build_meta_fn(ctx=query_ctx, conversion_key=effective_conversion_key)
+        if conversion_key_resolution:
+            out["meta"]["conversion_key_resolution"] = conversion_key_resolution
+        return out
+
+    @router.get("/api/performance/channel/suggestions")
+    def performance_channel_suggestions(
+        date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
+        date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
+        timezone: str = Query("UTC", description="IANA timezone for bucketing"),
+        currency: Optional[str] = Query(None, description="Display currency (metadata only)"),
+        workspace: Optional[str] = Query(None, description="Workspace filter (reserved)"),
+        account: Optional[str] = Query(None, description="Account filter (reserved)"),
+        model_id: Optional[str] = Query(None, description="Optional model config id"),
+        conversion_key: Optional[str] = Query(None, description="Optional conversion key filter"),
+        channels: Optional[List[str]] = Query(None, description="Optional channel filter list"),
+        db=Depends(get_db_dependency),
+        _ctx=Depends(require_permission_dependency("attribution.view")),
+    ):
+        journeys = ensure_journeys_loaded_fn(db)
+        query_ctx = build_query_context_fn(
+            date_from=date_from,
+            date_to=date_to,
+            timezone=timezone,
+            currency=currency,
+            workspace=workspace,
+            account=account,
+            model_id=model_id,
+            kpi_key="revenue",
+            grain="daily",
+            compare=False,
+            channels=channels,
+            conversion_key=conversion_key,
+        )
+        _resolved_cfg, config_meta = _load_selected_config_meta(db, query_ctx.model_id)
+        effective_conversion_key, conversion_key_resolution = _resolve_effective_conversion_key(
+            db,
+            requested_conversion_key=query_ctx.conversion_key,
+            configured_conversion_key=(config_meta.get("conversion_key") if config_meta else None),
+            date_from=query_ctx.date_from,
+            date_to=query_ctx.date_to,
+        )
+        suggestion_journeys = _filter_journeys_for_campaign_suggestions(
+            journeys=journeys,
+            date_from=query_ctx.date_from,
+            date_to=query_ctx.date_to,
+            timezone=query_ctx.timezone,
+            channels=query_ctx.channels,
+            conversion_key=effective_conversion_key,
+        )
+        out = _build_channel_suggestions_payload(
             journeys=suggestion_journeys,
             settings=_load_runtime_nba_settings(),
         )

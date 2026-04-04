@@ -29,6 +29,17 @@ interface ChannelPerformanceProps {
   configId?: string | null
 }
 
+interface SuggestedNext {
+  channel: string
+  campaign?: string
+  conversion_rate: number
+  count: number
+  avg_value: number
+  is_promoted_policy?: boolean
+  promoted_policy_title?: string | null
+  promoted_policy_hypothesis_id?: string | null
+}
+
 interface ChannelData {
   channel: string
   spend: number
@@ -53,6 +64,7 @@ interface ChannelData {
   roi: number
   roas: number
   cpa: number
+  suggested_next: SuggestedNext | null
   confidence?: Confidence
 }
 
@@ -196,6 +208,13 @@ interface ChannelSummaryResponse {
   notes?: string[]
 }
 
+interface ChannelSuggestionResponse {
+  items: Record<string, SuggestedNext>
+  level: string
+  eligible_journeys: number
+  reason?: string
+}
+
 const MODEL_LABELS: Record<string, string> = {
   last_touch: 'Last Touch',
   first_touch: 'First Touch',
@@ -217,6 +236,7 @@ const METRIC_DEFINITIONS: Record<string, string> = {
   'ROI': 'Return on investment: (attributed value − spend) ÷ spend.',
   'CPA': 'Cost per acquisition: spend ÷ attributed conversions.',
   'Share': 'Share of total attributed revenue.',
+  'Suggested next': 'Most likely next channel for journeys that currently end on this channel, filtered by NBA defaults.',
 }
 
 function formatCurrency(val: number): string {
@@ -373,11 +393,29 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     refetchInterval: false,
   })
 
+  const suggestionsQuery = useQuery<ChannelSuggestionResponse>({
+    queryKey: ['channel-suggestions-panel', trendDateRange.dateFrom, trendDateRange.dateTo, configId ?? 'default'],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        date_from: trendDateRange.dateFrom,
+        date_to: trendDateRange.dateTo,
+        timezone: 'UTC',
+      })
+      if (configId) params.set('model_id', configId)
+      return apiGetJson<ChannelSuggestionResponse>(`/api/performance/channel/suggestions?${params.toString()}`, {
+        fallbackMessage: 'Failed to load channel suggestions',
+      })
+    },
+    enabled: !!trendDateRange.dateFrom && !!trendDateRange.dateTo,
+    refetchInterval: false,
+  })
+
   const loading = summaryQuery.isLoading
 
   const channelRows = useMemo(() => {
     const rows = summaryQuery.data?.items ?? []
     if (!rows.length) return []
+    const suggestionMap = suggestionsQuery.data?.items ?? {}
     const revenueTotal = rows.reduce((sum, row) => sum + (row.current.revenue || 0), 0)
     return rows.map((row) => {
       const spend = row.current.spend || 0
@@ -416,10 +454,11 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
         roi,
         roas,
         cpa,
+        suggested_next: suggestionMap[row.channel] ?? null,
         confidence: row.confidence || undefined,
       } as ChannelData
     })
-  }, [summaryQuery.data?.items])
+  }, [summaryQuery.data?.items, suggestionsQuery.data?.items])
 
   const sortedChannels = useMemo(() => {
     if (!channelRows.length) return []
@@ -736,6 +775,51 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
         }
       },
     })),
+    {
+      key: 'suggested_next',
+      label: 'Suggested next',
+      hideable: true,
+      title: METRIC_DEFINITIONS['Suggested next'],
+      render: (channel) =>
+        channel.suggested_next ? (
+          <div style={{ display: 'inline-flex', gap: t.space.xs, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span
+              title={`${channel.suggested_next.count} journeys, ${(channel.suggested_next.conversion_rate * 100).toFixed(1)}% conversion, avg $${channel.suggested_next.avg_value}`}
+              style={{
+                display: 'inline-block',
+                padding: '2px 8px',
+                backgroundColor: t.color.accentMuted,
+                color: t.color.accent,
+                borderRadius: t.radius.sm,
+                fontSize: t.font.sizeXs,
+                fontWeight: t.font.weightSemibold,
+              }}
+            >
+              {channel.suggested_next.channel}
+              {channel.suggested_next.campaign ? ` / ${channel.suggested_next.campaign}` : ''}{' '}
+              ({(channel.suggested_next.conversion_rate * 100).toFixed(0)}%)
+            </span>
+            {channel.suggested_next.is_promoted_policy ? (
+              <span
+                title={channel.suggested_next.promoted_policy_title ?? 'Promoted Journey Lab policy'}
+                style={{
+                  display: 'inline-block',
+                  padding: '2px 8px',
+                  border: `1px solid ${t.color.warning}`,
+                  color: t.color.warning,
+                  borderRadius: t.radius.full,
+                  fontSize: t.font.sizeXs,
+                  fontWeight: t.font.weightSemibold,
+                }}
+              >
+                Deployed policy
+              </span>
+            ) : null}
+          </div>
+        ) : (
+          <span style={{ color: t.color.textMuted, fontSize: t.font.sizeXs }}>—</span>
+        ),
+    },
     {
       key: 'confidence',
       label: 'Confidence',
@@ -1432,7 +1516,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
             {
               key: 'overview',
               label: 'Overview',
-              visibleColumnKeys: ['channel', 'visits', 'attributed_conversions', 'attributed_value', 'spend', 'roas', 'cpa'],
+              visibleColumnKeys: ['channel', 'visits', 'attributed_conversions', 'attributed_value', 'spend', 'roas', 'cpa', 'suggested_next'],
             },
             {
               key: 'efficiency',
@@ -1442,7 +1526,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
             {
               key: 'mix',
               label: 'Mix',
-              visibleColumnKeys: ['channel', 'visits', 'attributed_conversions', 'attributed_value', 'attributed_share', 'spend', 'confidence'],
+              visibleColumnKeys: ['channel', 'visits', 'attributed_conversions', 'attributed_value', 'attributed_share', 'spend', 'suggested_next', 'confidence'],
             },
           ]}
           defaultPresetKey="overview"

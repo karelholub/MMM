@@ -112,6 +112,50 @@ def test_campaign_suggestions_payload_keeps_promoted_policy():
     assert rec["promoted_policy_hypothesis_id"] == "hyp-campaign-policy"
 
 
+def test_channel_suggestions_payload_keeps_promoted_policy():
+    journeys = [
+        {
+            "converted": True,
+            "kpi_type": "purchase",
+            "touchpoints": [
+                {"timestamp": "2026-02-10T10:00:00Z", "channel": "Paid Search", "campaign": "Brand"},
+                {"timestamp": "2026-02-10T10:05:00Z", "channel": "Email", "campaign": "Checkout Rescue"},
+            ],
+            "conversions": [{"id": "conv-1", "value": 100.0}],
+        }
+    ]
+    payload = performance_router._build_channel_suggestions_payload(
+        journeys=journeys,
+        settings=performance_router.NBASettings(
+            min_prefix_support=1,
+            min_conversion_rate=0.5,
+            max_prefix_depth=5,
+            min_next_support=5,
+            max_suggestions_per_prefix=3,
+            min_uplift_pct=0.1,
+            excluded_channels=["direct"],
+            promoted_journey_policies=[
+                {
+                    "hypothesis_id": "hyp-channel-policy",
+                    "title": "Promote checkout rescue email",
+                    "journey_definition_id": "jd-1",
+                    "prefix": "Paid Search",
+                    "prefix_steps": ["Paid Search"],
+                    "step": "Email",
+                    "channel": "Email",
+                    "campaign": None,
+                }
+            ],
+        ),
+    )
+
+    assert "" not in payload["items"]
+    rec = payload["items"]["Paid Search"]
+    assert rec["step"] == "Email"
+    assert rec["is_promoted_policy"] is True
+    assert rec["promoted_policy_hypothesis_id"] == "hyp-channel-policy"
+
+
 def test_filter_journeys_for_campaign_suggestions_respects_period_channels_and_conversion_key():
     journeys = [
         {
