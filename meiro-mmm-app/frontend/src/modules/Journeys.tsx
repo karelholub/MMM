@@ -564,6 +564,33 @@ function objectPreview(value: Record<string, unknown> | null | undefined): strin
     .join(' · ')
 }
 
+function readResultString(result: Record<string, unknown>, key: string): string | null {
+  const value = result?.[key]
+  return typeof value === 'string' && value ? value : null
+}
+
+function readResultNumber(result: Record<string, unknown>, key: string): number | null {
+  const value = result?.[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function readResultObject(result: Record<string, unknown>, key: string): Record<string, unknown> {
+  const value = result?.[key]
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+}
+
+function getHypothesisLearningStage(item: JourneyHypothesisRecord): string {
+  return readResultString(item.result || {}, 'learning_stage') || item.status || 'draft'
+}
+
+function formatStageLabel(stage: string): string {
+  return stage.replace(/_/g, ' ')
+}
+
+function getHypothesisEvidenceSummary(item: JourneyHypothesisRecord): string | null {
+  return readResultString(item.result || {}, 'summary') || readResultString(item.result || {}, 'note')
+}
+
 function parseDelimitedSteps(value: string): string[] {
   return value
     .split(/\n|>/g)
@@ -1467,6 +1494,88 @@ export default function Journeys({
   const hypothesisResultNote = typeof hypothesisDraft.result?.['note'] === 'string' ? String(hypothesisDraft.result['note']) : ''
   const activeHypothesis = editingHypothesisId ? hypotheses.find((item) => item.id === editingHypothesisId) || null : null
   const sandboxHypothesis = sandboxHypothesisId ? hypotheses.find((item) => item.id === sandboxHypothesisId) || null : null
+  const hypothesisLearningCounts = useMemo(() => {
+    return hypotheses.reduce<Record<string, number>>((acc, item) => {
+      const key = getHypothesisLearningStage(item)
+      acc[key] = (acc[key] || 0) + 1
+      return acc
+    }, {})
+  }, [hypotheses])
+  const latestLearnedHypotheses = useMemo(
+    () =>
+      hypotheses.filter((item) => ['validated', 'rejected', 'inconclusive'].includes(getHypothesisLearningStage(item))).slice(0, 3),
+    [hypotheses],
+  )
+
+  const renderHypothesisLearningCard = (item: JourneyHypothesisRecord, compact = false) => {
+    const stage = getHypothesisLearningStage(item)
+    const summary = getHypothesisEvidenceSummary(item)
+    const experimentStatus = readResultString(item.result || {}, 'experiment_status')
+    const experimentName = readResultString(item.result || {}, 'experiment_name')
+    const upliftAbs = readResultNumber(item.result || {}, 'uplift_abs')
+    const pValue = readResultNumber(item.result || {}, 'p_value')
+    const treatment = readResultObject(item.result || {}, 'treatment')
+    const control = readResultObject(item.result || {}, 'control')
+    const stageColor =
+      stage === 'validated'
+        ? t.color.success
+        : stage === 'rejected'
+        ? t.color.danger
+        : stage === 'inconclusive'
+        ? t.color.warning
+        : t.color.textMuted
+
+    return (
+      <div
+        style={{
+          border: `1px solid ${t.color.borderLight}`,
+          borderRadius: t.radius.sm,
+          padding: compact ? '10px 12px' : t.space.sm,
+          background: compact ? t.color.surface : t.color.bg,
+          display: 'grid',
+          gap: 6,
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, flexWrap: 'wrap', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap', alignItems: 'center' }}>
+            <span
+              style={{
+                border: `1px solid ${stageColor}`,
+                color: stageColor,
+                borderRadius: t.radius.full,
+                padding: '4px 8px',
+                fontSize: t.font.sizeXs,
+                textTransform: 'capitalize',
+              }}
+            >
+              {formatStageLabel(stage)}
+            </span>
+            {experimentStatus ? (
+              <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'capitalize' }}>
+                experiment {formatStageLabel(experimentStatus)}
+              </span>
+            ) : null}
+          </div>
+          {item.linked_experiment_id ? (
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+              #{item.linked_experiment_id}
+              {experimentName ? ` · ${experimentName}` : ''}
+            </div>
+          ) : null}
+        </div>
+        {summary ? <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{summary}</div> : null}
+        {upliftAbs != null || pValue != null ? (
+          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+            {upliftAbs != null ? `Observed uplift ${formatPercent(upliftAbs)}` : 'Observed uplift —'}
+            {pValue != null ? ` · p=${pValue.toFixed(3)}` : ''}
+            {typeof treatment.n === 'number' && typeof control.n === 'number'
+              ? ` · ${Number(treatment.n).toLocaleString()} treatment / ${Number(control.n).toLocaleString()} control`
+              : ''}
+          </div>
+        ) : null}
+      </div>
+    )
+  }
 
   const resetHypothesisDraft = () => {
     setEditingHypothesisId(null)
@@ -1857,6 +1966,38 @@ export default function Journeys({
                 </div>
               )}
 
+              {!!hypotheses.length && (
+                <SectionCard title="Learning loop" subtitle="Completed journey experiments feed back into discovery and policy selection.">
+                  <div style={{ display: 'grid', gap: t.space.md }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: t.space.sm }}>
+                      {[
+                        { label: 'Validated', value: hypothesisLearningCounts.validated || 0 },
+                        { label: 'Rejected', value: hypothesisLearningCounts.rejected || 0 },
+                        { label: 'Inconclusive', value: hypothesisLearningCounts.inconclusive || 0 },
+                        { label: 'In flight', value: (hypothesisLearningCounts.in_experiment || 0) + (hypothesisLearningCounts.experiment_draft || 0) },
+                      ].map((item) => (
+                        <div key={item.label} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                          <div style={{ fontSize: t.font.sizeLg, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                            {item.value.toLocaleString()}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    {!!latestLearnedHypotheses.length && (
+                      <div style={{ display: 'grid', gap: t.space.sm }}>
+                        {latestLearnedHypotheses.map((item) => (
+                          <div key={item.id} style={{ display: 'grid', gap: 6 }}>
+                            <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>{item.title}</div>
+                            {renderHypothesisLearningCard(item, true)}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </SectionCard>
+              )}
+
               {!!insightItems.length && (
                 <div style={{ display: 'grid', gap: t.space.md }}>
                   {insightItems.map((item) => {
@@ -2043,6 +2184,7 @@ export default function Journeys({
                         <option value="in_experiment">In experiment</option>
                         <option value="validated">Validated</option>
                         <option value="rejected">Rejected</option>
+                        <option value="inconclusive">Inconclusive</option>
                       </select>
                     </label>
                     <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
@@ -2283,8 +2425,11 @@ export default function Journeys({
                       />
                     </label>
                     {activeHypothesis?.linked_experiment_id ? (
-                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                        Linked experiment #{activeHypothesis.linked_experiment_id} is active for this hypothesis.
+                      <div style={{ display: 'grid', gap: t.space.sm }}>
+                        <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                          Linked experiment #{activeHypothesis.linked_experiment_id} is active for this hypothesis.
+                        </div>
+                        {renderHypothesisLearningCard(activeHypothesis)}
                       </div>
                     ) : (
                       <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
@@ -2355,7 +2500,7 @@ export default function Journeys({
                         <div style={{ display: 'grid', gap: 4 }}>
                           <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightSemibold }}>{item.title}</div>
                           <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
-                            {item.status} · {item.support_count.toLocaleString()} journeys · {item.sample_size_target?.toLocaleString() || '—'} sample target
+                            {formatStageLabel(getHypothesisLearningStage(item))} · {item.support_count.toLocaleString()} journeys · {item.sample_size_target?.toLocaleString() || '—'} sample target
                             {item.linked_experiment_id ? ` · experiment #${item.linked_experiment_id}` : ''}
                           </div>
                         </div>
@@ -2422,6 +2567,7 @@ export default function Journeys({
                       <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
                         Proposed action: {objectPreview(item.proposed_action)}
                       </div>
+                      {item.linked_experiment_id ? renderHypothesisLearningCard(item) : null}
                       {typeof item.result?.['note'] === 'string' && item.result['note'] ? (
                         <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
                           Notes: {String(item.result['note'])}
@@ -2462,8 +2608,11 @@ export default function Journeys({
                     >
                       <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>{item.title}</div>
                       <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
-                        {item.status} · {item.support_count.toLocaleString()} journeys
+                        {formatStageLabel(getHypothesisLearningStage(item))} · {item.support_count.toLocaleString()} journeys
                       </div>
+                      {item.linked_experiment_id ? (
+                        <div style={{ marginTop: 8 }}>{renderHypothesisLearningCard(item, true)}</div>
+                      ) : null}
                     </button>
                   ))}
                 </div>
@@ -2483,6 +2632,14 @@ export default function Journeys({
                 )}
                 {sandboxHypothesis && policySimulationQuery.data && (
                   <div style={{ display: 'grid', gap: t.space.md }}>
+                    {sandboxHypothesis.linked_experiment_id ? (
+                      <div style={{ display: 'grid', gap: 6 }}>
+                        <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>
+                          Experiment evidence
+                        </div>
+                        {renderHypothesisLearningCard(sandboxHypothesis)}
+                      </div>
+                    ) : null}
                     {!policySimulationQuery.data.previewAvailable ? (
                       <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
                         {policySimulationQuery.data.reason || 'No observational preview available for this hypothesis.'}
@@ -2640,7 +2797,7 @@ export default function Journeys({
                             </button>
                           ) : (
                             <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                              Linked experiment #{sandboxHypothesis.linked_experiment_id} already exists for this hypothesis.
+                              Linked experiment #{sandboxHypothesis.linked_experiment_id} already exists for this hypothesis. Use the experimental readout above as the primary source of truth; keep the observational sandbox for follow-up variants.
                             </div>
                           )}
                         </div>
