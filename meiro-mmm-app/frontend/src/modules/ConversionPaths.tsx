@@ -17,6 +17,9 @@ interface NextBestRec {
   conversions: number
   conversion_rate: number
   avg_value: number
+  is_promoted_policy?: boolean
+  promoted_policy_title?: string | null
+  promoted_policy_hypothesis_id?: string | null
 }
 
 interface PathAnalysis {
@@ -535,20 +538,38 @@ export default function ConversionPaths() {
         const prefix = path.path.split(' > ').slice(0, -1).join(' > ')
         const top = data.next_best_by_prefix?.[prefix]?.[0]
         return top ? (
-          <span
-            title={`${top.count} journeys, ${(top.conversion_rate * 100).toFixed(1)}% conversion, avg value $${top.avg_value}`}
-            style={{
-              display: 'inline-block',
-              padding: '2px 8px',
-              backgroundColor: t.color.accentMuted,
-              color: t.color.accent,
-              borderRadius: t.radius.sm,
-              fontSize: t.font.sizeXs,
-              fontWeight: t.font.weightSemibold,
-            }}
-          >
-            {top.channel} ({(top.conversion_rate * 100).toFixed(0)}%)
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: t.space.xs, flexWrap: 'wrap' }}>
+            <span
+              title={`${top.count} journeys, ${(top.conversion_rate * 100).toFixed(1)}% conversion, avg value $${top.avg_value}`}
+              style={{
+                display: 'inline-block',
+                padding: '2px 8px',
+                backgroundColor: t.color.accentMuted,
+                color: t.color.accent,
+                borderRadius: t.radius.sm,
+                fontSize: t.font.sizeXs,
+                fontWeight: t.font.weightSemibold,
+              }}
+            >
+              {top.channel} ({(top.conversion_rate * 100).toFixed(0)}%)
+            </span>
+            {top.is_promoted_policy ? (
+              <span
+                title={top.promoted_policy_title ?? 'Promoted Journey Lab policy'}
+                style={{
+                  display: 'inline-block',
+                  padding: '2px 8px',
+                  border: `1px solid ${t.color.warning}`,
+                  color: t.color.warning,
+                  borderRadius: t.radius.full,
+                  fontSize: t.font.sizeXs,
+                  fontWeight: t.font.weightSemibold,
+                }}
+              >
+                Policy
+              </span>
+            ) : null}
+          </div>
         ) : (
           <span style={{ color: t.color.textMuted, fontSize: t.font.sizeXs }}>—</span>
         )
@@ -1118,6 +1139,23 @@ export default function ConversionPaths() {
                     >
                       {rec.campaign != null ? `${rec.channel} / ${rec.campaign}` : rec.channel}
                     </span>
+                    {rec.is_promoted_policy ? (
+                      <span
+                        title={rec.promoted_policy_title ?? 'Promoted Journey Lab policy'}
+                        style={{
+                          display: 'inline-block',
+                          padding: '2px 8px',
+                          border: `1px solid ${t.color.warning}`,
+                          color: t.color.warning,
+                          borderRadius: t.radius.full,
+                          fontSize: t.font.sizeXs,
+                          fontWeight: t.font.weightSemibold,
+                          marginRight: t.space.sm,
+                        }}
+                      >
+                        Deployed policy
+                      </span>
+                    ) : null}
                     <span style={{ color: t.color.textSecondary }}>
                       Confidence {(rec.conversion_rate * 100).toFixed(1)}% · support {rec.count} journeys · avg ${rec.avg_value}
                     </span>
