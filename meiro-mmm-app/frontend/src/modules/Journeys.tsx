@@ -906,11 +906,10 @@ export default function Journeys({
   })
 
   const funnelListQuery = useQuery<FunnelListResponse>({
-    queryKey: ['funnels-list', selectedJourneyId, user.userId],
+    queryKey: ['funnels-list', selectedJourneyId],
     queryFn: async () => {
       const params = new URLSearchParams({
         workspace_id: 'default',
-        user_id: user.userId,
       })
       if (selectedJourneyId) params.set('journey_definition_id', selectedJourneyId)
       return apiGetJson<FunnelListResponse>(`/api/funnels?${params.toString()}`, {
