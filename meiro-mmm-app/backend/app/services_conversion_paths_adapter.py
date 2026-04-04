@@ -54,12 +54,31 @@ def _resolve_definition(db: Session, definition_id: Optional[str]) -> Optional[J
         if row and not row.is_archived:
             return row
         return None
-    return (
+    candidates = (
         db.query(JourneyDefinition)
         .filter(JourneyDefinition.is_archived == False)  # noqa: E712
         .order_by(JourneyDefinition.updated_at.desc())
-        .first()
+        .all()
     )
+    fallback: Optional[JourneyDefinition] = candidates[0] if candidates else None
+    for row in candidates:
+        has_daily = (
+            db.query(func.count(JourneyPathDaily.id))
+            .filter(JourneyPathDaily.journey_definition_id == row.id)
+            .scalar()
+            or 0
+        )
+        if has_daily > 0:
+            return row
+        has_facts = (
+            db.query(func.count(JourneyDefinitionInstanceFact.id))
+            .filter(JourneyDefinitionInstanceFact.journey_definition_id == row.id)
+            .scalar()
+            or 0
+        )
+        if has_facts > 0:
+            return row
+    return fallback
 
 
 def _resolve_date_bounds(
