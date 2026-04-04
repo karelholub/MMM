@@ -244,6 +244,7 @@ from app.services_mmm_platform import build_mmm_dataset_from_platform
 from app.services_mmm_mapping import build_smart_suggestions, validate_mapping
 from app.services_incrementality import (
     assign_profiles_deterministic,
+    build_experiment_design_recommendation,
     build_experiment_setup_context,
     create_experiment_record,
     record_exposure,
@@ -3599,6 +3600,32 @@ def get_experiment_setup_context(
         kpi_config=KPI_CONFIG,
         date_from=start_dt,
         date_to=end_dt,
+    )
+
+
+@app.get("/api/experiments/recommend-design")
+def recommend_experiment_design(
+    channel: str = Query(...),
+    conversion_key: Optional[str] = Query(None),
+    date_from: Optional[date] = Query(None),
+    date_to: Optional[date] = Query(None),
+    alpha: float = Query(0.05),
+    power: float = Query(0.8),
+    mde: float = Query(0.01),
+    db=Depends(get_db),
+):
+    journeys = _ensure_journeys_loaded(db)
+    start_dt = datetime.combine(date_from, datetime.min.time()) if date_from else None
+    end_dt = datetime.combine(date_to + timedelta(days=1), datetime.min.time()) if date_to else None
+    return build_experiment_design_recommendation(
+        journeys=journeys,
+        channel=channel,
+        conversion_key=conversion_key,
+        date_from=start_dt,
+        date_to=end_dt,
+        alpha=alpha,
+        power=power,
+        mde=mde,
     )
 
 

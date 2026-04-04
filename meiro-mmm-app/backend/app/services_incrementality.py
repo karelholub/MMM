@@ -363,6 +363,191 @@ def build_experiment_setup_context(
     }
 
 
+def _filtered_touchpoints_for_window(
+    journey: Dict[str, Any],
+    *,
+    date_from: Optional[datetime],
+    date_to: Optional[datetime],
+) -> List[Tuple[Dict[str, Any], Optional[datetime]]]:
+    touchpoints = journey.get("touchpoints") or []
+    if not isinstance(touchpoints, list):
+        return []
+    filtered: List[Tuple[Dict[str, Any], Optional[datetime]]] = []
+    for tp in touchpoints:
+        if not isinstance(tp, dict):
+            continue
+        tp_dt = _touchpoint_datetime(tp)
+        if date_from and tp_dt and tp_dt < date_from:
+            continue
+        if date_to and tp_dt and tp_dt >= date_to:
+            continue
+        if date_from and date_to and tp_dt is None:
+            continue
+        filtered.append((tp, tp_dt))
+    return filtered
+
+
+def build_experiment_design_recommendation(
+    *,
+    journeys: List[Dict[str, Any]],
+    channel: str,
+    conversion_key: Optional[str],
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+    alpha: float = 0.05,
+    power: float = 0.8,
+    mde: float = 0.01,
+) -> Dict[str, Any]:
+    normalized_channel = str(channel or "").strip()
+    normalized_conversion_key = str(conversion_key or "").strip() or None
+    warnings: List[str] = []
+
+    if not normalized_channel:
+        return {
+            "channel": None,
+            "conversion_key": normalized_conversion_key,
+            "recommendation": {"readiness": "no_data"},
+            "warnings": ["Channel is required."],
+            "observed": {},
+        }
+
+    candidate_rates = [0.9, 0.8, 0.7, 0.5] if normalized_channel in OWNED_CHANNEL_HINTS else [0.8, 0.7, 0.5]
+    matched_journeys: List[Dict[str, Any]] = []
+    profile_ids: set[str] = set()
+    touch_dates: List[datetime] = []
+    matching_kpi_conversions = 0
+    any_converted = 0
+
+    for journey in journeys or []:
+        filtered_touchpoints = _filtered_touchpoints_for_window(journey, date_from=date_from, date_to=date_to)
+        if not filtered_touchpoints:
+            continue
+        if not any(str((tp.get("channel") or "unknown")).strip() == normalized_channel for tp, _tp_dt in filtered_touchpoints):
+            continue
+        matched_journeys.append(journey)
+        profile_id = _journey_profile_id(journey)
+        if profile_id:
+            profile_ids.add(profile_id)
+        for _tp, tp_dt in filtered_touchpoints:
+            if tp_dt is not None:
+                touch_dates.append(tp_dt)
+        converted = bool(journey.get("converted", True))
+        if converted:
+            any_converted += 1
+        journey_kpi = str(journey.get("kpi_type") or "").strip() or None
+        if converted and (normalized_conversion_key is None or journey_kpi == normalized_conversion_key):
+            matching_kpi_conversions += 1
+
+    total_journeys = len(matched_journeys)
+    non_converted_journeys = max(total_journeys - matching_kpi_conversions, 0)
+    window_days = 0
+    if date_from and date_to and date_to > date_from:
+        window_days = max(int((date_to - date_from).days), 1)
+    elif touch_dates:
+        window_days = max(int((max(touch_dates).date() - min(touch_dates).date()).days) + 1, 1)
+    baseline_rate = matching_kpi_conversions / float(total_journeys or 1) if total_journeys > 0 else 0.0
+    avg_daily_eligible = total_journeys / float(window_days or 1) if total_journeys > 0 else 0.0
+
+    observed = {
+        "journeys": total_journeys,
+        "matching_kpi_conversions": matching_kpi_conversions,
+        "non_converted_journeys": non_converted_journeys,
+        "converted_journeys_any_kpi": any_converted,
+        "observed_profiles": len(profile_ids),
+        "baseline_conversion_rate": round(baseline_rate, 4),
+        "avg_daily_eligible": round(avg_daily_eligible, 2),
+        "window_days": window_days,
+    }
+
+    if total_journeys <= 0:
+        return {
+            "channel": normalized_channel,
+            "conversion_key": normalized_conversion_key,
+            "date_from": date_from.date().isoformat() if date_from else None,
+            "date_to": ((date_to - timedelta(days=1)).date().isoformat() if date_to else None),
+            "observed": observed,
+            "recommendation": {
+                "readiness": "no_data",
+                "reason": "No journeys touched this channel in the selected window.",
+            },
+            "warnings": ["No eligible journeys found for this channel in the selected date range."],
+        }
+
+    if normalized_conversion_key and matching_kpi_conversions <= 0:
+        warnings.append("No conversions were observed for the selected KPI on this channel in the selected window.")
+
+    effective_baseline = min(max(baseline_rate, 0.01), 0.99)
+    candidate_recommendations: List[Dict[str, Any]] = []
+    for rate in candidate_rates:
+        sample_target_total = estimate_sample_size(
+            baseline_rate=effective_baseline,
+            mde=max(mde, 0.001),
+            alpha=alpha,
+            power=power,
+            treatment_rate=rate,
+        )
+        treatment_size = int(sample_target_total * rate)
+        control_size = sample_target_total - treatment_size
+        projected_runtime_days = int(max(1, round(sample_target_total / float(avg_daily_eligible or 1))))
+        candidate_recommendations.append(
+            {
+                "treatment_rate": rate,
+                "sample_target_total": sample_target_total,
+                "sample_target_treatment": treatment_size,
+                "sample_target_control": control_size,
+                "projected_runtime_days": projected_runtime_days,
+            }
+        )
+
+    selected_recommendation = candidate_recommendations[-1]
+    for candidate in candidate_recommendations:
+        if candidate["projected_runtime_days"] <= 21:
+            selected_recommendation = candidate
+            break
+        selected_recommendation = candidate
+
+    recommended_runtime = max(14, selected_recommendation["projected_runtime_days"])
+    readiness = "ready_to_launch"
+    reason = "Observed volume and baseline are sufficient for a practical holdout design."
+
+    if total_journeys < 25 or len(profile_ids) < 25:
+        readiness = "insufficient_signal"
+        reason = "Too few observed journeys/profiles for a reliable holdout design."
+        warnings.append("Observed audience is too small; experiment results will be unstable.")
+    elif matching_kpi_conversions < 5:
+        readiness = "insufficient_signal"
+        reason = "Very few KPI conversions were observed for this channel."
+        warnings.append("Observed KPI conversion count is low; baseline is noisy.")
+    elif selected_recommendation["projected_runtime_days"] > 42:
+        readiness = "needs_more_volume"
+        reason = "Projected runtime is long for the target MDE; widen the effect threshold or use a larger audience."
+        warnings.append("Projected runtime exceeds six weeks for the requested MDE.")
+    elif selected_recommendation["projected_runtime_days"] > 21:
+        readiness = "needs_more_volume"
+        reason = "The design is possible, but the selected MDE implies a slower readout."
+        warnings.append("Projected runtime is longer than three weeks.")
+
+    recommendation = {
+        **selected_recommendation,
+        "min_runtime_days": recommended_runtime,
+        "alpha": alpha,
+        "power": power,
+        "mde": mde,
+        "readiness": readiness,
+        "reason": reason,
+    }
+
+    return {
+        "channel": normalized_channel,
+        "conversion_key": normalized_conversion_key,
+        "date_from": date_from.date().isoformat() if date_from else None,
+        "date_to": ((date_to - timedelta(days=1)).date().isoformat() if date_to else None),
+        "observed": observed,
+        "recommendation": recommendation,
+        "warnings": warnings,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Deterministic assignment
 # ---------------------------------------------------------------------------

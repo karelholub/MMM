@@ -9,6 +9,7 @@ from app.db import Base, get_db
 from app.main import app
 import app.main as main_module
 from app.models_config_dq import ConversionPath
+from app.services_journey_cache import invalidate_journey_cache
 from app.utils.kpi_config import default_kpi_config
 
 
@@ -36,6 +37,7 @@ def test_incrementality_setup_context_uses_settings_and_observed_journeys():
 
     session = SessionLocal()
     try:
+        invalidate_journey_cache()
         session.add_all(
             [
                 ConversionPath(
@@ -177,6 +179,7 @@ def test_incrementality_create_persists_structured_setup_and_config_snapshot():
 
     session = SessionLocal()
     try:
+        invalidate_journey_cache()
         from app.models_config_dq import ModelConfig
 
         session.add(
@@ -231,6 +234,82 @@ def test_incrementality_create_persists_structured_setup_and_config_snapshot():
         assert detail_payload["setup"]["assignment_unit"] == "profile_id"
         assert detail_payload["setup"]["config_id"] == "cfg-1"
         assert detail_payload["setup"]["config_version"] == 4
+    finally:
+        app.dependency_overrides.clear()
+        main_module.KPI_CONFIG = original_kpi_config
+        session.close()
+        engine.dispose()
+
+
+def test_incrementality_recommend_design_returns_guided_plan():
+    original_kpi_config = main_module.KPI_CONFIG
+    main_module.KPI_CONFIG = default_kpi_config()
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    def override_get_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides.clear()
+    app.dependency_overrides[get_db] = override_get_db
+
+    session = SessionLocal()
+    try:
+        invalidate_journey_cache()
+        rows = []
+        for idx in range(1, 61):
+            converted = idx % 5 == 0
+            rows.append(
+                ConversionPath(
+                    conversion_id=f"email-{idx}",
+                    profile_id=f"profile-{idx}",
+                    conversion_key="purchase" if converted else None,
+                    conversion_ts=datetime(2026, 3, (idx % 10) + 1, 12, 0),
+                    path_json={
+                        "customer_id": f"profile-{idx}",
+                        "touchpoints": [
+                            {"channel": "email", "timestamp": f"2026-03-{(idx % 10) + 1:02d}T09:00:00Z"},
+                        ],
+                        "converted": converted,
+                        "conversion_value": 100.0 if converted else 0.0,
+                        "kpi_type": "purchase" if converted else "add_to_cart",
+                        "conversions": [{"name": "purchase", "value": 100.0}] if converted else [],
+                    },
+                    path_hash=f"hash-{idx}",
+                    length=1,
+                    first_touch_ts=datetime(2026, 3, (idx % 10) + 1, 9, 0),
+                    last_touch_ts=datetime(2026, 3, (idx % 10) + 1, 9, 0),
+                )
+            )
+        session.add_all(rows)
+        session.commit()
+
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/experiments/recommend-design?channel=email&conversion_key=purchase&date_from=2026-03-01&date_to=2026-03-10&mde=0.15"
+            )
+        assert response.status_code == 200
+        payload = response.json()
+
+        assert payload["channel"] == "email"
+        assert payload["conversion_key"] == "purchase"
+        assert payload["observed"]["journeys"] == 60
+        assert payload["observed"]["matching_kpi_conversions"] == 12
+        assert payload["observed"]["baseline_conversion_rate"] == 0.2
+        assert payload["recommendation"]["treatment_rate"] in {0.9, 0.8, 0.7, 0.5}
+        assert payload["recommendation"]["sample_target_total"] > 0
+        assert payload["recommendation"]["min_runtime_days"] >= 14
+        assert payload["recommendation"]["readiness"] in {"ready_to_launch", "needs_more_volume", "insufficient_signal"}
     finally:
         app.dependency_overrides.clear()
         main_module.KPI_CONFIG = original_kpi_config
