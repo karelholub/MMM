@@ -278,6 +278,51 @@ interface JourneyHypothesisExperimentLinkResponse {
   hypothesis: JourneyHypothesisRecord
 }
 
+interface JourneyPolicyCandidate {
+  rank: number
+  step: string
+  support_count: number
+  conversion_rate: number
+  avg_value: number
+  uplift_abs: number
+  uplift_rel?: number | null
+  estimated_incremental_conversions: number
+  confidence: string
+  is_current_step: boolean
+}
+
+interface JourneyPolicySimulationResponse {
+  previewAvailable: boolean
+  reason?: string | null
+  source_window?: { date_from?: string | null; date_to?: string | null }
+  prefix?: {
+    steps: string[]
+    label: string
+    current_step?: string | null
+  }
+  summary?: {
+    eligible_journeys: number
+    baseline_conversion_rate: number
+    current_path_support: number
+    current_path_conversion_rate: number
+    candidate_count: number
+    sample_size_target?: number | null
+    observational_only: boolean
+  }
+  top_candidates: JourneyPolicyCandidate[]
+  selected_policy?: (JourneyPolicyCandidate & { rationale?: string | null }) | null
+  current_path?: {
+    step?: string | null
+    support_count: number
+    conversion_rate: number
+  } | null
+  decision?: {
+    status: string
+    warnings: string[]
+    recommended_action?: string | null
+  } | null
+}
+
 interface JourneyHypothesisRequest {
   journey_definition_id: string
   title: string
@@ -316,7 +361,7 @@ interface HypothesisExperimentDraft {
   notes: string
 }
 
-type JourneysTab = 'insights' | 'hypotheses' | 'paths' | 'flow' | 'examples' | 'funnels'
+type JourneysTab = 'insights' | 'hypotheses' | 'policy' | 'paths' | 'flow' | 'examples' | 'funnels'
 type PathSortBy = 'journeys' | 'conversion_rate' | 'avg_time'
 
 interface SavedJourneyView {
@@ -616,6 +661,8 @@ export default function Journeys({
   const [editingHypothesisId, setEditingHypothesisId] = useState<string | null>(null)
   const [hypothesisError, setHypothesisError] = useState<string | null>(null)
   const [hypothesisDraft, setHypothesisDraft] = useState<HypothesisDraft>(() => defaultHypothesisDraft())
+  const [sandboxHypothesisId, setSandboxHypothesisId] = useState<string | null>(null)
+  const [sandboxCandidateStep, setSandboxCandidateStep] = useState('')
   const [hypothesisExperimentDraft, setHypothesisExperimentDraft] = useState<HypothesisExperimentDraft>(() => {
     const start = new Date()
     const end = new Date()
@@ -949,7 +996,21 @@ export default function Journeys({
         fallbackMessage: 'Failed to load journey hypotheses',
       })
     },
-    enabled: !!selectedJourneyId && (activeTab === 'hypotheses' || activeTab === 'insights') && !featureDisabled,
+    enabled: !!selectedJourneyId && (activeTab === 'hypotheses' || activeTab === 'insights' || activeTab === 'policy') && !featureDisabled,
+  })
+
+  const policySimulationQuery = useQuery<JourneyPolicySimulationResponse>({
+    queryKey: ['journey-policy-simulation', sandboxHypothesisId, sandboxCandidateStep],
+    queryFn: async () => {
+      if (!sandboxHypothesisId) throw new Error('No hypothesis selected')
+      return apiSendJson<JourneyPolicySimulationResponse>(
+        `/api/journeys/hypotheses/${sandboxHypothesisId}/simulate`,
+        'POST',
+        { proposed_step: sandboxCandidateStep || null },
+        { fallbackMessage: 'Failed to simulate journey policy' },
+      )
+    },
+    enabled: !!sandboxHypothesisId && activeTab === 'policy' && !featureDisabled,
   })
 
   const savedViewsQuery = useQuery<SavedJourneyViewsResponse>({
@@ -1095,7 +1156,7 @@ export default function Journeys({
   })
 
   const createExperimentFromHypothesisMutation = useMutation({
-    mutationFn: async (payload: { hypothesisId: string; start_at: string; end_at: string; notes: string }) => {
+    mutationFn: async (payload: { hypothesisId: string; start_at: string; end_at: string; notes: string; proposed_step: string }) => {
       return apiSendJson<JourneyHypothesisExperimentLinkResponse>(
         `/api/journeys/hypotheses/${payload.hypothesisId}/create-experiment`,
         'POST',
@@ -1103,6 +1164,7 @@ export default function Journeys({
           start_at: new Date(`${payload.start_at}T00:00:00`).toISOString(),
           end_at: new Date(`${payload.end_at}T23:59:59`).toISOString(),
           notes: payload.notes || null,
+          proposed_step: payload.proposed_step || null,
         },
         { fallbackMessage: 'Failed to create experiment from hypothesis' },
       )
@@ -1144,7 +1206,7 @@ export default function Journeys({
     const params = readParams()
     setSelectedJourneyId(params.get('journey_id') || '')
     const tabParam = params.get('tab')
-    if (tabParam === 'insights' || tabParam === 'hypotheses' || tabParam === 'paths' || tabParam === 'flow' || tabParam === 'examples' || tabParam === 'funnels') {
+    if (tabParam === 'insights' || tabParam === 'hypotheses' || tabParam === 'policy' || tabParam === 'paths' || tabParam === 'flow' || tabParam === 'examples' || tabParam === 'funnels') {
       setActiveTab(tabParam)
     }
     setExamplesPathHash(params.get('examples_path_hash') || '')
@@ -1201,6 +1263,19 @@ export default function Journeys({
   }, [selectedJourneyId, selectedDefinition?.conversion_kpi_id])
 
   useEffect(() => {
+    const items = hypothesesQuery.data?.items ?? []
+    if (!items.length) {
+      setSandboxHypothesisId(null)
+      setSandboxCandidateStep('')
+      return
+    }
+    if (!sandboxHypothesisId || !items.some((item) => item.id === sandboxHypothesisId)) {
+      setSandboxHypothesisId(items[0].id)
+      setSandboxCandidateStep('')
+    }
+  }, [hypothesesQuery.data?.items, sandboxHypothesisId])
+
+  useEffect(() => {
     if (typeof window === 'undefined') return
     const params = readParams()
     if (selectedJourneyId) params.set('journey_id', selectedJourneyId)
@@ -1251,6 +1326,7 @@ export default function Journeys({
       [
         { key: 'insights' as JourneysTab, label: 'Insights', visible: true, disabled: false },
         { key: 'hypotheses' as JourneysTab, label: 'Hypotheses', visible: true, disabled: false },
+        { key: 'policy' as JourneysTab, label: 'Policy Sandbox', visible: true, disabled: false },
         { key: 'paths' as JourneysTab, label: 'Paths', visible: true, disabled: false },
         { key: 'flow' as JourneysTab, label: 'Flow', visible: true, disabled: false },
         { key: 'examples' as JourneysTab, label: 'Examples', visible: journeyExamplesEnabled, disabled: false },
@@ -1390,6 +1466,7 @@ export default function Journeys({
   const insightItems = insightsQuery.data?.items ?? []
   const hypothesisResultNote = typeof hypothesisDraft.result?.['note'] === 'string' ? String(hypothesisDraft.result['note']) : ''
   const activeHypothesis = editingHypothesisId ? hypotheses.find((item) => item.id === editingHypothesisId) || null : null
+  const sandboxHypothesis = sandboxHypothesisId ? hypotheses.find((item) => item.id === sandboxHypothesisId) || null : null
 
   const resetHypothesisDraft = () => {
     setEditingHypothesisId(null)
@@ -1437,6 +1514,26 @@ export default function Journeys({
     })
   }
 
+  const openPolicySandbox = (item: JourneyHypothesisRecord) => {
+    setSandboxHypothesisId(item.id)
+    setSandboxCandidateStep('')
+    setActiveTab('policy')
+  }
+
+  const applySandboxCandidateToDraft = () => {
+    const selected = policySimulationQuery.data?.selected_policy
+    if (!selected || !sandboxHypothesis) return
+    loadHypothesisIntoDraft({
+      ...sandboxHypothesis,
+      proposed_action: {
+        ...sandboxHypothesis.proposed_action,
+        step: selected.step,
+        type: 'nba_intervention',
+        idea: `Test ${selected.step} for prefix ${policySimulationQuery.data?.prefix?.label || ''}`.trim(),
+      },
+    })
+  }
+
   const submitHypothesis = () => {
     if (!selectedJourneyId) {
       setHypothesisError('Select a journey definition first')
@@ -1474,7 +1571,7 @@ export default function Journeys({
     createHypothesisMutation.mutate(body)
   }
 
-  const createExperimentFromHypothesis = (item: JourneyHypothesisRecord) => {
+  const createExperimentFromHypothesis = (item: JourneyHypothesisRecord, proposedStep?: string) => {
     if (!hypothesisExperimentDraft.start_at || !hypothesisExperimentDraft.end_at) {
       setHypothesisError('Experiment start and end dates are required')
       return
@@ -1484,6 +1581,7 @@ export default function Journeys({
       start_at: hypothesisExperimentDraft.start_at,
       end_at: hypothesisExperimentDraft.end_at,
       notes: hypothesisExperimentDraft.notes.trim(),
+      proposed_step: proposedStep || '',
     })
   }
 
@@ -2262,6 +2360,21 @@ export default function Journeys({
                           </div>
                         </div>
                         <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            onClick={() => openPolicySandbox(item)}
+                            style={{
+                              border: `1px solid ${t.color.border}`,
+                              background: t.color.surface,
+                              color: t.color.text,
+                              borderRadius: t.radius.sm,
+                              padding: '6px 10px',
+                              fontSize: t.font.sizeSm,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Open sandbox
+                          </button>
                           {!item.linked_experiment_id ? (
                             <button
                               type="button"
@@ -2317,6 +2430,224 @@ export default function Journeys({
                     </div>
                   ))}
                 </div>
+              </SectionCard>
+            </div>
+          )}
+
+          {activeTab === 'policy' && (
+            <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'minmax(260px, 340px) minmax(0, 1fr)' }}>
+              <SectionCard title="Hypotheses" subtitle="Pick a saved hypothesis to compare observed next-step candidates.">
+                <div style={{ display: 'grid', gap: t.space.sm }}>
+                  {!hypotheses.length && (
+                    <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                      No hypotheses yet. Save one from Insights or the Hypotheses tab first.
+                    </div>
+                  )}
+                  {hypotheses.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => {
+                        setSandboxHypothesisId(item.id)
+                        setSandboxCandidateStep('')
+                      }}
+                      style={{
+                        textAlign: 'left',
+                        border: `1px solid ${sandboxHypothesisId === item.id ? t.color.accent : t.color.borderLight}`,
+                        background: sandboxHypothesisId === item.id ? t.color.accentMuted : t.color.surface,
+                        borderRadius: t.radius.sm,
+                        padding: '10px 12px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>{item.title}</div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                        {item.status} · {item.support_count.toLocaleString()} journeys
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </SectionCard>
+
+              <SectionCard title="Policy Sandbox" subtitle="Observational comparison of next-step candidates for the current hypothesis prefix.">
+                {!sandboxHypothesis && (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    Select a hypothesis to preview candidate next-step policies.
+                  </div>
+                )}
+                {sandboxHypothesis && policySimulationQuery.isLoading && (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading policy preview…</div>
+                )}
+                {sandboxHypothesis && policySimulationQuery.isError && (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{(policySimulationQuery.error as Error).message}</div>
+                )}
+                {sandboxHypothesis && policySimulationQuery.data && (
+                  <div style={{ display: 'grid', gap: t.space.md }}>
+                    {!policySimulationQuery.data.previewAvailable ? (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                        {policySimulationQuery.data.reason || 'No observational preview available for this hypothesis.'}
+                      </div>
+                    ) : (
+                      <>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: t.space.sm }}>
+                          <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Prefix</div>
+                            <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>
+                              {policySimulationQuery.data.prefix?.label || '—'}
+                            </div>
+                          </div>
+                          <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Eligible journeys</div>
+                            <div style={{ fontSize: t.font.sizeBase, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                              {(policySimulationQuery.data.summary?.eligible_journeys ?? 0).toLocaleString()}
+                            </div>
+                          </div>
+                          <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Baseline CVR</div>
+                            <div style={{ fontSize: t.font.sizeBase, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                              {formatPercent(policySimulationQuery.data.summary?.baseline_conversion_rate ?? 0)}
+                            </div>
+                          </div>
+                          <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Observed window</div>
+                            <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>
+                              {policySimulationQuery.data.source_window?.date_from || '—'} → {policySimulationQuery.data.source_window?.date_to || '—'}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bg }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'start', flexWrap: 'wrap' }}>
+                            <div>
+                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>Selected policy</div>
+                              <div style={{ fontSize: t.font.sizeLg, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                                {policySimulationQuery.data.selected_policy?.step || '—'}
+                              </div>
+                              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary, marginTop: 4 }}>
+                                {policySimulationQuery.data.selected_policy?.rationale || 'No rationale available.'}
+                              </div>
+                            </div>
+                            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                              Current step: <strong style={{ color: t.color.text }}>{policySimulationQuery.data.current_path?.step || '—'}</strong>
+                            </div>
+                          </div>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: t.space.sm, marginTop: t.space.md }}>
+                            <div>
+                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Observed CVR</div>
+                              <div style={{ fontSize: t.font.sizeBase, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                                {formatPercent(policySimulationQuery.data.selected_policy?.conversion_rate ?? 0)}
+                              </div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Delta vs current</div>
+                              <div style={{ fontSize: t.font.sizeBase, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                                {formatPercent(policySimulationQuery.data.selected_policy?.uplift_abs ?? 0)}
+                              </div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Estimated incremental conversions</div>
+                              <div style={{ fontSize: t.font.sizeBase, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                                {(policySimulationQuery.data.selected_policy?.estimated_incremental_conversions ?? 0).toLocaleString()}
+                              </div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Confidence</div>
+                              <div style={{ fontSize: t.font.sizeBase, color: t.color.text, fontWeight: t.font.weightSemibold, textTransform: 'capitalize' }}>
+                                {policySimulationQuery.data.selected_policy?.confidence || 'low'}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'grid', gap: t.space.sm }}>
+                          <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>
+                            Candidate next steps
+                          </div>
+                          {(policySimulationQuery.data.top_candidates || []).map((candidate) => (
+                            <button
+                              key={candidate.step}
+                              type="button"
+                              onClick={() => setSandboxCandidateStep(candidate.step)}
+                              style={{
+                                textAlign: 'left',
+                                border: `1px solid ${policySimulationQuery.data.selected_policy?.step === candidate.step ? t.color.accent : t.color.borderLight}`,
+                                background: policySimulationQuery.data.selected_policy?.step === candidate.step ? t.color.accentMuted : t.color.surface,
+                                borderRadius: t.radius.sm,
+                                padding: '10px 12px',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'center', flexWrap: 'wrap' }}>
+                                <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>
+                                  #{candidate.rank} {candidate.step}
+                                  {candidate.is_current_step ? ' · current' : ''}
+                                </div>
+                                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'capitalize' }}>
+                                  {candidate.confidence} confidence
+                                </div>
+                              </div>
+                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary, marginTop: 4 }}>
+                                {candidate.support_count.toLocaleString()} journeys · CVR {formatPercent(candidate.conversion_rate)} ·
+                                uplift {formatPercent(candidate.uplift_abs)} · avg value {candidate.avg_value.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+
+                        {policySimulationQuery.data.decision?.warnings?.length ? (
+                          <div style={{ display: 'grid', gap: 6 }}>
+                            {policySimulationQuery.data.decision.warnings.map((warning, idx) => (
+                              <div key={idx} style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>
+                                {warning}
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+
+                        <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            onClick={applySandboxCandidateToDraft}
+                            style={{
+                              border: `1px solid ${t.color.border}`,
+                              background: t.color.surface,
+                              color: t.color.text,
+                              borderRadius: t.radius.sm,
+                              padding: '8px 12px',
+                              fontSize: t.font.sizeSm,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Sync candidate to hypothesis
+                          </button>
+                          {!sandboxHypothesis.linked_experiment_id ? (
+                            <button
+                              type="button"
+                              onClick={() => createExperimentFromHypothesis(sandboxHypothesis, policySimulationQuery.data.selected_policy?.step)}
+                              disabled={createExperimentFromHypothesisMutation.isPending}
+                              style={{
+                                border: `1px solid ${t.color.accent}`,
+                                background: t.color.accent,
+                                color: '#fff',
+                                borderRadius: t.radius.sm,
+                                padding: '8px 12px',
+                                fontSize: t.font.sizeSm,
+                                cursor: createExperimentFromHypothesisMutation.isPending ? 'wait' : 'pointer',
+                                opacity: createExperimentFromHypothesisMutation.isPending ? 0.8 : 1,
+                              }}
+                            >
+                              {createExperimentFromHypothesisMutation.isPending ? 'Creating experiment…' : 'Create experiment'}
+                            </button>
+                          ) : (
+                            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                              Linked experiment #{sandboxHypothesis.linked_experiment_id} already exists for this hypothesis.
+                            </div>
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
               </SectionCard>
             </div>
           )}
