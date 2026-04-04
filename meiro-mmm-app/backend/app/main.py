@@ -244,6 +244,7 @@ from app.services_mmm_platform import build_mmm_dataset_from_platform
 from app.services_mmm_mapping import build_smart_suggestions, validate_mapping
 from app.services_incrementality import (
     assign_profiles_deterministic,
+    build_experiment_setup_context,
     create_experiment_record,
     record_exposure,
     record_exposures_batch,
@@ -3569,6 +3570,23 @@ class ExperimentCreate(BaseModel):
     segment: Dict[str, Any] = Field(default_factory=dict)
     policy: Dict[str, Any] = Field(default_factory=dict)
     guardrails: Dict[str, Any] = Field(default_factory=dict)
+
+
+@app.get("/api/experiments/setup-context")
+def get_experiment_setup_context(
+    date_from: Optional[date] = Query(None),
+    date_to: Optional[date] = Query(None),
+    db=Depends(get_db),
+):
+    journeys = _ensure_journeys_loaded(db)
+    start_dt = datetime.combine(date_from, datetime.min.time()) if date_from else None
+    end_dt = datetime.combine(date_to + timedelta(days=1), datetime.min.time()) if date_to else None
+    return build_experiment_setup_context(
+        journeys=journeys,
+        kpi_config=KPI_CONFIG,
+        date_from=start_dt,
+        date_to=end_dt,
+    )
 
 
 class ExperimentSummary(BaseModel):

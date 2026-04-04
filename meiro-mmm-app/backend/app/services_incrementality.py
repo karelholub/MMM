@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from datetime import datetime, timedelta
+from statistics import NormalDist
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -29,6 +30,9 @@ from .models_config_dq import (
 )
 
 logger = logging.getLogger(__name__)
+
+OWNED_CHANNEL_HINTS = {"email", "push", "sms", "whatsapp", "onsite", "in_app", "app_push"}
+NON_EXPERIMENTABLE_CHANNELS = {"direct", "unknown"}
 
 
 def create_experiment_record(
@@ -108,6 +112,216 @@ def serialize_experiment_detail(
         "segment": dict(exp.segment_json or {}),
         "policy": dict(exp.policy_json or {}),
         "guardrails": dict(exp.guardrails_json or {}),
+    }
+
+
+def _journey_profile_id(journey: Dict[str, Any]) -> str:
+    for key in ("customer_id", "profile_id", "id"):
+        value = str(journey.get(key) or "").strip()
+        if value:
+            return value
+    customer = journey.get("customer") or {}
+    if isinstance(customer, dict):
+        value = str(customer.get("id") or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _touchpoint_datetime(touchpoint: Dict[str, Any]) -> Optional[datetime]:
+    raw = touchpoint.get("timestamp") or touchpoint.get("ts")
+    if not raw:
+        return None
+    try:
+        ts = pd.to_datetime(raw, errors="coerce", utc=True)
+    except Exception:
+        return None
+    if ts is None or pd.isna(ts):
+        return None
+    try:
+        ts_py = ts.to_pydatetime()
+    except Exception:
+        return None
+    if getattr(ts_py, "tzinfo", None) is not None:
+        return ts_py.replace(tzinfo=None)
+    return ts_py
+
+
+def build_experiment_setup_context(
+    *,
+    journeys: List[Dict[str, Any]],
+    kpi_config: Any,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    channel_stats: Dict[str, Dict[str, Any]] = {}
+    kpi_counts: Dict[str, int] = {}
+    observed_kpis: set[str] = set()
+    total_window_journeys = 0
+    window_converted = 0
+    first_seen: Optional[datetime] = None
+    last_seen: Optional[datetime] = None
+
+    for journey in journeys or []:
+        touchpoints = journey.get("touchpoints") or []
+        if not isinstance(touchpoints, list):
+            continue
+        filtered_touchpoints: List[Tuple[Dict[str, Any], Optional[datetime]]] = []
+        for tp in touchpoints:
+            if not isinstance(tp, dict):
+                continue
+            tp_dt = _touchpoint_datetime(tp)
+            if date_from and tp_dt and tp_dt < date_from:
+                continue
+            if date_to and tp_dt and tp_dt >= date_to:
+                continue
+            if date_from and date_to and tp_dt is None:
+                continue
+            filtered_touchpoints.append((tp, tp_dt))
+            if tp_dt is not None:
+                first_seen = tp_dt if first_seen is None else min(first_seen, tp_dt)
+                last_seen = tp_dt if last_seen is None else max(last_seen, tp_dt)
+        if not filtered_touchpoints:
+            continue
+
+        total_window_journeys += 1
+        converted = bool(journey.get("converted", True))
+        if converted:
+            window_converted += 1
+
+        kpi_id = str(journey.get("kpi_type") or "").strip()
+        if kpi_id:
+            observed_kpis.add(kpi_id)
+            kpi_counts[kpi_id] = kpi_counts.get(kpi_id, 0) + 1
+
+        profile_id = _journey_profile_id(journey)
+        unique_channels = {str((tp.get("channel") or "unknown")).strip() or "unknown" for tp, _tp_dt in filtered_touchpoints}
+        for channel in unique_channels:
+            stat = channel_stats.setdefault(
+                channel,
+                {
+                    "channel": channel,
+                    "label": channel,
+                    "journeys": 0,
+                    "converted_journeys": 0,
+                    "non_converted_journeys": 0,
+                    "profiles": set(),
+                    "last_seen_at": None,
+                },
+            )
+            stat["journeys"] += 1
+            if converted:
+                stat["converted_journeys"] += 1
+            else:
+                stat["non_converted_journeys"] += 1
+            if profile_id:
+                stat["profiles"].add(profile_id)
+            channel_touch_times = [tp_dt for tp, tp_dt in filtered_touchpoints if str((tp.get("channel") or "unknown")).strip() == channel and tp_dt is not None]
+            if channel_touch_times:
+                ch_last = max(channel_touch_times)
+                stat["last_seen_at"] = ch_last if stat["last_seen_at"] is None else max(stat["last_seen_at"], ch_last)
+
+    channel_rows: List[Dict[str, Any]] = []
+    for channel, stat in channel_stats.items():
+        journeys_count = int(stat["journeys"] or 0)
+        converted_journeys = int(stat["converted_journeys"] or 0)
+        non_converted_journeys = int(stat["non_converted_journeys"] or 0)
+        eligible = channel not in NON_EXPERIMENTABLE_CHANNELS and journeys_count > 0
+        notes: List[str] = []
+        if non_converted_journeys <= 0:
+            notes.append("No non-converted journeys observed in the selected window.")
+        elif non_converted_journeys < 10:
+            notes.append("Very few non-converted journeys observed; baseline may be noisy.")
+        if channel in NON_EXPERIMENTABLE_CHANNELS:
+            notes.append("This channel is not a useful holdout target.")
+        channel_rows.append(
+            {
+                "channel": channel,
+                "label": channel,
+                "journeys": journeys_count,
+                "converted_journeys": converted_journeys,
+                "non_converted_journeys": non_converted_journeys,
+                "observed_profiles": len(stat["profiles"]),
+                "baseline_conversion_rate": round(converted_journeys / float(journeys_count or 1), 4),
+                "share_of_journeys": round(journeys_count / float(total_window_journeys or 1), 4),
+                "last_seen_at": stat["last_seen_at"].isoformat() if stat["last_seen_at"] else None,
+                "eligible": eligible,
+                "delivery_class": "owned" if channel in OWNED_CHANNEL_HINTS else "observed",
+                "notes": notes,
+            }
+        )
+    channel_rows.sort(
+        key=lambda item: (
+            0 if item["eligible"] else 1,
+            0 if item["delivery_class"] == "owned" else 1,
+            -int(item["journeys"] or 0),
+            str(item["channel"]),
+        )
+    )
+
+    definitions = list(getattr(kpi_config, "definitions", []) or [])
+    configured_ids = {str(definition.id) for definition in definitions if getattr(definition, "id", None)}
+    kpi_rows: List[Dict[str, Any]] = []
+    for definition in definitions:
+        definition_id = str(getattr(definition, "id", "") or "").strip()
+        if not definition_id:
+            continue
+        kpi_rows.append(
+            {
+                "id": definition_id,
+                "label": str(getattr(definition, "label", definition_id) or definition_id),
+                "type": str(getattr(definition, "type", "primary") or "primary"),
+                "event_name": str(getattr(definition, "event_name", "") or ""),
+                "count": int(kpi_counts.get(definition_id, 0)),
+                "is_primary": definition_id == str(getattr(kpi_config, "primary_kpi_id", None) or ""),
+            }
+        )
+    kpi_rows.sort(key=lambda item: (0 if item["is_primary"] else 1, -int(item["count"] or 0), item["label"]))
+
+    default_channel_row = next(
+        (
+            row
+            for row in channel_rows
+            if row["eligible"] and row["non_converted_journeys"] > 0
+        ),
+        next((row for row in channel_rows if row["eligible"]), None),
+    )
+    default_kpi = str(getattr(kpi_config, "primary_kpi_id", None) or "") or (kpi_rows[0]["id"] if kpi_rows else "")
+    default_treatment_rate = 0.9 if (default_channel_row or {}).get("delivery_class") == "owned" else 0.8
+    default_runtime = 14 if ((default_channel_row or {}).get("journeys") or 0) >= 100 else 21
+
+    warnings: List[str] = []
+    if total_window_journeys <= 0:
+        warnings.append("No journey data found in the selected date range.")
+    if channel_rows and not any(row["eligible"] for row in channel_rows):
+        warnings.append("Only direct or unknown channels were observed in the selected date range.")
+    if total_window_journeys > 0 and window_converted >= total_window_journeys:
+        warnings.append("Only converted journeys were observed; baseline conversion rates may be inflated.")
+    unmapped_kpis = sorted(observed_kpis - configured_ids)
+    if unmapped_kpis:
+        warnings.append(f"Observed KPI ids not present in Settings: {', '.join(unmapped_kpis[:5])}.")
+
+    return {
+        "date_from": date_from.date().isoformat() if date_from else (first_seen.date().isoformat() if first_seen else None),
+        "date_to": ((date_to - timedelta(days=1)).date().isoformat() if date_to else (last_seen.date().isoformat() if last_seen else None)),
+        "defaults": {
+            "channel": (default_channel_row or {}).get("channel"),
+            "conversion_key": default_kpi or None,
+            "treatment_rate": default_treatment_rate,
+            "min_runtime_days": default_runtime,
+            "alpha": 0.05,
+            "power": 0.8,
+            "mde": 0.01,
+        },
+        "channels": channel_rows,
+        "kpis": kpi_rows,
+        "summary": {
+            "journeys": total_window_journeys,
+            "converted_journeys": window_converted,
+            "non_converted_journeys": max(total_window_journeys - window_converted, 0),
+            "observed_channels": len(channel_rows),
+        },
+        "warnings": warnings,
     }
 
 
@@ -520,9 +734,9 @@ def estimate_sample_size(
     """
     import math
 
-    # Two-sided test
-    z_alpha = 1.96  # for alpha=0.05
-    z_beta = 0.84  # for power=0.8
+    dist = NormalDist()
+    z_alpha = dist.inv_cdf(1 - (alpha / 2.0))
+    z_beta = dist.inv_cdf(power)
 
     p1 = baseline_rate
     p2 = baseline_rate + mde
@@ -777,7 +991,9 @@ def compute_experiment_health(
             control_exp += 1
 
     total_n = treat_n + control_n
-    expected_share = 0.5  # default when specific split is not stored
+    policy = dict(exp.policy_json or {})
+    expected_share = float(policy.get("treatment_rate") or 0.5)
+    expected_share = min(0.99, max(0.01, expected_share))
     observed_share = (treat_n / total_n) if total_n > 0 else 0.0
     balance_status = "ok"
     if total_n > 0 and abs(observed_share - expected_share) > 0.1:
