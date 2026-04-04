@@ -10,7 +10,14 @@ from app.services_performance_trends import (
     resolve_period_windows,
 )
 from app.db import Base
-from app.models_config_dq import ChannelPerformanceDaily, JourneyDefinition, JourneyPathDaily, SilverConversionFact, SilverTouchpointFact
+from app.models_config_dq import (
+    ChannelPerformanceDaily,
+    JourneyDefinition,
+    JourneyInstanceFact,
+    JourneyPathDaily,
+    SilverConversionFact,
+    SilverTouchpointFact,
+)
 from app.services_conversions import persist_journeys_as_conversion_paths
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -861,6 +868,71 @@ def test_build_campaign_aggregate_overlay_falls_back_to_silver_without_single_de
         assert overlay is not None
         assert overlay["current_store"]["meta_ads:Spring"]["2026-02-01"]["conversions"] == 1.0
         assert overlay["current_store"]["meta_ads:Spring"]["2026-02-01"]["revenue"] == 150.0
+    finally:
+        db.close()
+
+
+def test_build_campaign_aggregate_overlay_returns_none_when_canonical_revenue_is_stale_zero():
+    db = _unit_db_session()
+    try:
+        db.add(
+            JourneyDefinition(
+                id="jd-campaign-stale-zero",
+                name="Campaign Journey",
+                conversion_kpi_id="purchase",
+                lookback_window_days=30,
+                mode_default="conversion_only",
+                created_by="test",
+                updated_by="test",
+                is_archived=False,
+                created_at=datetime(2026, 2, 1, 0, 0),
+                updated_at=datetime(2026, 2, 1, 0, 0),
+            )
+        )
+        db.commit()
+
+        inserted = persist_journeys_as_conversion_paths(
+            db,
+            [
+                {
+                    "_schema": "v2",
+                    "customer": {"id": "cust-current"},
+                    "touchpoints": [{"channel": "meta_ads", "campaign": "Spring", "interaction_type": "click", "ts": "2026-02-01T10:00:00Z"}],
+                    "conversions": [{"id": "conv-current", "name": "purchase", "ts": "2026-02-01T12:00:00Z", "value": 150.0}],
+                },
+            ],
+            replace=True,
+            import_source="meiro_events_replay",
+            import_batch_id="stale-zero-campaign-overlay-batch",
+        )
+        assert inserted == 1
+
+        db.query(SilverConversionFact).update(
+            {
+                SilverConversionFact.gross_revenue_total: 0.0,
+                SilverConversionFact.net_revenue_total: 0.0,
+            },
+            synchronize_session=False,
+        )
+        db.query(JourneyInstanceFact).update(
+            {
+                JourneyInstanceFact.gross_revenue_total: 0.0,
+                JourneyInstanceFact.net_revenue_total: 0.0,
+            },
+            synchronize_session=False,
+        )
+        db.commit()
+
+        overlay = build_campaign_aggregate_overlay(
+            db,
+            date_from="2026-02-01",
+            date_to="2026-02-01",
+            timezone="UTC",
+            compare=False,
+            conversion_key="purchase",
+        )
+
+        assert overlay is None
     finally:
         db.close()
 

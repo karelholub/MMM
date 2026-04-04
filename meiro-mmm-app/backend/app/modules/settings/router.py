@@ -24,6 +24,7 @@ from app.services_notifications import (
 from app.services_revenue_config import normalize_revenue_config
 from app.services_attribution_defaults import build_attribution_defaults_overview
 from app.services_nba_defaults import build_nba_preview_summary
+from app.services_nba_policy_sync import build_promoted_journey_policy_overrides
 from app.services_mmm_defaults import build_mmm_defaults_preview
 from app.utils.taxonomy import (
     ChannelRule,
@@ -240,6 +241,46 @@ def create_router(
                 )
 
         return replace_settings_fn(new_settings)
+
+    @router.get("/api/settings/nba/promoted-policies")
+    def get_nba_promoted_policies(
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("settings.view")),
+    ):
+        settings = get_settings_obj()
+        items = list(getattr(settings.nba, "promoted_journey_policies", []) or [])
+        discovered = build_promoted_journey_policy_overrides(
+            db,
+            workspace_id=ctx.workspace_id,
+        )
+        return {
+            "items": items,
+            "discovered": discovered,
+        }
+
+    @router.post("/api/settings/nba/promoted-policies/sync")
+    def sync_nba_promoted_policies(
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("settings.manage")),
+    ):
+        current = get_settings_obj()
+        synced = build_promoted_journey_policy_overrides(
+            db,
+            workspace_id=ctx.workspace_id,
+        )
+        updated_settings = Settings(
+            attribution=current.attribution,
+            mmm=current.mmm,
+            nba=current.nba.model_copy(update={"promoted_journey_policies": synced}),
+            feature_flags=current.feature_flags,
+            ads_governance=current.ads_governance,
+            revenue_config=current.revenue_config,
+        )
+        saved = replace_settings_fn(updated_settings)
+        return {
+            "items": list(getattr(saved.nba, "promoted_journey_policies", []) or []),
+            "synced": len(synced),
+        }
 
     @router.get("/api/settings/revenue-config")
     def get_revenue_config_settings(_ctx=Depends(require_permission_dependency("settings.view"))):

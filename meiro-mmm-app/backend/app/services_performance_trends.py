@@ -176,18 +176,20 @@ def _expense_records(expenses: Any) -> Iterable[Any]:
     return expenses or []
 
 
-def _expense_fields(exp: Any) -> Tuple[Optional[str], Optional[str], float, str]:
+def _expense_fields(exp: Any) -> Tuple[Optional[str], Optional[str], Optional[str], float, str]:
     if isinstance(exp, dict):
         channel = exp.get("channel")
+        campaign = exp.get("campaign")
         start = exp.get("service_period_start")
         amount = float(exp.get("converted_amount") or exp.get("amount") or 0.0)
         status = str(exp.get("status", "active"))
-        return channel, start, amount, status
+        return channel, (str(campaign).strip() if campaign not in (None, "") else None), start, amount, status
     channel = getattr(exp, "channel", None)
+    campaign = getattr(exp, "campaign", None)
     start = getattr(exp, "service_period_start", None)
     amount = float(getattr(exp, "converted_amount", None) or getattr(exp, "amount", 0.0) or 0.0)
     status = str(getattr(exp, "status", "active"))
-    return channel, start, amount, status
+    return channel, (str(campaign).strip() if campaign not in (None, "") else None), start, amount, status
 
 
 def _single_active_journey_definition_id(db: Session, *, conversion_key: Optional[str] = None) -> Optional[str]:
@@ -202,6 +204,36 @@ def _single_active_journey_definition_id(db: Session, *, conversion_key: Optiona
     if len(rows) != 1:
         return None
     return str(rows[0].id)
+
+
+def _rows_have_positive_revenue(rows: List[Any]) -> bool:
+    for row in rows:
+        try:
+            if float(getattr(row, "gross_revenue_total", 0.0) or 0.0) > 1e-9:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _overlay_has_positive_revenue(overlay: Optional[Dict[str, Any]]) -> bool:
+    if not overlay:
+        return False
+    for buckets in (overlay.get("current_store") or {}).values():
+        for row in (buckets or {}).values():
+            try:
+                if float((row or {}).get("revenue", 0.0) or 0.0) > 1e-9:
+                    return True
+            except Exception:
+                continue
+    for buckets in (overlay.get("previous_store") or {}).values():
+        for row in (buckets or {}).values():
+            try:
+                if float((row or {}).get("revenue", 0.0) or 0.0) > 1e-9:
+                    return True
+            except Exception:
+                continue
+    return False
 
 
 def build_campaign_aggregate_overlay(
@@ -261,6 +293,8 @@ def build_campaign_aggregate_overlay(
             filter_channels=filter_channels,
             conversion_key=conversion_key,
         )
+    if not _rows_have_positive_revenue(rows):
+        return None
 
     curr_store: Dict[str, Dict[str, Dict[str, float]]] = {}
     prev_store: Dict[str, Dict[str, Dict[str, float]]] = {}
@@ -312,13 +346,14 @@ def build_campaign_aggregate_overlay(
 
     if not curr_store and not prev_store:
         return None
-    return {
+    overlay = {
         "current_store": curr_store,
         "previous_store": prev_store,
         "current_outcomes": curr_outcomes,
         "previous_outcomes": prev_outcomes,
         "meta": meta,
     }
+    return overlay if _overlay_has_positive_revenue(overlay) else None
 
 
 def _build_campaign_aggregate_overlay_from_silver(
@@ -412,13 +447,14 @@ def _build_campaign_aggregate_overlay_from_silver(
 
     if not curr_store and not prev_store:
         return None
-    return {
+    overlay = {
         "current_store": curr_store,
         "previous_store": prev_store,
         "current_outcomes": curr_outcomes,
         "previous_outcomes": prev_outcomes,
         "meta": meta,
     }
+    return overlay if _overlay_has_positive_revenue(overlay) else None
 
 
 def build_channel_aggregate_overlay(
@@ -464,6 +500,8 @@ def build_channel_aggregate_overlay(
             filter_channels=filter_channels,
             conversion_key=conversion_key,
         )
+    if not _rows_have_positive_revenue(rows):
+        return None
 
     curr_store: Dict[str, Dict[str, Dict[str, float]]] = {}
     prev_store: Dict[str, Dict[str, Dict[str, float]]] = {}
@@ -515,12 +553,13 @@ def build_channel_aggregate_overlay(
 
     if not curr_store and not prev_store:
         return None
-    return {
+    overlay = {
         "current_store": curr_store,
         "previous_store": prev_store,
         "current_outcomes": curr_outcomes,
         "previous_outcomes": prev_outcomes,
     }
+    return overlay if _overlay_has_positive_revenue(overlay) else None
 
 
 def _build_channel_aggregate_overlay_from_silver(
@@ -612,12 +651,13 @@ def _build_channel_aggregate_overlay_from_silver(
 
     if not curr_store and not prev_store:
         return None
-    return {
+    overlay = {
         "current_store": curr_store,
         "previous_store": prev_store,
         "current_outcomes": curr_outcomes,
         "previous_outcomes": prev_outcomes,
     }
+    return overlay if _overlay_has_positive_revenue(overlay) else None
 
 
 def _collect_channel_rollups(
@@ -731,7 +771,7 @@ def _collect_channel_rollups(
         }
 
     for exp in _expense_records(expenses):
-        channel, start_raw, amount, status = _expense_fields(exp)
+        channel, _campaign, start_raw, amount, status = _expense_fields(exp)
         if status == "deleted" or not channel:
             continue
         channel = str(channel)
@@ -884,7 +924,7 @@ def _collect_campaign_rollups(
     channel_spend_curr: Dict[str, Dict[str, float]] = {}
     channel_spend_prev: Dict[str, Dict[str, float]] = {}
     for exp in _expense_records(expenses):
-        channel, start_raw, amount, status = _expense_fields(exp)
+        channel, campaign_name, start_raw, amount, status = _expense_fields(exp)
         if status == "deleted" or not channel:
             continue
         channel = str(channel)
@@ -894,6 +934,22 @@ def _collect_campaign_rollups(
         if day is None:
             continue
         bucket = _bucket_start(day, resolved_grain).isoformat()
+        if campaign_name:
+            c_key = campaign_key(channel, campaign_name)
+            meta.setdefault(
+                c_key,
+                {
+                    "campaign_id": c_key,
+                    "campaign_name": campaign_name,
+                    "channel": channel,
+                    "platform": None,
+                },
+            )
+            if curr_from <= day <= curr_to:
+                _add_metric_rollup(curr_store, c_key, bucket, spend=amount)
+            elif compare and prev_from <= day <= prev_to:
+                _add_metric_rollup(prev_store, c_key, bucket, spend=amount)
+            continue
         if curr_from <= day <= curr_to:
             by_bucket = channel_spend_curr.setdefault(channel, {})
             by_bucket[bucket] = by_bucket.get(bucket, 0.0) + amount

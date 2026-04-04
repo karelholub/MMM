@@ -153,3 +153,35 @@ def test_viewer_cannot_propose_or_apply_ads_changes(client: TestClient):
         headers=_viewer_headers(),
     )
     assert read_resp.status_code == 200
+
+
+def test_create_change_requests_from_budget_recommendation(client: TestClient):
+    resp = client.post(
+        "/api/ads/change-requests/from-budget-recommendation",
+        json={
+            "run_id": "mmm_budget_test",
+            "scenario_id": "scn-1",
+            "recommendation_id": "rec-1",
+            "currency": "USD",
+            "targets": [
+                {
+                    "channel": "google_ads",
+                    "provider": "google_ads",
+                    "account_id": "acct-1",
+                    "entity_id": "cmp-budget-1",
+                    "entity_name": "Campaign One",
+                    "delta_pct": 0.15,
+                    "reason": "High modeled return",
+                }
+            ],
+        },
+        headers=_admin_headers(),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["skipped_total"] == 0
+    payload = body["items"][0]["action_payload"]
+    assert payload["daily_budget"] == 115.0
+    assert payload["previous_daily_budget"] == 100.0
+    assert payload["source"]["scenario_id"] == "scn-1"

@@ -1,7 +1,13 @@
 import { useState, useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { tokens } from '../theme/tokens'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
+import DecisionStatusCard from '../components/DecisionStatusCard'
+import { navigateForRecommendedAction } from '../lib/recommendedActions'
+import {
+  createAdsChangeRequestsFromBudgetRecommendation,
+  type AdsProviderKey,
+} from '../connectors/adsManagerConnector'
 
 const t = tokens
 
@@ -29,10 +35,134 @@ interface WhatIfResult {
   lift: { absolute: number; percent: number }
 }
 
+interface RecommendationActionItem {
+  channel: string
+  campaign_id?: string | null
+  action: 'increase' | 'decrease' | 'hold'
+  delta_pct?: number | null
+  delta_amount?: number | null
+  base_spend?: number | null
+  new_spend?: number | null
+  reason?: string | null
+  outside_observed_range?: boolean
+}
+
+interface DecisionPayload {
+  status?: string | null
+  subtitle?: string | null
+  blockers?: string[]
+  warnings?: string[]
+  actions?: Array<{
+    id: string
+    label: string
+    benefit?: string
+    requires_review?: boolean
+    domain?: string
+    target_page?: string
+    target_section?: string
+    target_tab?: string
+  }>
+}
+
+interface BudgetRecommendationItem {
+  id: string
+  objective: string
+  scope: string
+  status: string
+  title: string
+  summary: string
+  expected_impact: {
+    metric: string
+    delta_pct: number
+    delta_abs: number
+    net_budget_change?: number
+    reallocated_spend?: number
+  }
+  confidence: { score: number; band: string }
+  risk: { extrapolation: string; readiness: string }
+  actions: RecommendationActionItem[]
+  evidence: string[]
+  decision: DecisionPayload
+}
+
+interface BudgetRecommendationsResponse {
+  run_id: string
+  objective: string
+  recommendations: BudgetRecommendationItem[]
+  decision: DecisionPayload
+  summary: {
+    total_budget_change_pct: number
+    baseline_spend_total: number
+    channels_considered: number
+    periods: number
+    weighted_roi: number
+  }
+}
+
+interface SavedBudgetScenario {
+  id: string
+  objective: string
+  total_budget_change_pct: number
+  multipliers: Record<string, number>
+  summary: Record<string, unknown>
+  created_by?: string | null
+  created_at?: string | null
+  recommendations: BudgetRecommendationItem[]
+}
+
+interface CampaignSummaryItem {
+  channel: string
+  campaign: string
+  mean_spend: number
+  roi?: number
+}
+
+interface BudgetRealizationItem {
+  scenario_id: string
+  run_id: string
+  objective: string
+  created_at?: string | null
+  expected_impact: {
+    delta_pct?: number
+    reallocated_spend?: number
+  }
+  execution: {
+    counts: Record<string, number>
+    proposed_budget_delta_total: number
+    applied_budget_delta_total: number
+    execution_progress_pct: number
+    projected_realized_lift_pct: number
+    latest_change_at?: string | null
+  }
+  change_requests: Array<{
+    id: string
+    provider: AdsProviderKey
+    entity_id: string
+    status: string
+    proposed_daily_budget: number
+    previous_daily_budget: number
+    delta_budget: number
+    error_message?: string | null
+  }>
+}
+
+interface BudgetRealizationResponse {
+  items: BudgetRealizationItem[]
+  total: number
+}
+
 function formatCurrency(val: number): string {
   if (val >= 1_000_000) return `$${(val / 1_000_000).toFixed(1)}M`
   if (val >= 1_000) return `$${(val / 1_000).toFixed(0)}K`
   return `$${val.toFixed(0)}`
+}
+
+function providerFromBudgetChannel(channel: string): AdsProviderKey | null {
+  const key = (channel || '').toLowerCase()
+  if (key.includes('google')) return 'google_ads'
+  if (key.includes('meta') || key.includes('facebook') || key.includes('fb')) return 'meta_ads'
+  if (key.includes('linkedin')) return 'linkedin_ads'
+  return null
 }
 
 export default function BudgetOptimizer({
@@ -42,6 +172,7 @@ export default function BudgetOptimizer({
   runId,
   datasetId,
 }: BudgetOptimizerProps) {
+  const queryClient = useQueryClient()
   const [multipliers, setMultipliers] = useState<Record<string, number>>(() =>
     roiData.reduce((acc, { channel }) => ({ ...acc, [channel]: 1.0 }), {})
   )
@@ -53,6 +184,9 @@ export default function BudgetOptimizer({
   )
   const [totalBudgetMode, setTotalBudgetMode] = useState<'constant' | 'change'>('constant')
   const [totalBudgetChangePct, setTotalBudgetChangePct] = useState(0)
+  const [recommendationObjective, setRecommendationObjective] = useState<
+    'protect_efficiency' | 'grow_conversions' | 'hit_target_roas'
+  >('protect_efficiency')
   const [optimalMix, setOptimalMix] = useState<Record<string, number> | null>(null)
   const [optimalUplift, setOptimalUplift] = useState<number | null>(null)
   const [optimalPredictedKpi, setOptimalPredictedKpi] = useState<number | null>(null)
@@ -63,6 +197,139 @@ export default function BudgetOptimizer({
 
   const totalBudgetMultiplier =
     totalBudgetMode === 'constant' ? 1.0 : 1.0 + totalBudgetChangePct / 100
+
+  const recommendationsQuery = useQuery<BudgetRecommendationsResponse>({
+    queryKey: ['budget-recommendations', runId, recommendationObjective, totalBudgetChangePct],
+    queryFn: async () => {
+      if (!runId) {
+        return {
+          run_id: '',
+          objective: recommendationObjective,
+          recommendations: [],
+          decision: { status: 'blocked', blockers: ['Model run missing'] },
+          summary: {
+            total_budget_change_pct: totalBudgetChangePct,
+            baseline_spend_total: 0,
+            channels_considered: 0,
+            periods: 0,
+            weighted_roi: 0,
+          },
+        }
+      }
+      return apiGetJson<BudgetRecommendationsResponse>(
+        `/api/models/${runId}/budget/recommendations?objective=${encodeURIComponent(
+          recommendationObjective
+        )}&total_budget_change_pct=${totalBudgetChangePct}`,
+        { fallbackMessage: 'Failed to load budget recommendations' }
+      )
+    },
+    enabled: !!runId,
+  })
+
+  const savedScenariosQuery = useQuery<{ items: SavedBudgetScenario[]; total: number }>({
+    queryKey: ['budget-scenarios', runId],
+    queryFn: async () => {
+      if (!runId) return { items: [], total: 0 }
+      return apiGetJson<{ items: SavedBudgetScenario[]; total: number }>(
+        `/api/models/${runId}/budget/scenarios`,
+        { fallbackMessage: 'Failed to load saved budget scenarios' }
+      )
+    },
+    enabled: !!runId,
+  })
+
+  const campaignSummaryQuery = useQuery<CampaignSummaryItem[]>({
+    queryKey: ['budget-campaign-summary', runId],
+    queryFn: async () => {
+      if (!runId) return []
+      return apiGetJson<CampaignSummaryItem[]>(`/api/models/${runId}/summary/campaign`, {
+        fallbackMessage: 'Failed to load campaign summary',
+      }).catch(() => [])
+    },
+    enabled: !!runId,
+  })
+
+  const realizationQuery = useQuery<BudgetRealizationResponse>({
+    queryKey: ['budget-realization', runId],
+    queryFn: async () => {
+      if (!runId) return { items: [], total: 0 }
+      return apiGetJson<BudgetRealizationResponse>(`/api/models/${runId}/budget/realization`, {
+        fallbackMessage: 'Failed to load budget realization',
+      })
+    },
+    enabled: !!runId,
+  })
+
+  const saveScenarioMutation = useMutation({
+    mutationFn: async () => {
+      if (!runId) throw new Error('Missing model run')
+      return apiSendJson<SavedBudgetScenario>(
+        `/api/models/${runId}/budget/scenarios`,
+        'POST',
+        {
+          objective: recommendationObjective,
+          total_budget_change_pct: totalBudgetChangePct,
+          multipliers,
+          recommendations: recommendationsQuery.data?.recommendations ?? [],
+        },
+        { fallbackMessage: 'Failed to save budget scenario' }
+      )
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['budget-scenarios', runId] })
+    },
+  })
+
+  const createChangeRequestsMutation = useMutation({
+    mutationFn: async () => {
+      if (!runId || !topRecommendation) throw new Error('Recommendation is unavailable')
+      const existingScenario =
+        savedScenariosQuery.data?.items?.find(
+          (item) =>
+            item.objective === recommendationObjective &&
+            Number(item.total_budget_change_pct || 0) === totalBudgetChangePct
+        ) ?? null
+      const scenario =
+        existingScenario ?? (await saveScenarioMutation.mutateAsync())
+      const recommendation =
+        scenario.recommendations.find((item) => item.id === topRecommendation.id) ??
+        scenario.recommendations[0]
+      if (!recommendation) throw new Error('Saved recommendation is unavailable')
+
+      const targets = recommendation.actions
+        .filter((action) => action.action !== 'hold')
+        .flatMap((action) => {
+          const provider = providerFromBudgetChannel(action.channel)
+          if (!provider) return []
+          const channelCampaigns = (campaignSummaryQuery.data ?? [])
+            .filter((row) => row.channel === action.channel)
+            .sort((a, b) => (Number(b.roi ?? 0) * Number(b.mean_spend ?? 0)) - (Number(a.roi ?? 0) * Number(a.mean_spend ?? 0)))
+            .slice(0, 2)
+          return channelCampaigns.map((campaign) => ({
+            channel: action.channel,
+            provider,
+            entity_id: campaign.campaign,
+            entity_name: campaign.campaign,
+            delta_pct: Number(action.delta_pct ?? 0),
+            reason: action.reason ?? recommendation.summary,
+          }))
+        })
+
+      if (!targets.length) {
+        throw new Error('No campaign targets are available for this recommendation yet')
+      }
+      return createAdsChangeRequestsFromBudgetRecommendation({
+        runId,
+        scenarioId: scenario.id,
+        recommendationId: recommendation.id,
+        targets,
+      })
+    },
+    onSuccess: async (_, _vars, _ctx) => {
+      await queryClient.invalidateQueries({ queryKey: ['budget-realization', runId] })
+      await queryClient.invalidateQueries({ queryKey: ['budget-scenarios', runId] })
+    },
+  })
 
   const { data: dataset = [] } = useQuery<Record<string, unknown>[]>({
     queryKey: ['dataset-preview', datasetId],
@@ -298,6 +565,42 @@ export default function BudgetOptimizer({
     return out
   }, [optimalMix, channelList, baselineSpendByChannel])
 
+  const topRecommendation = recommendationsQuery.data?.recommendations?.[0] ?? null
+
+  const applyRecommendation = (recommendation: BudgetRecommendationItem) => {
+    const next = channelList.reduce((acc, ch) => ({ ...acc, [ch]: 1.0 }), {} as Record<string, number>)
+    recommendation.actions.forEach((action) => {
+      if (!action.channel) return
+      next[action.channel] = 1 + Number(action.delta_pct ?? 0)
+    })
+    setMultipliers(next)
+    setOptimalMix(null)
+    setOptimalUplift(null)
+    setOptimalPredictedKpi(null)
+    setOptimizationMessage(
+      `${recommendation.title}: ${recommendation.summary}`
+    )
+  }
+
+  const loadSavedScenario = (scenario: SavedBudgetScenario) => {
+    setMultipliers({
+      ...channelList.reduce((acc, ch) => ({ ...acc, [ch]: 1.0 }), {} as Record<string, number>),
+      ...(scenario.multipliers || {}),
+    })
+    setRecommendationObjective(
+      (scenario.objective as 'protect_efficiency' | 'grow_conversions' | 'hit_target_roas') ||
+        'protect_efficiency'
+    )
+    setTotalBudgetChangePct(Number(scenario.total_budget_change_pct || 0))
+    setTotalBudgetMode(
+      Number(scenario.total_budget_change_pct || 0) === 0 ? 'constant' : 'change'
+    )
+    setOptimalMix(null)
+    setOptimalUplift(null)
+    setOptimalPredictedKpi(null)
+    setOptimizationMessage('Loaded saved scenario')
+  }
+
   return (
     <div
       style={{
@@ -316,6 +619,408 @@ export default function BudgetOptimizer({
         Reallocate spend across channels using model ROI and contribution. Sliders scale each channel’s spend relative to the dataset baseline. Constraints and total budget guardrails keep scenarios realistic.
       </p>
 
+      <div
+        style={{
+          display: 'grid',
+          gap: t.space.lg,
+          marginBottom: t.space.xl,
+          padding: t.space.lg,
+          borderRadius: t.radius.md,
+          backgroundColor: t.color.bg,
+          border: `1px solid ${t.color.borderLight}`,
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            gap: t.space.md,
+            alignItems: 'flex-start',
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ maxWidth: 720 }}>
+            <h3
+              style={{
+                margin: `0 0 ${t.space.xs}px`,
+                fontSize: t.font.sizeLg,
+                fontWeight: t.font.weightSemibold,
+                color: t.color.text,
+              }}
+            >
+              Recommendation Center
+            </h3>
+            <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Start with the model-backed recommendation, then adjust manually if you need a custom scenario.
+            </p>
+          </div>
+          <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', alignItems: 'center' }}>
+            <select
+              value={recommendationObjective}
+              onChange={(e) =>
+                setRecommendationObjective(
+                  e.target.value as 'protect_efficiency' | 'grow_conversions' | 'hit_target_roas'
+                )
+              }
+              style={{
+                padding: `${t.space.xs}px ${t.space.sm}px`,
+                border: `1px solid ${t.color.border}`,
+                borderRadius: t.radius.sm,
+                fontSize: t.font.sizeSm,
+                background: t.color.surface,
+              }}
+            >
+              <option value="protect_efficiency">Protect efficiency</option>
+              <option value="grow_conversions">Grow conversions</option>
+              <option value="hit_target_roas">Hit target ROAS</option>
+            </select>
+            <button
+              type="button"
+              onClick={() => saveScenarioMutation.mutate()}
+              disabled={!runId || saveScenarioMutation.isPending}
+              style={{
+                padding: `${t.space.sm}px ${t.space.md}px`,
+                borderRadius: t.radius.sm,
+                border: `1px solid ${t.color.accent}`,
+                background: 'transparent',
+                color: t.color.accent,
+                cursor: !runId || saveScenarioMutation.isPending ? 'not-allowed' : 'pointer',
+                fontSize: t.font.sizeSm,
+                fontWeight: t.font.weightMedium,
+              }}
+            >
+              {saveScenarioMutation.isPending ? 'Saving…' : 'Save scenario'}
+            </button>
+          </div>
+        </div>
+
+        {recommendationsQuery.data?.decision && (
+          <DecisionStatusCard
+            title="Budget recommendation status"
+            status={recommendationsQuery.data.decision.status ?? undefined}
+            subtitle={recommendationsQuery.data.decision.subtitle ?? undefined}
+            blockers={recommendationsQuery.data.decision.blockers ?? []}
+            warnings={recommendationsQuery.data.decision.warnings ?? []}
+            actions={recommendationsQuery.data.decision.actions ?? []}
+            onActionClick={(action) => navigateForRecommendedAction(action, { defaultPage: 'mmm' })}
+          />
+        )}
+
+        {recommendationsQuery.isLoading ? (
+          <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+            Loading recommendations…
+          </div>
+        ) : topRecommendation ? (
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(0, 1.2fr) minmax(320px, 0.8fr)',
+              gap: t.space.lg,
+            }}
+          >
+            <div
+              style={{
+                padding: t.space.lg,
+                borderRadius: t.radius.md,
+                border: `1px solid ${t.color.borderLight}`,
+                background: t.color.surface,
+                display: 'grid',
+                gap: t.space.md,
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.md, flexWrap: 'wrap' }}>
+                <div>
+                  <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                    {topRecommendation.title}
+                  </div>
+                  <div style={{ marginTop: 4, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    {topRecommendation.summary}
+                  </div>
+                </div>
+                <div
+                  style={{
+                    padding: `${t.space.xs}px ${t.space.sm}px`,
+                    borderRadius: t.radius.full,
+                    background: topRecommendation.status === 'ready' ? t.color.successMuted : t.color.warningSubtle,
+                    color: topRecommendation.status === 'ready' ? t.color.success : t.color.warning,
+                    border: `1px solid ${topRecommendation.status === 'ready' ? t.color.success : t.color.warning}`,
+                    fontSize: t.font.sizeXs,
+                    fontWeight: t.font.weightSemibold,
+                    textTransform: 'capitalize',
+                    alignSelf: 'flex-start',
+                  }}
+                >
+                  {topRecommendation.status}
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: t.space.sm }}>
+                <div style={{ padding: t.space.sm, borderRadius: t.radius.sm, background: t.color.bg, border: `1px solid ${t.color.borderLight}` }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Expected lift</div>
+                  <div style={{ fontSize: t.font.sizeBase, fontWeight: t.font.weightSemibold }}>
+                    +{topRecommendation.expected_impact.delta_pct.toFixed(1)}%
+                  </div>
+                </div>
+                <div style={{ padding: t.space.sm, borderRadius: t.radius.sm, background: t.color.bg, border: `1px solid ${t.color.borderLight}` }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Reallocated spend</div>
+                  <div style={{ fontSize: t.font.sizeBase, fontWeight: t.font.weightSemibold }}>
+                    {formatCurrency(topRecommendation.expected_impact.reallocated_spend ?? 0)}
+                  </div>
+                </div>
+                <div style={{ padding: t.space.sm, borderRadius: t.radius.sm, background: t.color.bg, border: `1px solid ${t.color.borderLight}` }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Confidence</div>
+                  <div style={{ fontSize: t.font.sizeBase, fontWeight: t.font.weightSemibold, textTransform: 'capitalize' }}>
+                    {topRecommendation.confidence.band}
+                  </div>
+                </div>
+                <div style={{ padding: t.space.sm, borderRadius: t.radius.sm, background: t.color.bg, border: `1px solid ${t.color.borderLight}` }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Risk</div>
+                  <div style={{ fontSize: t.font.sizeBase, fontWeight: t.font.weightSemibold, textTransform: 'capitalize' }}>
+                    {topRecommendation.risk.extrapolation}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gap: t.space.sm }}>
+                {topRecommendation.actions.map((action) => (
+                  <div
+                    key={`${topRecommendation.id}:${action.channel}:${action.action}`}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      gap: t.space.md,
+                      alignItems: 'center',
+                      padding: t.space.sm,
+                      borderRadius: t.radius.sm,
+                      border: `1px solid ${t.color.borderLight}`,
+                      background: t.color.bg,
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightMedium, color: t.color.text }}>
+                        {action.action === 'increase' ? 'Increase' : action.action === 'decrease' ? 'Decrease' : 'Hold'} {action.channel}
+                      </div>
+                      <div style={{ marginTop: 2, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                        {action.reason}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right', fontSize: t.font.sizeSm }}>
+                      <div style={{ fontWeight: t.font.weightSemibold, color: action.action === 'increase' ? t.color.success : t.color.warning }}>
+                        {Number(action.delta_pct ?? 0) >= 0 ? '+' : ''}
+                        {(Number(action.delta_pct ?? 0) * 100).toFixed(1)}%
+                      </div>
+                      <div style={{ marginTop: 2, color: t.color.textSecondary }}>
+                        {formatCurrency(action.delta_amount ?? 0)}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={() => applyRecommendation(topRecommendation)}
+                  style={{
+                    padding: `${t.space.sm}px ${t.space.md}px`,
+                    borderRadius: t.radius.sm,
+                    border: 'none',
+                    background: t.color.accent,
+                    color: '#fff',
+                    cursor: 'pointer',
+                    fontWeight: t.font.weightSemibold,
+                  }}
+                >
+                  Use recommendation
+                </button>
+                <button
+                  type="button"
+                  onClick={() => saveScenarioMutation.mutate()}
+                  disabled={!runId || saveScenarioMutation.isPending}
+                  style={{
+                    padding: `${t.space.sm}px ${t.space.md}px`,
+                    borderRadius: t.radius.sm,
+                    border: `1px solid ${t.color.border}`,
+                    background: 'transparent',
+                    color: t.color.text,
+                    cursor: !runId || saveScenarioMutation.isPending ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  Save recommendation
+                </button>
+                <button
+                  type="button"
+                  onClick={() => createChangeRequestsMutation.mutate()}
+                  disabled={!runId || createChangeRequestsMutation.isPending}
+                  style={{
+                    padding: `${t.space.sm}px ${t.space.md}px`,
+                    borderRadius: t.radius.sm,
+                    border: `1px solid ${t.color.warning}`,
+                    background: 'transparent',
+                    color: t.color.warning,
+                    cursor: !runId || createChangeRequestsMutation.isPending ? 'not-allowed' : 'pointer',
+                    fontWeight: t.font.weightMedium,
+                  }}
+                >
+                  {createChangeRequestsMutation.isPending ? 'Creating proposals…' : 'Create change requests'}
+                </button>
+              </div>
+              {createChangeRequestsMutation.isError ? (
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.danger }}>
+                  {(createChangeRequestsMutation.error as Error).message}
+                </div>
+              ) : null}
+              {createChangeRequestsMutation.isSuccess ? (
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.success }}>
+                  Created {createChangeRequestsMutation.data.total} change request{createChangeRequestsMutation.data.total === 1 ? '' : 's'}
+                  {createChangeRequestsMutation.data.skipped_total
+                    ? `, skipped ${createChangeRequestsMutation.data.skipped_total}`
+                    : ''}
+                  .
+                </div>
+              ) : null}
+            </div>
+
+            <div style={{ display: 'grid', gap: t.space.md }}>
+              <div
+                style={{
+                  padding: t.space.lg,
+                  borderRadius: t.radius.md,
+                  border: `1px solid ${t.color.borderLight}`,
+                  background: t.color.surface,
+                }}
+              >
+                <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, marginBottom: t.space.sm }}>
+                  Evidence
+                </div>
+                <div style={{ display: 'grid', gap: t.space.sm }}>
+                  {topRecommendation.evidence.map((item) => (
+                    <div key={item} style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                      {item}
+                    </div>
+                  ))}
+                </div>
+                <div style={{ marginTop: t.space.md, fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                  Based on {recommendationsQuery.data?.summary.periods ?? 0} modeled periods across{' '}
+                  {recommendationsQuery.data?.summary.channels_considered ?? 0} channels.
+                </div>
+              </div>
+
+              <div
+                style={{
+                  padding: t.space.lg,
+                  borderRadius: t.radius.md,
+                  border: `1px solid ${t.color.borderLight}`,
+                  background: t.color.surface,
+                }}
+              >
+                <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, marginBottom: t.space.sm }}>
+                  Saved scenarios
+                </div>
+                {savedScenariosQuery.data?.items?.length ? (
+                  <div style={{ display: 'grid', gap: t.space.sm }}>
+                    {savedScenariosQuery.data.items.slice(0, 3).map((scenario) => (
+                      <button
+                        key={scenario.id}
+                        type="button"
+                        onClick={() => loadSavedScenario(scenario)}
+                        style={{
+                          textAlign: 'left',
+                          padding: t.space.sm,
+                          borderRadius: t.radius.sm,
+                          border: `1px solid ${t.color.borderLight}`,
+                          background: t.color.bg,
+                          cursor: 'pointer',
+                          display: 'grid',
+                          gap: 4,
+                        }}
+                      >
+                        <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightMedium, color: t.color.text }}>
+                          {scenario.objective.replace(/_/g, ' ')}
+                        </div>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                          Saved {scenario.created_at ? new Date(scenario.created_at).toLocaleString() : 'recently'}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    No saved scenarios yet.
+                  </div>
+                )}
+                {saveScenarioMutation.isError ? (
+                  <div style={{ marginTop: t.space.sm, fontSize: t.font.sizeXs, color: t.color.danger }}>
+                    {(saveScenarioMutation.error as Error).message}
+                  </div>
+                ) : null}
+                {saveScenarioMutation.isSuccess ? (
+                  <div style={{ marginTop: t.space.sm, fontSize: t.font.sizeXs, color: t.color.success }}>
+                    Scenario saved.
+                  </div>
+                ) : null}
+              </div>
+
+              <div
+                style={{
+                  padding: t.space.lg,
+                  borderRadius: t.radius.md,
+                  border: `1px solid ${t.color.borderLight}`,
+                  background: t.color.surface,
+                }}
+              >
+                <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, marginBottom: t.space.sm }}>
+                  Rollout realization
+                </div>
+                {realizationQuery.data?.items?.length ? (
+                  <div style={{ display: 'grid', gap: t.space.sm }}>
+                    {realizationQuery.data.items.slice(0, 3).map((item) => (
+                      <div
+                        key={item.scenario_id}
+                        style={{
+                          padding: t.space.sm,
+                          borderRadius: t.radius.sm,
+                          border: `1px solid ${t.color.borderLight}`,
+                          background: t.color.bg,
+                          display: 'grid',
+                          gap: 4,
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm }}>
+                          <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightMedium, color: t.color.text }}>
+                            {item.objective.replace(/_/g, ' ')}
+                          </div>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                            {item.execution.execution_progress_pct.toFixed(0)}% applied
+                          </div>
+                        </div>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                          Requests: {item.execution.counts.total} total, {item.execution.counts.pending_approval} pending, {item.execution.counts.applied} applied
+                        </div>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                          Budget moved: {formatCurrency(item.execution.applied_budget_delta_total)} applied of {formatCurrency(item.execution.proposed_budget_delta_total)} proposed
+                        </div>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                          Projected realized lift: +{item.execution.projected_realized_lift_pct.toFixed(1)}%
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    No rollout tracking yet. Create change requests from a saved recommendation to start tracking execution.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+            No recommendation available for this run yet.
+          </div>
+        )}
+      </div>
+
       {/* Optimizer context: baseline spend + total budget control */}
       <div
         style={{
@@ -331,8 +1036,11 @@ export default function BudgetOptimizer({
       >
         <div>
           <h3 style={{ margin: `0 0 ${t.space.sm}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-            Baseline spend (from dataset)
+            Manual scenario builder
           </h3>
+          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, marginBottom: t.space.sm }}>
+            Start from the recommended plan above or build a custom allocation here.
+          </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: t.space.sm, alignItems: 'center' }}>
             {channelList.map((ch) => (
               <span

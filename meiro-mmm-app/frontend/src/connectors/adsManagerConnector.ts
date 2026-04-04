@@ -57,6 +57,23 @@ export interface AdsChangeRequestListResponse {
   total: number
 }
 
+export interface BudgetRecommendationTargetInput {
+  channel: string
+  provider: AdsProviderKey
+  entity_id: string
+  entity_name?: string | null
+  account_id?: string | null
+  delta_pct: number
+  reason?: string | null
+}
+
+export interface BudgetRecommendationCreateResponse {
+  items: AdsChangeRequest[]
+  skipped: Array<Record<string, unknown>>
+  total: number
+  skipped_total: number
+}
+
 export interface AdsAuditItem {
   id: string
   actor_user_id: string
@@ -118,6 +135,22 @@ export async function createAdsChangeRequest(input: {
     action_type: input.actionType,
     action_payload: input.actionPayload || {},
   }, { fallbackMessage: 'Failed to create change request' })
+}
+
+export async function createAdsChangeRequestsFromBudgetRecommendation(input: {
+  runId: string
+  scenarioId: string
+  recommendationId?: string | null
+  currency?: string
+  targets: BudgetRecommendationTargetInput[]
+}): Promise<BudgetRecommendationCreateResponse> {
+  return apiSendJson('/api/ads/change-requests/from-budget-recommendation', 'POST', {
+    run_id: input.runId,
+    scenario_id: input.scenarioId,
+    recommendation_id: input.recommendationId || undefined,
+    currency: input.currency || 'USD',
+    targets: input.targets,
+  }, { fallbackMessage: 'Failed to create recommendation change requests' })
 }
 
 export async function approveAdsChangeRequest(requestId: string): Promise<AdsChangeRequest> {

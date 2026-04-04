@@ -4,7 +4,16 @@ from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.modules.journeys.schemas import JourneyDefinitionCreate, JourneyDefinitionUpdate, JourneySavedViewPayload
+from app.modules.journeys.schemas import (
+    JourneyDefinitionCreate,
+    JourneyExperimentCreatePayload,
+    JourneyDefinitionUpdate,
+    JourneyHypothesisPayload,
+    JourneyPolicyPromotionPayload,
+    JourneyPolicySimulationPayload,
+    JourneySavedViewPayload,
+)
+from app.models_config_dq import JourneyHypothesis
 from app.services_journey_attribution import build_journey_attribution_summary
 from app.services_journey_definitions import (
     archive_journey_definition,
@@ -15,7 +24,19 @@ from app.services_journey_definitions import (
     update_journey_definition,
 )
 from app.services_journey_examples import list_examples_for_journey_definition
+from app.services_journey_hypotheses import (
+    create_journey_hypothesis,
+    list_journey_hypotheses,
+    serialize_journey_hypothesis,
+    update_journey_hypothesis,
+)
+from app.services_journey_insights import build_journey_insights
 from app.services_journey_paths import list_paths_for_journey_definition
+from app.services_journey_policy_learning import (
+    list_journey_policy_candidates,
+    serialize_journey_policy_candidate_response,
+    set_journey_policy_promotion,
+)
 from app.services_journey_saved_views import (
     create_journey_saved_view,
     delete_journey_saved_view,
@@ -24,6 +45,8 @@ from app.services_journey_saved_views import (
     update_journey_saved_view,
 )
 from app.services_journey_transitions import list_transitions_for_journey_definition
+from app.services_incrementality import create_experiment_record, serialize_experiment_summary
+from app.services_nba_policy_simulation import build_journey_policy_simulation
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +176,233 @@ def create_router(
         if not ok:
             raise HTTPException(status_code=404, detail="Journey saved view not found")
         return {"id": view_id, "status": "deleted"}
+
+    @router.get("/api/journeys/hypotheses")
+    def api_list_journey_hypotheses(
+        journey_definition_id: Optional[str] = Query(None),
+        status: Optional[str] = Query(None),
+        mine_only: bool = Query(False),
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        return list_journey_hypotheses(
+            db,
+            workspace_id=ctx.workspace_id,
+            journey_definition_id=journey_definition_id,
+            status=status,
+            owner_user_id=ctx.user_id if mine_only else None,
+        )
+
+    @router.post("/api/journeys/hypotheses")
+    def api_create_journey_hypothesis(
+        body: JourneyHypothesisPayload,
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        jd = get_journey_definition(db, body.journey_definition_id)
+        if not jd or jd.is_archived:
+            raise HTTPException(status_code=404, detail="Journey definition not found")
+        if not body.title.strip():
+            raise HTTPException(status_code=400, detail="title is required")
+        if not body.hypothesis_text.strip():
+            raise HTTPException(status_code=400, detail="hypothesis_text is required")
+        item = create_journey_hypothesis(
+            db,
+            workspace_id=ctx.workspace_id,
+            owner_user_id=ctx.user_id,
+            journey_definition_id=body.journey_definition_id,
+            title=body.title,
+            target_kpi=body.target_kpi,
+            hypothesis_text=body.hypothesis_text,
+            trigger=body.trigger,
+            segment=body.segment,
+            current_action=body.current_action,
+            proposed_action=body.proposed_action,
+            support_count=body.support_count,
+            baseline_rate=body.baseline_rate,
+            sample_size_target=body.sample_size_target,
+            status=body.status,
+            linked_experiment_id=body.linked_experiment_id,
+            result=body.result,
+        )
+        return serialize_journey_hypothesis(item)
+
+    @router.put("/api/journeys/hypotheses/{hypothesis_id}")
+    def api_update_journey_hypothesis(
+        hypothesis_id: str,
+        body: JourneyHypothesisPayload,
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        jd = get_journey_definition(db, body.journey_definition_id)
+        if not jd or jd.is_archived:
+            raise HTTPException(status_code=404, detail="Journey definition not found")
+        if not body.title.strip():
+            raise HTTPException(status_code=400, detail="title is required")
+        if not body.hypothesis_text.strip():
+            raise HTTPException(status_code=400, detail="hypothesis_text is required")
+        item = update_journey_hypothesis(
+            db,
+            workspace_id=ctx.workspace_id,
+            hypothesis_id=hypothesis_id,
+            title=body.title,
+            target_kpi=body.target_kpi,
+            hypothesis_text=body.hypothesis_text,
+            trigger=body.trigger,
+            segment=body.segment,
+            current_action=body.current_action,
+            proposed_action=body.proposed_action,
+            support_count=body.support_count,
+            baseline_rate=body.baseline_rate,
+            sample_size_target=body.sample_size_target,
+            status=body.status,
+            linked_experiment_id=body.linked_experiment_id,
+            result=body.result,
+        )
+        if not item:
+            raise HTTPException(status_code=404, detail="Journey hypothesis not found")
+        return serialize_journey_hypothesis(item)
+
+    @router.post("/api/journeys/hypotheses/{hypothesis_id}/create-experiment")
+    def api_create_experiment_from_journey_hypothesis(
+        hypothesis_id: str,
+        body: JourneyExperimentCreatePayload,
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        if body.start_at >= body.end_at:
+            raise HTTPException(status_code=400, detail="start_at must be before end_at")
+        hypothesis = (
+            db.query(JourneyHypothesis)
+            .filter(JourneyHypothesis.id == hypothesis_id, JourneyHypothesis.workspace_id == ctx.workspace_id)
+            .first()
+        )
+        if not hypothesis:
+            raise HTTPException(status_code=404, detail="Journey hypothesis not found")
+        if hypothesis.linked_experiment_id:
+            raise HTTPException(status_code=400, detail="Journey hypothesis already linked to an experiment")
+        jd = get_journey_definition(db, hypothesis.journey_definition_id)
+        if not jd or jd.is_archived:
+            raise HTTPException(status_code=404, detail="Journey definition not found")
+
+        derived_channel = (
+            (body.channel or "").strip()
+            or str((hypothesis.segment_json or {}).get("channel_group") or "").strip()
+            or "journey"
+        )
+        proposed_action = dict(hypothesis.proposed_action_json or {})
+        if body.proposed_step and body.proposed_step.strip():
+            proposed_action["step"] = body.proposed_step.strip()
+            proposed_action["type"] = str(proposed_action.get("type") or "nba_intervention")
+            proposed_action["idea"] = str(
+                proposed_action.get("idea")
+                or f"Test {body.proposed_step.strip()} for this prefix."
+            )
+        experiment_name = (body.name or "").strip() or f"Journey test: {hypothesis.title}"
+        note_parts = [
+            body.notes.strip() if body.notes else "",
+            f"Created from journey hypothesis {hypothesis.id}.",
+            f"Journey definition: {hypothesis.journey_definition_id}.",
+            f"Hypothesis: {hypothesis.hypothesis_text}",
+        ]
+        experiment = create_experiment_record(
+            db,
+            name=experiment_name,
+            channel=derived_channel,
+            start_at=body.start_at,
+            end_at=body.end_at,
+            conversion_key=hypothesis.target_kpi or jd.conversion_kpi_id,
+            notes="\n\n".join(part for part in note_parts if part),
+            experiment_type=(body.experiment_type or "holdout").strip() or "holdout",
+            source_type="journey_hypothesis",
+            source_id=hypothesis.id,
+            segment=dict(hypothesis.segment_json or {}),
+            policy={
+                "trigger": dict(hypothesis.trigger_json or {}),
+                "current_action": dict(hypothesis.current_action_json or {}),
+                "proposed_action": proposed_action,
+            },
+            guardrails={
+                "sample_size_target": hypothesis.sample_size_target,
+                "support_count": hypothesis.support_count,
+                **(body.guardrails or {}),
+            },
+        )
+
+        hypothesis.linked_experiment_id = experiment.id
+        hypothesis.status = "in_experiment"
+        hypothesis.proposed_action_json = proposed_action
+        hypothesis.updated_at = datetime.utcnow()
+        db.add(hypothesis)
+        db.commit()
+        db.refresh(hypothesis)
+        return {
+            "experiment": serialize_experiment_summary(
+                experiment,
+                source_name=hypothesis.title,
+                source_journey_definition_id=hypothesis.journey_definition_id,
+            ),
+            "hypothesis": serialize_journey_hypothesis(hypothesis),
+        }
+
+    @router.post("/api/journeys/hypotheses/{hypothesis_id}/simulate")
+    def api_simulate_journey_hypothesis_policy(
+        hypothesis_id: str,
+        body: Optional[JourneyPolicySimulationPayload] = None,
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        hypothesis = (
+            db.query(JourneyHypothesis)
+            .filter(JourneyHypothesis.id == hypothesis_id, JourneyHypothesis.workspace_id == ctx.workspace_id)
+            .first()
+        )
+        if not hypothesis:
+            raise HTTPException(status_code=404, detail="Journey hypothesis not found")
+        return build_journey_policy_simulation(
+            db,
+            hypothesis=hypothesis,
+            proposed_step=(body.proposed_step if body else None),
+        )
+
+    @router.get("/api/journeys/{definition_id}/policies")
+    def api_list_journey_policy_candidates(
+        definition_id: str,
+        limit: int = Query(12, ge=1, le=50),
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        jd = get_journey_definition(db, definition_id)
+        if not jd or jd.is_archived:
+            raise HTTPException(status_code=404, detail="Journey definition not found")
+        return list_journey_policy_candidates(
+            db,
+            workspace_id=ctx.workspace_id,
+            journey_definition_id=definition_id,
+            limit=limit,
+        )
+
+    @router.post("/api/journeys/hypotheses/{hypothesis_id}/policy-promotion")
+    def api_set_journey_policy_promotion(
+        hypothesis_id: str,
+        body: JourneyPolicyPromotionPayload,
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        try:
+            item = set_journey_policy_promotion(
+                db,
+                workspace_id=ctx.workspace_id,
+                hypothesis_id=hypothesis_id,
+                actor_user_id=ctx.user_id,
+                active=body.active,
+                notes=body.notes,
+            )
+        except ValueError as exc:
+            message = str(exc)
+            status_code = 404 if "not found" in message.lower() else 400
+            raise HTTPException(status_code=status_code, detail=message)
+        return serialize_journey_policy_candidate_response(item)
 
     @router.post("/api/journeys/definitions")
     def api_create_journey_definition(
@@ -286,6 +536,42 @@ def create_router(
             country=country,
             page=page,
             limit=limit,
+        )
+
+    @router.get("/api/journeys/{definition_id}/insights")
+    def api_get_journey_insights(
+        definition_id: str,
+        date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
+        date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
+        mode: str = Query("conversion_only", pattern="^(conversion_only|all_journeys)$"),
+        channel_group: Optional[str] = Query(None),
+        campaign_id: Optional[str] = Query(None),
+        device: Optional[str] = Query(None),
+        country: Optional[str] = Query(None),
+        db=Depends(get_db_dependency),
+        _ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        jd = get_journey_definition(db, definition_id)
+        if not jd or jd.is_archived:
+            raise HTTPException(status_code=404, detail="Journey definition not found")
+        try:
+            d_from = datetime.fromisoformat(date_from).date()
+            d_to = datetime.fromisoformat(date_to).date()
+        except Exception:
+            raise HTTPException(status_code=400, detail="date_from/date_to must be YYYY-MM-DD")
+        if d_from > d_to:
+            raise HTTPException(status_code=400, detail="date_from must be <= date_to")
+        return build_journey_insights(
+            db,
+            journey_definition_id=definition_id,
+            date_from=d_from,
+            date_to=d_to,
+            mode=mode,
+            channel_group=channel_group,
+            campaign_id=campaign_id,
+            device=device,
+            country=country,
+            target_kpi=jd.conversion_kpi_id,
         )
 
     @router.get("/api/journeys/{definition_id}/transitions")

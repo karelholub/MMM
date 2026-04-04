@@ -154,6 +154,21 @@ interface NBASettings {
   max_suggestions_per_prefix: number
   min_uplift_pct: number | null
   excluded_channels: string[]
+  promoted_journey_policies: Array<{
+    hypothesis_id: string
+    title: string
+    journey_definition_id: string
+    prefix: string
+    prefix_steps: string[]
+    step: string
+    channel: string
+    campaign?: string | null
+    segment: Record<string, unknown>
+    promoted_at?: string | null
+    promoted_by?: string | null
+    notes?: string | null
+    source?: string | null
+  }>
 }
 
 interface FeatureFlags {
@@ -231,6 +246,16 @@ interface Settings {
   feature_flags: FeatureFlags
   ads_governance: AdsGovernanceSettings
   revenue_config: RevenueConfig
+}
+
+interface PromotedJourneyPolicyResponse {
+  items: NBASettings['promoted_journey_policies']
+  discovered: NBASettings['promoted_journey_policies']
+}
+
+interface PromotedJourneyPolicySyncResponse {
+  items: NBASettings['promoted_journey_policies']
+  synced: number
 }
 
 type MatchOperator = 'any' | 'contains' | 'equals' | 'regex'
@@ -857,6 +882,7 @@ const DEFAULT_SETTINGS: Settings = {
     max_suggestions_per_prefix: 3,
     min_uplift_pct: null,
     excluded_channels: ['direct'],
+    promoted_journey_policies: [],
   },
   feature_flags: {
     mmm_enabled: false,
@@ -1298,6 +1324,14 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       enabled:
         activeSection === 'taxonomy' &&
         (taxonomyActiveTab === 'overview' || taxonomyActiveTab === 'advanced'),
+    })
+    const promotedJourneyPoliciesQuery = useQuery<PromotedJourneyPolicyResponse>({
+      queryKey: ['settings', 'nba', 'promoted-policies'],
+      queryFn: async () =>
+        apiGetJson<PromotedJourneyPolicyResponse>('/api/settings/nba/promoted-policies', {
+          fallbackMessage: 'Failed to load promoted journey policies',
+        }),
+      enabled: activeSection === 'nba',
     })
     const taxonomyCoverageQuery = useQuery<TaxonomyCoverageResponse>({
       queryKey: ['taxonomy', 'coverage'],
@@ -1751,6 +1785,38 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
     const [nbaTestResult, setNbaTestResult] = useState<NBATestResult | null>(null)
     const [nbaTestError, setNbaTestError] = useState<string | null>(null)
     const [isTestingNba, setIsTestingNba] = useState(false)
+    const syncPromotedJourneyPoliciesMutation = useMutation({
+      mutationFn: async () =>
+        apiSendJson<PromotedJourneyPolicySyncResponse>(
+          '/api/settings/nba/promoted-policies/sync',
+          'POST',
+          undefined,
+          { fallbackMessage: 'Failed to sync promoted journey policies' },
+        ),
+      onSuccess: async (payload) => {
+        await settingsQuery.refetch()
+        await promotedJourneyPoliciesQuery.refetch()
+        setSettingsBaseline((prev) =>
+          prev
+            ? {
+                ...prev,
+                nba: {
+                  ...prev.nba,
+                  promoted_journey_policies: deepClone(payload.items ?? []),
+                },
+              }
+            : prev,
+        )
+        setNbaDraft((prev) => ({
+          ...prev,
+          promoted_journey_policies: deepClone(payload.items ?? []),
+        }))
+        setLastSavedAt((prev) => ({
+          ...prev,
+          nba: new Date().toLocaleString(),
+        }))
+      },
+    })
 
     const attributionErrors = useMemo(() => {
       const errors: Partial<Record<keyof AttributionSettings, string>> = {}
@@ -5817,6 +5883,9 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       const nbaRequiresAck = needsNbaDependencyAck && !nbaDependencyAcknowledged
       const baselineRate = nbaTestResult?.baselineConversionRate ?? 0
       const testRecommendations = nbaTestResult?.recommendations ?? []
+      const promotedPolicies = nbaDraft.promoted_journey_policies ?? []
+      const discoveredPromotedPolicies =
+        promotedJourneyPoliciesQuery.data?.discovered ?? []
 
       const formatPercentDisplay = (value: number | null | undefined) => {
         if (value === null || value === undefined || Number.isNaN(value)) {
@@ -5834,6 +5903,19 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
             (part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase(),
           )
           .join(' ')
+
+      const promotedPolicyForRecommendation = (
+        prefix: string | null | undefined,
+        rec: NBATestRecommendationRow,
+      ) => {
+        const normalizedPrefix = (prefix || '').trim()
+        return promotedPolicies.find(
+          (policy) =>
+            policy.prefix === normalizedPrefix &&
+            String(policy.step || policy.channel || '').trim().toLowerCase() ===
+              String(rec.step || rec.channel || '').trim().toLowerCase(),
+        )
+      }
 
       const handlePresetChange = (next: NbaPresetKey | 'custom') => {
         if (next === 'custom') {
@@ -6290,6 +6372,172 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
           </div>
 
           <div style={cardStyle}>
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                gap: t.space.md,
+                alignItems: 'start',
+                flexWrap: 'wrap',
+              }}
+            >
+              <div style={{ display: 'grid', gap: t.space.xs }}>
+                <h3
+                  style={{
+                    margin: 0,
+                    fontSize: t.font.sizeMd,
+                    fontWeight: t.font.weightSemibold,
+                    color: t.color.text,
+                  }}
+                >
+                  Deployed Journey Policies
+                </h3>
+                <p style={helperTextStyle}>
+                  Sync promoted Journey Lab policies into NBA defaults. Synced
+                  policies are consumed as prefix-specific overrides in NBA
+                  recommendation filtering.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void syncPromotedJourneyPoliciesMutation.mutateAsync()}
+                disabled={syncPromotedJourneyPoliciesMutation.isPending}
+                style={{
+                  padding: `${t.space.sm}px ${t.space.md}px`,
+                  borderRadius: t.radius.sm,
+                  border: `1px solid ${t.color.border}`,
+                  background: t.color.surface,
+                  color: t.color.text,
+                  fontSize: t.font.sizeSm,
+                  fontWeight: t.font.weightMedium,
+                  cursor: syncPromotedJourneyPoliciesMutation.isPending ? 'wait' : 'pointer',
+                  opacity: syncPromotedJourneyPoliciesMutation.isPending ? 0.8 : 1,
+                }}
+              >
+                {syncPromotedJourneyPoliciesMutation.isPending
+                  ? 'Syncing…'
+                  : 'Sync from Journey Lab'}
+              </button>
+            </div>
+
+            {promotedJourneyPoliciesQuery.isError && (
+              <span style={{ color: t.color.danger, fontSize: t.font.sizeSm }}>
+                {(promotedJourneyPoliciesQuery.error as Error).message}
+              </span>
+            )}
+
+            <div
+              style={{
+                display: 'grid',
+                gap: t.space.sm,
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+              }}
+            >
+              <div
+                style={{
+                  border: `1px solid ${t.color.borderLight}`,
+                  borderRadius: t.radius.sm,
+                  padding: t.space.sm,
+                }}
+              >
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                  Synced overrides
+                </div>
+                <div
+                  style={{
+                    fontSize: t.font.sizeLg,
+                    color: t.color.text,
+                    fontWeight: t.font.weightSemibold,
+                  }}
+                >
+                  {promotedPolicies.length.toLocaleString()}
+                </div>
+              </div>
+              <div
+                style={{
+                  border: `1px solid ${t.color.borderLight}`,
+                  borderRadius: t.radius.sm,
+                  padding: t.space.sm,
+                }}
+              >
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                  Journey Lab promotions
+                </div>
+                <div
+                  style={{
+                    fontSize: t.font.sizeLg,
+                    color: t.color.text,
+                    fontWeight: t.font.weightSemibold,
+                  }}
+                >
+                  {discoveredPromotedPolicies.length.toLocaleString()}
+                </div>
+              </div>
+            </div>
+
+            {!promotedPolicies.length ? (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                No deployed journey policies yet. Promote a validated policy in
+                Journey Lab, then sync it here to activate it in NBA defaults.
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gap: t.space.sm }}>
+                {promotedPolicies.map(
+                  (policy: NBASettings['promoted_journey_policies'][number]) => (
+                    <div
+                      key={`${policy.hypothesis_id}-${policy.prefix}-${policy.step}`}
+                      style={{
+                        border: `1px solid ${t.color.borderLight}`,
+                        borderRadius: t.radius.sm,
+                        padding: t.space.sm,
+                        background: t.color.bgSubtle,
+                        display: 'grid',
+                        gap: 4,
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          gap: t.space.sm,
+                          flexWrap: 'wrap',
+                        }}
+                      >
+                        <div
+                          style={{
+                            fontSize: t.font.sizeSm,
+                            color: t.color.text,
+                            fontWeight: t.font.weightMedium,
+                          }}
+                        >
+                          {policy.title}
+                        </div>
+                        <div
+                          style={{
+                            fontSize: t.font.sizeXs,
+                            color: t.color.textMuted,
+                          }}
+                        >
+                          {policy.promoted_at
+                            ? new Date(policy.promoted_at).toLocaleString()
+                            : 'Promoted'}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                        Prefix: {policy.prefix}
+                      </div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                        Override next step: {policy.step}
+                        {policy.campaign ? ` · ${policy.campaign}` : ''}
+                      </div>
+                    </div>
+                  ),
+                )}
+              </div>
+            )}
+          </div>
+
+          <div style={cardStyle}>
             <div style={{ display: 'grid', gap: t.space.xs }}>
               <h3
                 style={{
@@ -6636,6 +6884,10 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                   <tbody>
                     {testRecommendations.map((rec) => {
                       const confidence = confidenceFor(rec)
+                      const promotedPolicy = promotedPolicyForRecommendation(
+                        nbaTestResult?.prefix === '(start)' ? '' : nbaTestResult?.prefix,
+                        rec,
+                      )
                       return (
                         <tr key={`${rec.step}-${rec.channel}`}>
                           <td
@@ -6649,6 +6901,22 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                                 {prettyChannel(rec.channel)}
                                 {rec.campaign ? ` · ${rec.campaign}` : ''}
                               </span>
+                              {promotedPolicy ? (
+                                <span
+                                  style={{
+                                    display: 'inline-flex',
+                                    width: 'fit-content',
+                                    padding: '2px 8px',
+                                    borderRadius: t.radius.full,
+                                    border: `1px solid ${t.color.accent}`,
+                                    color: t.color.accent,
+                                    fontSize: t.font.sizeXs,
+                                    fontWeight: t.font.weightMedium,
+                                  }}
+                                >
+                                  Deployed policy
+                                </span>
+                              ) : null}
                               <span
                                 style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}
                               >

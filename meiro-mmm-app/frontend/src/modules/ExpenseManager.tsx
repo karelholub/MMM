@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
@@ -7,6 +7,7 @@ import { apiGetJson, apiSendJson } from '../lib/apiClient'
 interface ExpenseEntry {
   id: string
   channel: string
+  campaign?: string | null
   cost_type: string
   amount: number
   currency: string
@@ -77,6 +78,32 @@ interface ReconciliationRow {
   status: string
 }
 
+interface TaxonomyCoverageResponse {
+  channel_distribution: Record<string, number>
+}
+
+interface TaxonomyResponse {
+  channel_rules: Array<{ channel: string }>
+}
+
+interface CampaignSummaryItem {
+  campaign_id: string
+  campaign_name?: string | null
+  channel: string
+}
+
+interface CampaignSummaryResponse {
+  items: CampaignSummaryItem[]
+}
+
+function normalizeCampaignOption(item: CampaignSummaryItem): string | null {
+  if (item.campaign_name) return item.campaign_name
+  const raw = String(item.campaign_id || '')
+  if (!raw) return null
+  const idx = raw.indexOf(':')
+  return idx >= 0 ? raw.slice(idx + 1) || null : raw
+}
+
 const card = {
   backgroundColor: '#fff',
   borderRadius: 12,
@@ -110,6 +137,7 @@ const COLORS: Record<string, string> = {
 function buildExpensesQueryParams(filters: {
   includeDeleted?: boolean
   channel?: string
+  campaign?: string
   cost_type?: string
   source_type?: string
   currency?: string
@@ -121,6 +149,7 @@ function buildExpensesQueryParams(filters: {
   const p = new URLSearchParams()
   if (filters.includeDeleted) p.set('include_deleted', 'true')
   if (filters.channel) p.set('channel', filters.channel)
+  if (filters.campaign) p.set('campaign', filters.campaign)
   if (filters.cost_type) p.set('cost_type', filters.cost_type)
   if (filters.source_type) p.set('source_type', filters.source_type)
   if (filters.currency) p.set('currency', filters.currency)
@@ -138,6 +167,7 @@ export default function ExpenseManager() {
   // Filters for expenses list
   const [includeDeleted, setIncludeDeleted] = useState(false)
   const [filterChannel, setFilterChannel] = useState('')
+  const [filterCampaign, setFilterCampaign] = useState('')
   const [filterCostType, setFilterCostType] = useState('')
   const [filterSourceType, setFilterSourceType] = useState('')
   const [filterCurrency, setFilterCurrency] = useState('')
@@ -148,6 +178,7 @@ export default function ExpenseManager() {
 
   // Add form state (extended)
   const [newChannel, setNewChannel] = useState('google_ads')
+  const [newCampaign, setNewCampaign] = useState('')
   const [newCostType, setNewCostType] = useState('Media Spend')
   const [newAmount, setNewAmount] = useState('')
   const [newCurrency, setNewCurrency] = useState('USD')
@@ -164,6 +195,7 @@ export default function ExpenseManager() {
   const queryParams = useMemo(() => buildExpensesQueryParams({
     includeDeleted,
     channel: filterChannel || undefined,
+    campaign: filterCampaign || undefined,
     cost_type: filterCostType || undefined,
     source_type: filterSourceType || undefined,
     currency: filterCurrency || undefined,
@@ -171,7 +203,7 @@ export default function ExpenseManager() {
     service_period_start: servicePeriodStart || undefined,
     service_period_end: servicePeriodEnd || undefined,
     search: searchText || undefined,
-  }), [includeDeleted, filterChannel, filterCostType, filterSourceType, filterCurrency, filterStatus, servicePeriodStart, servicePeriodEnd, searchText])
+  }), [includeDeleted, filterChannel, filterCampaign, filterCostType, filterSourceType, filterCurrency, filterStatus, servicePeriodStart, servicePeriodEnd, searchText])
 
   const summaryParams = useMemo(() => {
     const p = new URLSearchParams()
@@ -193,6 +225,38 @@ export default function ExpenseManager() {
     queryFn: async () => apiGetJson<ExpenseSummary>(`/api/expenses/summary?${summaryParams}`, {
       fallbackMessage: 'Failed to fetch summary',
     }),
+  })
+
+  const taxonomyCoverageQuery = useQuery<TaxonomyCoverageResponse>({
+    queryKey: ['expenses-taxonomy-coverage'],
+    queryFn: async () =>
+      apiGetJson<TaxonomyCoverageResponse>('/api/taxonomy/coverage', {
+        fallbackMessage: 'Failed to fetch taxonomy coverage',
+      }),
+  })
+
+  const taxonomyQuery = useQuery<TaxonomyResponse>({
+    queryKey: ['expenses-taxonomy'],
+    queryFn: async () =>
+      apiGetJson<TaxonomyResponse>('/api/taxonomy', {
+        fallbackMessage: 'Failed to fetch taxonomy',
+      }),
+  })
+
+  const campaignOptionsQuery = useQuery<CampaignSummaryResponse>({
+    queryKey: ['expenses-campaign-options'],
+    queryFn: async () => {
+      const today = new Date()
+      const start = new Date(today.getTime() - 90 * 24 * 60 * 60 * 1000)
+      const params = new URLSearchParams({
+        date_from: start.toISOString().slice(0, 10),
+        date_to: today.toISOString().slice(0, 10),
+        compare: '0',
+      })
+      return apiGetJson<CampaignSummaryResponse>(`/api/performance/campaign/summary?${params.toString()}`, {
+        fallbackMessage: 'Failed to fetch campaign options',
+      })
+    },
   })
 
   const importHealthQuery = useQuery<ImportHealthResponse>({
@@ -243,6 +307,7 @@ export default function ExpenseManager() {
     mutationFn: async (entry: Partial<ExpenseEntry>) => {
       const payload = {
         channel: entry.channel,
+        campaign: entry.campaign || undefined,
         cost_type: entry.cost_type ?? 'Media Spend',
         amount: Number(entry.amount),
         currency: entry.currency ?? 'USD',
@@ -263,6 +328,7 @@ export default function ExpenseManager() {
       queryClient.invalidateQueries({ queryKey: ['expenses'] })
       queryClient.invalidateQueries({ queryKey: ['expenses-summary'] })
       setNewAmount('')
+      setNewCampaign('')
       setNewNotes('')
       setNewInvoiceRef('')
       setNewExternalLink('')
@@ -316,6 +382,7 @@ export default function ExpenseManager() {
     const end = newServicePeriodEnd || undefined
     addMutation.mutate({
       channel: newChannel,
+      campaign: newCampaign || undefined,
       cost_type: newCostType,
       amount,
       currency: newCurrency,
@@ -343,6 +410,39 @@ export default function ExpenseManager() {
   const summary = summaryQuery.data
   const expenses = expensesQuery.data || []
   const reportingCurrency = summary?.reporting_currency || 'USD'
+  const channelOptions = useMemo(() => {
+    const options = new Set<string>()
+    ;(summary?.channels ?? []).forEach((channel) => {
+      if (channel) options.add(channel)
+    })
+    Object.keys(taxonomyCoverageQuery.data?.channel_distribution ?? {}).forEach((channel) => {
+      if (channel) options.add(channel)
+    })
+    ;(taxonomyQuery.data?.channel_rules ?? []).forEach((rule) => {
+      if (rule.channel) options.add(rule.channel)
+    })
+    expenses.forEach((expense) => {
+      if (expense.channel) options.add(expense.channel)
+    })
+    CHANNEL_OPTIONS.forEach((channel) => options.add(channel))
+    return Array.from(options).sort((a, b) => a.localeCompare(b))
+  }, [
+    expenses,
+    summary?.channels,
+    taxonomyCoverageQuery.data?.channel_distribution,
+    taxonomyQuery.data?.channel_rules,
+  ])
+  const campaignOptions = useMemo(() => {
+    const options = new Set<string>()
+    ;(campaignOptionsQuery.data?.items ?? []).forEach((item) => {
+      const label = normalizeCampaignOption(item)
+      if (label) options.add(String(label))
+    })
+    expenses.forEach((expense) => {
+      if (expense.campaign) options.add(expense.campaign)
+    })
+    return Array.from(options).sort((a, b) => a.localeCompare(b))
+  }, [campaignOptionsQuery.data?.items, expenses])
   const chartData = summary ? Object.entries(summary.by_channel).map(([channel, amount]) => ({
     channel, amount, fill: COLORS[channel] || '#6c757d',
   })).sort((a, b) => b.amount - a.amount) : []
@@ -359,6 +459,13 @@ export default function ExpenseManager() {
     if (newCurrency === 'USD') return amt
     return null // Could integrate FX later; for now show "—" or same
   }, [newAmount, newCurrency])
+
+  useEffect(() => {
+    if (!channelOptions.length) return
+    if (!channelOptions.includes(newChannel)) {
+      setNewChannel(channelOptions[0])
+    }
+  }, [channelOptions, newChannel])
 
   return (
     <div>
@@ -527,10 +634,26 @@ export default function ExpenseManager() {
                   onChange={(e) => setNewChannel(e.target.value)}
                   style={{ width: '100%', padding: '10px', fontSize: '14px', border: '1px solid #dee2e6', borderRadius: 6 }}
                 >
-                  {CHANNEL_OPTIONS.map(ch => (
+                  {channelOptions.map(ch => (
                     <option key={ch} value={ch}>{ch.replace(/_/g, ' ')}</option>
                   ))}
                 </select>
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#6c757d', marginBottom: 4 }}>Campaign</label>
+                <input
+                  type="text"
+                  list="expense-campaign-options"
+                  value={newCampaign}
+                  onChange={(e) => setNewCampaign(e.target.value)}
+                  placeholder="Optional campaign"
+                  style={{ width: '100%', padding: '10px', fontSize: '14px', border: '1px solid #dee2e6', borderRadius: 6, boxSizing: 'border-box' }}
+                />
+                <datalist id="expense-campaign-options">
+                  {campaignOptions.map((campaign) => (
+                    <option key={campaign} value={campaign} />
+                  ))}
+                </datalist>
               </div>
               <div>
                 <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#6c757d', marginBottom: 4 }}>Cost Type</label>
@@ -657,8 +780,19 @@ export default function ExpenseManager() {
               />
               <select value={filterChannel} onChange={(e) => setFilterChannel(e.target.value)} style={{ padding: '8px', fontSize: 13, border: '1px solid #dee2e6', borderRadius: 6 }}>
                 <option value="">All channels</option>
-                {CHANNEL_OPTIONS.map(ch => <option key={ch} value={ch}>{ch}</option>)}
+                {channelOptions.map(ch => <option key={ch} value={ch}>{ch}</option>)}
               </select>
+              <input
+                type="text"
+                list="expense-filter-campaign-options"
+                value={filterCampaign}
+                onChange={(e) => setFilterCampaign(e.target.value)}
+                placeholder="All campaigns"
+                style={{ padding: '8px', fontSize: 13, border: '1px solid #dee2e6', borderRadius: 6, minWidth: 180 }}
+              />
+              <datalist id="expense-filter-campaign-options">
+                {campaignOptions.map((campaign) => <option key={campaign} value={campaign} />)}
+              </datalist>
               <select value={filterCostType} onChange={(e) => setFilterCostType(e.target.value)} style={{ padding: '8px', fontSize: 13, border: '1px solid #dee2e6', borderRadius: 6 }}>
                 <option value="">All cost types</option>
                 {COST_TYPES.map(ct => <option key={ct} value={ct}>{ct}</option>)}
@@ -695,7 +829,7 @@ export default function ExpenseManager() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
                 <thead>
                   <tr style={{ backgroundColor: '#f8f9fa' }}>
-                    {['Channel', 'Cost Type', 'Amount (orig)', 'Amount (' + reportingCurrency + ')', 'Service Period', 'Source', 'Status', 'Notes', 'Actions'].map(h => (
+                    {['Channel', 'Campaign', 'Cost Type', 'Amount (orig)', 'Amount (' + reportingCurrency + ')', 'Service Period', 'Source', 'Status', 'Notes', 'Actions'].map(h => (
                       <th key={h} style={{ padding: '12px 16px', textAlign: h === 'Actions' ? 'center' : 'left', fontWeight: '600', color: '#495057', borderBottom: '2px solid #e9ecef' }}>
                         {h}
                       </th>
@@ -723,6 +857,7 @@ export default function ExpenseManager() {
                           {exp.channel.replace(/_/g, ' ')}
                         </span>
                       </td>
+                      <td style={{ padding: '10px 16px', color: '#495057' }}>{exp.campaign || '—'}</td>
                       <td style={{ padding: '10px 16px' }}>{exp.cost_type ?? '-'}</td>
                       <td style={{ padding: '10px 16px' }}>{exp.amount.toLocaleString()} {exp.currency}</td>
                       <td style={{ padding: '10px 16px', fontWeight: 600, color: '#dc3545' }}>
@@ -767,7 +902,7 @@ export default function ExpenseManager() {
                   ))}
                   {expenses.length === 0 && (
                     <tr>
-                      <td colSpan={9} style={{ padding: 24, textAlign: 'center', color: '#6c757d' }}>
+                      <td colSpan={10} style={{ padding: 24, textAlign: 'center', color: '#6c757d' }}>
                         No expenses match the filters. Add one above or run an import.
                       </td>
                     </tr>
@@ -801,6 +936,8 @@ export default function ExpenseManager() {
               <dl style={{ margin: 0, fontSize: 14 }}>
                 <dt style={{ color: '#6c757d', marginTop: 8 }}>Channel</dt>
                 <dd style={{ marginLeft: 0 }}>{selectedExpense.channel}</dd>
+                <dt style={{ color: '#6c757d', marginTop: 8 }}>Campaign</dt>
+                <dd style={{ marginLeft: 0 }}>{selectedExpense.campaign || '—'}</dd>
                 <dt style={{ color: '#6c757d', marginTop: 8 }}>Cost type</dt>
                 <dd style={{ marginLeft: 0 }}>{selectedExpense.cost_type}</dd>
                 <dt style={{ color: '#6c757d', marginTop: 8 }}>Amount (original)</dt>

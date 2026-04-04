@@ -7,7 +7,19 @@ from typing import Any, Callable, Dict, Optional
 import pandas as pd
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException
 
-from app.modules.mmm.schemas import BuildFromPlatformRequest, ModelConfig, OptimizeRequest, ValidateMappingRequest
+from app.modules.mmm.schemas import (
+    BudgetScenarioCreateRequest,
+    BuildFromPlatformRequest,
+    ModelConfig,
+    OptimizeRequest,
+    ValidateMappingRequest,
+)
+from app.services_budget_recommendations import (
+    build_budget_recommendations,
+    create_budget_scenario,
+    serialize_budget_scenario,
+)
+from app.services_budget_realization import list_budget_realization, record_budget_realization_snapshot
 
 
 def create_router(
@@ -30,6 +42,25 @@ def create_router(
     def _ensure_mmm_enabled() -> None:
         if not getattr(get_settings_obj().feature_flags, "mmm_enabled", False):
             raise HTTPException(status_code=404, detail="mmm_enabled flag is off")
+
+    def _load_run_and_dataset_rows(run_id: str) -> tuple[Dict[str, Any], list[dict[str, Any]]]:
+        run = get_runs_obj().get(run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Model not found")
+        dataset_id = run.get("dataset_id") or (run.get("config") or {}).get("dataset_id")
+        if not dataset_id:
+            raise HTTPException(status_code=400, detail="Model dataset is unavailable")
+        dataset_info = get_datasets_obj().get(str(dataset_id))
+        if not dataset_info:
+            raise HTTPException(status_code=404, detail="Dataset not found")
+        path = dataset_info.get("path")
+        if path is None:
+            raise HTTPException(status_code=404, detail="Dataset file not found")
+        p = Path(path) if isinstance(path, str) else path
+        if not p.exists():
+            raise HTTPException(status_code=404, detail="Dataset file not found")
+        rows = pd.read_csv(p).fillna(0).to_dict(orient="records")
+        return run, rows
 
     @router.get("/api/mmm/platform-options")
     def get_mmm_platform_options():
@@ -361,5 +392,86 @@ def create_router(
             }
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Optimization error: {exc}")
+
+    @router.get("/api/models/{run_id}/budget/recommendations")
+    def get_budget_recommendations(
+        run_id: str,
+        objective: str = "protect_efficiency",
+        total_budget_change_pct: float = 0.0,
+    ):
+        _ensure_mmm_enabled()
+        run, dataset_rows = _load_run_and_dataset_rows(run_id)
+        return build_budget_recommendations(
+            run_id=run_id,
+            run=run,
+            dataset_rows=dataset_rows,
+            objective=objective,
+            total_budget_change_pct=total_budget_change_pct,
+        )
+
+    @router.get("/api/models/{run_id}/budget/scenarios")
+    def list_budget_scenarios(run_id: str, db=Depends(get_db_dependency)):
+        _ensure_mmm_enabled()
+        from app.models_config_dq import BudgetScenario
+
+        rows = (
+            db.query(BudgetScenario)
+            .filter(BudgetScenario.run_id == run_id)
+            .order_by(BudgetScenario.created_at.desc())
+            .limit(20)
+            .all()
+        )
+        return {"items": [serialize_budget_scenario(db, row) for row in rows], "total": len(rows)}
+
+    @router.post("/api/models/{run_id}/budget/scenarios")
+    def create_budget_scenario_endpoint(
+        run_id: str,
+        body: BudgetScenarioCreateRequest,
+        db=Depends(get_db_dependency),
+    ):
+        _ensure_mmm_enabled()
+        _run, _dataset_rows = _load_run_and_dataset_rows(run_id)
+        scenario = create_budget_scenario(
+            db,
+            run_id=run_id,
+            objective=body.objective,
+            total_budget_change_pct=body.total_budget_change_pct,
+            multipliers=body.multipliers,
+            recommendations=body.recommendations,
+            summary={
+                "run_id": run_id,
+                "objective": body.objective,
+                "total_budget_change_pct": body.total_budget_change_pct,
+            },
+            created_by="ui",
+        )
+        return serialize_budget_scenario(db, scenario)
+
+    @router.get("/api/models/{run_id}/budget/scenarios/{scenario_id}")
+    def get_budget_scenario(run_id: str, scenario_id: str, db=Depends(get_db_dependency)):
+        _ensure_mmm_enabled()
+        from app.models_config_dq import BudgetScenario
+
+        row = (
+            db.query(BudgetScenario)
+            .filter(BudgetScenario.id == scenario_id, BudgetScenario.run_id == run_id)
+            .first()
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Budget scenario not found")
+        return serialize_budget_scenario(db, row)
+
+    @router.get("/api/models/{run_id}/budget/realization")
+    def get_budget_realization(run_id: str, db=Depends(get_db_dependency)):
+        _ensure_mmm_enabled()
+        return list_budget_realization(db, run_id=run_id)
+
+    @router.post("/api/models/{run_id}/budget/scenarios/{scenario_id}/realization")
+    def create_budget_realization_snapshot_endpoint(run_id: str, scenario_id: str, db=Depends(get_db_dependency)):
+        _ensure_mmm_enabled()
+        try:
+            return record_budget_realization_snapshot(db, run_id=run_id, scenario_id=scenario_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return router

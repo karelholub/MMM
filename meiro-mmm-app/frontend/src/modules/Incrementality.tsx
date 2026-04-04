@@ -1,10 +1,34 @@
-import { useState, useMemo } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { tokens as t } from '../theme/tokens'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
 
 const OWNED_CHANNELS = ['email', 'push', 'sms', 'whatsapp', 'onsite']
+
+function objectPreview(value: Record<string, unknown> | null | undefined): string {
+  if (!value || typeof value !== 'object') return '—'
+  const pairs = Object.entries(value).filter(([, item]) => item != null && item !== '')
+  if (!pairs.length) return '—'
+  return pairs
+    .map(([key, item]) => {
+      if (Array.isArray(item)) return `${key}: ${item.join(' → ')}`
+      if (typeof item === 'object') {
+        return `${key}: ${Object.entries(item as Record<string, unknown>)
+          .filter(([, nested]) => nested != null && nested !== '')
+          .map(([nestedKey, nested]) => `${nestedKey}=${String(nested)}`)
+          .join(', ')}`
+      }
+      return `${key}: ${String(item)}`
+    })
+    .join(' · ')
+}
+
+function sourceBadgeLabel(sourceType?: string | null): string | null {
+  if (!sourceType) return null
+  if (sourceType === 'journey_hypothesis') return 'Journey hypothesis'
+  return sourceType
+}
 
 interface ExperimentSummary {
   id: number
@@ -14,10 +38,18 @@ interface ExperimentSummary {
   end_at: string
   status: string
   conversion_key?: string | null
+  experiment_type: string
+  source_type?: string | null
+  source_id?: string | null
+  source_name?: string | null
+  source_journey_definition_id?: string | null
 }
 
 interface ExperimentDetail extends ExperimentSummary {
   notes?: string | null
+  segment?: Record<string, unknown>
+  policy?: Record<string, unknown>
+  guardrails?: Record<string, unknown>
 }
 
 interface ExperimentResults {
@@ -82,8 +114,27 @@ interface ExperimentHealth {
   ready_state: { label: ReadyLabel; reasons: string[] }
 }
 
+function buildJourneyLabHref(summary?: ExperimentSummary | null): string | null {
+  if (!summary || summary.source_type !== 'journey_hypothesis' || !summary.source_id || !summary.source_journey_definition_id) {
+    return null
+  }
+  const params = new URLSearchParams()
+  params.set('page', 'analytics_journeys')
+  params.set('journey_id', summary.source_journey_definition_id)
+  params.set('tab', 'experiments')
+  params.set('experiment_id', String(summary.id))
+  params.set('hypothesis_id', summary.source_id)
+  return `/?${params.toString()}`
+}
+
 export default function IncrementalityPage() {
-  const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [selectedId, setSelectedId] = useState<number | null>(() => {
+    if (typeof window === 'undefined') return null
+    const params = new URLSearchParams(window.location.search)
+    const raw = params.get('experiment_id')
+    const parsed = raw ? Number(raw) : null
+    return parsed != null && Number.isFinite(parsed) ? parsed : null
+  })
   const [showPowerCalc, setShowPowerCalc] = useState(false)
   const [showTimeSeries, setShowTimeSeries] = useState(false)
   const [showAdvancedSetup, setShowAdvancedSetup] = useState(false)
@@ -224,6 +275,7 @@ export default function IncrementalityPage() {
 
   const selectedSummary =
     selectedId != null ? experimentsQuery.data?.find((e) => e.id === selectedId) : undefined
+  const selectedJourneyHref = buildJourneyLabHref(selectedSummary)
 
   const statusLabel = (status: string): string => {
     if (status === 'completed') return 'Stopped'
@@ -247,7 +299,9 @@ export default function IncrementalityPage() {
         !q ||
         e.name.toLowerCase().includes(q) ||
         e.channel.toLowerCase().includes(q) ||
-        (e.conversion_key ?? '').toLowerCase().includes(q)
+        (e.conversion_key ?? '').toLowerCase().includes(q) ||
+        (e.source_name ?? '').toLowerCase().includes(q) ||
+        (e.source_type ?? '').toLowerCase().includes(q)
       let matchesStatus = true
       if (statusFilter === 'draft') {
         matchesStatus = e.status === 'draft'
@@ -267,6 +321,31 @@ export default function IncrementalityPage() {
     })
     return items
   }, [experimentsQuery.data, search, statusFilter])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const syncFromUrl = () => {
+      const params = new URLSearchParams(window.location.search)
+      const raw = params.get('experiment_id')
+      const parsed = raw ? Number(raw) : null
+      const nextSelected = parsed != null && Number.isFinite(parsed) ? parsed : null
+      setSelectedId((prev) => (prev === nextSelected ? prev : nextSelected))
+    }
+    syncFromUrl()
+    window.addEventListener('popstate', syncFromUrl)
+    return () => window.removeEventListener('popstate', syncFromUrl)
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    if (selectedId != null) params.set('experiment_id', String(selectedId))
+    else params.delete('experiment_id')
+    const next = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}${window.location.hash}`
+    if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== next) {
+      window.history.replaceState({}, '', next)
+    }
+  }, [selectedId])
 
   return (
     <div style={{ maxWidth: 1200, margin: '0 auto' }}>
@@ -603,6 +682,12 @@ export default function IncrementalityPage() {
                           {new Date(e.start_at).toLocaleDateString()} –{' '}
                           {new Date(e.end_at).toLocaleDateString()}
                         </div>
+                        {(e.source_type || e.source_name) && (
+                          <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted, marginTop: 2 }}>
+                            {sourceBadgeLabel(e.source_type) || 'Linked source'}
+                            {e.source_name ? ` • ${e.source_name}` : ''}
+                          </div>
+                        )}
                       </button>
                     </li>
                   )
@@ -1013,6 +1098,11 @@ export default function IncrementalityPage() {
                   <strong title="Draft = configured, Running = in flight, Stopped = completed">
                     {selectedSummary && statusLabel(selectedSummary.status)}
                   </strong>
+                  {selectedSummary?.experiment_type && (
+                    <>
+                      {' • '}Type <strong>{selectedSummary.experiment_type}</strong>
+                    </>
+                  )}
                   {healthQuery.data && (
                     <>
                       {' • '}
@@ -1041,6 +1131,21 @@ export default function IncrementalityPage() {
                     </>
                   )}
                 </p>
+                {(selectedSummary?.source_type || selectedSummary?.source_name) && (
+                  <p style={{ margin: '0 0 4px', fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                    Source <strong>{sourceBadgeLabel(selectedSummary?.source_type) || 'Linked source'}</strong>
+                    {selectedSummary?.source_name ? <> • <strong>{selectedSummary.source_name}</strong></> : null}
+                    {selectedSummary?.source_id ? <> • ID <code>{selectedSummary.source_id}</code></> : null}
+                    {selectedJourneyHref ? (
+                      <>
+                        {' • '}
+                        <a href={selectedJourneyHref} style={{ color: tkn.color.accent, textDecoration: 'none' }}>
+                          Open in Journey Lab
+                        </a>
+                      </>
+                    ) : null}
+                  </p>
+                )}
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: tkn.space.xs, marginTop: tkn.space.sm }}>
                   {selectedSummary?.status === 'draft' && (
                     <button
@@ -1132,6 +1237,27 @@ export default function IncrementalityPage() {
                     {detailQuery.data.notes}
                   </p>
                 )}
+                {(detailQuery.data?.segment && Object.keys(detailQuery.data.segment).length > 0) ||
+                (detailQuery.data?.policy && Object.keys(detailQuery.data.policy).length > 0) ||
+                (detailQuery.data?.guardrails && Object.keys(detailQuery.data.guardrails).length > 0) ? (
+                  <div style={{ display: 'grid', gap: tkn.space.sm, marginTop: tkn.space.md }}>
+                    {detailQuery.data?.segment && Object.keys(detailQuery.data.segment).length > 0 && (
+                      <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                        <strong style={{ color: tkn.color.text }}>Segment:</strong> {objectPreview(detailQuery.data.segment)}
+                      </div>
+                    )}
+                    {detailQuery.data?.policy && Object.keys(detailQuery.data.policy).length > 0 && (
+                      <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                        <strong style={{ color: tkn.color.text }}>Policy:</strong> {objectPreview(detailQuery.data.policy)}
+                      </div>
+                    )}
+                    {detailQuery.data?.guardrails && Object.keys(detailQuery.data.guardrails).length > 0 && (
+                      <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                        <strong style={{ color: tkn.color.text }}>Guardrails:</strong> {objectPreview(detailQuery.data.guardrails)}
+                      </div>
+                    )}
+                  </div>
+                ) : null}
               </div>
 
               {/* Health + results */}

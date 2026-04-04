@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ModelConfig(BaseModel):
@@ -43,6 +43,18 @@ class OptimizeRequest(BaseModel):
     min_spend: float = 0.5
     max_spend: float = 2.0
     channel_constraints: Dict[str, ChannelConstraint] | None = None
+
+
+class BudgetRecommendationQuery(BaseModel):
+    objective: str = "protect_efficiency"
+    total_budget_change_pct: float = 0.0
+
+
+class BudgetScenarioCreateRequest(BaseModel):
+    objective: str = "protect_efficiency"
+    total_budget_change_pct: float = 0.0
+    multipliers: Dict[str, float] = Field(default_factory=dict)
+    recommendations: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class BuildFromPlatformRequest(BaseModel):

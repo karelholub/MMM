@@ -193,7 +193,267 @@ interface AlertDraft {
   cooldown_days: number
 }
 
-type JourneysTab = 'paths' | 'flow' | 'examples' | 'funnels'
+interface JourneyInsightItem {
+  id: string
+  kind: string
+  title: string
+  summary: string
+  severity: string
+  confidence: string
+  support_count: number
+  baseline_rate: number
+  observed_rate: number
+  impact_estimate: {
+    direction?: string
+    magnitude?: string
+    estimated_users_affected?: number
+  }
+  evidence: string[]
+  suggested_hypothesis: {
+    title: string
+    hypothesis_text: string
+    trigger: Record<string, unknown>
+    segment: Record<string, unknown>
+    current_action: Record<string, unknown>
+    proposed_action: Record<string, unknown>
+    target_kpi?: string | null
+    support_count?: number
+    baseline_rate?: number
+    sample_size_target?: number
+  }
+}
+
+interface JourneyInsightsResponse {
+  items: JourneyInsightItem[]
+  summary: {
+    paths_considered: number
+    journeys: number
+    conversions: number
+    baseline_conversion_rate: number
+  }
+}
+
+interface JourneyHypothesisRecord {
+  id: string
+  journey_definition_id: string
+  owner_user_id: string
+  title: string
+  target_kpi?: string | null
+  hypothesis_text: string
+  trigger: Record<string, unknown>
+  segment: Record<string, unknown>
+  current_action: Record<string, unknown>
+  proposed_action: Record<string, unknown>
+  support_count: number
+  baseline_rate?: number | null
+  sample_size_target?: number | null
+  status: string
+  linked_experiment_id?: number | null
+  result: Record<string, unknown>
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+interface JourneyHypothesesResponse {
+  items: JourneyHypothesisRecord[]
+  total: number
+}
+
+interface LinkedExperimentSummary {
+  id: number
+  name: string
+  channel: string
+  start_at: string
+  end_at: string
+  status: string
+  conversion_key?: string | null
+  experiment_type: string
+  source_type?: string | null
+  source_id?: string | null
+  source_name?: string | null
+}
+
+interface LinkedExperimentDetail extends LinkedExperimentSummary {
+  notes?: string | null
+  segment?: Record<string, unknown>
+  policy?: Record<string, unknown>
+  guardrails?: Record<string, unknown>
+}
+
+interface LinkedExperimentResults {
+  experiment_id: number
+  status: string
+  treatment?: {
+    n: number
+    conversions: number
+    conversion_rate: number
+    total_value: number
+  }
+  control?: {
+    n: number
+    conversions: number
+    conversion_rate: number
+    total_value: number
+  }
+  uplift_abs?: number | null
+  uplift_rel?: number | null
+  ci_low?: number | null
+  ci_high?: number | null
+  p_value?: number | null
+  insufficient_data?: boolean
+}
+
+interface LinkedExperimentHealth {
+  experiment_id: number
+  sample: { treatment: number; control: number }
+  exposures: { treatment: number; control: number }
+  outcomes: { treatment: number; control: number }
+  balance: { status: 'ok' | 'warn'; expected_share: number; observed_share: number }
+  data_completeness: {
+    assignments: { status: 'ok' | 'fail' }
+    outcomes: { status: 'ok' | 'fail' }
+    exposures: { status: 'ok' | 'warn' }
+  }
+  overlap_risk: { status: 'ok' | 'warn'; overlapping_profiles: number }
+  ready_state: { label: 'not_ready' | 'early' | 'ready'; reasons: string[] }
+}
+
+interface JourneyHypothesisExperimentLinkResponse {
+  experiment: LinkedExperimentSummary
+  hypothesis: JourneyHypothesisRecord
+}
+
+interface JourneyPolicyCandidate {
+  rank: number
+  step: string
+  support_count: number
+  conversion_rate: number
+  avg_value: number
+  uplift_abs: number
+  uplift_rel?: number | null
+  estimated_incremental_conversions: number
+  confidence: string
+  is_current_step: boolean
+}
+
+interface JourneyPolicySimulationResponse {
+  previewAvailable: boolean
+  reason?: string | null
+  source_window?: { date_from?: string | null; date_to?: string | null }
+  prefix?: {
+    steps: string[]
+    label: string
+    current_step?: string | null
+  }
+  summary?: {
+    eligible_journeys: number
+    baseline_conversion_rate: number
+    current_path_support: number
+    current_path_conversion_rate: number
+    candidate_count: number
+    sample_size_target?: number | null
+    observational_only: boolean
+  }
+  top_candidates: JourneyPolicyCandidate[]
+  selected_policy?: (JourneyPolicyCandidate & { rationale?: string | null }) | null
+  current_path?: {
+    step?: string | null
+    support_count: number
+    conversion_rate: number
+  } | null
+  decision?: {
+    status: string
+    warnings: string[]
+    recommended_action?: string | null
+  } | null
+}
+
+interface JourneyPolicyRecommendationRecord {
+  hypothesis_id: string
+  title: string
+  journey_definition_id: string
+  status: string
+  learning_stage: string
+  linked_experiment_id?: number | null
+  prefix: {
+    steps: string[]
+    label: string
+  }
+  segment: Record<string, unknown>
+  segment_label: string
+  policy: {
+    step: string
+    action: Record<string, unknown>
+  }
+  support_count: number
+  sample_size_target?: number | null
+  uplift_abs?: number | null
+  uplift_rel?: number | null
+  p_value?: number | null
+  summary?: string | null
+  recommendation: string
+  recommendation_reason: string
+  score: number
+  promotion: Record<string, unknown>
+  updated_at?: string | null
+}
+
+interface JourneyPolicyRecommendationsResponse {
+  items: JourneyPolicyRecommendationRecord[]
+  summary: {
+    total: number
+    promoted: number
+    ready_to_promote: number
+    validated: number
+    in_flight: number
+    rejected: number
+  }
+}
+
+interface JourneyPolicyPromotionResponse {
+  hypothesis: JourneyHypothesisRecord
+  policy_candidate: JourneyPolicyRecommendationRecord
+}
+
+interface JourneyHypothesisRequest {
+  journey_definition_id: string
+  title: string
+  target_kpi?: string | null
+  hypothesis_text: string
+  trigger: Record<string, unknown>
+  segment: Record<string, unknown>
+  current_action: Record<string, unknown>
+  proposed_action: Record<string, unknown>
+  support_count: number
+  baseline_rate?: number | null
+  sample_size_target?: number | null
+  status: string
+  linked_experiment_id?: number | null
+  result: Record<string, unknown>
+}
+
+interface HypothesisDraft {
+  title: string
+  target_kpi: string
+  hypothesis_text: string
+  trigger: Record<string, unknown>
+  segment: Record<string, unknown>
+  current_action: Record<string, unknown>
+  proposed_action: Record<string, unknown>
+  support_count: number
+  baseline_rate: number | null
+  sample_size_target: number | null
+  status: string
+  result: Record<string, unknown>
+}
+
+interface HypothesisExperimentDraft {
+  start_at: string
+  end_at: string
+  notes: string
+}
+
+type JourneysTab = 'insights' | 'hypotheses' | 'policy' | 'experiments' | 'paths' | 'flow' | 'examples' | 'funnels'
 type PathSortBy = 'journeys' | 'conversion_rate' | 'avg_time'
 
 interface SavedJourneyView {
@@ -298,12 +558,32 @@ function formatPercent(v: number): string {
   return `${(v * 100).toFixed(1)}%`
 }
 
+function experimentStatusLabel(status: string): string {
+  const normalized = String(status || '').trim().toLowerCase()
+  if (!normalized) return 'Unknown'
+  return normalized.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
 function formatSeconds(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return '—'
   if (v < 60) return `${v.toFixed(0)}s`
   const mins = v / 60
   if (mins < 60) return `${mins.toFixed(1)}m`
   return `${(mins / 60).toFixed(1)}h`
+}
+
+function buildIncrementalityHref(experimentId: number): string {
+  const params = new URLSearchParams()
+  params.set('page', 'incrementality')
+  params.set('experiment_id', String(experimentId))
+  return `/?${params.toString()}`
+}
+
+function readNumericUrlParam(name: string): number | null {
+  const raw = readParams().get(name)
+  if (!raw) return null
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 function channelFitsGroup(channel: string, group?: string | null): boolean {
@@ -364,6 +644,86 @@ function formatDateTime(value?: string | null): string {
   const d = new Date(value)
   if (Number.isNaN(d.getTime())) return '—'
   return d.toLocaleString()
+}
+
+function defaultHypothesisDraft(targetKpi = ''): HypothesisDraft {
+  return {
+    title: '',
+    target_kpi: targetKpi,
+    hypothesis_text: '',
+    trigger: {},
+    segment: {},
+    current_action: {},
+    proposed_action: {},
+    support_count: 0,
+    baseline_rate: null,
+    sample_size_target: null,
+    status: 'draft',
+    result: {},
+  }
+}
+
+function objectPreview(value: Record<string, unknown> | null | undefined): string {
+  if (!value || typeof value !== 'object') return '—'
+  const pairs = Object.entries(value).filter(([, item]) => item != null && item !== '')
+  if (!pairs.length) return '—'
+  return pairs
+    .map(([key, item]) => {
+      if (Array.isArray(item)) return `${key}: ${item.join(' → ')}`
+      if (typeof item === 'object') return `${key}: ${Object.entries(item as Record<string, unknown>).filter(([, nested]) => nested != null && nested !== '').map(([nestedKey, nested]) => `${nestedKey}=${String(nested)}`).join(', ')}`
+      return `${key}: ${String(item)}`
+    })
+    .join(' · ')
+}
+
+function readResultString(result: Record<string, unknown>, key: string): string | null {
+  const value = result?.[key]
+  return typeof value === 'string' && value ? value : null
+}
+
+function readResultNumber(result: Record<string, unknown>, key: string): number | null {
+  const value = result?.[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function readResultObject(result: Record<string, unknown>, key: string): Record<string, unknown> {
+  const value = result?.[key]
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+}
+
+function readResultBool(result: Record<string, unknown>, key: string): boolean | null {
+  const value = result?.[key]
+  return typeof value === 'boolean' ? value : null
+}
+
+function getHypothesisLearningStage(item: JourneyHypothesisRecord): string {
+  return readResultString(item.result || {}, 'learning_stage') || item.status || 'draft'
+}
+
+function formatStageLabel(stage: string): string {
+  return stage.replace(/_/g, ' ')
+}
+
+function getHypothesisEvidenceSummary(item: JourneyHypothesisRecord): string | null {
+  return readResultString(item.result || {}, 'summary') || readResultString(item.result || {}, 'note')
+}
+
+function getHypothesisPromotion(item: JourneyHypothesisRecord): Record<string, unknown> {
+  return readResultObject(item.result || {}, 'policy_promotion')
+}
+
+function parseDelimitedSteps(value: string): string[] {
+  return value
+    .split(/\n|>/g)
+    .map((part) => part.trim())
+    .filter(Boolean)
+}
+
+function toDateInputValue(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 function aggregateBreakdown(
@@ -446,6 +806,22 @@ export default function Journeys({
   const [createAlertError, setCreateAlertError] = useState<string | null>(null)
   const [alertScope, setAlertScope] = useState<Record<string, unknown>>({})
   const [alertPreview, setAlertPreview] = useState<JourneyAlertPreviewResponse | null>(null)
+  const [editingHypothesisId, setEditingHypothesisId] = useState<string | null>(null)
+  const [hypothesisError, setHypothesisError] = useState<string | null>(null)
+  const [hypothesisDraft, setHypothesisDraft] = useState<HypothesisDraft>(() => defaultHypothesisDraft())
+  const [sandboxHypothesisId, setSandboxHypothesisId] = useState<string | null>(() => readParams().get('hypothesis_id') || null)
+  const [sandboxCandidateStep, setSandboxCandidateStep] = useState('')
+  const [selectedJourneyExperimentId, setSelectedJourneyExperimentId] = useState<number | null>(() => readNumericUrlParam('experiment_id'))
+  const [hypothesisExperimentDraft, setHypothesisExperimentDraft] = useState<HypothesisExperimentDraft>(() => {
+    const start = new Date()
+    const end = new Date()
+    end.setDate(end.getDate() + 14)
+    return {
+      start_at: toDateInputValue(start),
+      end_at: toDateInputValue(end),
+      notes: '',
+    }
+  })
   const [alertDraft, setAlertDraft] = useState<AlertDraft>({
     name: '',
     type: 'path_volume_change',
@@ -596,11 +972,10 @@ export default function Journeys({
   })
 
   const funnelListQuery = useQuery<FunnelListResponse>({
-    queryKey: ['funnels-list', selectedJourneyId, user.userId],
+    queryKey: ['funnels-list', selectedJourneyId],
     queryFn: async () => {
       const params = new URLSearchParams({
         workspace_id: 'default',
-        user_id: user.userId,
       })
       if (selectedJourneyId) params.set('journey_definition_id', selectedJourneyId)
       return apiGetJson<FunnelListResponse>(`/api/funnels?${params.toString()}`, {
@@ -731,6 +1106,118 @@ export default function Journeys({
     enabled: !!selectedJourneyId && activeTab === 'examples' && !featureDisabled,
   })
 
+  const insightsQuery = useQuery<JourneyInsightsResponse>({
+    queryKey: [
+      'journey-insights',
+      selectedJourneyId,
+      filters.dateFrom,
+      filters.dateTo,
+      filters.channel,
+      filters.campaign,
+      filters.device,
+      filters.geo,
+      mode,
+    ],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        date_from: filters.dateFrom,
+        date_to: filters.dateTo,
+        mode,
+      })
+      if (filters.channel !== 'all') params.set('channel_group', filters.channel)
+      if (filters.campaign !== 'all') params.set('campaign_id', filters.campaign)
+      if (filters.device !== 'all') params.set('device', filters.device)
+      if (filters.geo !== 'all') params.set('country', filters.geo.toUpperCase())
+      return apiGetJson<JourneyInsightsResponse>(`/api/journeys/${selectedJourneyId}/insights?${params.toString()}`, {
+        fallbackMessage: 'Failed to load journey insights',
+      })
+    },
+    enabled: !!selectedJourneyId && activeTab === 'insights' && !featureDisabled,
+  })
+
+  const hypothesesQuery = useQuery<JourneyHypothesesResponse>({
+    queryKey: ['journey-hypotheses', selectedJourneyId],
+    queryFn: async () => {
+      const params = new URLSearchParams()
+      if (selectedJourneyId) params.set('journey_definition_id', selectedJourneyId)
+      return apiGetJson<JourneyHypothesesResponse>(`/api/journeys/hypotheses?${params.toString()}`, {
+        fallbackMessage: 'Failed to load journey hypotheses',
+      })
+    },
+    enabled: !!selectedJourneyId && (activeTab === 'hypotheses' || activeTab === 'insights' || activeTab === 'policy' || activeTab === 'experiments') && !featureDisabled,
+  })
+
+  const linkedExperimentSourceIds = useMemo(
+    () => Array.from(new Set((hypothesesQuery.data?.items ?? []).filter((item) => item.linked_experiment_id).map((item) => item.id))),
+    [hypothesesQuery.data?.items],
+  )
+
+  const linkedExperimentsQuery = useQuery<LinkedExperimentSummary[]>({
+    queryKey: ['journey-linked-experiments', selectedJourneyId, linkedExperimentSourceIds.join(',')],
+    queryFn: async () => {
+      const params = new URLSearchParams({ source_type: 'journey_hypothesis' })
+      linkedExperimentSourceIds.forEach((id) => params.append('source_id', id))
+      return apiGetJson<LinkedExperimentSummary[]>(`/api/experiments?${params.toString()}`, {
+        fallbackMessage: 'Failed to load linked journey experiments',
+      })
+    },
+    enabled: !!selectedJourneyId && activeTab === 'experiments' && linkedExperimentSourceIds.length > 0 && !featureDisabled,
+  })
+
+  const linkedExperimentDetailQuery = useQuery<LinkedExperimentDetail>({
+    queryKey: ['journey-linked-experiment-detail', selectedJourneyExperimentId],
+    queryFn: async () => {
+      return apiGetJson<LinkedExperimentDetail>(`/api/experiments/${selectedJourneyExperimentId}`, {
+        fallbackMessage: 'Failed to load journey experiment detail',
+      })
+    },
+    enabled: activeTab === 'experiments' && selectedJourneyExperimentId != null && !featureDisabled,
+  })
+
+  const linkedExperimentResultsQuery = useQuery<LinkedExperimentResults>({
+    queryKey: ['journey-linked-experiment-results', selectedJourneyExperimentId],
+    queryFn: async () => {
+      return apiGetJson<LinkedExperimentResults>(`/api/experiments/${selectedJourneyExperimentId}/results`, {
+        fallbackMessage: 'Failed to load journey experiment results',
+      })
+    },
+    enabled: activeTab === 'experiments' && selectedJourneyExperimentId != null && !featureDisabled,
+  })
+
+  const linkedExperimentHealthQuery = useQuery<LinkedExperimentHealth>({
+    queryKey: ['journey-linked-experiment-health', selectedJourneyExperimentId],
+    queryFn: async () => {
+      return apiGetJson<LinkedExperimentHealth>(`/api/experiments/${selectedJourneyExperimentId}/health`, {
+        fallbackMessage: 'Failed to load journey experiment health',
+      })
+    },
+    enabled: activeTab === 'experiments' && selectedJourneyExperimentId != null && !featureDisabled,
+  })
+
+  const policySimulationQuery = useQuery<JourneyPolicySimulationResponse>({
+    queryKey: ['journey-policy-simulation', sandboxHypothesisId, sandboxCandidateStep],
+    queryFn: async () => {
+      if (!sandboxHypothesisId) throw new Error('No hypothesis selected')
+      return apiSendJson<JourneyPolicySimulationResponse>(
+        `/api/journeys/hypotheses/${sandboxHypothesisId}/simulate`,
+        'POST',
+        { proposed_step: sandboxCandidateStep || null },
+        { fallbackMessage: 'Failed to simulate journey policy' },
+      )
+    },
+    enabled: !!sandboxHypothesisId && activeTab === 'policy' && !featureDisabled,
+  })
+
+  const policyRecommendationsQuery = useQuery<JourneyPolicyRecommendationsResponse>({
+    queryKey: ['journey-policy-recommendations', selectedJourneyId],
+    queryFn: async () => {
+      return apiGetJson<JourneyPolicyRecommendationsResponse>(`/api/journeys/${selectedJourneyId}/policies?limit=10`, {
+        fallbackMessage: 'Failed to load learned journey policies',
+      })
+    },
+    enabled: !!selectedJourneyId && (activeTab === 'insights' || activeTab === 'policy' || activeTab === 'hypotheses' || activeTab === 'experiments') && !featureDisabled,
+  })
+
   const savedViewsQuery = useQuery<SavedJourneyViewsResponse>({
     queryKey: ['journey-saved-views', user.userId],
     queryFn: async () => {
@@ -817,6 +1304,137 @@ export default function Journeys({
     },
   })
 
+  const createHypothesisMutation = useMutation({
+    mutationFn: async (payload: JourneyHypothesisRequest) => {
+      return apiSendJson<JourneyHypothesisRecord>('/api/journeys/hypotheses', 'POST', payload, {
+        fallbackMessage: 'Failed to create journey hypothesis',
+      })
+    },
+    onSuccess: async (created) => {
+      await queryClient.invalidateQueries({ queryKey: ['journey-hypotheses', selectedJourneyId] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-policy-recommendations', selectedJourneyId] })
+      setEditingHypothesisId(created.id)
+      setHypothesisDraft({
+        title: created.title,
+        target_kpi: created.target_kpi || '',
+        hypothesis_text: created.hypothesis_text,
+        trigger: created.trigger || {},
+        segment: created.segment || {},
+        current_action: created.current_action || {},
+        proposed_action: created.proposed_action || {},
+        support_count: created.support_count || 0,
+        baseline_rate: created.baseline_rate ?? null,
+        sample_size_target: created.sample_size_target ?? null,
+        status: created.status || 'draft',
+        result: created.result || {},
+      })
+      setHypothesisError(null)
+    },
+    onError: (err) => setHypothesisError((err as Error).message || 'Failed to create journey hypothesis'),
+  })
+
+  const updateHypothesisMutation = useMutation({
+    mutationFn: async (payload: { id: string; body: JourneyHypothesisRequest }) => {
+      return apiSendJson<JourneyHypothesisRecord>(`/api/journeys/hypotheses/${payload.id}`, 'PUT', payload.body, {
+        fallbackMessage: 'Failed to update journey hypothesis',
+      })
+    },
+    onSuccess: async (updated) => {
+      await queryClient.invalidateQueries({ queryKey: ['journey-hypotheses', selectedJourneyId] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-policy-recommendations', selectedJourneyId] })
+      setEditingHypothesisId(updated.id)
+      setHypothesisDraft({
+        title: updated.title,
+        target_kpi: updated.target_kpi || '',
+        hypothesis_text: updated.hypothesis_text,
+        trigger: updated.trigger || {},
+        segment: updated.segment || {},
+        current_action: updated.current_action || {},
+        proposed_action: updated.proposed_action || {},
+        support_count: updated.support_count || 0,
+        baseline_rate: updated.baseline_rate ?? null,
+        sample_size_target: updated.sample_size_target ?? null,
+        status: updated.status || 'draft',
+        result: updated.result || {},
+      })
+      setHypothesisError(null)
+    },
+    onError: (err) => setHypothesisError((err as Error).message || 'Failed to update journey hypothesis'),
+  })
+
+  const createExperimentFromHypothesisMutation = useMutation({
+    mutationFn: async (payload: { hypothesisId: string; start_at: string; end_at: string; notes: string; proposed_step: string }) => {
+      return apiSendJson<JourneyHypothesisExperimentLinkResponse>(
+        `/api/journeys/hypotheses/${payload.hypothesisId}/create-experiment`,
+        'POST',
+        {
+          start_at: new Date(`${payload.start_at}T00:00:00`).toISOString(),
+          end_at: new Date(`${payload.end_at}T23:59:59`).toISOString(),
+          notes: payload.notes || null,
+          proposed_step: payload.proposed_step || null,
+        },
+        { fallbackMessage: 'Failed to create experiment from hypothesis' },
+      )
+    },
+    onSuccess: async (payload) => {
+      await queryClient.invalidateQueries({ queryKey: ['journey-hypotheses', selectedJourneyId] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-policy-recommendations', selectedJourneyId] })
+      setEditingHypothesisId(payload.hypothesis.id)
+      setHypothesisDraft({
+        title: payload.hypothesis.title,
+        target_kpi: payload.hypothesis.target_kpi || '',
+        hypothesis_text: payload.hypothesis.hypothesis_text,
+        trigger: payload.hypothesis.trigger || {},
+        segment: payload.hypothesis.segment || {},
+        current_action: payload.hypothesis.current_action || {},
+        proposed_action: payload.hypothesis.proposed_action || {},
+        support_count: payload.hypothesis.support_count || 0,
+        baseline_rate: payload.hypothesis.baseline_rate ?? null,
+        sample_size_target: payload.hypothesis.sample_size_target ?? null,
+        status: payload.hypothesis.status || 'in_experiment',
+        result: payload.hypothesis.result || {},
+      })
+      setHypothesisError(null)
+    },
+    onError: (err) => setHypothesisError((err as Error).message || 'Failed to create experiment from hypothesis'),
+  })
+
+  const promoteHypothesisPolicyMutation = useMutation({
+    mutationFn: async (payload: { hypothesisId: string; active: boolean }) => {
+      return apiSendJson<JourneyPolicyPromotionResponse>(
+        `/api/journeys/hypotheses/${payload.hypothesisId}/policy-promotion`,
+        'POST',
+        {
+          active: payload.active,
+          notes: payload.active ? 'Promoted from the Journey Lab learned policy workflow.' : 'Removed from the Journey Lab learned policy workflow.',
+        },
+        { fallbackMessage: payload.active ? 'Failed to promote journey policy' : 'Failed to remove journey policy promotion' },
+      )
+    },
+    onSuccess: async (payload) => {
+      await queryClient.invalidateQueries({ queryKey: ['journey-hypotheses', selectedJourneyId] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-policy-recommendations', selectedJourneyId] })
+      if (editingHypothesisId === payload.hypothesis.id) {
+        setHypothesisDraft({
+          title: payload.hypothesis.title,
+          target_kpi: payload.hypothesis.target_kpi || '',
+          hypothesis_text: payload.hypothesis.hypothesis_text,
+          trigger: payload.hypothesis.trigger || {},
+          segment: payload.hypothesis.segment || {},
+          current_action: payload.hypothesis.current_action || {},
+          proposed_action: payload.hypothesis.proposed_action || {},
+          support_count: payload.hypothesis.support_count || 0,
+          baseline_rate: payload.hypothesis.baseline_rate ?? null,
+          sample_size_target: payload.hypothesis.sample_size_target ?? null,
+          status: payload.hypothesis.status || 'draft',
+          result: payload.hypothesis.result || {},
+        })
+      }
+      setHypothesisError(null)
+    },
+    onError: (err) => setHypothesisError((err as Error).message || 'Failed to update journey policy promotion'),
+  })
+
   const deleteSavedViewMutation = useMutation({
     mutationFn: async (viewId: string) => {
       return apiSendJson<{ id: string; status: string }>(`/api/journeys/views/${viewId}`, 'DELETE', undefined, {
@@ -832,11 +1450,13 @@ export default function Journeys({
     const params = readParams()
     setSelectedJourneyId(params.get('journey_id') || '')
     const tabParam = params.get('tab')
-    if (tabParam === 'paths' || tabParam === 'flow' || tabParam === 'examples' || tabParam === 'funnels') {
+    if (tabParam === 'insights' || tabParam === 'hypotheses' || tabParam === 'policy' || tabParam === 'experiments' || tabParam === 'paths' || tabParam === 'flow' || tabParam === 'examples' || tabParam === 'funnels') {
       setActiveTab(tabParam)
     }
     setExamplesPathHash(params.get('examples_path_hash') || '')
     setExamplesStepFilter(params.get('examples_step') || '')
+    setSandboxHypothesisId(params.get('hypothesis_id') || null)
+    setSelectedJourneyExperimentId(readNumericUrlParam('experiment_id'))
     setFilters((prev) => ({
       ...prev,
       dateFrom: params.get('date_from') || prev.dateFrom,
@@ -857,6 +1477,14 @@ export default function Journeys({
   }, [draft.conversion_kpi_id, kpisQuery.data?.definitions, kpisQuery.data?.primary_kpi_id])
 
   useEffect(() => {
+    if (editingHypothesisId) return
+    setHypothesisDraft((prev) => {
+      if (prev.title || prev.hypothesis_text || prev.support_count > 0) return prev
+      return defaultHypothesisDraft(selectedDefinition?.conversion_kpi_id || '')
+    })
+  }, [editingHypothesisId, selectedDefinition?.conversion_kpi_id])
+
+  useEffect(() => {
     setFilters((prev) => ({
       ...prev,
       dateFrom: journeysSummary?.date_min?.slice(0, 10) ?? prev.dateFrom,
@@ -875,6 +1503,36 @@ export default function Journeys({
   }, [definitionsQuery.data?.items, selectedJourneyId])
 
   useEffect(() => {
+    setEditingHypothesisId(null)
+    setHypothesisError(null)
+    setHypothesisDraft(defaultHypothesisDraft(selectedDefinition?.conversion_kpi_id || ''))
+  }, [selectedJourneyId, selectedDefinition?.conversion_kpi_id])
+
+  useEffect(() => {
+    const items = hypothesesQuery.data?.items ?? []
+    if (!items.length) {
+      setSandboxHypothesisId(null)
+      setSandboxCandidateStep('')
+      return
+    }
+    if (!sandboxHypothesisId || !items.some((item) => item.id === sandboxHypothesisId)) {
+      setSandboxHypothesisId(items[0].id)
+      setSandboxCandidateStep('')
+    }
+  }, [hypothesesQuery.data?.items, sandboxHypothesisId])
+
+  useEffect(() => {
+    const items = linkedExperimentsQuery.data ?? []
+    if (!items.length) {
+      setSelectedJourneyExperimentId(null)
+      return
+    }
+    if (!selectedJourneyExperimentId || !items.some((item) => item.id === selectedJourneyExperimentId)) {
+      setSelectedJourneyExperimentId(items[0].id)
+    }
+  }, [linkedExperimentsQuery.data, selectedJourneyExperimentId])
+
+  useEffect(() => {
     if (typeof window === 'undefined') return
     const params = readParams()
     if (selectedJourneyId) params.set('journey_id', selectedJourneyId)
@@ -891,8 +1549,12 @@ export default function Journeys({
     else params.delete('examples_path_hash')
     if (examplesStepFilter.trim()) params.set('examples_step', examplesStepFilter.trim())
     else params.delete('examples_step')
+    if (activeTab === 'policy' && sandboxHypothesisId) params.set('hypothesis_id', sandboxHypothesisId)
+    else if (activeTab !== 'experiments') params.delete('hypothesis_id')
+    if (activeTab === 'experiments' && selectedJourneyExperimentId != null) params.set('experiment_id', String(selectedJourneyExperimentId))
+    else params.delete('experiment_id')
     window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`)
-  }, [activeTab, examplesPathHash, examplesStepFilter, filters, selectedJourneyId])
+  }, [activeTab, examplesPathHash, examplesStepFilter, filters, sandboxHypothesisId, selectedJourneyExperimentId, selectedJourneyId])
 
   useEffect(() => {
     setPathsPage(1)
@@ -923,6 +1585,10 @@ export default function Journeys({
   const tabs = useMemo(
     () =>
       [
+        { key: 'insights' as JourneysTab, label: 'Insights', visible: true, disabled: false },
+        { key: 'hypotheses' as JourneysTab, label: 'Hypotheses', visible: true, disabled: false },
+        { key: 'policy' as JourneysTab, label: 'Policy Sandbox', visible: true, disabled: false },
+        { key: 'experiments' as JourneysTab, label: 'Experiments', visible: true, disabled: false },
         { key: 'paths' as JourneysTab, label: 'Paths', visible: true, disabled: false },
         { key: 'flow' as JourneysTab, label: 'Flow', visible: true, disabled: false },
         { key: 'examples' as JourneysTab, label: 'Examples', visible: journeyExamplesEnabled, disabled: false },
@@ -1057,6 +1723,349 @@ export default function Journeys({
       render: (row) => creditOverlay(globalCredits, row.channel_group),
     },
   ]
+
+  const hypotheses = hypothesesQuery.data?.items ?? []
+  const linkedExperiments = linkedExperimentsQuery.data ?? []
+  const insightItems = insightsQuery.data?.items ?? []
+  const policyRecommendations = policyRecommendationsQuery.data?.items ?? []
+  const hypothesisResultNote = typeof hypothesisDraft.result?.['note'] === 'string' ? String(hypothesisDraft.result['note']) : ''
+  const activeHypothesis = editingHypothesisId ? hypotheses.find((item) => item.id === editingHypothesisId) || null : null
+  const sandboxHypothesis = sandboxHypothesisId ? hypotheses.find((item) => item.id === sandboxHypothesisId) || null : null
+  const experimentHypothesisById = useMemo(
+    () =>
+      new Map(
+        hypotheses
+          .filter((item) => item.linked_experiment_id != null)
+          .map((item) => [Number(item.linked_experiment_id), item] as const),
+      ),
+    [hypotheses],
+  )
+  const selectedJourneyExperiment = selectedJourneyExperimentId != null ? linkedExperiments.find((item) => item.id === selectedJourneyExperimentId) || null : null
+  const selectedJourneyExperimentHypothesis = selectedJourneyExperimentId != null ? experimentHypothesisById.get(selectedJourneyExperimentId) || null : null
+  const linkedExperimentCounts = useMemo(
+    () =>
+      linkedExperiments.reduce(
+        (acc, item) => {
+          acc.total += 1
+          acc[item.status] = (acc[item.status] || 0) + 1
+          return acc
+        },
+        { total: 0, draft: 0, running: 0, completed: 0 } as Record<string, number>,
+      ),
+    [linkedExperiments],
+  )
+  const hypothesisLearningCounts = useMemo(() => {
+    return hypotheses.reduce<Record<string, number>>((acc, item) => {
+      const key = getHypothesisLearningStage(item)
+      acc[key] = (acc[key] || 0) + 1
+      return acc
+    }, {})
+  }, [hypotheses])
+  const latestLearnedHypotheses = useMemo(
+    () =>
+      hypotheses.filter((item) => ['validated', 'rejected', 'inconclusive'].includes(getHypothesisLearningStage(item))).slice(0, 3),
+    [hypotheses],
+  )
+  const topPromotablePolicies = useMemo(
+    () => policyRecommendations.filter((item) => item.recommendation === 'promote' || item.recommendation === 'promoted').slice(0, 4),
+    [policyRecommendations],
+  )
+
+  const renderHypothesisLearningCard = (item: JourneyHypothesisRecord, compact = false) => {
+    const stage = getHypothesisLearningStage(item)
+    const summary = getHypothesisEvidenceSummary(item)
+    const experimentStatus = readResultString(item.result || {}, 'experiment_status')
+    const experimentName = readResultString(item.result || {}, 'experiment_name')
+    const upliftAbs = readResultNumber(item.result || {}, 'uplift_abs')
+    const pValue = readResultNumber(item.result || {}, 'p_value')
+    const treatment = readResultObject(item.result || {}, 'treatment')
+    const control = readResultObject(item.result || {}, 'control')
+    const promotion = getHypothesisPromotion(item)
+    const stageColor =
+      stage === 'validated'
+        ? t.color.success
+        : stage === 'rejected'
+        ? t.color.danger
+        : stage === 'inconclusive'
+        ? t.color.warning
+        : t.color.textMuted
+
+    return (
+      <div
+        style={{
+          border: `1px solid ${t.color.borderLight}`,
+          borderRadius: t.radius.sm,
+          padding: compact ? '10px 12px' : t.space.sm,
+          background: compact ? t.color.surface : t.color.bg,
+          display: 'grid',
+          gap: 6,
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, flexWrap: 'wrap', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap', alignItems: 'center' }}>
+            <span
+              style={{
+                border: `1px solid ${stageColor}`,
+                color: stageColor,
+                borderRadius: t.radius.full,
+                padding: '4px 8px',
+                fontSize: t.font.sizeXs,
+                textTransform: 'capitalize',
+              }}
+            >
+              {formatStageLabel(stage)}
+            </span>
+            {experimentStatus ? (
+              <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'capitalize' }}>
+                experiment {formatStageLabel(experimentStatus)}
+              </span>
+            ) : null}
+            {readResultBool(promotion, 'active') ? (
+              <span
+                style={{
+                  border: `1px solid ${t.color.accent}`,
+                  color: t.color.accent,
+                  borderRadius: t.radius.full,
+                  padding: '4px 8px',
+                  fontSize: t.font.sizeXs,
+                }}
+              >
+                Promoted
+              </span>
+            ) : null}
+          </div>
+          {item.linked_experiment_id ? (
+            <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap', alignItems: 'center' }}>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                #{item.linked_experiment_id}
+                {experimentName ? ` · ${experimentName}` : ''}
+              </div>
+              <a
+                href={buildIncrementalityHref(item.linked_experiment_id)}
+                style={{ fontSize: t.font.sizeXs, color: t.color.accent, textDecoration: 'none' }}
+              >
+                Open in Incrementality
+              </a>
+            </div>
+          ) : null}
+        </div>
+        {summary ? <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{summary}</div> : null}
+        {upliftAbs != null || pValue != null ? (
+          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+            {upliftAbs != null ? `Observed uplift ${formatPercent(upliftAbs)}` : 'Observed uplift —'}
+            {pValue != null ? ` · p=${pValue.toFixed(3)}` : ''}
+            {typeof treatment.n === 'number' && typeof control.n === 'number'
+              ? ` · ${Number(treatment.n).toLocaleString()} treatment / ${Number(control.n).toLocaleString()} control`
+              : ''}
+          </div>
+        ) : null}
+      </div>
+    )
+  }
+
+  const renderPolicyRecommendationCard = (item: JourneyPolicyRecommendationRecord) => {
+    const recommendationColor =
+      item.recommendation === 'promote' || item.recommendation === 'promoted'
+        ? t.color.success
+        : item.recommendation === 'avoid'
+        ? t.color.danger
+        : t.color.warning
+    return (
+      <div
+        key={item.hypothesis_id}
+        style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.surface, display: 'grid', gap: 8 }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'start', flexWrap: 'wrap' }}>
+          <div style={{ display: 'grid', gap: 4 }}>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightSemibold }}>{item.title}</div>
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+              {item.prefix.label} · {item.policy.step} · score {item.score.toFixed(1)}
+            </div>
+          </div>
+          <span
+            style={{
+              border: `1px solid ${recommendationColor}`,
+              color: recommendationColor,
+              borderRadius: t.radius.full,
+              padding: '4px 8px',
+              fontSize: t.font.sizeXs,
+              textTransform: 'capitalize',
+            }}
+          >
+            {formatStageLabel(item.recommendation)}
+          </span>
+        </div>
+        <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+          {item.summary || item.recommendation_reason}
+        </div>
+        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+          {item.segment_label} · support {item.support_count.toLocaleString()}
+          {typeof item.uplift_abs === 'number' ? ` · uplift ${formatPercent(item.uplift_abs)}` : ''}
+          {typeof item.p_value === 'number' ? ` · p=${item.p_value.toFixed(3)}` : ''}
+        </div>
+        <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            onClick={() => {
+              const linked = hypotheses.find((hypothesis) => hypothesis.id === item.hypothesis_id)
+              if (linked) {
+                setSandboxHypothesisId(linked.id)
+                setSandboxCandidateStep(item.policy.step || '')
+              }
+              setActiveTab('policy')
+            }}
+            style={{
+              border: `1px solid ${t.color.border}`,
+              background: t.color.surface,
+              color: t.color.text,
+              borderRadius: t.radius.sm,
+              padding: '6px 10px',
+              fontSize: t.font.sizeSm,
+              cursor: 'pointer',
+            }}
+          >
+            Open in sandbox
+          </button>
+          {item.recommendation === 'promote' || item.recommendation === 'promoted' ? (
+            <button
+              type="button"
+              onClick={() => promoteHypothesisPolicyMutation.mutate({ hypothesisId: item.hypothesis_id, active: item.recommendation !== 'promoted' })}
+              disabled={promoteHypothesisPolicyMutation.isPending}
+              style={{
+                border: `1px solid ${item.recommendation === 'promoted' ? t.color.border : t.color.accent}`,
+                background: item.recommendation === 'promoted' ? t.color.surface : t.color.accent,
+                color: item.recommendation === 'promoted' ? t.color.text : '#fff',
+                borderRadius: t.radius.sm,
+                padding: '6px 10px',
+                fontSize: t.font.sizeSm,
+                cursor: promoteHypothesisPolicyMutation.isPending ? 'wait' : 'pointer',
+                opacity: promoteHypothesisPolicyMutation.isPending ? 0.8 : 1,
+              }}
+            >
+              {item.recommendation === 'promoted' ? 'Remove promotion' : 'Promote policy'}
+            </button>
+          ) : null}
+        </div>
+      </div>
+    )
+  }
+
+  const resetHypothesisDraft = () => {
+    setEditingHypothesisId(null)
+    setHypothesisError(null)
+    setHypothesisDraft(defaultHypothesisDraft(selectedDefinition?.conversion_kpi_id || ''))
+  }
+
+  const loadHypothesisIntoDraft = (item: JourneyHypothesisRecord) => {
+    setEditingHypothesisId(item.id)
+    setHypothesisError(null)
+    setActiveTab('hypotheses')
+    setHypothesisDraft({
+      title: item.title,
+      target_kpi: item.target_kpi || selectedDefinition?.conversion_kpi_id || '',
+      hypothesis_text: item.hypothesis_text,
+      trigger: item.trigger || {},
+      segment: item.segment || {},
+      current_action: item.current_action || {},
+      proposed_action: item.proposed_action || {},
+      support_count: item.support_count || 0,
+      baseline_rate: item.baseline_rate ?? null,
+      sample_size_target: item.sample_size_target ?? null,
+      status: item.status || 'draft',
+      result: item.result || {},
+    })
+  }
+
+  const startHypothesisFromInsight = (item: JourneyInsightItem) => {
+    setEditingHypothesisId(null)
+    setHypothesisError(null)
+    setActiveTab('hypotheses')
+    setHypothesisDraft({
+      title: item.suggested_hypothesis.title || item.title,
+      target_kpi: item.suggested_hypothesis.target_kpi || selectedDefinition?.conversion_kpi_id || '',
+      hypothesis_text: item.suggested_hypothesis.hypothesis_text || item.summary,
+      trigger: item.suggested_hypothesis.trigger || {},
+      segment: item.suggested_hypothesis.segment || {},
+      current_action: item.suggested_hypothesis.current_action || {},
+      proposed_action: item.suggested_hypothesis.proposed_action || {},
+      support_count: item.suggested_hypothesis.support_count || item.support_count || 0,
+      baseline_rate: item.suggested_hypothesis.baseline_rate ?? item.baseline_rate ?? null,
+      sample_size_target: item.suggested_hypothesis.sample_size_target ?? null,
+      status: 'draft',
+      result: {},
+    })
+  }
+
+  const openPolicySandbox = (item: JourneyHypothesisRecord) => {
+    setSandboxHypothesisId(item.id)
+    setSandboxCandidateStep('')
+    setActiveTab('policy')
+  }
+
+  const applySandboxCandidateToDraft = () => {
+    const selected = policySimulationQuery.data?.selected_policy
+    if (!selected || !sandboxHypothesis) return
+    loadHypothesisIntoDraft({
+      ...sandboxHypothesis,
+      proposed_action: {
+        ...sandboxHypothesis.proposed_action,
+        step: selected.step,
+        type: 'nba_intervention',
+        idea: `Test ${selected.step} for prefix ${policySimulationQuery.data?.prefix?.label || ''}`.trim(),
+      },
+    })
+  }
+
+  const submitHypothesis = () => {
+    if (!selectedJourneyId) {
+      setHypothesisError('Select a journey definition first')
+      return
+    }
+    if (!hypothesisDraft.title.trim()) {
+      setHypothesisError('Hypothesis title is required')
+      return
+    }
+    if (!hypothesisDraft.hypothesis_text.trim()) {
+      setHypothesisError('Hypothesis description is required')
+      return
+    }
+    const body: JourneyHypothesisRequest = {
+      journey_definition_id: selectedJourneyId,
+      title: hypothesisDraft.title.trim(),
+      target_kpi: hypothesisDraft.target_kpi || selectedDefinition?.conversion_kpi_id || null,
+      hypothesis_text: hypothesisDraft.hypothesis_text.trim(),
+      trigger: hypothesisDraft.trigger,
+      segment: hypothesisDraft.segment,
+      current_action: hypothesisDraft.current_action,
+      proposed_action: hypothesisDraft.proposed_action,
+      support_count: Math.max(0, Math.round(hypothesisDraft.support_count || 0)),
+      baseline_rate: hypothesisDraft.baseline_rate,
+      sample_size_target: hypothesisDraft.sample_size_target,
+      status: hypothesisDraft.status || 'draft',
+      linked_experiment_id: null,
+      result: hypothesisDraft.result || {},
+    }
+    setHypothesisError(null)
+    if (editingHypothesisId) {
+      updateHypothesisMutation.mutate({ id: editingHypothesisId, body })
+      return
+    }
+    createHypothesisMutation.mutate(body)
+  }
+
+  const createExperimentFromHypothesis = (item: JourneyHypothesisRecord, proposedStep?: string) => {
+    if (!hypothesisExperimentDraft.start_at || !hypothesisExperimentDraft.end_at) {
+      setHypothesisError('Experiment start and end dates are required')
+      return
+    }
+    createExperimentFromHypothesisMutation.mutate({
+      hypothesisId: item.id,
+      start_at: hypothesisExperimentDraft.start_at,
+      end_at: hypothesisExperimentDraft.end_at,
+      notes: hypothesisExperimentDraft.notes.trim(),
+      proposed_step: proposedStep || '',
+    })
+  }
 
   const buildCurrentSavedViewState = (): SavedJourneyViewStatePayload => ({
     selectedJourneyId,
@@ -1292,6 +2301,1185 @@ export default function Journeys({
               </button>
             ))}
           </div>
+
+          {activeTab === 'insights' && (
+            <div style={{ display: 'grid', gap: t.space.md }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: t.space.sm }}>
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bg }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>Paths considered</div>
+                  <div style={{ fontSize: t.font.sizeXl, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                    {(insightsQuery.data?.summary.paths_considered ?? 0).toLocaleString()}
+                  </div>
+                </div>
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bg }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>Journeys</div>
+                  <div style={{ fontSize: t.font.sizeXl, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                    {(insightsQuery.data?.summary.journeys ?? 0).toLocaleString()}
+                  </div>
+                </div>
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bg }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>Conversions</div>
+                  <div style={{ fontSize: t.font.sizeXl, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                    {(insightsQuery.data?.summary.conversions ?? 0).toLocaleString()}
+                  </div>
+                </div>
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bg }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>Baseline CVR</div>
+                  <div style={{ fontSize: t.font.sizeXl, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                    {formatPercent(insightsQuery.data?.summary.baseline_conversion_rate ?? 0)}
+                  </div>
+                </div>
+              </div>
+
+              {insightsQuery.isLoading && <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading journey insights…</div>}
+              {insightsQuery.isError && <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{(insightsQuery.error as Error).message}</div>}
+              {!insightsQuery.isLoading && !insightsQuery.isError && !insightItems.length && (
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  No insight candidates for the selected journey and filter set.
+                </div>
+              )}
+
+              {!!hypotheses.length && (
+                <SectionCard title="Learning loop" subtitle="Completed journey experiments feed back into discovery and policy selection.">
+                  <div style={{ display: 'grid', gap: t.space.md }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: t.space.sm }}>
+                      {[
+                        { label: 'Validated', value: hypothesisLearningCounts.validated || 0 },
+                        { label: 'Rejected', value: hypothesisLearningCounts.rejected || 0 },
+                        { label: 'Inconclusive', value: hypothesisLearningCounts.inconclusive || 0 },
+                        { label: 'In flight', value: (hypothesisLearningCounts.in_experiment || 0) + (hypothesisLearningCounts.experiment_draft || 0) },
+                      ].map((item) => (
+                        <div key={item.label} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                          <div style={{ fontSize: t.font.sizeLg, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                            {item.value.toLocaleString()}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    {!!latestLearnedHypotheses.length && (
+                      <div style={{ display: 'grid', gap: t.space.sm }}>
+                        {latestLearnedHypotheses.map((item) => (
+                          <div key={item.id} style={{ display: 'grid', gap: 6 }}>
+                            <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>{item.title}</div>
+                            {renderHypothesisLearningCard(item, true)}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {policyRecommendationsQuery.isLoading ? (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading learned policy recommendations…</div>
+                    ) : null}
+                    {!policyRecommendationsQuery.isLoading && !!topPromotablePolicies.length ? (
+                      <div style={{ display: 'grid', gap: t.space.sm }}>
+                        <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>
+                          Top learned policies
+                        </div>
+                        {topPromotablePolicies.map((item) => renderPolicyRecommendationCard(item))}
+                      </div>
+                    ) : null}
+                  </div>
+                </SectionCard>
+              )}
+
+              {!!insightItems.length && (
+                <div style={{ display: 'grid', gap: t.space.md }}>
+                  {insightItems.map((item) => {
+                    const confidenceColor =
+                      item.confidence === 'high' ? t.color.success : item.confidence === 'medium' ? t.color.warning : t.color.textMuted
+                    const severityColor =
+                      item.severity === 'high' ? t.color.danger : item.severity === 'medium' ? t.color.warning : t.color.textMuted
+                    return (
+                      <SectionCard
+                        key={item.id}
+                        title={item.title}
+                        subtitle={item.summary}
+                        actions={
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                            <span
+                              style={{
+                                border: `1px solid ${severityColor}`,
+                                color: severityColor,
+                                borderRadius: t.radius.full,
+                                padding: '4px 8px',
+                                fontSize: t.font.sizeXs,
+                                textTransform: 'capitalize',
+                              }}
+                            >
+                              {item.severity} priority
+                            </span>
+                            <span
+                              style={{
+                                border: `1px solid ${confidenceColor}`,
+                                color: confidenceColor,
+                                borderRadius: t.radius.full,
+                                padding: '4px 8px',
+                                fontSize: t.font.sizeXs,
+                                textTransform: 'capitalize',
+                              }}
+                            >
+                              {item.confidence} confidence
+                            </span>
+                          </div>
+                        }
+                      >
+                        <div style={{ display: 'grid', gap: t.space.md }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: t.space.sm }}>
+                            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Support</div>
+                              <div style={{ fontSize: t.font.sizeBase, color: t.color.text, fontWeight: t.font.weightSemibold }}>{item.support_count.toLocaleString()} journeys</div>
+                            </div>
+                            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Observed CVR</div>
+                              <div style={{ fontSize: t.font.sizeBase, color: t.color.text, fontWeight: t.font.weightSemibold }}>{formatPercent(item.observed_rate)}</div>
+                            </div>
+                            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Impact estimate</div>
+                              <div style={{ fontSize: t.font.sizeBase, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                                ~{(item.impact_estimate?.estimated_users_affected ?? 0).toLocaleString()} users
+                              </div>
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'grid', gap: 6 }}>
+                            {(item.evidence || []).map((entry, idx) => (
+                              <div key={`${item.id}-${idx}`} style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                                {entry}
+                              </div>
+                            ))}
+                          </div>
+
+                          <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.bg }}>
+                            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase', marginBottom: 4 }}>
+                              Suggested hypothesis
+                            </div>
+                            <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>
+                              {item.suggested_hypothesis.title}
+                            </div>
+                            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary, marginTop: 4 }}>
+                              {item.suggested_hypothesis.hypothesis_text}
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+                            <button
+                              type="button"
+                              onClick={() => startHypothesisFromInsight(item)}
+                              style={{
+                                border: `1px solid ${t.color.accent}`,
+                                background: t.color.accent,
+                                color: '#fff',
+                                borderRadius: t.radius.sm,
+                                padding: '8px 12px',
+                                fontSize: t.font.sizeSm,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              Create hypothesis
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const trigger = item.suggested_hypothesis.trigger || {}
+                                const pathHash = typeof trigger.path_hash === 'string' ? trigger.path_hash : ''
+                                const steps = Array.isArray(trigger.steps) ? trigger.steps.join(' ') : ''
+                                setExamplesPathHash(pathHash)
+                                setExamplesStepFilter('')
+                                if (!pathHash && steps) setExamplesStepFilter(String(steps).split(' ')[0] || '')
+                                setActiveTab('examples')
+                              }}
+                              style={{
+                                border: `1px solid ${t.color.border}`,
+                                background: t.color.surface,
+                                color: t.color.text,
+                                borderRadius: t.radius.sm,
+                                padding: '8px 12px',
+                                fontSize: t.font.sizeSm,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              Open evidence
+                            </button>
+                          </div>
+                        </div>
+                      </SectionCard>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'hypotheses' && (
+            <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))' }}>
+              <SectionCard
+                title={editingHypothesisId ? 'Edit hypothesis' : 'New hypothesis'}
+                subtitle="Turn observed journey behavior into a structured experiment candidate."
+                actions={
+                  <button
+                    type="button"
+                    onClick={resetHypothesisDraft}
+                    style={{
+                      border: `1px solid ${t.color.border}`,
+                      background: t.color.surface,
+                      color: t.color.text,
+                      borderRadius: t.radius.sm,
+                      padding: '6px 10px',
+                      fontSize: t.font.sizeSm,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    New draft
+                  </button>
+                }
+              >
+                <div style={{ display: 'grid', gap: t.space.md }}>
+                  <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                    Title
+                    <input
+                      value={hypothesisDraft.title}
+                      onChange={(e) => setHypothesisDraft((prev) => ({ ...prev, title: e.target.value }))}
+                      placeholder="Recover mobile retargeting exits"
+                      style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                    />
+                  </label>
+
+                  <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                    Hypothesis
+                    <textarea
+                      value={hypothesisDraft.hypothesis_text}
+                      onChange={(e) => setHypothesisDraft((prev) => ({ ...prev, hypothesis_text: e.target.value }))}
+                      rows={3}
+                      placeholder="If we intervene earlier for this path, conversion rate should improve."
+                      style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                    />
+                  </label>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: t.space.md }}>
+                    <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                      Status
+                      <select
+                        value={hypothesisDraft.status}
+                        onChange={(e) => setHypothesisDraft((prev) => ({ ...prev, status: e.target.value }))}
+                        style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                      >
+                        <option value="draft">Draft</option>
+                        <option value="ready_to_test">Ready to test</option>
+                        <option value="in_experiment">In experiment</option>
+                        <option value="validated">Validated</option>
+                        <option value="rejected">Rejected</option>
+                        <option value="inconclusive">Inconclusive</option>
+                      </select>
+                    </label>
+                    <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                      Target KPI
+                      <select
+                        value={hypothesisDraft.target_kpi}
+                        onChange={(e) => setHypothesisDraft((prev) => ({ ...prev, target_kpi: e.target.value }))}
+                        style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                      >
+                        <option value="">Default journey KPI</option>
+                        {kpiOptions.map((kpi) => (
+                          <option key={kpi.id} value={kpi.id}>
+                            {kpi.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                      Support
+                      <input
+                        type="number"
+                        min={0}
+                        value={hypothesisDraft.support_count}
+                        onChange={(e) => setHypothesisDraft((prev) => ({ ...prev, support_count: Math.max(0, Number(e.target.value) || 0) }))}
+                        style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                      />
+                    </label>
+                    <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                      Sample size target
+                      <input
+                        type="number"
+                        min={0}
+                        value={hypothesisDraft.sample_size_target ?? ''}
+                        onChange={(e) =>
+                          setHypothesisDraft((prev) => ({
+                            ...prev,
+                            sample_size_target: e.target.value ? Math.max(0, Number(e.target.value) || 0) : null,
+                          }))
+                        }
+                        style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                      />
+                    </label>
+                    <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                      Baseline conversion rate
+                      <input
+                        type="number"
+                        min={0}
+                        max={1}
+                        step="0.0001"
+                        value={hypothesisDraft.baseline_rate ?? ''}
+                        onChange={(e) =>
+                          setHypothesisDraft((prev) => ({
+                            ...prev,
+                            baseline_rate: e.target.value === '' ? null : Math.max(0, Number(e.target.value) || 0),
+                          }))
+                        }
+                        style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                      />
+                    </label>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: t.space.md }}>
+                    <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                      Trigger path hash
+                      <input
+                        value={typeof hypothesisDraft.trigger.path_hash === 'string' ? hypothesisDraft.trigger.path_hash : ''}
+                        onChange={(e) =>
+                          setHypothesisDraft((prev) => ({
+                            ...prev,
+                            trigger: { ...prev.trigger, path_hash: e.target.value },
+                          }))
+                        }
+                        style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                      />
+                    </label>
+                    <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                      Trigger steps
+                      <textarea
+                        value={Array.isArray(hypothesisDraft.trigger.steps) ? (hypothesisDraft.trigger.steps as unknown[]).map(String).join('\n') : ''}
+                        onChange={(e) =>
+                          setHypothesisDraft((prev) => ({
+                            ...prev,
+                            trigger: { ...prev.trigger, steps: parseDelimitedSteps(e.target.value) },
+                          }))
+                        }
+                        rows={3}
+                        style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                      />
+                    </label>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: t.space.md }}>
+                    <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                      Channel group
+                      <input
+                        value={typeof hypothesisDraft.segment.channel_group === 'string' ? hypothesisDraft.segment.channel_group : ''}
+                        onChange={(e) =>
+                          setHypothesisDraft((prev) => ({
+                            ...prev,
+                            segment: { ...prev.segment, channel_group: e.target.value },
+                          }))
+                        }
+                        style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                      />
+                    </label>
+                    <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                      Campaign
+                      <input
+                        value={typeof hypothesisDraft.segment.campaign_id === 'string' ? hypothesisDraft.segment.campaign_id : ''}
+                        onChange={(e) =>
+                          setHypothesisDraft((prev) => ({
+                            ...prev,
+                            segment: { ...prev.segment, campaign_id: e.target.value },
+                          }))
+                        }
+                        style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                      />
+                    </label>
+                    <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                      Device
+                      <input
+                        value={typeof hypothesisDraft.segment.device === 'string' ? hypothesisDraft.segment.device : ''}
+                        onChange={(e) =>
+                          setHypothesisDraft((prev) => ({
+                            ...prev,
+                            segment: { ...prev.segment, device: e.target.value },
+                          }))
+                        }
+                        style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                      />
+                    </label>
+                    <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                      Country
+                      <input
+                        value={typeof hypothesisDraft.segment.country === 'string' ? hypothesisDraft.segment.country : ''}
+                        onChange={(e) =>
+                          setHypothesisDraft((prev) => ({
+                            ...prev,
+                            segment: { ...prev.segment, country: e.target.value },
+                          }))
+                        }
+                        style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                      />
+                    </label>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: t.space.md }}>
+                    <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                      Current action type
+                      <input
+                        value={typeof hypothesisDraft.current_action.type === 'string' ? hypothesisDraft.current_action.type : ''}
+                        onChange={(e) =>
+                          setHypothesisDraft((prev) => ({
+                            ...prev,
+                            current_action: { ...prev.current_action, type: e.target.value },
+                          }))
+                        }
+                        style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                      />
+                    </label>
+                    <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                      Proposed action type
+                      <input
+                        value={typeof hypothesisDraft.proposed_action.type === 'string' ? hypothesisDraft.proposed_action.type : ''}
+                        onChange={(e) =>
+                          setHypothesisDraft((prev) => ({
+                            ...prev,
+                            proposed_action: { ...prev.proposed_action, type: e.target.value },
+                          }))
+                        }
+                        style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                      />
+                    </label>
+                    <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, gridColumn: '1 / -1' }}>
+                      Proposed action idea
+                      <textarea
+                        value={typeof hypothesisDraft.proposed_action.idea === 'string' ? hypothesisDraft.proposed_action.idea : ''}
+                        onChange={(e) =>
+                          setHypothesisDraft((prev) => ({
+                            ...prev,
+                            proposed_action: { ...prev.proposed_action, idea: e.target.value },
+                          }))
+                        }
+                        rows={2}
+                        style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                      />
+                    </label>
+                  </div>
+
+                  <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                    Result notes
+                    <textarea
+                      value={hypothesisResultNote}
+                      onChange={(e) =>
+                        setHypothesisDraft((prev) => ({
+                          ...prev,
+                          result: e.target.value ? { ...prev.result, note: e.target.value } : {},
+                        }))
+                      }
+                      rows={2}
+                      placeholder="What still needs validation, or what did we learn?"
+                      style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                    />
+                  </label>
+
+                  <div style={{ borderTop: `1px solid ${t.color.borderLight}`, paddingTop: t.space.md, display: 'grid', gap: t.space.md }}>
+                    <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>
+                      Experiment linking
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: t.space.md }}>
+                      <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                        Experiment start
+                        <input
+                          type="date"
+                          value={hypothesisExperimentDraft.start_at}
+                          onChange={(e) => setHypothesisExperimentDraft((prev) => ({ ...prev, start_at: e.target.value }))}
+                          style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                        />
+                      </label>
+                      <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                        Experiment end
+                        <input
+                          type="date"
+                          value={hypothesisExperimentDraft.end_at}
+                          onChange={(e) => setHypothesisExperimentDraft((prev) => ({ ...prev, end_at: e.target.value }))}
+                          style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                        />
+                      </label>
+                    </div>
+                    <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                      Experiment notes
+                      <textarea
+                        value={hypothesisExperimentDraft.notes}
+                        onChange={(e) => setHypothesisExperimentDraft((prev) => ({ ...prev, notes: e.target.value }))}
+                        rows={2}
+                        placeholder="Operator notes, rollout assumptions, or holdout design details."
+                        style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                      />
+                    </label>
+                    {activeHypothesis?.linked_experiment_id ? (
+                      <div style={{ display: 'grid', gap: t.space.sm }}>
+                        <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                          Linked experiment #{activeHypothesis.linked_experiment_id} is active for this hypothesis.
+                        </div>
+                        {renderHypothesisLearningCard(activeHypothesis)}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                        Save the hypothesis first, then create an experiment that will appear in Incrementality with journey provenance.
+                      </div>
+                    )}
+                  </div>
+
+                  {hypothesisError && <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{hypothesisError}</div>}
+
+                  <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    {activeHypothesis && !activeHypothesis.linked_experiment_id ? (
+                      <button
+                        type="button"
+                        onClick={() => createExperimentFromHypothesis(activeHypothesis)}
+                        disabled={createExperimentFromHypothesisMutation.isPending}
+                        style={{
+                          border: `1px solid ${t.color.border}`,
+                          background: t.color.surface,
+                          color: t.color.text,
+                          borderRadius: t.radius.sm,
+                          padding: '8px 12px',
+                          fontSize: t.font.sizeSm,
+                          cursor: createExperimentFromHypothesisMutation.isPending ? 'wait' : 'pointer',
+                          opacity: createExperimentFromHypothesisMutation.isPending ? 0.8 : 1,
+                        }}
+                      >
+                        {createExperimentFromHypothesisMutation.isPending ? 'Creating experiment…' : 'Create experiment'}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={submitHypothesis}
+                      disabled={createHypothesisMutation.isPending || updateHypothesisMutation.isPending || createExperimentFromHypothesisMutation.isPending}
+                      style={{
+                        border: `1px solid ${t.color.accent}`,
+                        background: t.color.accent,
+                        color: '#fff',
+                        borderRadius: t.radius.sm,
+                        padding: '8px 12px',
+                        fontSize: t.font.sizeSm,
+                        cursor: createHypothesisMutation.isPending || updateHypothesisMutation.isPending || createExperimentFromHypothesisMutation.isPending ? 'wait' : 'pointer',
+                        opacity: createHypothesisMutation.isPending || updateHypothesisMutation.isPending || createExperimentFromHypothesisMutation.isPending ? 0.8 : 1,
+                      }}
+                    >
+                      {createHypothesisMutation.isPending || updateHypothesisMutation.isPending
+                        ? 'Saving…'
+                        : editingHypothesisId
+                        ? 'Update hypothesis'
+                        : 'Save hypothesis'}
+                    </button>
+                  </div>
+                </div>
+              </SectionCard>
+
+              <SectionCard title="Saved hypotheses" subtitle="Reusable journey interventions with context, support, and readiness.">
+                <div style={{ display: 'grid', gap: t.space.sm }}>
+                  {hypothesesQuery.isLoading && <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading journey hypotheses…</div>}
+                  {hypothesesQuery.isError && <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{(hypothesesQuery.error as Error).message}</div>}
+                  {!hypothesesQuery.isLoading && !hypothesesQuery.isError && !hypotheses.length && (
+                    <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                      No hypotheses yet. Start from an insight or create one manually.
+                    </div>
+                  )}
+                  {hypotheses.map((item) => (
+                    <div key={item.id} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: editingHypothesisId === item.id ? t.color.accentMuted : t.color.surface, display: 'grid', gap: 8 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'start' }}>
+                        <div style={{ display: 'grid', gap: 4 }}>
+                          <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightSemibold }}>{item.title}</div>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                            {formatStageLabel(getHypothesisLearningStage(item))} · {item.support_count.toLocaleString()} journeys · {item.sample_size_target?.toLocaleString() || '—'} sample target
+                            {item.linked_experiment_id ? ` · experiment #${item.linked_experiment_id}` : ''}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            onClick={() => openPolicySandbox(item)}
+                            style={{
+                              border: `1px solid ${t.color.border}`,
+                              background: t.color.surface,
+                              color: t.color.text,
+                              borderRadius: t.radius.sm,
+                              padding: '6px 10px',
+                              fontSize: t.font.sizeSm,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Open sandbox
+                          </button>
+                          {!item.linked_experiment_id ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                loadHypothesisIntoDraft(item)
+                                createExperimentFromHypothesis(item)
+                              }}
+                              style={{
+                                border: `1px solid ${t.color.border}`,
+                                background: t.color.surface,
+                                color: t.color.text,
+                                borderRadius: t.radius.sm,
+                                padding: '6px 10px',
+                                fontSize: t.font.sizeSm,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              Create experiment
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => loadHypothesisIntoDraft(item)}
+                            style={{
+                              border: `1px solid ${t.color.border}`,
+                              background: t.color.surface,
+                              color: t.color.text,
+                              borderRadius: t.radius.sm,
+                              padding: '6px 10px',
+                              fontSize: t.font.sizeSm,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Edit
+                          </button>
+                        </div>
+                      </div>
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{item.hypothesis_text}</div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                        Trigger: {objectPreview(item.trigger)}
+                      </div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                        Segment: {objectPreview(item.segment)}
+                      </div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                        Proposed action: {objectPreview(item.proposed_action)}
+                      </div>
+                      {item.linked_experiment_id ? renderHypothesisLearningCard(item) : null}
+                      {typeof item.result?.['note'] === 'string' && item.result['note'] ? (
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                          Notes: {String(item.result['note'])}
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </SectionCard>
+            </div>
+          )}
+
+          {activeTab === 'experiments' && (
+            <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'minmax(280px, 360px) minmax(0, 1fr)' }}>
+              <div style={{ display: 'grid', gap: t.space.md }}>
+                <SectionCard title="Experiment queue" subtitle="Journey hypotheses already linked into Incrementality.">
+                  <div style={{ display: 'grid', gap: t.space.sm }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: t.space.xs }}>
+                      {[
+                        { label: 'Total', value: linkedExperimentCounts.total || 0 },
+                        { label: 'Draft', value: linkedExperimentCounts.draft || 0 },
+                        { label: 'Running', value: linkedExperimentCounts.running || 0 },
+                        { label: 'Completed', value: linkedExperimentCounts.completed || 0 },
+                      ].map((metric) => (
+                        <div
+                          key={metric.label}
+                          style={{
+                            border: `1px solid ${t.color.borderLight}`,
+                            borderRadius: t.radius.sm,
+                            padding: '10px 12px',
+                            background: t.color.bg,
+                          }}
+                        >
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>{metric.label}</div>
+                          <div style={{ fontSize: t.font.sizeLg, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                            {metric.value.toLocaleString()}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    {linkedExperimentsQuery.isLoading ? (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading linked experiments…</div>
+                    ) : null}
+                    {linkedExperimentsQuery.isError ? (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{(linkedExperimentsQuery.error as Error).message}</div>
+                    ) : null}
+                    {!linkedExperimentsQuery.isLoading && !linkedExperiments.length ? (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                        No linked experiments yet. Create one from a hypothesis or the Policy Sandbox.
+                      </div>
+                    ) : null}
+                    {linkedExperiments.map((item) => {
+                      const linkedHypothesis = experimentHypothesisById.get(item.id)
+                      const isSelected = selectedJourneyExperimentId === item.id
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => setSelectedJourneyExperimentId(item.id)}
+                          style={{
+                            textAlign: 'left',
+                            border: `1px solid ${isSelected ? t.color.accent : t.color.borderLight}`,
+                            background: isSelected ? t.color.accentMuted : t.color.surface,
+                            borderRadius: t.radius.sm,
+                            padding: '10px 12px',
+                            cursor: 'pointer',
+                            display: 'grid',
+                            gap: 6,
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'center' }}>
+                            <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                              {item.name}
+                            </div>
+                            <span
+                              style={{
+                                border: `1px solid ${item.status === 'completed' ? t.color.success : item.status === 'running' ? t.color.accent : t.color.border}`,
+                                color: item.status === 'completed' ? t.color.success : item.status === 'running' ? t.color.accent : t.color.textSecondary,
+                                borderRadius: t.radius.full,
+                                padding: '2px 8px',
+                                fontSize: t.font.sizeXs,
+                              }}
+                            >
+                              {experimentStatusLabel(item.status)}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                            {item.channel} · {new Date(item.start_at).toLocaleDateString()} → {new Date(item.end_at).toLocaleDateString()}
+                          </div>
+                          {linkedHypothesis ? (
+                            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                              Hypothesis: {linkedHypothesis.title}
+                            </div>
+                          ) : null}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </SectionCard>
+              </div>
+
+              <SectionCard
+                title="Experiment detail"
+                subtitle="Inspect linked experiment status, measured results, and rollout guardrails without leaving Journey Lab."
+                actions={
+                  <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
+                    {selectedJourneyExperiment ? (
+                      <a
+                        href={buildIncrementalityHref(selectedJourneyExperiment.id)}
+                        style={{
+                          border: `1px solid ${t.color.border}`,
+                          background: t.color.surface,
+                          color: t.color.accent,
+                          borderRadius: t.radius.sm,
+                          padding: '6px 10px',
+                          fontSize: t.font.sizeSm,
+                          cursor: 'pointer',
+                          textDecoration: 'none',
+                        }}
+                      >
+                        Open in Incrementality
+                      </a>
+                    ) : null}
+                    {selectedJourneyExperimentHypothesis ? (
+                      <button
+                        type="button"
+                        onClick={() => loadHypothesisIntoDraft(selectedJourneyExperimentHypothesis)}
+                        style={{
+                          border: `1px solid ${t.color.border}`,
+                          background: t.color.surface,
+                          color: t.color.text,
+                          borderRadius: t.radius.sm,
+                          padding: '6px 10px',
+                          fontSize: t.font.sizeSm,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Open hypothesis
+                      </button>
+                    ) : null}
+                  </div>
+                }
+              >
+                {!selectedJourneyExperiment ? (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    Select a linked experiment to inspect its setup and measured readout.
+                  </div>
+                ) : (
+                  <div style={{ display: 'grid', gap: t.space.md }}>
+                    <div style={{ display: 'grid', gap: 6 }}>
+                      <div style={{ fontSize: t.font.sizeLg, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                        {selectedJourneyExperiment.name}
+                      </div>
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                        {selectedJourneyExperiment.channel} · {experimentStatusLabel(selectedJourneyExperiment.status)} ·{' '}
+                        {new Date(selectedJourneyExperiment.start_at).toLocaleDateString()} → {new Date(selectedJourneyExperiment.end_at).toLocaleDateString()}
+                      </div>
+                      {(selectedJourneyExperiment.source_type || selectedJourneyExperiment.source_name) && (
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                          Source: {selectedJourneyExperiment.source_type || 'linked source'}
+                          {selectedJourneyExperiment.source_name ? ` · ${selectedJourneyExperiment.source_name}` : ''}
+                        </div>
+                      )}
+                    </div>
+
+                    {linkedExperimentDetailQuery.isLoading ? (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading experiment detail…</div>
+                    ) : null}
+                    {linkedExperimentDetailQuery.isError ? (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{(linkedExperimentDetailQuery.error as Error).message}</div>
+                    ) : null}
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: t.space.sm }}>
+                      <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Ready to read</div>
+                        <div style={{ fontSize: t.font.sizeBase, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                          {linkedExperimentHealthQuery.data?.ready_state.label
+                            ? experimentStatusLabel(linkedExperimentHealthQuery.data.ready_state.label)
+                            : '—'}
+                        </div>
+                      </div>
+                      <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Sample</div>
+                        <div style={{ fontSize: t.font.sizeBase, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                          {linkedExperimentHealthQuery.data
+                            ? `${linkedExperimentHealthQuery.data.sample.treatment.toLocaleString()} / ${linkedExperimentHealthQuery.data.sample.control.toLocaleString()}`
+                            : '—'}
+                        </div>
+                      </div>
+                      <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Observed uplift</div>
+                        <div style={{ fontSize: t.font.sizeBase, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                          {linkedExperimentResultsQuery.data?.uplift_abs != null
+                            ? formatPercent(linkedExperimentResultsQuery.data.uplift_abs)
+                            : '—'}
+                        </div>
+                      </div>
+                      <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>p-value</div>
+                        <div style={{ fontSize: t.font.sizeBase, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                          {linkedExperimentResultsQuery.data?.p_value != null
+                            ? linkedExperimentResultsQuery.data.p_value.toFixed(3)
+                            : '—'}
+                        </div>
+                      </div>
+                    </div>
+
+                    {linkedExperimentResultsQuery.data?.insufficient_data ? (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>
+                        Results are not ready yet. Keep assignments and outcomes flowing before making a decision.
+                      </div>
+                    ) : null}
+
+                    {linkedExperimentHealthQuery.data?.ready_state.reasons?.length ? (
+                      <div style={{ display: 'grid', gap: 6 }}>
+                        {linkedExperimentHealthQuery.data.ready_state.reasons.map((reason, idx) => (
+                          <div key={idx} style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                            {reason}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    {linkedExperimentDetailQuery.data ? (
+                      <div style={{ display: 'grid', gap: t.space.sm }}>
+                        <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>Experiment setup</div>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                          Segment: {objectPreview(linkedExperimentDetailQuery.data.segment)}
+                        </div>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                          Policy: {objectPreview(linkedExperimentDetailQuery.data.policy)}
+                        </div>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                          Guardrails: {objectPreview(linkedExperimentDetailQuery.data.guardrails)}
+                        </div>
+                        {linkedExperimentDetailQuery.data.notes ? (
+                          <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                            Notes: {linkedExperimentDetailQuery.data.notes}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {selectedJourneyExperimentHypothesis ? (
+                      <div style={{ display: 'grid', gap: 6 }}>
+                        <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>
+                          Linked hypothesis evidence
+                        </div>
+                        {renderHypothesisLearningCard(selectedJourneyExperimentHypothesis)}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              </SectionCard>
+            </div>
+          )}
+
+          {activeTab === 'policy' && (
+            <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'minmax(260px, 340px) minmax(0, 1fr)' }}>
+              <div style={{ display: 'grid', gap: t.space.md }}>
+                <SectionCard title="Learned policies" subtitle="Promote validated journey policies or inspect what should be tested next.">
+                  <div style={{ display: 'grid', gap: t.space.sm }}>
+                    {policyRecommendationsQuery.isLoading ? (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading learned policies…</div>
+                    ) : null}
+                    {policyRecommendationsQuery.isError ? (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{(policyRecommendationsQuery.error as Error).message}</div>
+                    ) : null}
+                    {!policyRecommendationsQuery.isLoading && !policyRecommendations.length ? (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                        No policy evidence yet. Create hypotheses and run experiments first.
+                      </div>
+                    ) : null}
+                    {policyRecommendations.slice(0, 3).map((item) => renderPolicyRecommendationCard(item))}
+                  </div>
+                </SectionCard>
+
+                <SectionCard title="Hypotheses" subtitle="Pick a saved hypothesis to compare observed next-step candidates.">
+                  <div style={{ display: 'grid', gap: t.space.sm }}>
+                    {!hypotheses.length && (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                        No hypotheses yet. Save one from Insights or the Hypotheses tab first.
+                      </div>
+                    )}
+                    {hypotheses.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => {
+                          setSandboxHypothesisId(item.id)
+                          setSandboxCandidateStep('')
+                        }}
+                        style={{
+                          textAlign: 'left',
+                          border: `1px solid ${sandboxHypothesisId === item.id ? t.color.accent : t.color.borderLight}`,
+                          background: sandboxHypothesisId === item.id ? t.color.accentMuted : t.color.surface,
+                          borderRadius: t.radius.sm,
+                          padding: '10px 12px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>{item.title}</div>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                          {formatStageLabel(getHypothesisLearningStage(item))} · {item.support_count.toLocaleString()} journeys
+                        </div>
+                        {item.linked_experiment_id ? (
+                          <div style={{ marginTop: 8 }}>{renderHypothesisLearningCard(item, true)}</div>
+                        ) : null}
+                      </button>
+                    ))}
+                  </div>
+                </SectionCard>
+              </div>
+
+              <SectionCard title="Policy Sandbox" subtitle="Observational comparison of next-step candidates for the current hypothesis prefix.">
+                {!sandboxHypothesis && (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    Select a hypothesis to preview candidate next-step policies.
+                  </div>
+                )}
+                {sandboxHypothesis && policySimulationQuery.isLoading && (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading policy preview…</div>
+                )}
+                {sandboxHypothesis && policySimulationQuery.isError && (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{(policySimulationQuery.error as Error).message}</div>
+                )}
+                {sandboxHypothesis && policySimulationQuery.data && (
+                  <div style={{ display: 'grid', gap: t.space.md }}>
+                    {sandboxHypothesis.linked_experiment_id ? (
+                      <div style={{ display: 'grid', gap: 6 }}>
+                        <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>
+                          Experiment evidence
+                        </div>
+                        {renderHypothesisLearningCard(sandboxHypothesis)}
+                      </div>
+                    ) : null}
+                    {!policySimulationQuery.data.previewAvailable ? (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                        {policySimulationQuery.data.reason || 'No observational preview available for this hypothesis.'}
+                      </div>
+                    ) : (
+                      <>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: t.space.sm }}>
+                          <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Prefix</div>
+                            <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>
+                              {policySimulationQuery.data.prefix?.label || '—'}
+                            </div>
+                          </div>
+                          <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Eligible journeys</div>
+                            <div style={{ fontSize: t.font.sizeBase, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                              {(policySimulationQuery.data.summary?.eligible_journeys ?? 0).toLocaleString()}
+                            </div>
+                          </div>
+                          <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Baseline CVR</div>
+                            <div style={{ fontSize: t.font.sizeBase, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                              {formatPercent(policySimulationQuery.data.summary?.baseline_conversion_rate ?? 0)}
+                            </div>
+                          </div>
+                          <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Observed window</div>
+                            <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>
+                              {policySimulationQuery.data.source_window?.date_from || '—'} → {policySimulationQuery.data.source_window?.date_to || '—'}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bg }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'start', flexWrap: 'wrap' }}>
+                            <div>
+                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>Selected policy</div>
+                              <div style={{ fontSize: t.font.sizeLg, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                                {policySimulationQuery.data.selected_policy?.step || '—'}
+                              </div>
+                              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary, marginTop: 4 }}>
+                                {policySimulationQuery.data.selected_policy?.rationale || 'No rationale available.'}
+                              </div>
+                            </div>
+                            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                              Current step: <strong style={{ color: t.color.text }}>{policySimulationQuery.data.current_path?.step || '—'}</strong>
+                            </div>
+                          </div>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: t.space.sm, marginTop: t.space.md }}>
+                            <div>
+                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Observed CVR</div>
+                              <div style={{ fontSize: t.font.sizeBase, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                                {formatPercent(policySimulationQuery.data.selected_policy?.conversion_rate ?? 0)}
+                              </div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Delta vs current</div>
+                              <div style={{ fontSize: t.font.sizeBase, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                                {formatPercent(policySimulationQuery.data.selected_policy?.uplift_abs ?? 0)}
+                              </div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Estimated incremental conversions</div>
+                              <div style={{ fontSize: t.font.sizeBase, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                                {(policySimulationQuery.data.selected_policy?.estimated_incremental_conversions ?? 0).toLocaleString()}
+                              </div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Confidence</div>
+                              <div style={{ fontSize: t.font.sizeBase, color: t.color.text, fontWeight: t.font.weightSemibold, textTransform: 'capitalize' }}>
+                                {policySimulationQuery.data.selected_policy?.confidence || 'low'}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'grid', gap: t.space.sm }}>
+                          <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>
+                            Candidate next steps
+                          </div>
+                          {(policySimulationQuery.data.top_candidates || []).map((candidate) => (
+                            <button
+                              key={candidate.step}
+                              type="button"
+                              onClick={() => setSandboxCandidateStep(candidate.step)}
+                              style={{
+                                textAlign: 'left',
+                                border: `1px solid ${policySimulationQuery.data.selected_policy?.step === candidate.step ? t.color.accent : t.color.borderLight}`,
+                                background: policySimulationQuery.data.selected_policy?.step === candidate.step ? t.color.accentMuted : t.color.surface,
+                                borderRadius: t.radius.sm,
+                                padding: '10px 12px',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'center', flexWrap: 'wrap' }}>
+                                <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>
+                                  #{candidate.rank} {candidate.step}
+                                  {candidate.is_current_step ? ' · current' : ''}
+                                </div>
+                                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'capitalize' }}>
+                                  {candidate.confidence} confidence
+                                </div>
+                              </div>
+                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary, marginTop: 4 }}>
+                                {candidate.support_count.toLocaleString()} journeys · CVR {formatPercent(candidate.conversion_rate)} ·
+                                uplift {formatPercent(candidate.uplift_abs)} · avg value {candidate.avg_value.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+
+                        {policySimulationQuery.data.decision?.warnings?.length ? (
+                          <div style={{ display: 'grid', gap: 6 }}>
+                            {policySimulationQuery.data.decision.warnings.map((warning, idx) => (
+                              <div key={idx} style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>
+                                {warning}
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+
+                        <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+                          {getHypothesisLearningStage(sandboxHypothesis) === 'validated' || readResultBool(getHypothesisPromotion(sandboxHypothesis), 'active') ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                promoteHypothesisPolicyMutation.mutate({
+                                  hypothesisId: sandboxHypothesis.id,
+                                  active: !readResultBool(getHypothesisPromotion(sandboxHypothesis), 'active'),
+                                })
+                              }
+                              disabled={promoteHypothesisPolicyMutation.isPending}
+                              style={{
+                                border: `1px solid ${readResultBool(getHypothesisPromotion(sandboxHypothesis), 'active') ? t.color.border : t.color.accent}`,
+                                background: readResultBool(getHypothesisPromotion(sandboxHypothesis), 'active') ? t.color.surface : t.color.accent,
+                                color: readResultBool(getHypothesisPromotion(sandboxHypothesis), 'active') ? t.color.text : '#fff',
+                                borderRadius: t.radius.sm,
+                                padding: '8px 12px',
+                                fontSize: t.font.sizeSm,
+                                cursor: promoteHypothesisPolicyMutation.isPending ? 'wait' : 'pointer',
+                                opacity: promoteHypothesisPolicyMutation.isPending ? 0.8 : 1,
+                              }}
+                            >
+                              {readResultBool(getHypothesisPromotion(sandboxHypothesis), 'active') ? 'Remove promotion' : 'Promote policy'}
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={applySandboxCandidateToDraft}
+                            style={{
+                              border: `1px solid ${t.color.border}`,
+                              background: t.color.surface,
+                              color: t.color.text,
+                              borderRadius: t.radius.sm,
+                              padding: '8px 12px',
+                              fontSize: t.font.sizeSm,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Sync candidate to hypothesis
+                          </button>
+                          {!sandboxHypothesis.linked_experiment_id ? (
+                            <button
+                              type="button"
+                              onClick={() => createExperimentFromHypothesis(sandboxHypothesis, policySimulationQuery.data.selected_policy?.step)}
+                              disabled={createExperimentFromHypothesisMutation.isPending}
+                              style={{
+                                border: `1px solid ${t.color.accent}`,
+                                background: t.color.accent,
+                                color: '#fff',
+                                borderRadius: t.radius.sm,
+                                padding: '8px 12px',
+                                fontSize: t.font.sizeSm,
+                                cursor: createExperimentFromHypothesisMutation.isPending ? 'wait' : 'pointer',
+                                opacity: createExperimentFromHypothesisMutation.isPending ? 0.8 : 1,
+                              }}
+                            >
+                              {createExperimentFromHypothesisMutation.isPending ? 'Creating experiment…' : 'Create experiment'}
+                            </button>
+                          ) : (
+                            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                              Linked experiment #{sandboxHypothesis.linked_experiment_id} already exists for this hypothesis. Use the experimental readout above as the primary source of truth; keep the observational sandbox for follow-up variants.
+                            </div>
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </SectionCard>
+            </div>
+          )}
 
           {activeTab === 'paths' && (
             <>

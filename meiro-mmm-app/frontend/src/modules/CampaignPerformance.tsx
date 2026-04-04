@@ -7,6 +7,7 @@ import ExplainabilityPanel from '../components/ExplainabilityPanel'
 import TrendPanel from '../components/dashboard/TrendPanel'
 import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn, SectionCard } from '../components/dashboard'
 import { apiGetJson } from '../lib/apiClient'
+import { buildJourneyHypothesisHref } from '../lib/journeyLinks'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import AdsActionsDrawer from '../components/ads/AdsActionsDrawer'
 import DecisionStatusCard from '../components/DecisionStatusCard'
@@ -24,6 +25,17 @@ interface SuggestedNext {
   conversion_rate: number
   count: number
   avg_value: number
+  is_promoted_policy?: boolean
+  promoted_policy_title?: string | null
+  promoted_policy_hypothesis_id?: string | null
+  promoted_policy_journey_definition_id?: string | null
+}
+
+interface CampaignSuggestionResponse {
+  items: Record<string, SuggestedNext>
+  level: string
+  eligible_journeys: number
+  reason?: string
 }
 
 interface CampaignData {
@@ -324,6 +336,18 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       roas?: number | null
       cpa?: number | null
     }
+    decisionContext?: {
+      source: 'performance_recommendation' | 'deployed_journey_policy'
+      scope_label?: string | null
+      recommended_channel?: string | null
+      recommended_campaign?: string | null
+      conversion_rate?: number | null
+      journey_count?: number | null
+      avg_value?: number | null
+      policy_title?: string | null
+      hypothesis_id?: string | null
+      journey_definition_id?: string | null
+    } | null
   } | null>(null)
 
   const trendDateRange = useMemo(() => {
@@ -370,9 +394,28 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
     refetchInterval: false,
   })
 
+  const suggestionsQuery = useQuery<CampaignSuggestionResponse>({
+    queryKey: ['campaign-suggestions-v1', trendDateRange.dateFrom, trendDateRange.dateTo, conversionKey || 'all', configId ?? 'default'],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        date_from: trendDateRange.dateFrom,
+        date_to: trendDateRange.dateTo,
+        timezone: 'UTC',
+      })
+      if (conversionKey) params.set('conversion_key', conversionKey)
+      if (configId) params.set('model_id', configId)
+      return apiGetJson<CampaignSuggestionResponse>(`/api/performance/campaign/suggestions?${params.toString()}`, {
+        fallbackMessage: 'Failed to fetch campaign suggestions',
+      })
+    },
+    enabled: !!trendDateRange.dateFrom && !!trendDateRange.dateTo,
+    refetchInterval: false,
+  })
+
   const campaigns = useMemo(() => {
     const items = summaryQuery.data?.items ?? []
     if (!items.length) return []
+    const suggestionMap = suggestionsQuery.data?.items ?? {}
     const totalRevenue = items.reduce((sum, item) => sum + (item.current.revenue || 0), 0)
     return items.map((item) => {
       const channel = String(item.channel || 'unknown')
@@ -415,7 +458,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
         roi,
         roas,
         cpa,
-        suggested_next: null,
+        suggested_next: suggestionMap[campaignId] ?? null,
         treatment_rate: undefined,
         holdout_rate: undefined,
         uplift_abs: undefined,
@@ -426,7 +469,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
         confidence_score: item.confidence?.score,
       } as CampaignData
     })
-  }, [summaryQuery.data?.items])
+  }, [summaryQuery.data?.items, suggestionsQuery.data?.items])
   const loading = summaryQuery.isLoading
 
   const filteredCampaigns = useMemo(() => {
@@ -586,6 +629,20 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
         roas: campaign.roas,
         cpa: campaign.cpa,
       },
+      decisionContext: campaign.suggested_next
+        ? {
+            source: campaign.suggested_next.is_promoted_policy ? 'deployed_journey_policy' : 'performance_recommendation',
+            scope_label: campaign.campaign_name ? `${campaign.channel} / ${campaign.campaign_name}` : campaign.campaign,
+            recommended_channel: campaign.suggested_next.channel,
+            recommended_campaign: campaign.suggested_next.campaign ?? null,
+            conversion_rate: campaign.suggested_next.conversion_rate,
+            journey_count: campaign.suggested_next.count,
+            avg_value: campaign.suggested_next.avg_value,
+            policy_title: campaign.suggested_next.promoted_policy_title ?? null,
+            hypothesis_id: campaign.suggested_next.promoted_policy_hypothesis_id ?? null,
+            journey_definition_id: campaign.suggested_next.promoted_policy_journey_definition_id ?? null,
+          }
+        : null,
     })
   }, [])
 
@@ -889,23 +946,57 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       title: METRIC_DEFINITIONS['Suggested next'],
       render: (campaign) =>
         campaign.suggested_next ? (
-          <span
-            title={`${campaign.suggested_next.count} journeys, ${(campaign.suggested_next.conversion_rate * 100).toFixed(1)}% conversion, avg $${campaign.suggested_next.avg_value}`}
-            style={{
-              display: 'inline-block',
-              padding: '2px 8px',
-              backgroundColor: t.color.accentMuted,
-              color: t.color.accent,
-              borderRadius: t.radius.sm,
-              fontSize: t.font.sizeXs,
-              fontWeight: t.font.weightSemibold,
-            }}
-          >
-            {campaign.suggested_next.campaign != null
-              ? `${campaign.suggested_next.channel} / ${campaign.suggested_next.campaign}`
-              : campaign.suggested_next.channel}{' '}
-            ({(campaign.suggested_next.conversion_rate * 100).toFixed(0)}%)
-          </span>
+          <div style={{ display: 'inline-flex', gap: t.space.xs, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span
+              title={`${campaign.suggested_next.count} journeys, ${(campaign.suggested_next.conversion_rate * 100).toFixed(1)}% conversion, avg $${campaign.suggested_next.avg_value}`}
+              style={{
+                display: 'inline-block',
+                padding: '2px 8px',
+                backgroundColor: t.color.accentMuted,
+                color: t.color.accent,
+                borderRadius: t.radius.sm,
+                fontSize: t.font.sizeXs,
+                fontWeight: t.font.weightSemibold,
+              }}
+            >
+              {campaign.suggested_next.campaign != null
+                ? `${campaign.suggested_next.channel} / ${campaign.suggested_next.campaign}`
+                : campaign.suggested_next.channel}{' '}
+              ({(campaign.suggested_next.conversion_rate * 100).toFixed(0)}%)
+            </span>
+            {campaign.suggested_next.is_promoted_policy ? (
+              <>
+                <span
+                  title={campaign.suggested_next.promoted_policy_title ?? 'Promoted Journey Lab policy'}
+                  style={{
+                    display: 'inline-block',
+                    padding: '2px 8px',
+                    border: `1px solid ${t.color.warning}`,
+                    color: t.color.warning,
+                    borderRadius: t.radius.full,
+                    fontSize: t.font.sizeXs,
+                    fontWeight: t.font.weightSemibold,
+                  }}
+                >
+                  Deployed policy
+                </span>
+                {buildJourneyHypothesisHref({
+                  journeyDefinitionId: campaign.suggested_next.promoted_policy_journey_definition_id,
+                  hypothesisId: campaign.suggested_next.promoted_policy_hypothesis_id,
+                }) ? (
+                  <a
+                    href={buildJourneyHypothesisHref({
+                      journeyDefinitionId: campaign.suggested_next.promoted_policy_journey_definition_id,
+                      hypothesisId: campaign.suggested_next.promoted_policy_hypothesis_id,
+                    }) || '#'}
+                    style={{ fontSize: t.font.sizeXs, color: t.color.accent, textDecoration: 'none' }}
+                  >
+                    Open policy
+                  </a>
+                ) : null}
+              </>
+            ) : null}
+          </div>
         ) : (
           <span style={{ color: t.color.textMuted, fontSize: t.font.sizeXs }}>—</span>
         ),
@@ -1934,6 +2025,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
           entityId={adsDrawerContext.entityId}
           entityName={adsDrawerContext.entityName}
           previewMetrics={adsDrawerContext.previewMetrics}
+          decisionContext={adsDrawerContext.decisionContext}
         />
       )}
     </div>
