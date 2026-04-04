@@ -69,6 +69,94 @@ def test_campaign_summary_includes_conversion_key_meta_when_passed():
     assert body["meta"]["conversion_key"] == "purchase"
 
 
+def test_campaign_suggestions_payload_keeps_promoted_policy():
+    journeys = [
+        {
+            "converted": True,
+            "kpi_type": "purchase",
+            "touchpoints": [
+                {"timestamp": "2026-02-10T10:00:00Z", "channel": "Paid Search", "campaign": "Brand"},
+                {"timestamp": "2026-02-10T10:05:00Z", "channel": "Email", "campaign": "Checkout Rescue"},
+            ],
+            "conversions": [{"id": "conv-1", "value": 100.0}],
+        }
+    ]
+    payload = performance_router._build_campaign_suggestions_payload(
+        journeys=journeys,
+        settings=performance_router.NBASettings(
+            min_prefix_support=1,
+            min_conversion_rate=0.5,
+            max_prefix_depth=5,
+            min_next_support=5,
+            max_suggestions_per_prefix=3,
+            min_uplift_pct=0.1,
+            excluded_channels=["direct"],
+            promoted_journey_policies=[
+                {
+                    "hypothesis_id": "hyp-campaign-policy",
+                    "title": "Promote checkout rescue",
+                    "journey_definition_id": "jd-1",
+                    "prefix": "Paid Search:Brand",
+                    "prefix_steps": ["Paid Search:Brand"],
+                    "step": "Email:Checkout Rescue",
+                    "channel": "Email",
+                    "campaign": "Checkout Rescue",
+                }
+            ],
+        ),
+    )
+
+    rec = payload["items"]["Paid Search:Brand"]
+    assert rec["step"] == "Email:Checkout Rescue"
+    assert rec["is_promoted_policy"] is True
+    assert rec["promoted_policy_hypothesis_id"] == "hyp-campaign-policy"
+
+
+def test_filter_journeys_for_campaign_suggestions_respects_period_channels_and_conversion_key():
+    journeys = [
+        {
+            "converted": True,
+            "kpi_type": "purchase",
+            "touchpoints": [
+                {"timestamp": "2026-02-10T10:00:00Z", "channel": "Paid Search", "campaign": "Brand"},
+            ],
+        },
+        {
+            "converted": True,
+            "kpi_type": "lead",
+            "touchpoints": [
+                {"timestamp": "2026-02-10T10:00:00Z", "channel": "Paid Search", "campaign": "Lead Gen"},
+            ],
+        },
+        {
+            "converted": True,
+            "kpi_type": "purchase",
+            "touchpoints": [
+                {"timestamp": "2026-01-10T10:00:00Z", "channel": "Paid Search", "campaign": "Old"},
+            ],
+        },
+        {
+            "converted": True,
+            "kpi_type": "purchase",
+            "touchpoints": [
+                {"timestamp": "2026-02-10T10:00:00Z", "channel": "Organic", "campaign": "SEO"},
+            ],
+        },
+    ]
+
+    filtered = performance_router._filter_journeys_for_campaign_suggestions(
+        journeys=journeys,
+        date_from="2026-02-01",
+        date_to="2026-02-14",
+        timezone="UTC",
+        channels=["Paid Search"],
+        conversion_key="purchase",
+    )
+
+    assert len(filtered) == 1
+    assert filtered[0]["touchpoints"][-1]["campaign"] == "Brand"
+
+
 def test_resolve_effective_conversion_key_falls_back_when_configured_key_has_no_data(monkeypatch):
     def fake_iter_canonical_conversion_rows(db, *, date_from=None, date_to=None, conversion_key=None):
         if conversion_key == "form_submit":
