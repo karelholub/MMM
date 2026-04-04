@@ -3,8 +3,7 @@ import { useQuery, useMutation } from '@tanstack/react-query'
 import { tokens as t } from '../theme/tokens'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
-
-const OWNED_CHANNELS = ['email', 'push', 'sms', 'whatsapp', 'onsite']
+import { useWorkspaceContext } from '../components/WorkspaceContext'
 
 function objectPreview(value: Record<string, unknown> | null | undefined): string {
   if (!value || typeof value !== 'object') return '—'
@@ -114,6 +113,58 @@ interface ExperimentHealth {
   ready_state: { label: ReadyLabel; reasons: string[] }
 }
 
+interface SetupContextChannel {
+  channel: string
+  label: string
+  journeys: number
+  converted_journeys: number
+  non_converted_journeys: number
+  observed_profiles: number
+  baseline_conversion_rate: number
+  share_of_journeys: number
+  last_seen_at?: string | null
+  eligible: boolean
+  delivery_class: 'owned' | 'observed'
+  notes: string[]
+}
+
+interface SetupContextKpi {
+  id: string
+  label: string
+  type: string
+  event_name?: string | null
+  count: number
+  is_primary: boolean
+}
+
+interface SetupContext {
+  date_from?: string | null
+  date_to?: string | null
+  defaults: {
+    channel?: string | null
+    conversion_key?: string | null
+    treatment_rate: number
+    min_runtime_days: number
+    alpha: number
+    power: number
+    mde: number
+  }
+  channels: SetupContextChannel[]
+  kpis: SetupContextKpi[]
+  summary: {
+    journeys: number
+    converted_journeys: number
+    non_converted_journeys: number
+    observed_channels: number
+  }
+  warnings: string[]
+}
+
+function formatRate(value?: number | null): string {
+  if (value == null || !Number.isFinite(value)) return '—'
+  return `${(value * 100).toFixed(1)}%`
+}
+
 function buildJourneyLabHref(summary?: ExperimentSummary | null): string | null {
   if (!summary || summary.source_type !== 'journey_hypothesis' || !summary.source_id || !summary.source_journey_definition_id) {
     return null
@@ -128,6 +179,7 @@ function buildJourneyLabHref(summary?: ExperimentSummary | null): string | null 
 }
 
 export default function IncrementalityPage() {
+  const { globalDateFrom, globalDateTo, journeysSummary } = useWorkspaceContext()
   const [selectedId, setSelectedId] = useState<number | null>(() => {
     if (typeof window === 'undefined') return null
     const params = new URLSearchParams(window.location.search)
@@ -160,6 +212,19 @@ export default function IncrementalityPage() {
     alpha: 0.05,
     power: 0.8,
     treatment_rate: 0.5,
+  })
+
+  const setupContextQuery = useQuery<SetupContext>({
+    queryKey: ['experiment-setup-context', globalDateFrom, globalDateTo],
+    queryFn: async () => {
+      const params = new URLSearchParams()
+      if (globalDateFrom) params.set('date_from', globalDateFrom)
+      if (globalDateTo) params.set('date_to', globalDateTo)
+      const suffix = params.toString() ? `?${params.toString()}` : ''
+      return apiGetJson<SetupContext>(`/api/experiments/setup-context${suffix}`, {
+        fallbackMessage: 'Failed to load experiment setup context',
+      })
+    },
   })
 
   const experimentsQuery = useQuery<ExperimentSummary[]>({
@@ -219,6 +284,8 @@ export default function IncrementalityPage() {
       if (!form.name || !form.channel || !form.start_at || !form.end_at || !form.conversion_key) {
         throw new Error('Name, channel, primary metric, start and end are required')
       }
+      const selectedChannel = setupContextQuery.data?.channels.find((item) => item.channel === form.channel) ?? null
+      const selectedKpi = setupContextQuery.data?.kpis.find((item) => item.id === form.conversion_key) ?? null
       const plannedBits: string[] = []
       plannedBits.push(`Type: holdout (unit: profile_id, assignment: random hash)`)
       plannedBits.push(
@@ -246,6 +313,30 @@ export default function IncrementalityPage() {
         conversion_key: form.conversion_key,
         start_at: new Date(form.start_at).toISOString(),
         end_at: new Date(form.end_at).toISOString(),
+        policy: {
+          setup_source: 'planner_setup_context',
+          assignment_unit: 'profile_id',
+          assignment_method: 'deterministic_hash',
+          treatment_rate: form.treatment_rate,
+          baseline_rate_estimate: selectedChannel?.baseline_conversion_rate ?? null,
+          kpi_label: selectedKpi?.label ?? form.conversion_key,
+        },
+        guardrails: {
+          min_runtime_days: form.min_runtime_days ? Number(form.min_runtime_days) : null,
+          exclusion_window_days: form.exclusion_window_days ? Number(form.exclusion_window_days) : null,
+          stop_rule: form.stop_rule || null,
+          planner_window: {
+            date_from: globalDateFrom || setupContextQuery.data?.date_from || null,
+            date_to: globalDateTo || setupContextQuery.data?.date_to || null,
+          },
+          power_plan: {
+            baseline_rate: powerForm.baseline_rate,
+            mde: powerForm.mde,
+            alpha: powerForm.alpha,
+            power: powerForm.power,
+            treatment_rate: powerForm.treatment_rate,
+          },
+        },
         notes: combinedNotes || null,
       }
       return apiSendJson<ExperimentSummary>('/api/experiments', 'POST', body, {
@@ -346,6 +437,79 @@ export default function IncrementalityPage() {
       window.history.replaceState({}, '', next)
     }
   }, [selectedId])
+
+  const setupContext = setupContextQuery.data
+  const setupChannels = setupContext?.channels ?? []
+  const eligibleChannels = useMemo(() => setupChannels.filter((item) => item.eligible), [setupChannels])
+  const selectedSetupChannel = useMemo(
+    () => setupChannels.find((item) => item.channel === form.channel) ?? eligibleChannels[0] ?? null,
+    [setupChannels, eligibleChannels, form.channel],
+  )
+
+  useEffect(() => {
+    if (!setupContext) return
+    setForm((prev) => {
+      const nextChannel = prev.channel || setupContext.defaults.channel || eligibleChannels[0]?.channel || ''
+      const nextConversionKey =
+        prev.conversion_key ||
+        setupContext.defaults.conversion_key ||
+        setupContext.kpis.find((item) => item.is_primary)?.id ||
+        setupContext.kpis[0]?.id ||
+        ''
+      const nextStart = prev.start_at || globalDateFrom || setupContext.date_from || ''
+      const nextEnd = prev.end_at || globalDateTo || setupContext.date_to || ''
+      const nextTreatmentRate = prev.treatment_rate || setupContext.defaults.treatment_rate
+      const nextRuntime =
+        prev.min_runtime_days || String(setupContext.defaults.min_runtime_days || 14)
+      if (
+        nextChannel === prev.channel &&
+        nextConversionKey === prev.conversion_key &&
+        nextStart === prev.start_at &&
+        nextEnd === prev.end_at &&
+        nextTreatmentRate === prev.treatment_rate &&
+        nextRuntime === prev.min_runtime_days
+      ) {
+        return prev
+      }
+      return {
+        ...prev,
+        channel: nextChannel,
+        conversion_key: nextConversionKey,
+        start_at: nextStart,
+        end_at: nextEnd,
+        treatment_rate: nextTreatmentRate,
+        min_runtime_days: nextRuntime,
+      }
+    })
+  }, [setupContext, eligibleChannels, globalDateFrom, globalDateTo])
+
+  useEffect(() => {
+    if (!setupContext) return
+    setPowerForm((prev) => {
+      const nextBaseline = selectedSetupChannel?.baseline_conversion_rate ?? prev.baseline_rate
+      const nextTreatmentRate = form.treatment_rate || setupContext.defaults.treatment_rate
+      const nextMde = setupContext.defaults.mde || prev.mde
+      const nextAlpha = setupContext.defaults.alpha || prev.alpha
+      const nextPower = setupContext.defaults.power || prev.power
+      if (
+        nextBaseline === prev.baseline_rate &&
+        nextTreatmentRate === prev.treatment_rate &&
+        nextMde === prev.mde &&
+        nextAlpha === prev.alpha &&
+        nextPower === prev.power
+      ) {
+        return prev
+      }
+      return {
+        ...prev,
+        baseline_rate: nextBaseline,
+        treatment_rate: nextTreatmentRate,
+        mde: nextMde,
+        alpha: nextAlpha,
+        power: nextPower,
+      }
+    })
+  }, [setupContext, selectedSetupChannel, form.treatment_rate])
 
   return (
     <div style={{ maxWidth: 1200, margin: '0 auto' }}>
@@ -760,21 +924,24 @@ export default function IncrementalityPage() {
                     backgroundColor: 'white',
                   }}
                 >
-                  <option value="">Select owned channel</option>
-                  {OWNED_CHANNELS.map((ch) => (
-                    <option key={ch} value={ch}>
-                      {ch}
+                  <option value="">Select observed channel</option>
+                  {eligibleChannels.map((ch) => (
+                    <option key={ch.channel} value={ch.channel}>
+                      {ch.label}
                     </option>
                   ))}
                 </select>
+                <span style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>
+                  {setupContextQuery.isLoading
+                    ? 'Loading channel options from observed journeys…'
+                    : `${eligibleChannels.length} channels available from real journey data in the selected window.`}
+                </span>
               </label>
               <label style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
-                Primary metric (conversion key)
-                <input
-                  type="text"
+                Primary metric
+                <select
                   value={form.conversion_key}
                   onChange={(e) => setForm((f) => ({ ...f, conversion_key: e.target.value }))}
-                  placeholder="e.g. purchase, lead"
                   style={{
                     width: '100%',
                     marginTop: 4,
@@ -782,9 +949,72 @@ export default function IncrementalityPage() {
                     border: `1px solid ${tkn.color.border}`,
                     borderRadius: tkn.radius.sm,
                     fontSize: tkn.font.sizeSm,
+                    backgroundColor: 'white',
                   }}
-                />
+                >
+                  <option value="">Select KPI</option>
+                  {(setupContext?.kpis ?? []).map((kpi) => (
+                    <option key={kpi.id} value={kpi.id}>
+                      {kpi.label}
+                      {kpi.is_primary ? ' (Primary)' : ''}
+                    </option>
+                  ))}
+                </select>
+                <span style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>
+                  Source: Settings KPI definitions
+                  {journeysSummary?.primary_kpi_label ? ` · workspace primary KPI: ${journeysSummary.primary_kpi_label}` : ''}
+                </span>
               </label>
+              {selectedSetupChannel && (
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+                    gap: tkn.space.sm,
+                    padding: tkn.space.sm,
+                    border: `1px solid ${tkn.color.borderLight}`,
+                    borderRadius: tkn.radius.sm,
+                    background: tkn.color.surfaceMuted ?? tkn.color.surface,
+                  }}
+                >
+                  <div>
+                    <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>Observed journeys</div>
+                    <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>{selectedSetupChannel.journeys}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>Observed profiles</div>
+                    <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>{selectedSetupChannel.observed_profiles}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>Baseline conversion</div>
+                    <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>{formatRate(selectedSetupChannel.baseline_conversion_rate)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>Observed mix</div>
+                    <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>
+                      {selectedSetupChannel.converted_journeys} converted / {selectedSetupChannel.non_converted_journeys} non-converted
+                    </div>
+                  </div>
+                  {!!selectedSetupChannel.notes.length && (
+                    <div style={{ gridColumn: '1 / -1', fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                      {selectedSetupChannel.notes.join(' ')}
+                    </div>
+                  )}
+                </div>
+              )}
+              {!!setupContext?.warnings?.length && (
+                <div
+                  style={{
+                    fontSize: tkn.font.sizeXs,
+                    color: tkn.color.textSecondary,
+                    background: tkn.color.surfaceMuted ?? tkn.color.surface,
+                    borderRadius: tkn.radius.sm,
+                    padding: tkn.space.sm,
+                  }}
+                >
+                  {setupContext.warnings.join(' ')}
+                </div>
+              )}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tkn.space.sm }}>
                 <label style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
                   Start
