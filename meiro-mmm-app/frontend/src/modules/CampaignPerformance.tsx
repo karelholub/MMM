@@ -24,6 +24,16 @@ interface SuggestedNext {
   conversion_rate: number
   count: number
   avg_value: number
+  is_promoted_policy?: boolean
+  promoted_policy_title?: string | null
+  promoted_policy_hypothesis_id?: string | null
+}
+
+interface CampaignSuggestionResponse {
+  items: Record<string, SuggestedNext>
+  level: string
+  eligible_journeys: number
+  reason?: string
 }
 
 interface CampaignData {
@@ -370,9 +380,28 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
     refetchInterval: false,
   })
 
+  const suggestionsQuery = useQuery<CampaignSuggestionResponse>({
+    queryKey: ['campaign-suggestions-v1', trendDateRange.dateFrom, trendDateRange.dateTo, conversionKey || 'all', configId ?? 'default'],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        date_from: trendDateRange.dateFrom,
+        date_to: trendDateRange.dateTo,
+        timezone: 'UTC',
+      })
+      if (conversionKey) params.set('conversion_key', conversionKey)
+      if (configId) params.set('model_id', configId)
+      return apiGetJson<CampaignSuggestionResponse>(`/api/performance/campaign/suggestions?${params.toString()}`, {
+        fallbackMessage: 'Failed to fetch campaign suggestions',
+      })
+    },
+    enabled: !!trendDateRange.dateFrom && !!trendDateRange.dateTo,
+    refetchInterval: false,
+  })
+
   const campaigns = useMemo(() => {
     const items = summaryQuery.data?.items ?? []
     if (!items.length) return []
+    const suggestionMap = suggestionsQuery.data?.items ?? {}
     const totalRevenue = items.reduce((sum, item) => sum + (item.current.revenue || 0), 0)
     return items.map((item) => {
       const channel = String(item.channel || 'unknown')
@@ -415,7 +444,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
         roi,
         roas,
         cpa,
-        suggested_next: null,
+        suggested_next: suggestionMap[campaignId] ?? null,
         treatment_rate: undefined,
         holdout_rate: undefined,
         uplift_abs: undefined,
@@ -426,7 +455,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
         confidence_score: item.confidence?.score,
       } as CampaignData
     })
-  }, [summaryQuery.data?.items])
+  }, [summaryQuery.data?.items, suggestionsQuery.data?.items])
   const loading = summaryQuery.isLoading
 
   const filteredCampaigns = useMemo(() => {
@@ -889,23 +918,41 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       title: METRIC_DEFINITIONS['Suggested next'],
       render: (campaign) =>
         campaign.suggested_next ? (
-          <span
-            title={`${campaign.suggested_next.count} journeys, ${(campaign.suggested_next.conversion_rate * 100).toFixed(1)}% conversion, avg $${campaign.suggested_next.avg_value}`}
-            style={{
-              display: 'inline-block',
-              padding: '2px 8px',
-              backgroundColor: t.color.accentMuted,
-              color: t.color.accent,
-              borderRadius: t.radius.sm,
-              fontSize: t.font.sizeXs,
-              fontWeight: t.font.weightSemibold,
-            }}
-          >
-            {campaign.suggested_next.campaign != null
-              ? `${campaign.suggested_next.channel} / ${campaign.suggested_next.campaign}`
-              : campaign.suggested_next.channel}{' '}
-            ({(campaign.suggested_next.conversion_rate * 100).toFixed(0)}%)
-          </span>
+          <div style={{ display: 'inline-flex', gap: t.space.xs, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span
+              title={`${campaign.suggested_next.count} journeys, ${(campaign.suggested_next.conversion_rate * 100).toFixed(1)}% conversion, avg $${campaign.suggested_next.avg_value}`}
+              style={{
+                display: 'inline-block',
+                padding: '2px 8px',
+                backgroundColor: t.color.accentMuted,
+                color: t.color.accent,
+                borderRadius: t.radius.sm,
+                fontSize: t.font.sizeXs,
+                fontWeight: t.font.weightSemibold,
+              }}
+            >
+              {campaign.suggested_next.campaign != null
+                ? `${campaign.suggested_next.channel} / ${campaign.suggested_next.campaign}`
+                : campaign.suggested_next.channel}{' '}
+              ({(campaign.suggested_next.conversion_rate * 100).toFixed(0)}%)
+            </span>
+            {campaign.suggested_next.is_promoted_policy ? (
+              <span
+                title={campaign.suggested_next.promoted_policy_title ?? 'Promoted Journey Lab policy'}
+                style={{
+                  display: 'inline-block',
+                  padding: '2px 8px',
+                  border: `1px solid ${t.color.warning}`,
+                  color: t.color.warning,
+                  borderRadius: t.radius.full,
+                  fontSize: t.font.sizeXs,
+                  fontWeight: t.font.weightSemibold,
+                }}
+              >
+                Deployed policy
+              </span>
+            ) : null}
+          </div>
         ) : (
           <span style={{ color: t.color.textMuted, fontSize: t.font.sizeXs }}>—</span>
         ),
