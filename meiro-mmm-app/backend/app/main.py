@@ -3570,6 +3570,19 @@ class ExperimentCreate(BaseModel):
     segment: Dict[str, Any] = Field(default_factory=dict)
     policy: Dict[str, Any] = Field(default_factory=dict)
     guardrails: Dict[str, Any] = Field(default_factory=dict)
+    setup_source: Optional[str] = None
+    assignment_unit: Optional[str] = None
+    assignment_method: Optional[str] = None
+    treatment_rate: Optional[float] = None
+    baseline_rate_estimate: Optional[float] = None
+    min_runtime_days: Optional[int] = None
+    exclusion_window_days: Optional[int] = None
+    stop_rule: Optional[str] = None
+    alpha: Optional[float] = None
+    power: Optional[float] = None
+    mde_target: Optional[float] = None
+    config_id: Optional[str] = None
+    config_version: Optional[int] = None
 
 
 @app.get("/api/experiments/setup-context")
@@ -3602,6 +3615,8 @@ class ExperimentSummary(BaseModel):
     source_id: Optional[str] = None
     source_name: Optional[str] = None
     source_journey_definition_id: Optional[str] = None
+    config_id: Optional[str] = None
+    config_version: Optional[int] = None
 
 
 def _resolve_experiment_source_context(db, rows: List[Experiment]) -> Dict[str, Dict[str, Optional[str]]]:
@@ -3653,6 +3668,47 @@ def list_experiments(
 
 @app.post("/api/experiments", response_model=ExperimentSummary)
 def create_experiment(body: ExperimentCreate, db=Depends(get_db)):
+    policy = dict(body.policy or {})
+    guardrails = dict(body.guardrails or {})
+    if body.setup_source and "setup_source" not in policy:
+        policy["setup_source"] = body.setup_source
+    if body.assignment_unit and "assignment_unit" not in policy:
+        policy["assignment_unit"] = body.assignment_unit
+    if body.assignment_method and "assignment_method" not in policy:
+        policy["assignment_method"] = body.assignment_method
+    if body.treatment_rate is not None and "treatment_rate" not in policy:
+        policy["treatment_rate"] = body.treatment_rate
+    if body.baseline_rate_estimate is not None and "baseline_rate_estimate" not in policy:
+        policy["baseline_rate_estimate"] = body.baseline_rate_estimate
+
+    if body.min_runtime_days is not None and "min_runtime_days" not in guardrails:
+        guardrails["min_runtime_days"] = body.min_runtime_days
+    if body.exclusion_window_days is not None and "exclusion_window_days" not in guardrails:
+        guardrails["exclusion_window_days"] = body.exclusion_window_days
+    if body.stop_rule and "stop_rule" not in guardrails:
+        guardrails["stop_rule"] = body.stop_rule
+
+    power_plan = dict(guardrails.get("power_plan") or {})
+    if body.alpha is not None and "alpha" not in power_plan:
+        power_plan["alpha"] = body.alpha
+    if body.power is not None and "power" not in power_plan:
+        power_plan["power"] = body.power
+    if body.mde_target is not None and "mde" not in power_plan:
+        power_plan["mde"] = body.mde_target
+    if body.treatment_rate is not None and "treatment_rate" not in power_plan:
+        power_plan["treatment_rate"] = body.treatment_rate
+    if body.baseline_rate_estimate is not None and "baseline_rate" not in power_plan:
+        power_plan["baseline_rate"] = body.baseline_rate_estimate
+    if power_plan:
+        guardrails["power_plan"] = power_plan
+
+    resolved_config_id = (body.config_id or "").strip() or None
+    resolved_config_version = body.config_version
+    if resolved_config_id and resolved_config_version is None:
+        cfg = db.get(ORMModelConfig, resolved_config_id)
+        if cfg is not None:
+            resolved_config_version = int(getattr(cfg, "version", 0) or 0) or None
+
     exp = create_experiment_record(
         db,
         name=body.name,
@@ -3665,8 +3721,10 @@ def create_experiment(body: ExperimentCreate, db=Depends(get_db)):
         source_type=body.source_type,
         source_id=body.source_id,
         segment=body.segment,
-        policy=body.policy,
-        guardrails=body.guardrails,
+        policy=policy,
+        guardrails=guardrails,
+        config_id=resolved_config_id,
+        config_version=resolved_config_version,
     )
     return ExperimentSummary(**serialize_experiment_summary(exp))
 

@@ -151,3 +151,88 @@ def test_incrementality_setup_context_uses_settings_and_observed_journeys():
         main_module.KPI_CONFIG = original_kpi_config
         session.close()
         engine.dispose()
+
+
+def test_incrementality_create_persists_structured_setup_and_config_snapshot():
+    original_kpi_config = main_module.KPI_CONFIG
+    main_module.KPI_CONFIG = default_kpi_config()
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    def override_get_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides.clear()
+    app.dependency_overrides[get_db] = override_get_db
+
+    session = SessionLocal()
+    try:
+        from app.models_config_dq import ModelConfig
+
+        session.add(
+            ModelConfig(
+                id="cfg-1",
+                name="Active config",
+                status="active",
+                version=4,
+                config_json={"conversion_key": "purchase"},
+                created_by="qa",
+            )
+        )
+        session.commit()
+
+        payload = {
+            "name": "Email holdout",
+            "channel": "email",
+            "start_at": "2026-03-01T00:00:00Z",
+            "end_at": "2026-03-21T00:00:00Z",
+            "conversion_key": "purchase",
+            "notes": "Operator note",
+            "setup_source": "planner_setup_context",
+            "assignment_unit": "profile_id",
+            "assignment_method": "deterministic_hash",
+            "treatment_rate": 0.9,
+            "baseline_rate_estimate": 0.12,
+            "min_runtime_days": 14,
+            "exclusion_window_days": 30,
+            "stop_rule": "Run 14 days and until sample target is met",
+            "alpha": 0.05,
+            "power": 0.8,
+            "mde_target": 0.01,
+            "config_id": "cfg-1",
+        }
+
+        with TestClient(app) as client:
+            created = client.post("/api/experiments", json=payload)
+            assert created.status_code == 200
+            created_payload = created.json()
+            assert created_payload["config_id"] == "cfg-1"
+            assert created_payload["config_version"] == 4
+
+            detail = client.get(f"/api/experiments/{created_payload['id']}")
+            assert detail.status_code == 200
+            detail_payload = detail.json()
+
+        assert detail_payload["policy"]["setup_source"] == "planner_setup_context"
+        assert detail_payload["policy"]["treatment_rate"] == 0.9
+        assert detail_payload["guardrails"]["min_runtime_days"] == 14
+        assert detail_payload["guardrails"]["exclusion_window_days"] == 30
+        assert detail_payload["guardrails"]["power_plan"]["mde"] == 0.01
+        assert detail_payload["setup"]["assignment_unit"] == "profile_id"
+        assert detail_payload["setup"]["config_id"] == "cfg-1"
+        assert detail_payload["setup"]["config_version"] == 4
+    finally:
+        app.dependency_overrides.clear()
+        main_module.KPI_CONFIG = original_kpi_config
+        session.close()
+        engine.dispose()

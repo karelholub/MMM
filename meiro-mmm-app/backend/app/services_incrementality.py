@@ -51,6 +51,8 @@ def create_experiment_record(
     segment: Optional[Dict[str, Any]] = None,
     policy: Optional[Dict[str, Any]] = None,
     guardrails: Optional[Dict[str, Any]] = None,
+    config_id: Optional[str] = None,
+    config_version: Optional[int] = None,
 ) -> Experiment:
     exp = Experiment(
         name=name.strip(),
@@ -64,6 +66,8 @@ def create_experiment_record(
         segment_json=segment or {},
         policy_json=policy or {},
         guardrails_json=guardrails or {},
+        config_id=(config_id or "").strip() or None,
+        config_version=config_version,
         conversion_key=(conversion_key or "").strip() or None,
         notes=notes,
         created_at=datetime.utcnow(),
@@ -72,6 +76,37 @@ def create_experiment_record(
     db.commit()
     db.refresh(exp)
     return exp
+
+
+def serialize_experiment_setup(exp: Experiment) -> Dict[str, Any]:
+    policy = dict(exp.policy_json or {})
+    guardrails = dict(exp.guardrails_json or {})
+    power_plan = dict(guardrails.get("power_plan") or {})
+    planner_window = dict(guardrails.get("planner_window") or {})
+    return {
+        "setup_source": policy.get("setup_source"),
+        "assignment_unit": policy.get("assignment_unit"),
+        "assignment_method": policy.get("assignment_method"),
+        "treatment_rate": policy.get("treatment_rate"),
+        "baseline_rate_estimate": policy.get("baseline_rate_estimate"),
+        "kpi_label": policy.get("kpi_label"),
+        "min_runtime_days": guardrails.get("min_runtime_days"),
+        "exclusion_window_days": guardrails.get("exclusion_window_days"),
+        "stop_rule": guardrails.get("stop_rule"),
+        "planner_window": {
+            "date_from": planner_window.get("date_from"),
+            "date_to": planner_window.get("date_to"),
+        },
+        "power_plan": {
+            "baseline_rate": power_plan.get("baseline_rate"),
+            "mde": power_plan.get("mde"),
+            "alpha": power_plan.get("alpha"),
+            "power": power_plan.get("power"),
+            "treatment_rate": power_plan.get("treatment_rate"),
+        },
+        "config_id": exp.config_id,
+        "config_version": exp.config_version,
+    }
 
 
 def serialize_experiment_summary(
@@ -93,6 +128,8 @@ def serialize_experiment_summary(
         "source_id": exp.source_id,
         "source_name": source_name,
         "source_journey_definition_id": source_journey_definition_id,
+        "config_id": exp.config_id,
+        "config_version": exp.config_version,
     }
 
 
@@ -112,6 +149,7 @@ def serialize_experiment_detail(
         "segment": dict(exp.segment_json or {}),
         "policy": dict(exp.policy_json or {}),
         "guardrails": dict(exp.guardrails_json or {}),
+        "setup": serialize_experiment_setup(exp),
     }
 
 
