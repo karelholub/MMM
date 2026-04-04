@@ -162,6 +162,84 @@ def test_analysis_applies_nba_thresholds_and_promoted_policy_overrides():
         db.close()
 
 
+def test_analysis_prefers_definition_with_rows_in_requested_window():
+    db = _unit_db_session()
+    try:
+        newer = JourneyDefinition(
+            id="jd-newer-empty-window",
+            name="Newer Journey",
+            conversion_kpi_id="purchase",
+            lookback_window_days=30,
+            mode_default="conversion_only",
+            created_by="test",
+            updated_by="test",
+            is_archived=False,
+            created_at=datetime(2026, 2, 10, tzinfo=timezone.utc),
+            updated_at=datetime(2026, 2, 10, tzinfo=timezone.utc),
+        )
+        older = JourneyDefinition(
+            id="jd-older-has-window-data",
+            name="Older Journey",
+            conversion_kpi_id="purchase",
+            lookback_window_days=30,
+            mode_default="conversion_only",
+            created_by="test",
+            updated_by="test",
+            is_archived=False,
+            created_at=datetime(2026, 2, 1, tzinfo=timezone.utc),
+            updated_at=datetime(2026, 2, 1, tzinfo=timezone.utc),
+        )
+        db.add_all([newer, older])
+        db.add(
+            JourneyPathDaily(
+                date=date(2026, 1, 1),
+                journey_definition_id="jd-newer-empty-window",
+                path_hash="newer-old",
+                path_steps=["Test", "Purchase / Lead Won (conversion)"],
+                path_length=2,
+                count_journeys=5,
+                count_conversions=5,
+                gross_conversions_total=5.0,
+                net_conversions_total=5.0,
+                gross_revenue_total=500.0,
+                net_revenue_total=500.0,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+        db.add(
+            JourneyPathDaily(
+                date=date(2026, 2, 1),
+                journey_definition_id="jd-older-has-window-data",
+                path_hash="older-window",
+                path_steps=["Paid Landing", "Purchase / Lead Won (conversion)"],
+                path_length=2,
+                count_journeys=9,
+                count_conversions=9,
+                gross_conversions_total=9.0,
+                net_conversions_total=9.0,
+                gross_revenue_total=900.0,
+                net_revenue_total=900.0,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+        db.commit()
+
+        out = build_conversion_paths_analysis_from_daily(
+            db,
+            date_from=date(2026, 2, 1),
+            date_to=date(2026, 2, 2),
+            direct_mode="include",
+            path_scope="converted",
+        )
+
+        assert out["total_journeys"] == 9
+        assert out["journey_definition_id"] == "jd-older-has-window-data"
+    finally:
+        db.close()
+
+
 def test_details_returns_selected_path_summary():
     db = _unit_db_session()
     try:

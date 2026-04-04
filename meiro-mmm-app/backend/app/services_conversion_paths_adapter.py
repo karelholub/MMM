@@ -56,6 +56,19 @@ def _resolve_definition(db: Session, definition_id: Optional[str]) -> Optional[J
         if row and not row.is_archived:
             return row
         return None
+    return None
+
+
+def _select_definition_for_window(
+    db: Session,
+    *,
+    definition_id: Optional[str],
+    date_from: Optional[date],
+    date_to: Optional[date],
+) -> Optional[JourneyDefinition]:
+    explicit = _resolve_definition(db, definition_id)
+    if explicit:
+        return explicit
     candidates = (
         db.query(JourneyDefinition)
         .filter(JourneyDefinition.is_archived == False)  # noqa: E712
@@ -63,6 +76,36 @@ def _resolve_definition(db: Session, definition_id: Optional[str]) -> Optional[J
         .all()
     )
     fallback: Optional[JourneyDefinition] = candidates[0] if candidates else None
+    if not candidates:
+        return None
+
+    if date_from and date_to:
+        for row in candidates:
+            has_daily = (
+                db.query(func.count(JourneyPathDaily.id))
+                .filter(
+                    JourneyPathDaily.journey_definition_id == row.id,
+                    JourneyPathDaily.date >= date_from,
+                    JourneyPathDaily.date <= date_to,
+                )
+                .scalar()
+                or 0
+            )
+            if has_daily > 0:
+                return row
+            has_facts = (
+                db.query(func.count(JourneyDefinitionInstanceFact.id))
+                .filter(
+                    JourneyDefinitionInstanceFact.journey_definition_id == row.id,
+                    JourneyDefinitionInstanceFact.date >= date_from,
+                    JourneyDefinitionInstanceFact.date <= date_to,
+                )
+                .scalar()
+                or 0
+            )
+            if has_facts > 0:
+                return row
+
     for row in candidates:
         has_daily = (
             db.query(func.count(JourneyPathDaily.id))
@@ -152,7 +195,12 @@ def build_conversion_paths_analysis_from_daily(
     nba_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     nba_settings = NBASettings(**(nba_config or {}))
-    definition = _resolve_definition(db, definition_id)
+    definition = _select_definition_for_window(
+        db,
+        definition_id=definition_id,
+        date_from=date_from,
+        date_to=date_to,
+    )
     if not definition:
         return {
             "total_journeys": 0,
