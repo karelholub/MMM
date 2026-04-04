@@ -334,6 +334,17 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       roas?: number | null
       cpa?: number | null
     }
+    decisionContext?: {
+      source: 'performance_recommendation' | 'deployed_journey_policy'
+      scope_label?: string | null
+      recommended_channel?: string | null
+      recommended_campaign?: string | null
+      conversion_rate?: number | null
+      journey_count?: number | null
+      avg_value?: number | null
+      policy_title?: string | null
+      hypothesis_id?: string | null
+    } | null
   } | null>(null)
 
   const trendDateRange = useMemo(() => {
@@ -615,6 +626,19 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
         roas: campaign.roas,
         cpa: campaign.cpa,
       },
+      decisionContext: campaign.suggested_next
+        ? {
+            source: campaign.suggested_next.is_promoted_policy ? 'deployed_journey_policy' : 'performance_recommendation',
+            scope_label: campaign.campaign_name ? `${campaign.channel} / ${campaign.campaign_name}` : campaign.campaign,
+            recommended_channel: campaign.suggested_next.channel,
+            recommended_campaign: campaign.suggested_next.campaign ?? null,
+            conversion_rate: campaign.suggested_next.conversion_rate,
+            journey_count: campaign.suggested_next.count,
+            avg_value: campaign.suggested_next.avg_value,
+            policy_title: campaign.suggested_next.promoted_policy_title ?? null,
+            hypothesis_id: campaign.suggested_next.promoted_policy_hypothesis_id ?? null,
+          }
+        : null,
     })
   }, [])
 
@@ -1981,6 +2005,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
           entityId={adsDrawerContext.entityId}
           entityName={adsDrawerContext.entityName}
           previewMetrics={adsDrawerContext.previewMetrics}
+          decisionContext={adsDrawerContext.decisionContext}
         />
       )}
     </div>

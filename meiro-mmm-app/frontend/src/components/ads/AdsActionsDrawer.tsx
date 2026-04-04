@@ -26,6 +26,17 @@ export interface AdsActionsDrawerProps {
     roas?: number | null
     cpa?: number | null
   } | null
+  decisionContext?: {
+    source: 'performance_recommendation' | 'deployed_journey_policy'
+    scope_label?: string | null
+    recommended_channel?: string | null
+    recommended_campaign?: string | null
+    conversion_rate?: number | null
+    journey_count?: number | null
+    avg_value?: number | null
+    policy_title?: string | null
+    hypothesis_id?: string | null
+  } | null
 }
 
 function formatMoney(v: number | null | undefined): string {
@@ -47,6 +58,7 @@ export default function AdsActionsDrawer({
   entityId,
   entityName,
   previewMetrics,
+  decisionContext,
 }: AdsActionsDrawerProps) {
   const queryClient = useQueryClient()
   const [actionType, setActionType] = useState<AdsActionType>('pause')
@@ -62,9 +74,12 @@ export default function AdsActionsDrawer({
 
   const createMutation = useMutation({
     mutationFn: () => {
-      const payload = actionType === 'update_budget'
+      const payload: Record<string, unknown> = actionType === 'update_budget'
         ? { daily_budget: Number(budgetInput || 0), currency: 'USD' }
         : {}
+      if (decisionContext) {
+        payload.decision_context = decisionContext
+      }
       return createAdsChangeRequest({
         provider,
         accountId,
@@ -103,6 +118,10 @@ export default function AdsActionsDrawer({
 
   const state = stateQuery.data
   const isBusy = createMutation.isPending || approveMutation.isPending || applyMutation.isPending
+  const requestDecisionContext = (latestRequest?.action_payload?.decision_context as AdsActionsDrawerProps['decisionContext']) || decisionContext
+  const recommendedTargetLabel = requestDecisionContext?.recommended_campaign
+    ? `${requestDecisionContext.recommended_channel || 'Unknown'} / ${requestDecisionContext.recommended_campaign}`
+    : requestDecisionContext?.recommended_channel || null
 
   return (
     <>
@@ -176,6 +195,53 @@ export default function AdsActionsDrawer({
               </div>
             )}
           </section>
+
+          {requestDecisionContext && (
+            <section style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.surface }}>
+              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, marginBottom: t.space.sm }}>
+                Decision context
+              </div>
+              <div style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                <div>
+                  Source:{' '}
+                  <strong style={{ color: t.color.text }}>
+                    {requestDecisionContext.source === 'deployed_journey_policy' ? 'Deployed Journey Lab policy' : 'Performance recommendation'}
+                  </strong>
+                </div>
+                {requestDecisionContext.policy_title ? (
+                  <div>
+                    Policy: <strong style={{ color: t.color.text }}>{requestDecisionContext.policy_title}</strong>
+                  </div>
+                ) : null}
+                {requestDecisionContext.scope_label ? (
+                  <div>
+                    Current entity context: <strong style={{ color: t.color.text }}>{requestDecisionContext.scope_label}</strong>
+                  </div>
+                ) : null}
+                {recommendedTargetLabel ? (
+                  <div>
+                    Suggested next step: <strong style={{ color: t.color.text }}>{recommendedTargetLabel}</strong>
+                  </div>
+                ) : null}
+                <div style={{ display: 'flex', gap: t.space.md, flexWrap: 'wrap' }}>
+                  {requestDecisionContext.journey_count != null ? (
+                    <span>Journeys: <strong style={{ color: t.color.text }}>{formatNumber(requestDecisionContext.journey_count)}</strong></span>
+                  ) : null}
+                  {requestDecisionContext.conversion_rate != null ? (
+                    <span>CVR: <strong style={{ color: t.color.text }}>{(requestDecisionContext.conversion_rate * 100).toFixed(1)}%</strong></span>
+                  ) : null}
+                  {requestDecisionContext.avg_value != null ? (
+                    <span>Avg value: <strong style={{ color: t.color.text }}>{formatMoney(requestDecisionContext.avg_value)}</strong></span>
+                  ) : null}
+                </div>
+                {requestDecisionContext.hypothesis_id ? (
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                    Hypothesis: {requestDecisionContext.hypothesis_id}
+                  </div>
+                ) : null}
+              </div>
+            </section>
+          )}
 
           <section style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.surface }}>
             <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, marginBottom: t.space.sm }}>Propose change</div>
