@@ -4159,6 +4159,8 @@ class ExperimentHealth(BaseModel):
     balance: Dict[str, Any]
     data_completeness: Dict[str, Dict[str, str]]
     overlap_risk: Dict[str, Any]
+    plan: Dict[str, Any]
+    runtime: Dict[str, Any]
     ready_state: Dict[str, Any]
 
 
@@ -4169,10 +4171,11 @@ def get_experiment_health(exp_id: int, db=Depends(get_db)):
 
     Designed as a trust layer for the Incrementality dashboard:
     - sample sizes and conversions by group
-    - basic balance check vs an assumed 50/50 split (or close)
+    - basic balance check vs the stored planned split
     - data completeness for assignments, outcomes, and exposures
     - minimal contamination / overlap heuristic
     - coarse readiness classification (not_ready / early / ready)
+    - plan-vs-actual sample and runtime progress
     """
     exp = db.get(Experiment, exp_id)
     if not exp:

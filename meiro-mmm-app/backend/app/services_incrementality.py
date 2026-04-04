@@ -1257,6 +1257,52 @@ def compute_experiment_health(
             overlapping_profiles = len(overlaps)
     overlap_status = "ok" if overlapping_profiles == 0 else "warn"
 
+    guardrails = dict(exp.guardrails_json or {})
+    power_plan = dict(guardrails.get("power_plan") or {})
+    planned_total_target: Optional[int] = None
+    planned_treatment_target: Optional[int] = None
+    planned_control_target: Optional[int] = None
+    if power_plan:
+        try:
+            planned_total_target = estimate_sample_size(
+                baseline_rate=float(power_plan.get("baseline_rate") or 0.0),
+                mde=float(power_plan.get("mde") or 0.0),
+                alpha=float(power_plan.get("alpha") or 0.05),
+                power=float(power_plan.get("power") or 0.8),
+                treatment_rate=expected_share,
+            )
+        except Exception:
+            planned_total_target = None
+    if planned_total_target:
+        planned_treatment_target = int(planned_total_target * expected_share)
+        planned_control_target = planned_total_target - planned_treatment_target
+
+    now = datetime.utcnow()
+    runtime_cursor = min(now, exp.end_at)
+    elapsed_days = 0
+    if runtime_cursor > exp.start_at:
+        elapsed_days = max(1, int((runtime_cursor - exp.start_at).total_seconds() / 86400))
+    scheduled_days = 0
+    if exp.end_at > exp.start_at:
+        scheduled_days = max(1, int((exp.end_at - exp.start_at).total_seconds() / 86400))
+    planned_min_runtime_days = None
+    if guardrails.get("min_runtime_days") not in (None, "", []):
+        try:
+            planned_min_runtime_days = max(0, int(guardrails.get("min_runtime_days") or 0))
+        except Exception:
+            planned_min_runtime_days = None
+    runtime_status = "ok"
+    if exp.status == "draft":
+        runtime_status = "not_started"
+    elif planned_min_runtime_days is not None and elapsed_days < planned_min_runtime_days:
+        runtime_status = "warn"
+
+    sample_target_status = "ok"
+    if planned_treatment_target and treat_n < planned_treatment_target:
+        sample_target_status = "warn"
+    if planned_control_target and control_n < planned_control_target:
+        sample_target_status = "warn"
+
     # Readiness classification
     reasons: List[str] = []
     if total_n < min_assignments_per_group * 2:
@@ -1268,6 +1314,18 @@ def compute_experiment_health(
         reasons.append(
             f"Need at least {min_conversions_per_group} conversions per group; currently "
             f"{treat_conv} treatment / {control_conv} control."
+        )
+    if planned_treatment_target is not None and treat_n < planned_treatment_target:
+        reasons.append(
+            f"Planned treatment sample target is {planned_treatment_target}; currently {treat_n} assigned."
+        )
+    if planned_control_target is not None and control_n < planned_control_target:
+        reasons.append(
+            f"Planned control sample target is {planned_control_target}; currently {control_n} assigned."
+        )
+    if planned_min_runtime_days is not None and elapsed_days < planned_min_runtime_days:
+        reasons.append(
+            f"Planned minimum runtime is {planned_min_runtime_days} days; currently {elapsed_days} days elapsed."
         )
 
     if not reasons:
@@ -1291,6 +1349,29 @@ def compute_experiment_health(
         "overlap_risk": {
             "status": overlap_status,
             "overlapping_profiles": overlapping_profiles,
+        },
+        "plan": {
+            "treatment_rate": expected_share,
+            "sample_target_total": planned_total_target,
+            "sample_target_treatment": planned_treatment_target,
+            "sample_target_control": planned_control_target,
+            "sample_target_status": sample_target_status,
+            "progress_treatment": (
+                min(1.0, treat_n / float(planned_treatment_target))
+                if planned_treatment_target and planned_treatment_target > 0
+                else None
+            ),
+            "progress_control": (
+                min(1.0, control_n / float(planned_control_target))
+                if planned_control_target and planned_control_target > 0
+                else None
+            ),
+        },
+        "runtime": {
+            "status": runtime_status,
+            "elapsed_days": elapsed_days,
+            "planned_min_days": planned_min_runtime_days,
+            "scheduled_days": scheduled_days,
         },
         "ready_state": {"label": ready_label, "reasons": reasons},
     }

@@ -315,3 +315,84 @@ def test_incrementality_recommend_design_returns_guided_plan():
         main_module.KPI_CONFIG = original_kpi_config
         session.close()
         engine.dispose()
+
+
+def test_incrementality_health_uses_planned_sample_and_runtime():
+    original_kpi_config = main_module.KPI_CONFIG
+    main_module.KPI_CONFIG = default_kpi_config()
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    def override_get_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides.clear()
+    app.dependency_overrides[get_db] = override_get_db
+
+    session = SessionLocal()
+    try:
+        invalidate_journey_cache()
+        with TestClient(app) as client:
+            created = client.post(
+                "/api/experiments",
+                json={
+                    "name": "Email health plan",
+                    "channel": "email",
+                    "start_at": "2026-03-01T00:00:00Z",
+                    "end_at": "2026-04-30T00:00:00Z",
+                    "conversion_key": "purchase",
+                    "treatment_rate": 0.8,
+                    "baseline_rate_estimate": 0.15,
+                    "min_runtime_days": 30,
+                    "alpha": 0.05,
+                    "power": 0.8,
+                    "mde_target": 0.15,
+                },
+            )
+            assert created.status_code == 200
+            exp_id = created.json()["id"]
+
+            assigned = client.post(
+                f"/api/experiments/{exp_id}/assign",
+                json={"profile_ids": [f"p-{idx}" for idx in range(1, 11)], "treatment_rate": 0.8},
+            )
+            assert assigned.status_code == 200
+
+            outcomes = client.post(
+                f"/api/experiments/{exp_id}/outcomes",
+                json={
+                    "outcomes": [
+                        {"profile_id": "p-1", "conversion_ts": "2026-03-10T12:00:00Z", "value": 100.0},
+                        {"profile_id": "p-2", "conversion_ts": "2026-03-10T12:05:00Z", "value": 100.0},
+                    ]
+                },
+            )
+            assert outcomes.status_code == 200
+
+            health = client.get(f"/api/experiments/{exp_id}/health")
+            assert health.status_code == 200
+            payload = health.json()
+
+        assert payload["plan"]["treatment_rate"] == 0.8
+        assert payload["plan"]["sample_target_total"] is not None
+        assert payload["plan"]["sample_target_treatment"] is not None
+        assert payload["plan"]["sample_target_control"] is not None
+        assert payload["plan"]["sample_target_status"] == "warn"
+        assert payload["runtime"]["planned_min_days"] == 30
+        assert payload["ready_state"]["label"] in {"not_ready", "early"}
+        assert any("Planned treatment sample target" in reason for reason in payload["ready_state"]["reasons"])
+    finally:
+        app.dependency_overrides.clear()
+        main_module.KPI_CONFIG = original_kpi_config
+        session.close()
+        engine.dispose()
