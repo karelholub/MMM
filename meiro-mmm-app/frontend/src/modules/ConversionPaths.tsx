@@ -8,6 +8,7 @@ import ExplainabilityPanel from '../components/ExplainabilityPanel'
 import ConfidenceBadge, { type Confidence } from '../components/ConfidenceBadge'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { apiGetJson } from '../lib/apiClient'
+import { buildJourneyHypothesisHref } from '../lib/journeyLinks'
 
 interface NextBestRec {
   channel: string
@@ -20,6 +21,7 @@ interface NextBestRec {
   is_promoted_policy?: boolean
   promoted_policy_title?: string | null
   promoted_policy_hypothesis_id?: string | null
+  promoted_policy_journey_definition_id?: string | null
 }
 
 interface PathAnalysis {
@@ -554,20 +556,36 @@ export default function ConversionPaths() {
               {top.channel} ({(top.conversion_rate * 100).toFixed(0)}%)
             </span>
             {top.is_promoted_policy ? (
-              <span
-                title={top.promoted_policy_title ?? 'Promoted Journey Lab policy'}
-                style={{
-                  display: 'inline-block',
-                  padding: '2px 8px',
-                  border: `1px solid ${t.color.warning}`,
-                  color: t.color.warning,
-                  borderRadius: t.radius.full,
-                  fontSize: t.font.sizeXs,
-                  fontWeight: t.font.weightSemibold,
-                }}
-              >
-                Policy
-              </span>
+              <>
+                <span
+                  title={top.promoted_policy_title ?? 'Promoted Journey Lab policy'}
+                  style={{
+                    display: 'inline-block',
+                    padding: '2px 8px',
+                    border: `1px solid ${t.color.warning}`,
+                    color: t.color.warning,
+                    borderRadius: t.radius.full,
+                    fontSize: t.font.sizeXs,
+                    fontWeight: t.font.weightSemibold,
+                  }}
+                >
+                  Policy
+                </span>
+                {buildJourneyHypothesisHref({
+                  journeyDefinitionId: top.promoted_policy_journey_definition_id,
+                  hypothesisId: top.promoted_policy_hypothesis_id,
+                }) ? (
+                  <a
+                    href={buildJourneyHypothesisHref({
+                      journeyDefinitionId: top.promoted_policy_journey_definition_id,
+                      hypothesisId: top.promoted_policy_hypothesis_id,
+                    }) || '#'}
+                    style={{ fontSize: t.font.sizeXs, color: t.color.accent, textDecoration: 'none' }}
+                  >
+                    Open policy
+                  </a>
+                ) : null}
+              </>
             ) : null}
           </div>
         ) : (
@@ -1140,21 +1158,37 @@ export default function ConversionPaths() {
                       {rec.campaign != null ? `${rec.channel} / ${rec.campaign}` : rec.channel}
                     </span>
                     {rec.is_promoted_policy ? (
-                      <span
-                        title={rec.promoted_policy_title ?? 'Promoted Journey Lab policy'}
-                        style={{
-                          display: 'inline-block',
-                          padding: '2px 8px',
-                          border: `1px solid ${t.color.warning}`,
-                          color: t.color.warning,
-                          borderRadius: t.radius.full,
-                          fontSize: t.font.sizeXs,
-                          fontWeight: t.font.weightSemibold,
-                          marginRight: t.space.sm,
-                        }}
-                      >
-                        Deployed policy
-                      </span>
+                      <>
+                        <span
+                          title={rec.promoted_policy_title ?? 'Promoted Journey Lab policy'}
+                          style={{
+                            display: 'inline-block',
+                            padding: '2px 8px',
+                            border: `1px solid ${t.color.warning}`,
+                            color: t.color.warning,
+                            borderRadius: t.radius.full,
+                            fontSize: t.font.sizeXs,
+                            fontWeight: t.font.weightSemibold,
+                            marginRight: t.space.sm,
+                          }}
+                        >
+                          Deployed policy
+                        </span>
+                        {buildJourneyHypothesisHref({
+                          journeyDefinitionId: rec.promoted_policy_journey_definition_id,
+                          hypothesisId: rec.promoted_policy_hypothesis_id,
+                        }) ? (
+                          <a
+                            href={buildJourneyHypothesisHref({
+                              journeyDefinitionId: rec.promoted_policy_journey_definition_id,
+                              hypothesisId: rec.promoted_policy_hypothesis_id,
+                            }) || '#'}
+                            style={{ marginRight: t.space.sm, fontSize: t.font.sizeXs, color: t.color.accent, textDecoration: 'none' }}
+                          >
+                            Open policy
+                          </a>
+                        ) : null}
+                      </>
                     ) : null}
                     <span style={{ color: t.color.textSecondary }}>
                       Confidence {(rec.conversion_rate * 100).toFixed(1)}% · support {rec.count} journeys · avg ${rec.avg_value}

@@ -18,6 +18,7 @@ import {
 } from 'recharts'
 import { tokens } from '../theme/tokens'
 import { apiGetJson, withQuery } from '../lib/apiClient'
+import { buildJourneyHypothesisHref } from '../lib/journeyLinks'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn, SectionCard } from '../components/dashboard'
@@ -38,6 +39,7 @@ interface SuggestedNext {
   is_promoted_policy?: boolean
   promoted_policy_title?: string | null
   promoted_policy_hypothesis_id?: string | null
+  promoted_policy_journey_definition_id?: string | null
 }
 
 interface ChannelData {
@@ -800,20 +802,36 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
               ({(channel.suggested_next.conversion_rate * 100).toFixed(0)}%)
             </span>
             {channel.suggested_next.is_promoted_policy ? (
-              <span
-                title={channel.suggested_next.promoted_policy_title ?? 'Promoted Journey Lab policy'}
-                style={{
-                  display: 'inline-block',
-                  padding: '2px 8px',
-                  border: `1px solid ${t.color.warning}`,
-                  color: t.color.warning,
-                  borderRadius: t.radius.full,
-                  fontSize: t.font.sizeXs,
-                  fontWeight: t.font.weightSemibold,
-                }}
-              >
-                Deployed policy
-              </span>
+              <>
+                <span
+                  title={channel.suggested_next.promoted_policy_title ?? 'Promoted Journey Lab policy'}
+                  style={{
+                    display: 'inline-block',
+                    padding: '2px 8px',
+                    border: `1px solid ${t.color.warning}`,
+                    color: t.color.warning,
+                    borderRadius: t.radius.full,
+                    fontSize: t.font.sizeXs,
+                    fontWeight: t.font.weightSemibold,
+                  }}
+                >
+                  Deployed policy
+                </span>
+                {buildJourneyHypothesisHref({
+                  journeyDefinitionId: channel.suggested_next.promoted_policy_journey_definition_id,
+                  hypothesisId: channel.suggested_next.promoted_policy_hypothesis_id,
+                }) ? (
+                  <a
+                    href={buildJourneyHypothesisHref({
+                      journeyDefinitionId: channel.suggested_next.promoted_policy_journey_definition_id,
+                      hypothesisId: channel.suggested_next.promoted_policy_hypothesis_id,
+                    }) || '#'}
+                    style={{ fontSize: t.font.sizeXs, color: t.color.accent, textDecoration: 'none' }}
+                  >
+                    Open policy
+                  </a>
+                ) : null}
+              </>
             ) : null}
           </div>
         ) : (

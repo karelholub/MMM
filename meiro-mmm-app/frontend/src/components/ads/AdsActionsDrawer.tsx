@@ -10,6 +10,7 @@ import {
   createAdsChangeRequest,
   getAdsState,
 } from '../../connectors/adsManagerConnector'
+import { buildJourneyHypothesisHref } from '../../lib/journeyLinks'
 
 export interface AdsActionsDrawerProps {
   open: boolean
@@ -36,6 +37,7 @@ export interface AdsActionsDrawerProps {
     avg_value?: number | null
     policy_title?: string | null
     hypothesis_id?: string | null
+    journey_definition_id?: string | null
   } | null
 }
 
@@ -122,6 +124,10 @@ export default function AdsActionsDrawer({
   const recommendedTargetLabel = requestDecisionContext?.recommended_campaign
     ? `${requestDecisionContext.recommended_channel || 'Unknown'} / ${requestDecisionContext.recommended_campaign}`
     : requestDecisionContext?.recommended_channel || null
+  const policyHref = buildJourneyHypothesisHref({
+    journeyDefinitionId: requestDecisionContext?.journey_definition_id,
+    hypothesisId: requestDecisionContext?.hypothesis_id,
+  })
 
   return (
     <>
@@ -235,8 +241,13 @@ export default function AdsActionsDrawer({
                   ) : null}
                 </div>
                 {requestDecisionContext.hypothesis_id ? (
-                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
-                    Hypothesis: {requestDecisionContext.hypothesis_id}
+                  <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap', alignItems: 'center', fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                    <span>Hypothesis: {requestDecisionContext.hypothesis_id}</span>
+                    {policyHref ? (
+                      <a href={policyHref} style={{ color: t.color.accent, textDecoration: 'none' }}>
+                        Open in Journey Lab
+                      </a>
+                    ) : null}
                   </div>
                 ) : null}
               </div>

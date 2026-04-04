@@ -7,6 +7,7 @@ import ExplainabilityPanel from '../components/ExplainabilityPanel'
 import TrendPanel from '../components/dashboard/TrendPanel'
 import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn, SectionCard } from '../components/dashboard'
 import { apiGetJson } from '../lib/apiClient'
+import { buildJourneyHypothesisHref } from '../lib/journeyLinks'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import AdsActionsDrawer from '../components/ads/AdsActionsDrawer'
 import DecisionStatusCard from '../components/DecisionStatusCard'
@@ -27,6 +28,7 @@ interface SuggestedNext {
   is_promoted_policy?: boolean
   promoted_policy_title?: string | null
   promoted_policy_hypothesis_id?: string | null
+  promoted_policy_journey_definition_id?: string | null
 }
 
 interface CampaignSuggestionResponse {
@@ -344,6 +346,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       avg_value?: number | null
       policy_title?: string | null
       hypothesis_id?: string | null
+      journey_definition_id?: string | null
     } | null
   } | null>(null)
 
@@ -637,6 +640,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
             avg_value: campaign.suggested_next.avg_value,
             policy_title: campaign.suggested_next.promoted_policy_title ?? null,
             hypothesis_id: campaign.suggested_next.promoted_policy_hypothesis_id ?? null,
+            journey_definition_id: campaign.suggested_next.promoted_policy_journey_definition_id ?? null,
           }
         : null,
     })
@@ -961,20 +965,36 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
               ({(campaign.suggested_next.conversion_rate * 100).toFixed(0)}%)
             </span>
             {campaign.suggested_next.is_promoted_policy ? (
-              <span
-                title={campaign.suggested_next.promoted_policy_title ?? 'Promoted Journey Lab policy'}
-                style={{
-                  display: 'inline-block',
-                  padding: '2px 8px',
-                  border: `1px solid ${t.color.warning}`,
-                  color: t.color.warning,
-                  borderRadius: t.radius.full,
-                  fontSize: t.font.sizeXs,
-                  fontWeight: t.font.weightSemibold,
-                }}
-              >
-                Deployed policy
-              </span>
+              <>
+                <span
+                  title={campaign.suggested_next.promoted_policy_title ?? 'Promoted Journey Lab policy'}
+                  style={{
+                    display: 'inline-block',
+                    padding: '2px 8px',
+                    border: `1px solid ${t.color.warning}`,
+                    color: t.color.warning,
+                    borderRadius: t.radius.full,
+                    fontSize: t.font.sizeXs,
+                    fontWeight: t.font.weightSemibold,
+                  }}
+                >
+                  Deployed policy
+                </span>
+                {buildJourneyHypothesisHref({
+                  journeyDefinitionId: campaign.suggested_next.promoted_policy_journey_definition_id,
+                  hypothesisId: campaign.suggested_next.promoted_policy_hypothesis_id,
+                }) ? (
+                  <a
+                    href={buildJourneyHypothesisHref({
+                      journeyDefinitionId: campaign.suggested_next.promoted_policy_journey_definition_id,
+                      hypothesisId: campaign.suggested_next.promoted_policy_hypothesis_id,
+                    }) || '#'}
+                    style={{ fontSize: t.font.sizeXs, color: t.color.accent, textDecoration: 'none' }}
+                  >
+                    Open policy
+                  </a>
+                ) : null}
+              </>
             ) : null}
           </div>
         ) : (

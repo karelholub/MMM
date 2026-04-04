@@ -110,6 +110,7 @@ def test_campaign_suggestions_payload_keeps_promoted_policy():
     assert rec["step"] == "Email:Checkout Rescue"
     assert rec["is_promoted_policy"] is True
     assert rec["promoted_policy_hypothesis_id"] == "hyp-campaign-policy"
+    assert rec["promoted_policy_journey_definition_id"] == "jd-1"
 
 
 def test_channel_suggestions_payload_keeps_promoted_policy():
@@ -154,6 +155,7 @@ def test_channel_suggestions_payload_keeps_promoted_policy():
     assert rec["step"] == "Email"
     assert rec["is_promoted_policy"] is True
     assert rec["promoted_policy_hypothesis_id"] == "hyp-channel-policy"
+    assert rec["promoted_policy_journey_definition_id"] == "jd-1"
 
 
 def test_filter_journeys_for_campaign_suggestions_respects_period_channels_and_conversion_key():

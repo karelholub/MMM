@@ -96,6 +96,7 @@ def filter_nba_recommendations(
                     "is_promoted_policy": bool(promoted_policy),
                     "promoted_policy_title": promoted_policy.get("title") if promoted_policy else None,
                     "promoted_policy_hypothesis_id": promoted_policy.get("hypothesis_id") if promoted_policy else None,
+                    "promoted_policy_journey_definition_id": promoted_policy.get("journey_definition_id") if promoted_policy else None,
                 }
             )
 

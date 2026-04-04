@@ -51,5 +51,6 @@ def test_promoted_journey_policy_is_retained_and_ranked_first():
     assert kept[0]["step"] == "Checkout"
     assert kept[0]["is_promoted_policy"] is True
     assert kept[0]["promoted_policy_hypothesis_id"] == "hyp-1"
+    assert kept[0]["promoted_policy_journey_definition_id"] == "jd-1"
     assert stats["filtered_support"] == 0
     assert stats["filtered_uplift"] == 1
