@@ -9,7 +9,7 @@ from sqlalchemy.pool import StaticPool
 from app.db import Base, get_db
 from app.main import app
 import app.main as main_module
-from app.models_config_dq import JourneyPathDaily
+from app.models_config_dq import ExperimentAssignment, ExperimentOutcome, JourneyPathDaily
 from app.utils.kpi_config import default_kpi_config
 
 
@@ -265,3 +265,68 @@ def test_journey_insights_and_hypothesis_crud_flow(client_and_session):
     assert detail["policy"]["proposed_action"]["type"] == created["proposed_action"]["type"]
     assert detail["policy"]["proposed_action"]["step"] == "Checkout"
     assert detail["guardrails"]["sample_size_target"] == created["sample_size_target"]
+
+    exp_id = experiment_payload["experiment"]["id"]
+    session = SessionLocal()
+    try:
+        assignments = [
+            ExperimentAssignment(
+                experiment_id=exp_id,
+                profile_id=f"treatment-{idx}",
+                group="treatment",
+                assigned_at=datetime.utcnow(),
+            )
+            for idx in range(40)
+        ] + [
+            ExperimentAssignment(
+                experiment_id=exp_id,
+                profile_id=f"control-{idx}",
+                group="control",
+                assigned_at=datetime.utcnow(),
+            )
+            for idx in range(40)
+        ]
+        outcomes = [
+            ExperimentOutcome(
+                experiment_id=exp_id,
+                profile_id=f"treatment-{idx}",
+                conversion_ts=datetime(2026, 4, 10, 12, 0, 0),
+                value=120.0,
+            )
+            for idx in range(20)
+        ] + [
+            ExperimentOutcome(
+                experiment_id=exp_id,
+                profile_id=f"control-{idx}",
+                conversion_ts=datetime(2026, 4, 10, 12, 0, 0),
+                value=80.0,
+            )
+            for idx in range(8)
+        ]
+        session.add_all(assignments + outcomes)
+        session.commit()
+    finally:
+        session.close()
+
+    complete_experiment = client.post(
+        f"/api/experiments/{exp_id}/status",
+        headers=viewer_headers,
+        json={"status": "completed"},
+    )
+    assert complete_experiment.status_code == 200
+    assert complete_experiment.json()["status"] == "completed"
+
+    refreshed_hypotheses = client.get(
+        "/api/journeys/hypotheses",
+        params={"journey_definition_id": definition_id},
+        headers=viewer_headers,
+    )
+    assert refreshed_hypotheses.status_code == 200
+    refreshed = refreshed_hypotheses.json()["items"][0]
+    assert refreshed["status"] == "validated"
+    assert refreshed["result"]["verdict"] == "validated"
+    assert refreshed["result"]["experiment_status"] == "completed"
+    assert refreshed["result"]["treatment"]["n"] == 40
+    assert refreshed["result"]["control"]["n"] == 40
+    assert refreshed["result"]["uplift_abs"] > 0
+    assert "Treatment beat control" in refreshed["result"]["summary"]
