@@ -109,11 +109,6 @@ function asInt(value: string, fallback: number): number {
   return Number.isFinite(n) ? Math.trunc(n) : fallback
 }
 
-function asFloat(value: string, fallback: number): number {
-  const n = Number(value)
-  return Number.isFinite(n) ? n : fallback
-}
-
 function defaultJourneysTemplate() {
   return {
     schema_version: '1.0',
@@ -187,6 +182,23 @@ function defaultJourneysTemplate() {
       max_flow_date_range_days_before_weekly: 45,
     },
   }
+}
+
+function valuesEqual(left: any, right: any): boolean {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null)
+}
+
+function summarizeStepRule(rule: Record<string, any>): string[] {
+  const parts: string[] = []
+  const channels = Array.isArray(rule.channel_group_equals) ? rule.channel_group_equals.filter(Boolean) : []
+  const events = Array.isArray(rule.event_name_equals) ? rule.event_name_equals.filter(Boolean) : []
+  const urls = Array.isArray(rule.url_contains) ? rule.url_contains.filter(Boolean) : []
+  const referrers = Array.isArray(rule.referrer_contains) ? rule.referrer_contains.filter(Boolean) : []
+  if (channels.length) parts.push(`channels: ${channels.join(', ')}`)
+  if (events.length) parts.push(`events: ${events.join(', ')}`)
+  if (urls.length) parts.push(`url contains: ${urls.join(', ')}`)
+  if (referrers.length) parts.push(`referrer: ${referrers.join(', ')}`)
+  return parts
 }
 
 export default function JourneysSettingsSection({
@@ -352,6 +364,13 @@ export default function JourneysSettingsSection({
     setDraftJson(JSON.stringify(next, null, 2))
   }
 
+  const updateDraftWith = (updater: (next: Record<string, any>) => void) => {
+    if (!draftObj) return
+    const next = deepClone(draftObj)
+    updater(next)
+    updateDraft(next)
+  }
+
   const cardStyle: CSSProperties = {
     border: `1px solid ${t.color.borderLight}`,
     borderRadius: t.radius.md,
@@ -366,6 +385,15 @@ export default function JourneysSettingsSection({
   }
 
   const scaffoldSettingsJson = contextQuery.data?.scaffold_settings_json ?? activeVersion?.settings_json ?? defaultJourneysTemplate()
+  const activeSettingsJson = activeVersion?.settings_json ?? null
+  const suggestedStepRules = contextQuery.data?.scaffold_settings_json?.step_canonicalization?.rules ?? []
+  const activeStepRules = activeSettingsJson?.step_canonicalization?.rules ?? []
+  const draftStepRules = draftObj?.step_canonicalization?.rules ?? []
+  const recommendedTopPathsLimit = contextQuery.data?.recommendations?.paths_explorer_defaults?.top_paths_limit ?? 50
+  const recommendedMinVolumeThreshold = contextQuery.data?.recommendations?.flow_defaults?.min_volume_threshold ?? 20
+  const recommendedMaxNodes = contextQuery.data?.recommendations?.flow_defaults?.max_nodes ?? 30
+  const draftMatchesSuggestedRules = valuesEqual(draftStepRules, suggestedStepRules)
+  const draftMatchesActiveRules = valuesEqual(draftStepRules, activeStepRules)
 
   return (
     <div style={{ display: 'grid', gap: t.space.xl }}>
@@ -798,8 +826,11 @@ export default function JourneysSettingsSection({
                   <div style={{ display: 'grid', gap: t.space.sm }}>
                     <details open style={cardStyle}>
                       <summary style={{ cursor: 'pointer', fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>
-                        Sessionization & Journey Construction
+                        Data bindings & Journey Construction
                       </summary>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                        These controls shape how journeys are built from your workspace data. Channels, events, and suggested steps are derived from observed data above.
+                      </div>
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: t.space.sm }}>
                         <label style={{ display: 'grid', gap: 4 }}>
                           <span style={{ fontSize: t.font.sizeXs }}>Session timeout (minutes)</span>
@@ -821,47 +852,149 @@ export default function JourneysSettingsSection({
                         <input type="checkbox" checked={!!draftObj?.sessionization?.conversion_journeys_only} onChange={(e) => updateDraft(setIn(draftObj, ['sessionization', 'conversion_journeys_only'], e.target.checked))} disabled={!isDraft} />
                         Conversion journeys only (default ON)
                       </label>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: t.font.sizeXs }}>
-                        <input type="checkbox" checked={!!draftObj?.sessionization?.allow_all_journeys} onChange={(e) => updateDraft(setIn(draftObj, ['sessionization', 'allow_all_journeys'], e.target.checked))} disabled={!isDraft} />
-                        Allow all journeys
-                      </label>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                        Full-session overrides like `allow_all_journeys` stay in Advanced JSON because they change the meaning of the analysis rather than the default workspace policy.
+                      </div>
                     </details>
 
-                    <details style={cardStyle}>
+                    <details open style={cardStyle}>
                       <summary style={{ cursor: 'pointer', fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>
                         Step Canonicalization
                       </summary>
+                      <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          disabled={!isDraft || !suggestedStepRules.length || draftMatchesSuggestedRules}
+                          onClick={() => updateDraft(setIn(draftObj, ['step_canonicalization', 'rules'], deepClone(suggestedStepRules)))}
+                          style={{
+                            padding: `${t.space.xs}px ${t.space.sm}px`,
+                            borderRadius: t.radius.sm,
+                            border: `1px solid ${t.color.accent}`,
+                            background: t.color.accentMuted,
+                            color: t.color.accent,
+                            fontSize: t.font.sizeXs,
+                            cursor: !isDraft || !suggestedStepRules.length || draftMatchesSuggestedRules ? 'not-allowed' : 'pointer',
+                            opacity: !isDraft || !suggestedStepRules.length || draftMatchesSuggestedRules ? 0.6 : 1,
+                          }}
+                        >
+                          Apply workspace suggestions
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!isDraft || !activeStepRules.length || draftMatchesActiveRules}
+                          onClick={() => updateDraft(setIn(draftObj, ['step_canonicalization', 'rules'], deepClone(activeStepRules)))}
+                          style={{
+                            padding: `${t.space.xs}px ${t.space.sm}px`,
+                            borderRadius: t.radius.sm,
+                            border: `1px solid ${t.color.border}`,
+                            background: 'transparent',
+                            color: t.color.text,
+                            fontSize: t.font.sizeXs,
+                            cursor: !isDraft || !activeStepRules.length || draftMatchesActiveRules ? 'not-allowed' : 'pointer',
+                            opacity: !isDraft || !activeStepRules.length || draftMatchesActiveRules ? 0.6 : 1,
+                          }}
+                        >
+                          Restore active rules
+                        </button>
+                      </div>
                       <label style={{ display: 'grid', gap: 4 }}>
                         <span style={{ fontSize: t.font.sizeXs }}>Fallback step</span>
                         <input value={draftObj?.step_canonicalization?.fallback_step ?? 'Other'} onChange={(e) => updateDraft(setIn(draftObj, ['step_canonicalization', 'fallback_step'], e.target.value))} disabled={!isDraft} />
                       </label>
-                      <label style={{ display: 'grid', gap: 4 }}>
-                        <span style={{ fontSize: t.font.sizeXs }}>Step mapping rules (advanced JSON list)</span>
-                        <textarea
-                          rows={8}
-                          value={JSON.stringify(draftObj?.step_canonicalization?.rules ?? [], null, 2)}
-                          onChange={(e) => {
-                            try {
-                              const parsed = JSON.parse(e.target.value)
-                              updateDraft(setIn(draftObj, ['step_canonicalization', 'rules'], parsed))
-                              setParseError(null)
-                            } catch (error) {
-                              setParseError((error as Error).message)
-                            }
-                          }}
-                          disabled={!isDraft}
-                          style={{ fontFamily: 'monospace', fontSize: t.font.sizeXs }}
-                        />
-                      </label>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: t.space.sm }}>
+                        <div style={{ ...cardStyle, padding: t.space.sm }}>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Workspace suggestions</div>
+                          {(suggestedStepRules ?? []).length ? suggestedStepRules.map((rule: Record<string, any>, index: number) => (
+                            <div key={`${rule.step_name}-${index}`} style={{ display: 'grid', gap: 4 }}>
+                              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>{rule.step_name}</div>
+                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                                {summarizeStepRule(rule).join(' · ') || 'Generic fallback rule'}
+                              </div>
+                            </div>
+                          )) : (
+                            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                              No workspace-derived rule suggestions yet. Add more touchpoint history or use Advanced JSON for custom rules.
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ ...cardStyle, padding: t.space.sm }}>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Draft rules in use</div>
+                          {(draftStepRules ?? []).length ? draftStepRules.map((rule: Record<string, any>, index: number) => (
+                            <div key={`${rule.step_name}-${index}`} style={{ display: 'grid', gap: 4 }}>
+                              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>
+                                {rule.step_name}
+                                {rule.enabled === false ? ' (disabled)' : ''}
+                              </div>
+                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                                {summarizeStepRule(rule).join(' · ') || 'Generic fallback rule'}
+                              </div>
+                            </div>
+                          )) : (
+                            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                              No step rules configured yet.
+                            </div>
+                          )}
+                        </div>
+                      </div>
                       <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-                        Suggested from workspace events: {(contextQuery.data?.observed_event_names ?? []).slice(0, 6).map((item) => item.value).join(', ') || 'No observed events yet'}.
+                        Basic mode keeps step mapping readable and workspace-backed. Use Advanced JSON only for custom predicates, regex rules, or exhaustive manual mapping.
                       </div>
                     </details>
 
-                    <details style={cardStyle}>
+                    <details open style={cardStyle}>
                       <summary style={{ cursor: 'pointer', fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>
                         Paths / Flow defaults
                       </summary>
+                      <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          disabled={!isDraft}
+                          onClick={() =>
+                            updateDraftWith((next) => {
+                              next.paths_explorer_defaults = next.paths_explorer_defaults ?? {}
+                              next.flow_defaults = next.flow_defaults ?? {}
+                              next.paths_explorer_defaults.top_paths_limit = recommendedTopPathsLimit
+                              next.flow_defaults.min_volume_threshold = recommendedMinVolumeThreshold
+                              next.flow_defaults.max_nodes = recommendedMaxNodes
+                            })
+                          }
+                          style={{
+                            padding: `${t.space.xs}px ${t.space.sm}px`,
+                            borderRadius: t.radius.sm,
+                            border: `1px solid ${t.color.accent}`,
+                            background: t.color.accentMuted,
+                            color: t.color.accent,
+                            fontSize: t.font.sizeXs,
+                            cursor: !isDraft ? 'not-allowed' : 'pointer',
+                            opacity: !isDraft ? 0.6 : 1,
+                          }}
+                        >
+                          Apply recommended defaults
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!isDraft || !activeSettingsJson}
+                          onClick={() =>
+                            activeSettingsJson &&
+                            updateDraftWith((next) => {
+                              next.paths_explorer_defaults = deepClone(activeSettingsJson.paths_explorer_defaults ?? next.paths_explorer_defaults ?? {})
+                              next.flow_defaults = deepClone(activeSettingsJson.flow_defaults ?? next.flow_defaults ?? {})
+                            })
+                          }
+                          style={{
+                            padding: `${t.space.xs}px ${t.space.sm}px`,
+                            borderRadius: t.radius.sm,
+                            border: `1px solid ${t.color.border}`,
+                            background: 'transparent',
+                            color: t.color.text,
+                            fontSize: t.font.sizeXs,
+                            cursor: !isDraft || !activeSettingsJson ? 'not-allowed' : 'pointer',
+                            opacity: !isDraft || !activeSettingsJson ? 0.6 : 1,
+                          }}
+                        >
+                          Restore active defaults
+                        </button>
+                      </div>
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: t.space.sm }}>
                         <label style={{ display: 'grid', gap: 4 }}>
                           <span style={{ fontSize: t.font.sizeXs }}>Top paths limit</span>
@@ -891,7 +1024,7 @@ export default function JourneysSettingsSection({
                       </div>
                     </details>
 
-                    <details style={cardStyle}>
+                    <details open style={cardStyle}>
                       <summary style={{ cursor: 'pointer', fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>
                         Funnels & Diagnostics
                       </summary>
@@ -932,25 +1065,12 @@ export default function JourneysSettingsSection({
                       )}
                     </details>
 
-                    <details style={cardStyle}>
-                      <summary style={{ cursor: 'pointer', fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>
-                        Performance & retention guardrails
-                      </summary>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: t.space.sm }}>
-                        <label style={{ display: 'grid', gap: 4 }}>
-                          <span style={{ fontSize: t.font.sizeXs }}>Aggregation reprocess window (days)</span>
-                          <input type="number" value={draftObj?.performance_guardrails?.aggregation_reprocess_window_days ?? 3} onChange={(e) => updateDraft(setIn(draftObj, ['performance_guardrails', 'aggregation_reprocess_window_days'], asInt(e.target.value, 3)))} disabled={!isDraft} />
-                        </label>
-                        <label style={{ display: 'grid', gap: 4 }}>
-                          <span style={{ fontSize: t.font.sizeXs }}>Example sampling rate (0-1)</span>
-                          <input type="number" step="0.01" min={0} max={1} value={draftObj?.performance_guardrails?.sampling_rate_example_journeys ?? 0} onChange={(e) => updateDraft(setIn(draftObj, ['performance_guardrails', 'sampling_rate_example_journeys'], asFloat(e.target.value, 0)))} disabled={!isDraft} />
-                        </label>
-                        <label style={{ display: 'grid', gap: 4 }}>
-                          <span style={{ fontSize: t.font.sizeXs }}>Max flow query lookback (days)</span>
-                          <input type="number" value={draftObj?.performance_guardrails?.max_flow_query_lookback_window_days ?? 90} onChange={(e) => updateDraft(setIn(draftObj, ['performance_guardrails', 'max_flow_query_lookback_window_days'], asInt(e.target.value, 90)))} disabled={!isDraft} />
-                        </label>
+                    <div style={{ ...cardStyle, background: t.color.bgSubtle }}>
+                      <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>Advanced controls moved out of the main path</div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                        Performance guardrails, full step-rule JSON, and rare override fields stay in Advanced JSON. They are still available, but they no longer compete with the workspace-backed defaults most users actually need.
                       </div>
-                    </details>
+                    </div>
                   </div>
                 )}
 
