@@ -648,7 +648,6 @@ export default function App() {
                   lastPage={lastPage === 'analytics_journeys' ? 'overview' : lastPage}
                   onNavigate={(p) => handleSetPage(p)}
                   onConnectDataSources={handleSetDatasources}
-                  canCreateAlerts={hasPermission('alerts.manage')}
                 />
               )}
               {page === 'alerts' && <AlertsPage />}

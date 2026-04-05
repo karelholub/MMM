@@ -16,5 +16,6 @@
 - **Recovery**: No inline retry button; consistent with other dashboard error handling. User can use sidebar to go to Data sources or Alerts and retry from there.
 
 ## Consistency
-- Header (date range, "Create alert", Back) and AlertsBell match the rest of the app (menu + settings styling).
+- Cover Dashboard relies on the global workspace header for period, source, model, and config. The page header should stay quiet and only use local navigation actions such as Back.
+- Alert creation belongs in Alerts and drilldown modules; Cover Dashboard only links to alert review surfaces such as the alerts bell and alerts timeline.
 - All section CTAs deep-link: Channel performance → dashboard, Campaign performance → campaigns, Data sources / Data quality → dq/datasources, Alerts → alerts.

@@ -45,7 +45,6 @@ interface OverviewProps {
   lastPage: PageKey | null
   onNavigate: (page: PageKey) => void
   onConnectDataSources: () => void
-  canCreateAlerts: boolean
 }
 
 // --- API types (overview summary + drivers + alerts) ---
@@ -329,7 +328,7 @@ function daysInPeriod(fromIso?: string, toIso?: string): number {
 }
 
 // --- Cover Dashboard ---
-export default function Overview({ lastPage, onNavigate, onConnectDataSources, canCreateAlerts }: OverviewProps) {
+export default function Overview({ lastPage, onNavigate, onConnectDataSources }: OverviewProps) {
   const {
     globalDateFrom,
     globalDateTo,
@@ -650,48 +649,8 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
   const errorMessage =
     (summaryQuery.error as Error)?.message ?? (driversQuery.error as Error)?.message ?? null
 
-  // --- Header: date range + filters + Create alert ---
-  const dateRangeNode = (
-    <div
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: t.space.sm,
-        padding: `${t.space.sm}px ${t.space.md}px`,
-        borderRadius: t.radius.sm,
-        border: `1px solid ${t.color.borderLight}`,
-        background: t.color.surface,
-        fontSize: t.font.sizeSm,
-        color: t.color.textSecondary,
-      }}
-    >
-      <span role="img" aria-hidden>📅</span>
-      <span>
-        {dateRange.date_from} – {dateRange.date_to}
-      </span>
-    </div>
-  )
-
   const headerActions = (
     <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
-      {canCreateAlerts && (
-        <button
-          type="button"
-          onClick={() => onNavigate('alerts')}
-          style={{
-            padding: `${t.space.sm}px ${t.space.md}px`,
-            borderRadius: t.radius.sm,
-            border: 'none',
-            background: t.color.accent,
-            color: '#ffffff',
-            fontSize: t.font.sizeSm,
-            fontWeight: t.font.weightSemibold,
-            cursor: 'pointer',
-          }}
-        >
-          Create alert
-        </button>
-      )}
       {lastPage && lastPage !== 'overview' && (
         <button
           type="button"
@@ -830,10 +789,10 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources, c
   return (
     <DashboardPage
       title="Cover Dashboard"
-      description="What happened, why it happened, and what to check next."
-      dateRange={dateRangeNode}
+      description="What happened, why it happened, and what to check next. Period, source, model, and config are controlled in the workspace header."
+      dateRange={null}
       filters={null}
-      actions={headerActions}
+      actions={lastPage && lastPage !== 'overview' ? headerActions : null}
       isLoading={isLoading && !isEmpty}
       loadingState={loadingState}
       isError={isError}
