@@ -326,7 +326,7 @@ export function DashboardPage({
           </div>
         </div>
       </div>
-      <div style={{ minHeight: 240 }}>{content}</div>
+      <div style={{ minHeight: 240, minWidth: 0 }}>{content}</div>
     </div>
   )
 }

@@ -2524,6 +2524,22 @@ export default function Journeys({
           </SectionCard>
         }
       >
+        <style>{`
+          @media (max-width: 1100px) {
+            .journeys-split-layout {
+              grid-template-columns: minmax(0, 1fr) !important;
+            }
+            .journeys-two-col-layout {
+              grid-template-columns: minmax(0, 1fr) !important;
+            }
+            .journeys-detail-grid {
+              grid-template-columns: minmax(0, 1fr) !important;
+            }
+            .journeys-metric-row {
+              grid-template-columns: minmax(0, 1fr) !important;
+            }
+          }
+        `}</style>
         <SectionCard
           title="Journey definition"
           subtitle="Select an existing journey or create a new one for this workspace."
@@ -2758,7 +2774,7 @@ export default function Journeys({
             </div>
           }
         >
-          <div style={{ display: 'grid', gap: t.space.md }}>
+          <div style={{ display: 'grid', gap: t.space.md, minWidth: 0 }}>
             <select
               value={selectedJourneyId}
               onChange={(e) => setSelectedJourneyId(e.target.value)}
@@ -3027,7 +3043,8 @@ export default function Journeys({
               This journey definition is archived. Restore it to re-enable paths, flow, examples, experiments, and other workspace analysis.
             </div>
           ) : null}
-          <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', marginBottom: t.space.md }}>
+          <div style={{ display: 'grid', gap: t.space.md, minWidth: 0 }}>
+          <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', marginBottom: t.space.md, minWidth: 0 }}>
             {tabs.map((tab) => (
               <button
                 key={tab.key}
@@ -3714,8 +3731,8 @@ export default function Journeys({
           )}
 
           {!selectedDefinitionArchived && activeTab === 'experiments' && (
-            <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'minmax(280px, 360px) minmax(0, 1fr)' }}>
-              <div style={{ display: 'grid', gap: t.space.md }}>
+            <div className="journeys-split-layout" style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'minmax(280px, 360px) minmax(0, 1fr)', minWidth: 0 }}>
+              <div style={{ display: 'grid', gap: t.space.md, minWidth: 0 }}>
                 <SectionCard title="Experiment queue" subtitle="Journey hypotheses already linked into Incrementality.">
                   <div style={{ display: 'grid', gap: t.space.sm }}>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: t.space.xs }}>
@@ -3959,8 +3976,8 @@ export default function Journeys({
           )}
 
           {!selectedDefinitionArchived && activeTab === 'policy' && (
-            <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'minmax(260px, 340px) minmax(0, 1fr)' }}>
-              <div style={{ display: 'grid', gap: t.space.md }}>
+            <div className="journeys-split-layout" style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'minmax(260px, 340px) minmax(0, 1fr)', minWidth: 0 }}>
+              <div style={{ display: 'grid', gap: t.space.md, minWidth: 0 }}>
                 <SectionCard title="Learned policies" subtitle="Promote validated journey policies or inspect what should be tested next.">
                   <div style={{ display: 'grid', gap: t.space.sm }}>
                     {policyRecommendationsQuery.isLoading ? (
@@ -4373,8 +4390,8 @@ export default function Journeys({
                 </button>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(240px, 320px) 1fr', gap: t.space.md }}>
-                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md }}>
+              <div className="journeys-split-layout" style={{ display: 'grid', gridTemplateColumns: 'minmax(240px, 320px) 1fr', gap: t.space.md, minWidth: 0 }}>
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, minWidth: 0 }}>
                   <div style={{ fontSize: t.font.sizeXs, textTransform: 'uppercase', color: t.color.textMuted, marginBottom: t.space.sm }}>
                     Funnels
                   </div>
@@ -4406,7 +4423,7 @@ export default function Journeys({
                   </div>
                 </div>
 
-                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md }}>
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, minWidth: 0 }}>
                   {!selectedFunnelId && <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Select a funnel to view results.</div>}
                   {selectedFunnelId && funnelResultsQuery.isLoading && <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading funnel results…</div>}
                   {selectedFunnelId && funnelResultsQuery.isError && (
@@ -4454,7 +4471,7 @@ export default function Journeys({
                         </div>
                       </div>
 
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: t.space.md }}>
+                      <div className="journeys-two-col-layout" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: t.space.md, minWidth: 0 }}>
                         <div>
                           <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium, marginBottom: 6 }}>Device (top 5)</div>
                           <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
@@ -4498,7 +4515,7 @@ export default function Journeys({
                 <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>No transition flow available for the selected date range and filters.</div>
               )}
               {!!transitionsQuery.data?.edges?.length && (
-                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(240px, 320px) 1fr', gap: t.space.md }}>
+                <div className="journeys-split-layout" style={{ display: 'grid', gridTemplateColumns: 'minmax(240px, 320px) 1fr', gap: t.space.md, minWidth: 0 }}>
                   <SectionCard title="Nodes" subtitle={`${transitionsQuery.data.nodes.length} visible nodes`}>
                     <div style={{ display: 'grid', gap: 8 }}>
                       {transitionsQuery.data.nodes.map((node) => (
@@ -4598,6 +4615,7 @@ export default function Journeys({
               )}
             </div>
           )}
+          </div>
         </SectionCard>
 
         <div ref={savedViewsSectionRef}>
@@ -4673,7 +4691,7 @@ export default function Journeys({
             </div>
             <div style={{ flex: 1, overflowY: 'auto', padding: t.space.lg, display: 'grid', gap: t.space.lg }}>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>{normalizeSteps(selectedPath.path_steps).map((s) => pathChip(s))}</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: t.space.md }}>
+              <div className="journeys-two-col-layout" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: t.space.md, minWidth: 0 }}>
                 <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}><div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Journeys</div><div style={{ fontSize: t.font.sizeBase, fontWeight: t.font.weightSemibold }}>{selectedPath.count_journeys.toLocaleString()}</div></div>
                 <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}><div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Conversion rate</div><div style={{ fontSize: t.font.sizeBase, fontWeight: t.font.weightSemibold }}>{formatPercent(selectedPath.conversion_rate)}</div></div>
                 <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}><div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Avg time</div><div style={{ fontSize: t.font.sizeBase, fontWeight: t.font.weightSemibold }}>{formatSeconds(selectedPath.avg_time_to_convert_sec)}</div></div>
@@ -4724,7 +4742,7 @@ export default function Journeys({
                 <div style={{ display: 'grid', gap: 8 }}>
                   {!pathBreakdownByDevice.length && <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>No device breakdown available.</div>}
                   {pathBreakdownByDevice.map((row) => (
-                    <div key={row.key} style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 1fr) repeat(3, minmax(90px, auto))', gap: t.space.sm, fontSize: t.font.sizeSm, alignItems: 'center' }}>
+                    <div key={row.key} className="journeys-metric-row" style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 1fr) repeat(3, minmax(90px, auto))', gap: t.space.sm, fontSize: t.font.sizeSm, alignItems: 'center', minWidth: 0 }}>
                       <span style={{ color: t.color.text }}>{row.key}</span>
                       <span style={{ color: t.color.textSecondary }}>{row.journeys.toLocaleString()} journeys</span>
                       <span style={{ color: t.color.textSecondary }}>{row.conversions.toLocaleString()} conv.</span>
@@ -4737,7 +4755,7 @@ export default function Journeys({
                 <div style={{ display: 'grid', gap: 8 }}>
                   {!pathBreakdownByChannelGroup.length && <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>No channel-group breakdown available.</div>}
                   {pathBreakdownByChannelGroup.map((row) => (
-                    <div key={row.key} style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 1fr) repeat(3, minmax(90px, auto))', gap: t.space.sm, fontSize: t.font.sizeSm, alignItems: 'center' }}>
+                    <div key={row.key} className="journeys-metric-row" style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 1fr) repeat(3, minmax(90px, auto))', gap: t.space.sm, fontSize: t.font.sizeSm, alignItems: 'center', minWidth: 0 }}>
                       <span style={{ color: t.color.text }}>{row.key}</span>
                       <span style={{ color: t.color.textSecondary }}>{row.journeys.toLocaleString()} journeys</span>
                       <span style={{ color: t.color.textSecondary }}>{row.conversions.toLocaleString()} conv.</span>
@@ -5100,7 +5118,7 @@ export default function Journeys({
                 {alertDraft.type === 'ttc_shift' && <option value="p50_time_to_convert_sec">P50 time-to-convert</option>}
               </select>
             </label>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: t.space.md }}>
+            <div className="journeys-two-col-layout" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: t.space.md, minWidth: 0 }}>
               <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>Comparison mode
                 <select value={alertDraft.comparison_mode} onChange={(e) => setAlertDraft((p) => ({ ...p, comparison_mode: e.target.value as AlertDraft['comparison_mode'] }))} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}>
                   <option value="previous_period">Previous period</option>
@@ -5111,7 +5129,7 @@ export default function Journeys({
                 <input type="number" min={1} max={200} value={alertDraft.threshold_pct} onChange={(e) => setAlertDraft((p) => ({ ...p, threshold_pct: Math.max(1, Math.min(200, Number(e.target.value) || 1)) }))} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
               </label>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: t.space.md }}>
+            <div className="journeys-two-col-layout" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: t.space.md, minWidth: 0 }}>
               <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>Severity
                 <select value={alertDraft.severity} onChange={(e) => setAlertDraft((p) => ({ ...p, severity: e.target.value as AlertDraft['severity'] }))} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}>
                   <option value="info">Info</option>

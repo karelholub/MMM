@@ -23,6 +23,7 @@ export default function SectionCard({
       style={{
         display: 'grid',
         gap: t.space.md,
+        minWidth: 0,
         padding: t.space.lg,
         background: t.color.surface,
         borderRadius: t.radius.lg,
@@ -36,9 +37,11 @@ export default function SectionCard({
           justifyContent: 'space-between',
           alignItems: 'flex-start',
           gap: t.space.md,
+          flexWrap: 'wrap',
+          minWidth: 0,
         }}
       >
-        <div style={{ display: 'grid', gap: 4 }}>
+        <div style={{ display: 'grid', gap: 4, minWidth: 0, flex: '1 1 280px' }}>
           <h2
             style={{
               margin: 0,
@@ -53,9 +56,9 @@ export default function SectionCard({
             <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{subtitle}</p>
           )}
         </div>
-        {actions && <div style={{ display: 'flex', gap: t.space.sm }}>{actions}</div>}
+        {actions && <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', minWidth: 0, maxWidth: '100%' }}>{actions}</div>}
       </div>
-      <div style={{ overflow }}>{children}</div>
+      <div style={{ overflow, minWidth: 0 }}>{children}</div>
       {footer && (
         <div
           style={{
