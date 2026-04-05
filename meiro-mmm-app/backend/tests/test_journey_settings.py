@@ -1,17 +1,21 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
+from datetime import datetime, timezone
 
 from app.db import Base
 from app.main import app
 from app.services_journey_settings import (
     JourneySettingsStatus,
     activate_journey_settings_version,
+    build_journey_settings_context,
     build_journey_settings_impact_preview,
     create_journey_settings_draft,
     ensure_active_journey_settings,
     validate_journey_settings,
 )
+from app.models_config_dq import JourneyInstanceFact, JourneyStepFact, SilverTouchpointFact
+from app.utils.kpi_config import default_kpi_config
 
 
 def _unit_db_session():
@@ -107,3 +111,96 @@ def test_build_journey_settings_impact_preview_uses_canonical_output_counts(monk
         assert preview["baseline"]["distinct_steps_7d"] == 5
     finally:
         db.close()
+
+
+def test_build_journey_settings_context_uses_observed_workspace_values():
+    db = _unit_db_session()
+    try:
+        ensure_active_journey_settings(db, actor="test")
+        db.add_all(
+            [
+                JourneyInstanceFact(
+                    conversion_id="c1",
+                    profile_id="p1",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2026, 4, 1, tzinfo=timezone.utc),
+                    path_hash="a",
+                    path_length=3,
+                    steps_json=["Paid Landing", "Product / Content View", "Conversion"],
+                    channel_group="paid_search",
+                    gross_conversions_total=1.0,
+                    net_conversions_total=1.0,
+                    gross_revenue_total=10.0,
+                    net_revenue_total=10.0,
+                ),
+                JourneyInstanceFact(
+                    conversion_id="c2",
+                    profile_id="p2",
+                    conversion_key="lead",
+                    conversion_ts=datetime(2026, 4, 2, tzinfo=timezone.utc),
+                    path_hash="b",
+                    path_length=2,
+                    steps_json=["Organic / Direct Landing", "Conversion"],
+                    channel_group="organic_search",
+                    gross_conversions_total=1.0,
+                    net_conversions_total=1.0,
+                    gross_revenue_total=0.0,
+                    net_revenue_total=0.0,
+                ),
+                SilverTouchpointFact(
+                    conversion_id="c1",
+                    profile_id="p1",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2026, 4, 1, tzinfo=timezone.utc),
+                    ordinal=1,
+                    channel="paid_search",
+                    event_name="product_view",
+                ),
+                SilverTouchpointFact(
+                    conversion_id="c2",
+                    profile_id="p2",
+                    conversion_key="lead",
+                    conversion_ts=datetime(2026, 4, 2, tzinfo=timezone.utc),
+                    ordinal=1,
+                    channel="organic_search",
+                    event_name="form_submit",
+                ),
+                JourneyStepFact(
+                    conversion_id="c1",
+                    profile_id="p1",
+                    conversion_key="purchase",
+                    ordinal=1,
+                    step_name="Paid Landing",
+                ),
+                JourneyStepFact(
+                    conversion_id="c2",
+                    profile_id="p2",
+                    conversion_key="lead",
+                    ordinal=1,
+                    step_name="Organic / Direct Landing",
+                ),
+            ]
+        )
+        db.commit()
+
+        context = build_journey_settings_context(db, kpi_config=default_kpi_config())
+        assert context["workspace_summary"]["journeys_loaded"] == 2
+        assert any(item["value"] == "paid_search" for item in context["observed_channels"])
+        assert any(item["value"] == "product_view" for item in context["observed_event_names"])
+        assert any(item["value"] == "Paid Landing" for item in context["observed_steps"])
+        assert any(item["id"] == "purchase" and item["observed_count"] >= 1 for item in context["observed_kpis"])
+        assert context["scaffold_settings_json"]["step_canonicalization"]["rules"]
+    finally:
+        db.close()
+
+
+def test_journey_settings_context_route_returns_scaffold():
+    client = TestClient(app)
+    resp = client.get(
+        "/api/settings/journeys/context",
+        headers={"X-User-Role": "viewer"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "scaffold_settings_json" in body
+    assert "workspace_summary" in body

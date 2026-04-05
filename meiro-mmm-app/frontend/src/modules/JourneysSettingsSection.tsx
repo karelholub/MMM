@@ -57,6 +57,28 @@ interface JourneySettingsVersion {
   diff_json?: Record<string, any> | null
 }
 
+interface JourneySettingsContext {
+  active_version_id?: string | null
+  workspace_summary: {
+    journeys_loaded: number
+    observed_channels: number
+    observed_event_names: number
+    observed_steps: number
+    observed_conversion_keys: number
+  }
+  observed_channels: Array<{ value: string; count: number }>
+  observed_event_names: Array<{ value: string; count: number }>
+  observed_steps: Array<{ value: string; count: number }>
+  observed_conversion_keys: Array<{ value: string; count: number }>
+  observed_kpis: Array<{ id: string; label: string; observed_count: number; is_primary?: boolean }>
+  recommendations: {
+    flow_defaults?: { min_volume_threshold?: number; max_nodes?: number }
+    paths_explorer_defaults?: { top_paths_limit?: number }
+    notes?: string[]
+  }
+  scaffold_settings_json: Record<string, any>
+}
+
 function formatDateTime(value?: string | null): string {
   if (!value) return '—'
   const d = new Date(value)
@@ -201,6 +223,13 @@ export default function JourneysSettingsSection({
     }),
   })
 
+  const contextQuery = useQuery<JourneySettingsContext>({
+    queryKey: ['journeys-settings-context'],
+    queryFn: async () => apiGetJson<JourneySettingsContext>('/api/settings/journeys/context', {
+      fallbackMessage: 'Failed to load journey settings context',
+    }),
+  })
+
   const createDraftMutation = useMutation({
     mutationFn: async (payload: { description?: string; settings_json?: Record<string, any> }) => {
       return apiSendJson<JourneySettingsVersion>('/api/settings/journeys/versions', 'POST', {
@@ -336,6 +365,8 @@ export default function JourneysSettingsSection({
     navigateForRecommendedAction(action, { defaultPage: 'settings' })
   }
 
+  const scaffoldSettingsJson = contextQuery.data?.scaffold_settings_json ?? activeVersion?.settings_json ?? defaultJourneysTemplate()
+
   return (
     <div style={{ display: 'grid', gap: t.space.xl }}>
       <div style={cardStyle}>
@@ -373,7 +404,7 @@ export default function JourneysSettingsSection({
           </div>
         </div>
 
-        {(readinessQuery.data?.blockers?.length || readinessQuery.data?.warnings?.length || readinessQuery.data?.recommended_actions?.length) ? (
+      {(readinessQuery.data?.blockers?.length || readinessQuery.data?.warnings?.length || readinessQuery.data?.recommended_actions?.length) ? (
           <DecisionStatusCard
             title="Journeys Readiness Guidance"
             status={readinessQuery.data?.status}
@@ -387,6 +418,97 @@ export default function JourneysSettingsSection({
       </div>
 
       <div style={cardStyle}>
+        <div>
+          <h3 style={{ margin: 0, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold }}>Workspace-derived context</h3>
+          <p style={{ margin: `${t.space.xs}px 0 0`, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+            New drafts are now seeded from active settings plus observed workspace signals instead of static frontend defaults.
+          </p>
+        </div>
+
+        {contextQuery.isError ? (
+          <div style={{ fontSize: t.font.sizeXs, color: t.color.danger }}>
+            {(contextQuery.error as Error)?.message}
+          </div>
+        ) : null}
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: t.space.sm }}>
+          <div style={cardStyle}>
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Observed channels</div>
+            <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold }}>{contextQuery.data?.workspace_summary.observed_channels ?? 0}</div>
+          </div>
+          <div style={cardStyle}>
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Observed event names</div>
+            <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold }}>{contextQuery.data?.workspace_summary.observed_event_names ?? 0}</div>
+          </div>
+          <div style={cardStyle}>
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Observed steps</div>
+            <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold }}>{contextQuery.data?.workspace_summary.observed_steps ?? 0}</div>
+          </div>
+          <div style={cardStyle}>
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Observed KPIs</div>
+            <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold }}>{contextQuery.data?.workspace_summary.observed_conversion_keys ?? 0}</div>
+          </div>
+        </div>
+
+        {contextQuery.data ? (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: t.space.sm }}>
+            <div style={cardStyle}>
+              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>Observed channels</div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {(contextQuery.data.observed_channels ?? []).slice(0, 8).map((item) => (
+                  <span key={item.value} style={{ fontSize: t.font.sizeXs, padding: '2px 8px', borderRadius: 999, background: t.color.accentMuted, color: t.color.accent }}>
+                    {item.value} · {item.count}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div style={cardStyle}>
+              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>Observed event names</div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {(contextQuery.data.observed_event_names ?? []).slice(0, 8).map((item) => (
+                  <span key={item.value} style={{ fontSize: t.font.sizeXs, padding: '2px 8px', borderRadius: 999, background: t.color.surfaceMuted, color: t.color.text }}>
+                    {item.value}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div style={cardStyle}>
+              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>Observed KPI usage</div>
+              <div style={{ display: 'grid', gap: 4 }}>
+                {(contextQuery.data.observed_kpis ?? []).filter((item) => item.observed_count > 0).slice(0, 6).map((item) => (
+                  <div key={item.id} style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                    {item.label}{item.is_primary ? ' (primary)' : ''} · {item.observed_count}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={cardStyle}>
+              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>Recommended defaults</div>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                Flow min volume: {contextQuery.data.recommendations?.flow_defaults?.min_volume_threshold ?? '—'}
+              </div>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                Flow max nodes: {contextQuery.data.recommendations?.flow_defaults?.max_nodes ?? '—'}
+              </div>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                Top paths limit: {contextQuery.data.recommendations?.paths_explorer_defaults?.top_paths_limit ?? '—'}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {!!contextQuery.data?.recommendations?.notes?.length && (
+          <div style={{ display: 'grid', gap: 4 }}>
+            {contextQuery.data.recommendations.notes.map((note) => (
+              <div key={note} style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                {note}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div style={cardStyle}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.md, flexWrap: 'wrap' }}>
           <div>
             <h3 style={{ margin: 0, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold }}>Journeys settings versions</h3>
@@ -397,7 +519,7 @@ export default function JourneysSettingsSection({
           <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
             <button
               type="button"
-              onClick={() => createDraftMutation.mutate({ settings_json: activeVersion?.settings_json ?? defaultJourneysTemplate(), description: 'New journeys draft' })}
+              onClick={() => createDraftMutation.mutate({ settings_json: scaffoldSettingsJson, description: 'New journeys draft' })}
               style={{
                 padding: `${t.space.xs}px ${t.space.sm}px`,
                 borderRadius: t.radius.sm,
@@ -415,7 +537,7 @@ export default function JourneysSettingsSection({
               disabled={!activeVersion}
               onClick={() =>
                 createDraftMutation.mutate({
-                  settings_json: activeVersion?.settings_json ?? defaultJourneysTemplate(),
+                  settings_json: activeVersion?.settings_json ?? scaffoldSettingsJson,
                   description: activeVersion ? `Cloned from ${activeVersion.version_label}` : 'Cloned draft',
                 })
               }
@@ -692,6 +814,9 @@ export default function JourneysSettingsSection({
                           <input type="number" value={draftObj?.sessionization?.max_steps_per_journey ?? 20} onChange={(e) => updateDraft(setIn(draftObj, ['sessionization', 'max_steps_per_journey'], asInt(e.target.value, 20)))} disabled={!isDraft} />
                         </label>
                       </div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                        Observed journey volume in this workspace: {contextQuery.data?.workspace_summary.journeys_loaded ?? 0} journeys.
+                      </div>
                       <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: t.font.sizeXs }}>
                         <input type="checkbox" checked={!!draftObj?.sessionization?.conversion_journeys_only} onChange={(e) => updateDraft(setIn(draftObj, ['sessionization', 'conversion_journeys_only'], e.target.checked))} disabled={!isDraft} />
                         Conversion journeys only (default ON)
@@ -728,6 +853,9 @@ export default function JourneysSettingsSection({
                           style={{ fontFamily: 'monospace', fontSize: t.font.sizeXs }}
                         />
                       </label>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                        Suggested from workspace events: {(contextQuery.data?.observed_event_names ?? []).slice(0, 6).map((item) => item.value).join(', ') || 'No observed events yet'}.
+                      </div>
                     </details>
 
                     <details style={cardStyle}>
@@ -738,6 +866,9 @@ export default function JourneysSettingsSection({
                         <label style={{ display: 'grid', gap: 4 }}>
                           <span style={{ fontSize: t.font.sizeXs }}>Top paths limit</span>
                           <input type="number" value={draftObj?.paths_explorer_defaults?.top_paths_limit ?? 50} onChange={(e) => updateDraft(setIn(draftObj, ['paths_explorer_defaults', 'top_paths_limit'], asInt(e.target.value, 50)))} disabled={!isDraft} />
+                          <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                            Recommended: {contextQuery.data?.recommendations?.paths_explorer_defaults?.top_paths_limit ?? 50}
+                          </span>
                         </label>
                         <label style={{ display: 'grid', gap: 4 }}>
                           <span style={{ fontSize: t.font.sizeXs }}>Flow max depth</span>
@@ -746,10 +877,16 @@ export default function JourneysSettingsSection({
                         <label style={{ display: 'grid', gap: 4 }}>
                           <span style={{ fontSize: t.font.sizeXs }}>Min volume threshold</span>
                           <input type="number" value={draftObj?.flow_defaults?.min_volume_threshold ?? 20} onChange={(e) => updateDraft(setIn(draftObj, ['flow_defaults', 'min_volume_threshold'], asInt(e.target.value, 20)))} disabled={!isDraft} />
+                          <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                            Recommended: {contextQuery.data?.recommendations?.flow_defaults?.min_volume_threshold ?? 20}
+                          </span>
                         </label>
                         <label style={{ display: 'grid', gap: 4 }}>
                           <span style={{ fontSize: t.font.sizeXs }}>Max nodes</span>
                           <input type="number" value={draftObj?.flow_defaults?.max_nodes ?? 30} onChange={(e) => updateDraft(setIn(draftObj, ['flow_defaults', 'max_nodes'], asInt(e.target.value, 30)))} disabled={!isDraft} />
+                          <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                            Recommended: {contextQuery.data?.recommendations?.flow_defaults?.max_nodes ?? 30}
+                          </span>
                         </label>
                       </div>
                     </details>

@@ -12,8 +12,11 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .models_config_dq import (
+    JourneyInstanceFact,
     JourneySettingsStatus,
     JourneySettingsVersion,
+    JourneyStepFact,
+    SilverTouchpointFact,
     WorkspaceSettings,
 )
 from .services_journey_path_outputs import count_recent_path_outputs
@@ -163,6 +166,74 @@ class JourneySettingsSchema(BaseModel):
 
 def default_journey_settings() -> Dict[str, Any]:
     return JourneySettingsSchema().model_dump()
+
+
+def _top_string_counts(db: Session, column: Any, *, limit: int = 12) -> List[Dict[str, Any]]:
+    rows = (
+        db.query(column, func.count().label("count"))
+        .filter(column.isnot(None))
+        .filter(column != "")
+        .group_by(column)
+        .order_by(func.count().desc(), column.asc())
+        .limit(max(1, min(limit, 50)))
+        .all()
+    )
+    return [{"value": str(value), "count": int(count or 0)} for value, count in rows if str(value or "").strip()]
+
+
+def _suggest_step_rules(
+    *,
+    channels: List[Dict[str, Any]],
+    event_names: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    channel_values = {str(item.get("value") or "").strip().lower() for item in channels}
+    event_values = {str(item.get("value") or "").strip().lower() for item in event_names}
+    rules: List[Dict[str, Any]] = []
+    priority = 10
+
+    if any(value in channel_values for value in ("paid_search", "paid_social", "google_ads", "meta_ads")):
+        rules.append(
+            {
+                "step_name": "Paid Landing",
+                "priority": priority,
+                "enabled": True,
+                "channel_group_equals": sorted(
+                    [value for value in channel_values if value in {"paid_search", "paid_social", "google_ads", "meta_ads"}]
+                ),
+            }
+        )
+        priority += 10
+    if any(value in channel_values for value in ("organic_search", "referral", "direct")):
+        rules.append(
+            {
+                "step_name": "Organic / Direct Landing",
+                "priority": priority,
+                "enabled": True,
+                "channel_group_equals": sorted(
+                    [value for value in channel_values if value in {"organic_search", "referral", "direct"}]
+                ),
+            }
+        )
+        priority += 10
+
+    event_groups = [
+        ("Product / Content View", {"product_view", "content_view", "page_view", "view_item"}),
+        ("Checkout / Intent", {"add_to_cart", "begin_checkout", "checkout", "form_start", "form_submit"}),
+        ("Conversion", {"purchase", "lead", "lead_won", "sign_up", "subscribe"}),
+    ]
+    for step_name, candidates in event_groups:
+        matched = sorted([value for value in event_values if value in candidates])
+        if matched:
+            rules.append(
+                {
+                    "step_name": step_name,
+                    "priority": priority,
+                    "enabled": True,
+                    "event_name_equals": matched,
+                }
+            )
+            priority += 10
+    return rules
 
 
 def _normalize_and_validate(settings_json: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, str]], List[Dict[str, str]]]:
@@ -555,6 +626,100 @@ def build_journey_settings_impact_preview(
         "estimated_paths_returned": estimated_paths_returned,
         "warnings": warnings,
         "validation": {k: v for k, v in validation.items() if k != "normalized"},
+    }
+
+
+def build_journey_settings_context(
+    db: Session,
+    *,
+    kpi_config: Optional[Any] = None,
+    workspace_id: str = DEFAULT_WORKSPACE_ID,
+) -> Dict[str, Any]:
+    active_payload = get_active_journey_settings(db, workspace_id=workspace_id, use_cache=False)
+    active_settings_json = _deepcopy(active_payload.get("settings_json") or default_journey_settings())
+    schema_defaults = default_journey_settings()
+
+    observed_channels = _top_string_counts(db, JourneyInstanceFact.channel_group, limit=12)
+    observed_event_names = _top_string_counts(db, SilverTouchpointFact.event_name, limit=20)
+    observed_steps = _top_string_counts(db, JourneyStepFact.step_name, limit=15)
+    observed_conversion_keys = _top_string_counts(db, JourneyInstanceFact.conversion_key, limit=12)
+    journeys_loaded = int(db.query(func.count(JourneyInstanceFact.id)).scalar() or 0)
+
+    recommended_min_volume_threshold = 10 if journeys_loaded < 500 else 20 if journeys_loaded < 5_000 else 30
+    recommended_top_paths_limit = 50 if journeys_loaded < 2_000 else 75 if journeys_loaded < 10_000 else 100
+    recommended_max_nodes = 20 if journeys_loaded < 1_000 else 30 if journeys_loaded < 10_000 else 40
+
+    scaffold_settings_json = _deepcopy(active_settings_json)
+    active_rules = list((scaffold_settings_json.get("step_canonicalization") or {}).get("rules") or [])
+    default_rules = list((schema_defaults.get("step_canonicalization") or {}).get("rules") or [])
+    if not active_rules or active_rules == default_rules:
+        scaffold_settings_json["step_canonicalization"]["rules"] = _suggest_step_rules(
+            channels=observed_channels,
+            event_names=observed_event_names,
+        )
+    if (scaffold_settings_json.get("flow_defaults") or {}).get("min_volume_threshold") == (
+        (schema_defaults.get("flow_defaults") or {}).get("min_volume_threshold")
+    ):
+        scaffold_settings_json["flow_defaults"]["min_volume_threshold"] = recommended_min_volume_threshold
+    if (scaffold_settings_json.get("flow_defaults") or {}).get("max_nodes") == (
+        (schema_defaults.get("flow_defaults") or {}).get("max_nodes")
+    ):
+        scaffold_settings_json["flow_defaults"]["max_nodes"] = recommended_max_nodes
+    if (scaffold_settings_json.get("paths_explorer_defaults") or {}).get("top_paths_limit") == (
+        (schema_defaults.get("paths_explorer_defaults") or {}).get("top_paths_limit")
+    ):
+        scaffold_settings_json["paths_explorer_defaults"]["top_paths_limit"] = recommended_top_paths_limit
+
+    observed_kpis: List[Dict[str, Any]] = []
+    definitions = list(getattr(kpi_config, "definitions", []) or [])
+    primary_kpi_id = getattr(kpi_config, "primary_kpi_id", None)
+    observed_key_counts = {str(item["value"]): int(item["count"]) for item in observed_conversion_keys}
+    for definition in definitions:
+        definition_id = str(getattr(definition, "id", "") or "").strip()
+        if not definition_id:
+            continue
+        observed_kpis.append(
+            {
+                "id": definition_id,
+                "label": getattr(definition, "label", definition_id),
+                "observed_count": observed_key_counts.get(definition_id, 0),
+                "is_primary": definition_id == primary_kpi_id,
+            }
+        )
+
+    notes: List[str] = []
+    if observed_channels:
+        notes.append("Channel groups are derived from observed journey instances in this workspace.")
+    if observed_event_names:
+        notes.append("Step-rule suggestions are seeded from recent observed event names.")
+    if not observed_event_names:
+        notes.append("No recent event names were found, so step-rule suggestions remain conservative.")
+
+    return {
+        "active_version_id": active_payload.get("version_id"),
+        "workspace_summary": {
+            "journeys_loaded": journeys_loaded,
+            "observed_channels": len(observed_channels),
+            "observed_event_names": len(observed_event_names),
+            "observed_steps": len(observed_steps),
+            "observed_conversion_keys": len(observed_conversion_keys),
+        },
+        "observed_channels": observed_channels,
+        "observed_event_names": observed_event_names,
+        "observed_steps": observed_steps,
+        "observed_conversion_keys": observed_conversion_keys,
+        "observed_kpis": observed_kpis,
+        "recommendations": {
+            "flow_defaults": {
+                "min_volume_threshold": recommended_min_volume_threshold,
+                "max_nodes": recommended_max_nodes,
+            },
+            "paths_explorer_defaults": {
+                "top_paths_limit": recommended_top_paths_limit,
+            },
+            "notes": notes,
+        },
+        "scaffold_settings_json": scaffold_settings_json,
     }
 
 

@@ -65,6 +65,7 @@ def create_router(
     ensure_active_journey_settings_fn: Callable[..., Any],
     validate_journey_settings_fn: Callable[[Dict[str, Any]], Dict[str, Any]],
     build_journey_settings_impact_preview_fn: Callable[..., Dict[str, Any]],
+    build_journey_settings_context_fn: Callable[..., Dict[str, Any]],
     activate_journey_settings_version_fn: Callable[..., Any],
 ) -> APIRouter:
     router = APIRouter(tags=["config_management"])
@@ -435,6 +436,16 @@ def create_router(
             get_import_runs_fn=get_import_runs_fn,
             active_settings=active,
             active_settings_preview=active_preview,
+        )
+
+    @router.get("/api/settings/journeys/context")
+    def get_journeys_settings_context_route(
+        db=Depends(get_db_dependency),
+        _ctx=Depends(require_permission_dependency("settings.view")),
+    ):
+        return build_journey_settings_context_fn(
+            db,
+            kpi_config=get_kpi_config_fn(),
         )
 
     @router.post("/api/settings/journeys/validate")

@@ -91,6 +91,7 @@ from app.services_journey_cache import (
 from app.services_model_config_suggestions import suggest_model_config_from_journeys
 from app.services_journey_settings import (
     activate_journey_settings_version,
+    build_journey_settings_context,
     archive_journey_settings_version,
     build_journey_settings_impact_preview,
     create_journey_settings_draft,
@@ -2704,6 +2705,7 @@ app.include_router(
         ensure_active_journey_settings_fn=ensure_active_journey_settings,
         validate_journey_settings_fn=validate_journey_settings,
         build_journey_settings_impact_preview_fn=build_journey_settings_impact_preview,
+        build_journey_settings_context_fn=build_journey_settings_context,
         activate_journey_settings_version_fn=activate_journey_settings_version,
     )
 )
