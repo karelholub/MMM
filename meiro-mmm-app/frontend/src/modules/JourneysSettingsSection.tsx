@@ -222,6 +222,71 @@ function createEmptyStepRule(priority: number): Record<string, any> {
   }
 }
 
+function normalizedStringSet(values: unknown): Set<string> {
+  if (!Array.isArray(values)) return new Set()
+  return new Set(
+    values
+      .map((value) => String(value ?? '').trim().toLowerCase())
+      .filter(Boolean),
+  )
+}
+
+function analyzeStepRule(
+  rule: Record<string, any>,
+  {
+    observedChannels,
+    observedEvents,
+    allRules,
+    index,
+  }: {
+    observedChannels: Set<string>
+    observedEvents: Set<string>
+    allRules: Array<Record<string, any>>
+    index: number
+  },
+): string[] {
+  const warnings: string[] = []
+  const channels = normalizedStringSet(rule.channel_group_equals)
+  const events = normalizedStringSet(rule.event_name_equals)
+  const urls = normalizedStringSet(rule.url_contains)
+  const referrers = normalizedStringSet(rule.referrer_contains)
+  const hasConditions = channels.size > 0 || events.size > 0 || urls.size > 0 || referrers.size > 0
+
+  if (!hasConditions) {
+    warnings.push('No conditions set. This rule will not match anything useful until you add at least one channel, event, URL, or referrer condition.')
+  }
+  if (!(rule.step_name || '').trim()) {
+    warnings.push('Step name is empty.')
+  }
+
+  const unknownChannels = [...channels].filter((value) => !observedChannels.has(value))
+  if (unknownChannels.length) {
+    warnings.push(`Unknown channels for this workspace: ${unknownChannels.join(', ')}.`)
+  }
+
+  const unknownEvents = [...events].filter((value) => !observedEvents.has(value))
+  if (unknownEvents.length) {
+    warnings.push(`Unknown event names for this workspace: ${unknownEvents.join(', ')}.`)
+  }
+
+  const currentPriority = Number(rule.priority) || 0
+  const overlaps = allRules.some((candidate, candidateIndex) => {
+    if (candidateIndex === index) return false
+    const candidatePriority = Number(candidate?.priority) || 0
+    if (candidatePriority !== currentPriority) return false
+    const candidateChannels = normalizedStringSet(candidate?.channel_group_equals)
+    const candidateEvents = normalizedStringSet(candidate?.event_name_equals)
+    const sharesChannels = [...channels].some((value) => candidateChannels.has(value))
+    const sharesEvents = [...events].some((value) => candidateEvents.has(value))
+    return sharesChannels || sharesEvents
+  })
+  if (overlaps) {
+    warnings.push('Another rule shares this priority and some of the same channel/event conditions. Review ordering or specificity to avoid ambiguous matching.')
+  }
+
+  return warnings
+}
+
 function badgeStyle(kind: FieldBadgeKind): CSSProperties {
   if (kind === 'derived') {
     return {
@@ -484,6 +549,14 @@ export default function JourneysSettingsSection({
     10,
     ...draftStepRules.map((rule: Record<string, any>) => Number(rule?.priority) || 0),
   ) + 10
+  const observedChannelSet = useMemo(
+    () => new Set((contextQuery.data?.observed_channels ?? []).map((item) => String(item.value ?? '').trim().toLowerCase()).filter(Boolean)),
+    [contextQuery.data?.observed_channels],
+  )
+  const observedEventSet = useMemo(
+    () => new Set((contextQuery.data?.observed_event_names ?? []).map((item) => String(item.value ?? '').trim().toLowerCase()).filter(Boolean)),
+    [contextQuery.data?.observed_event_names],
+  )
 
   return (
     <div style={{ display: 'grid', gap: t.space.xl }}>
@@ -1086,148 +1159,176 @@ export default function JourneysSettingsSection({
                               Add empty rule
                             </button>
                           </div>
-                          {(draftStepRules ?? []).length ? draftStepRules.map((rule: Record<string, any>, index: number) => (
-                            <div key={`${rule.step_name || 'rule'}-${index}`} style={{ display: 'grid', gap: t.space.xs, border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'center', flexWrap: 'wrap' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                                  <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>
-                                    {rule.step_name || `Rule ${index + 1}`}
+                          {(draftStepRules ?? []).length ? draftStepRules.map((rule: Record<string, any>, index: number) => {
+                            const ruleWarnings = analyzeStepRule(rule, {
+                              observedChannels: observedChannelSet,
+                              observedEvents: observedEventSet,
+                              allRules: draftStepRules,
+                              index,
+                            })
+                            return (
+                              <div key={`${rule.step_name || 'rule'}-${index}`} style={{ display: 'grid', gap: t.space.xs, border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'center', flexWrap: 'wrap' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                    <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>
+                                      {rule.step_name || `Rule ${index + 1}`}
+                                    </div>
+                                    {rule.enabled === false ? <FieldBadge kind="inactive">disabled</FieldBadge> : null}
+                                    {ruleWarnings.length ? <FieldBadge kind="advanced">needs review</FieldBadge> : null}
                                   </div>
-                                  {rule.enabled === false ? <FieldBadge kind="inactive">disabled</FieldBadge> : null}
+                                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                    <button
+                                      type="button"
+                                      disabled={!isDraft}
+                                      onClick={() =>
+                                        updateDraftWith((next) => {
+                                          const rules = Array.isArray(next.step_canonicalization?.rules) ? [...next.step_canonicalization.rules] : []
+                                          const target = { ...(rules[index] ?? {}) }
+                                          target.enabled = !(target.enabled ?? true)
+                                          rules[index] = target
+                                          next.step_canonicalization = next.step_canonicalization ?? {}
+                                          next.step_canonicalization.rules = rules
+                                        })
+                                      }
+                                      style={{
+                                        padding: `2px ${t.space.xs}px`,
+                                        borderRadius: t.radius.sm,
+                                        border: `1px solid ${t.color.border}`,
+                                        background: 'transparent',
+                                        color: t.color.text,
+                                        fontSize: t.font.sizeXs,
+                                        cursor: !isDraft ? 'not-allowed' : 'pointer',
+                                        opacity: !isDraft ? 0.6 : 1,
+                                      }}
+                                    >
+                                      {rule.enabled === false ? 'Enable' : 'Disable'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={!isDraft}
+                                      onClick={() =>
+                                        updateDraftWith((next) => {
+                                          const rules = Array.isArray(next.step_canonicalization?.rules) ? [...next.step_canonicalization.rules] : []
+                                          rules.splice(index, 1)
+                                          next.step_canonicalization = next.step_canonicalization ?? {}
+                                          next.step_canonicalization.rules = rules
+                                        })
+                                      }
+                                      style={{
+                                        padding: `2px ${t.space.xs}px`,
+                                        borderRadius: t.radius.sm,
+                                        border: `1px solid ${t.color.danger}`,
+                                        background: t.color.dangerSubtle,
+                                        color: t.color.danger,
+                                        fontSize: t.font.sizeXs,
+                                        cursor: !isDraft ? 'not-allowed' : 'pointer',
+                                        opacity: !isDraft ? 0.6 : 1,
+                                      }}
+                                    >
+                                      Remove
+                                    </button>
+                                  </div>
                                 </div>
-                                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                                  <button
-                                    type="button"
-                                    disabled={!isDraft}
-                                    onClick={() =>
-                                      updateDraftWith((next) => {
-                                        const rules = Array.isArray(next.step_canonicalization?.rules) ? [...next.step_canonicalization.rules] : []
-                                        const target = { ...(rules[index] ?? {}) }
-                                        target.enabled = !(target.enabled ?? true)
-                                        rules[index] = target
-                                        next.step_canonicalization = next.step_canonicalization ?? {}
-                                        next.step_canonicalization.rules = rules
-                                      })
-                                    }
-                                    style={{
-                                      padding: `2px ${t.space.xs}px`,
-                                      borderRadius: t.radius.sm,
-                                      border: `1px solid ${t.color.border}`,
-                                      background: 'transparent',
-                                      color: t.color.text,
-                                      fontSize: t.font.sizeXs,
-                                      cursor: !isDraft ? 'not-allowed' : 'pointer',
-                                      opacity: !isDraft ? 0.6 : 1,
-                                    }}
-                                  >
-                                    {rule.enabled === false ? 'Enable' : 'Disable'}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    disabled={!isDraft}
-                                    onClick={() =>
-                                      updateDraftWith((next) => {
-                                        const rules = Array.isArray(next.step_canonicalization?.rules) ? [...next.step_canonicalization.rules] : []
-                                        rules.splice(index, 1)
-                                        next.step_canonicalization = next.step_canonicalization ?? {}
-                                        next.step_canonicalization.rules = rules
-                                      })
-                                    }
-                                    style={{
-                                      padding: `2px ${t.space.xs}px`,
-                                      borderRadius: t.radius.sm,
-                                      border: `1px solid ${t.color.danger}`,
-                                      background: t.color.dangerSubtle,
-                                      color: t.color.danger,
-                                      fontSize: t.font.sizeXs,
-                                      cursor: !isDraft ? 'not-allowed' : 'pointer',
-                                      opacity: !isDraft ? 0.6 : 1,
-                                    }}
-                                  >
-                                    Remove
-                                  </button>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: t.space.xs }}>
+                                  <label style={{ display: 'grid', gap: 4 }}>
+                                    <LabeledField label="Step name" kind="recommended" />
+                                    <input
+                                      value={rule.step_name ?? ''}
+                                      disabled={!isDraft}
+                                      onChange={(e) =>
+                                        updateDraftWith((next) => {
+                                          const rules = Array.isArray(next.step_canonicalization?.rules) ? [...next.step_canonicalization.rules] : []
+                                          const target = { ...(rules[index] ?? {}) }
+                                          target.step_name = e.target.value
+                                          rules[index] = target
+                                          next.step_canonicalization = next.step_canonicalization ?? {}
+                                          next.step_canonicalization.rules = rules
+                                        })
+                                      }
+                                    />
+                                  </label>
+                                  <label style={{ display: 'grid', gap: 4 }}>
+                                    <LabeledField label="Priority" kind="advanced" />
+                                    <input
+                                      type="number"
+                                      value={rule.priority ?? (index + 1) * 10}
+                                      disabled={!isDraft}
+                                      onChange={(e) =>
+                                        updateDraftWith((next) => {
+                                          const rules = Array.isArray(next.step_canonicalization?.rules) ? [...next.step_canonicalization.rules] : []
+                                          const target = { ...(rules[index] ?? {}) }
+                                          target.priority = asInt(e.target.value, (index + 1) * 10)
+                                          rules[index] = target
+                                          next.step_canonicalization = next.step_canonicalization ?? {}
+                                          next.step_canonicalization.rules = rules
+                                        })
+                                      }
+                                    />
+                                  </label>
                                 </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: t.space.xs }}>
+                                  <label style={{ display: 'grid', gap: 4 }}>
+                                    <LabeledField label="Channels" kind="derived" />
+                                    <input
+                                      value={Array.isArray(rule.channel_group_equals) ? rule.channel_group_equals.join(', ') : ''}
+                                      placeholder="paid_search, organic_search"
+                                      disabled={!isDraft}
+                                      onChange={(e) =>
+                                        updateDraftWith((next) => {
+                                          const rules = Array.isArray(next.step_canonicalization?.rules) ? [...next.step_canonicalization.rules] : []
+                                          const target = { ...(rules[index] ?? {}) }
+                                          target.channel_group_equals = normalizeRuleListInput(e.target.value)
+                                          rules[index] = target
+                                          next.step_canonicalization = next.step_canonicalization ?? {}
+                                          next.step_canonicalization.rules = rules
+                                        })
+                                      }
+                                    />
+                                  </label>
+                                  <label style={{ display: 'grid', gap: 4 }}>
+                                    <LabeledField label="Event names" kind="derived" />
+                                    <input
+                                      value={Array.isArray(rule.event_name_equals) ? rule.event_name_equals.join(', ') : ''}
+                                      placeholder="product_view, form_submit"
+                                      disabled={!isDraft}
+                                      onChange={(e) =>
+                                        updateDraftWith((next) => {
+                                          const rules = Array.isArray(next.step_canonicalization?.rules) ? [...next.step_canonicalization.rules] : []
+                                          const target = { ...(rules[index] ?? {}) }
+                                          target.event_name_equals = normalizeRuleListInput(e.target.value)
+                                          rules[index] = target
+                                          next.step_canonicalization = next.step_canonicalization ?? {}
+                                          next.step_canonicalization.rules = rules
+                                        })
+                                      }
+                                    />
+                                  </label>
+                                </div>
+                                <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                                  {summarizeStepRule(rule).join(' · ') || 'Add at least one channel or event condition to make this rule meaningful.'}
+                                </div>
+                                {ruleWarnings.length ? (
+                                  <div style={{ display: 'grid', gap: 4 }}>
+                                    {ruleWarnings.map((warning) => (
+                                      <div
+                                        key={warning}
+                                        style={{
+                                          fontSize: t.font.sizeXs,
+                                          color: t.color.warning,
+                                          background: t.color.warningSubtle,
+                                          border: `1px solid ${t.color.warning}`,
+                                          borderRadius: t.radius.sm,
+                                          padding: `${t.space.xs}px ${t.space.sm}px`,
+                                        }}
+                                      >
+                                        {warning}
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : null}
                               </div>
-                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: t.space.xs }}>
-                                <label style={{ display: 'grid', gap: 4 }}>
-                                  <LabeledField label="Step name" kind="recommended" />
-                                  <input
-                                    value={rule.step_name ?? ''}
-                                    disabled={!isDraft}
-                                    onChange={(e) =>
-                                      updateDraftWith((next) => {
-                                        const rules = Array.isArray(next.step_canonicalization?.rules) ? [...next.step_canonicalization.rules] : []
-                                        const target = { ...(rules[index] ?? {}) }
-                                        target.step_name = e.target.value
-                                        rules[index] = target
-                                        next.step_canonicalization = next.step_canonicalization ?? {}
-                                        next.step_canonicalization.rules = rules
-                                      })
-                                    }
-                                  />
-                                </label>
-                                <label style={{ display: 'grid', gap: 4 }}>
-                                  <LabeledField label="Priority" kind="advanced" />
-                                  <input
-                                    type="number"
-                                    value={rule.priority ?? (index + 1) * 10}
-                                    disabled={!isDraft}
-                                    onChange={(e) =>
-                                      updateDraftWith((next) => {
-                                        const rules = Array.isArray(next.step_canonicalization?.rules) ? [...next.step_canonicalization.rules] : []
-                                        const target = { ...(rules[index] ?? {}) }
-                                        target.priority = asInt(e.target.value, (index + 1) * 10)
-                                        rules[index] = target
-                                        next.step_canonicalization = next.step_canonicalization ?? {}
-                                        next.step_canonicalization.rules = rules
-                                      })
-                                    }
-                                  />
-                                </label>
-                              </div>
-                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: t.space.xs }}>
-                                <label style={{ display: 'grid', gap: 4 }}>
-                                  <LabeledField label="Channels" kind="derived" />
-                                  <input
-                                    value={Array.isArray(rule.channel_group_equals) ? rule.channel_group_equals.join(', ') : ''}
-                                    placeholder="paid_search, organic_search"
-                                    disabled={!isDraft}
-                                    onChange={(e) =>
-                                      updateDraftWith((next) => {
-                                        const rules = Array.isArray(next.step_canonicalization?.rules) ? [...next.step_canonicalization.rules] : []
-                                        const target = { ...(rules[index] ?? {}) }
-                                        target.channel_group_equals = normalizeRuleListInput(e.target.value)
-                                        rules[index] = target
-                                        next.step_canonicalization = next.step_canonicalization ?? {}
-                                        next.step_canonicalization.rules = rules
-                                      })
-                                    }
-                                  />
-                                </label>
-                                <label style={{ display: 'grid', gap: 4 }}>
-                                  <LabeledField label="Event names" kind="derived" />
-                                  <input
-                                    value={Array.isArray(rule.event_name_equals) ? rule.event_name_equals.join(', ') : ''}
-                                    placeholder="product_view, form_submit"
-                                    disabled={!isDraft}
-                                    onChange={(e) =>
-                                      updateDraftWith((next) => {
-                                        const rules = Array.isArray(next.step_canonicalization?.rules) ? [...next.step_canonicalization.rules] : []
-                                        const target = { ...(rules[index] ?? {}) }
-                                        target.event_name_equals = normalizeRuleListInput(e.target.value)
-                                        rules[index] = target
-                                        next.step_canonicalization = next.step_canonicalization ?? {}
-                                        next.step_canonicalization.rules = rules
-                                      })
-                                    }
-                                  />
-                                </label>
-                              </div>
-                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-                                {summarizeStepRule(rule).join(' · ') || 'Add at least one channel or event condition to make this rule meaningful.'}
-                              </div>
-                            </div>
-                          )) : (
+                            )
+                          }) : (
                             <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
                               No step rules configured yet.
                             </div>
