@@ -20,6 +20,10 @@ class JourneyDefinitionUpdate(BaseModel):
     mode_default: str = Field(..., pattern="^(conversion_only|all_journeys)$")
 
 
+class JourneyDefinitionDuplicatePayload(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+
+
 class JourneySavedViewPayload(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     journey_definition_id: Optional[str] = Field(None, max_length=36)

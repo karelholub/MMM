@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -97,6 +98,22 @@ def test_journey_definitions_crud_and_archive_flow(client: TestClient):
     assert list_all.status_code == 200
     assert list_all.json()["total"] == 1
     assert list_all.json()["items"][0]["is_archived"] is True
+
+    restore_resp = client.post(
+        f"/api/journeys/definitions/{definition_id}/restore",
+        headers={"X-User-Role": "editor", "X-User-Id": "qa-editor"},
+    )
+    assert restore_resp.status_code == 200
+    assert restore_resp.json()["is_archived"] is False
+
+    duplicate_resp = client.post(
+        f"/api/journeys/definitions/{definition_id}/duplicate",
+        headers={"X-User-Role": "editor", "X-User-Id": "qa-editor"},
+        json={"name": "Lifecycle journey copy"},
+    )
+    assert duplicate_resp.status_code == 200
+    assert duplicate_resp.json()["name"] == "Lifecycle journey copy"
+    assert duplicate_resp.json()["id"] != definition_id
 
 
 def test_journey_definitions_list_search_and_sort(client: TestClient):
@@ -271,7 +288,100 @@ def test_journey_definition_crud_triggers_rebuild_and_purge_hooks(client: TestCl
         headers=headers,
     )
     assert archive_resp.status_code == 200
-    assert purge_calls == [definition_id]
+    assert purge_calls == []
+
+
+def test_journey_definition_lifecycle_reports_dependencies_and_actions(client: TestClient):
+    editor_headers = {"X-User-Role": "editor", "X-User-Id": "qa-editor"}
+    view_headers = {"X-User-Role": "viewer", "X-User-Id": "qa-viewer"}
+
+    create_resp = client.post(
+        "/api/journeys/definitions",
+        headers=editor_headers,
+        json={
+            "name": "Lifecycle reporting",
+            "description": "Definition with dependencies",
+            "conversion_kpi_id": "purchase",
+            "lookback_window_days": 30,
+            "mode_default": "conversion_only",
+        },
+    )
+    assert create_resp.status_code == 200
+    definition_id = create_resp.json()["id"]
+
+    view_resp = client.post(
+        "/api/journeys/views",
+        headers=view_headers,
+        json={"name": "Saved view", "journey_definition_id": definition_id, "state": {"tab": "paths"}},
+    )
+    assert view_resp.status_code == 200
+
+    funnel_resp = client.post(
+        "/api/funnels",
+        headers=editor_headers,
+        json={
+            "journey_definition_id": definition_id,
+            "workspace_id": "default",
+            "name": "Lifecycle funnel",
+            "description": "Dependency funnel",
+            "steps": ["Paid Landing", "Purchase / Lead Won"],
+            "counting_method": "ordered",
+            "window_days": 30,
+        },
+    )
+    assert funnel_resp.status_code == 200
+
+    hypothesis_resp = client.post(
+        "/api/journeys/hypotheses",
+        headers=view_headers,
+        json={
+            "journey_definition_id": definition_id,
+            "title": "Lifecycle hypothesis",
+            "target_kpi": "purchase",
+            "hypothesis_text": "Testing next best action on this path.",
+            "trigger": {"path_prefix": ["Paid Landing"]},
+            "segment": {"channel_group": "paid"},
+            "current_action": {"step": "wait"},
+            "proposed_action": {"step": "email_followup"},
+            "support_count": 12,
+            "baseline_rate": 0.15,
+            "sample_size_target": 100,
+            "status": "draft",
+            "result": {},
+        },
+    )
+    assert hypothesis_resp.status_code == 200
+    hypothesis_id = hypothesis_resp.json()["id"]
+
+    experiment_resp = client.post(
+        f"/api/journeys/hypotheses/{hypothesis_id}/create-experiment",
+        headers=view_headers,
+        json={
+            "start_at": datetime(2026, 4, 1, tzinfo=timezone.utc).isoformat(),
+            "end_at": datetime(2026, 4, 15, tzinfo=timezone.utc).isoformat(),
+            "name": "Lifecycle hypothesis experiment",
+            "channel": "journey",
+            "notes": "Lifecycle dependency test",
+            "experiment_type": "holdout",
+        },
+    )
+    assert experiment_resp.status_code == 200
+
+    lifecycle_resp = client.get(
+        f"/api/journeys/definitions/{definition_id}/lifecycle",
+        headers=view_headers,
+    )
+    assert lifecycle_resp.status_code == 200
+    lifecycle = lifecycle_resp.json()
+    assert lifecycle["definition"]["id"] == definition_id
+    assert lifecycle["dependency_counts"]["saved_views"] == 1
+    assert lifecycle["dependency_counts"]["funnels"] == 1
+    assert lifecycle["dependency_counts"]["hypotheses"] == 1
+    assert lifecycle["dependency_counts"]["experiments"] == 1
+    assert lifecycle["allowed_actions"]["can_archive"] is True
+    assert lifecycle["allowed_actions"]["can_restore"] is False
+    assert lifecycle["allowed_actions"]["can_duplicate"] is True
+    assert lifecycle["warnings"]
 
 
 def test_journey_definition_rebuild_endpoint_invokes_definition_job(client: TestClient, monkeypatch):

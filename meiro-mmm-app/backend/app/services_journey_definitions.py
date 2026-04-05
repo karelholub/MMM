@@ -6,10 +6,21 @@ from datetime import datetime
 import uuid
 from typing import Iterable, Optional
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from .models_config_dq import JourneyDefinition, JourneyDefinitionMode
+from .models_config_dq import (
+    Experiment,
+    FunnelDefinition,
+    JourneyAlertDefinition,
+    JourneyDefinition,
+    JourneyDefinitionInstanceFact,
+    JourneyDefinitionMode,
+    JourneyHypothesis,
+    JourneyPathDaily,
+    JourneySavedView,
+    JourneyTransitionDaily,
+)
 
 
 def _serialize(item: JourneyDefinition) -> dict:
@@ -27,6 +38,7 @@ def _serialize(item: JourneyDefinition) -> dict:
         "created_at": item.created_at.isoformat() if item.created_at else None,
         "updated_at": item.updated_at.isoformat() if item.updated_at else None,
         "archived_at": item.archived_at.isoformat() if getattr(item, "archived_at", None) else None,
+        "lifecycle_status": "archived" if bool(getattr(item, "is_archived", False)) else "active",
     }
 
 
@@ -159,6 +171,135 @@ def archive_journey_definition(db: Session, definition_id: str, *, archived_by: 
     db.commit()
     db.refresh(item)
     return item
+
+
+def restore_journey_definition(db: Session, definition_id: str, *, restored_by: str) -> Optional[JourneyDefinition]:
+    item = db.get(JourneyDefinition, definition_id)
+    if not item:
+        return None
+    if not item.is_archived:
+        return item
+    now = datetime.utcnow()
+    item.is_archived = False
+    item.archived_at = None
+    item.archived_by = None
+    item.updated_by = restored_by
+    item.updated_at = now
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+def duplicate_journey_definition(
+    db: Session,
+    definition_id: str,
+    *,
+    created_by: str,
+    name: Optional[str] = None,
+) -> Optional[JourneyDefinition]:
+    item = db.get(JourneyDefinition, definition_id)
+    if not item:
+        return None
+    next_name = (name or "").strip() or f"{item.name} copy"
+    return create_journey_definition(
+        db,
+        name=next_name,
+        description=item.description,
+        conversion_kpi_id=item.conversion_kpi_id,
+        lookback_window_days=item.lookback_window_days,
+        mode_default=item.mode_default,
+        created_by=created_by,
+    )
+
+
+def get_journey_definition_lifecycle(db: Session, definition_id: str) -> Optional[dict]:
+    item = db.get(JourneyDefinition, definition_id)
+    if not item:
+        return None
+    hypothesis_ids = [
+        row_id
+        for (row_id,) in db.query(JourneyHypothesis.id)
+        .filter(JourneyHypothesis.journey_definition_id == definition_id)
+        .all()
+    ]
+    alerts = 0
+    for alert in db.query(JourneyAlertDefinition).filter(JourneyAlertDefinition.domain == "journeys").all():
+        scope = alert.scope_json or {}
+        if str(scope.get("journey_definition_id") or "").strip() == definition_id:
+            alerts += 1
+    dependency_counts = {
+        "saved_views": int(
+            db.query(func.count(JourneySavedView.id))
+            .filter(JourneySavedView.journey_definition_id == definition_id)
+            .scalar()
+            or 0
+        ),
+        "funnels": int(
+            db.query(func.count(FunnelDefinition.id))
+            .filter(FunnelDefinition.journey_definition_id == definition_id, FunnelDefinition.is_archived == False)  # noqa: E712
+            .scalar()
+            or 0
+        ),
+        "hypotheses": int(
+            db.query(func.count(JourneyHypothesis.id))
+            .filter(JourneyHypothesis.journey_definition_id == definition_id)
+            .scalar()
+            or 0
+        ),
+        "experiments": int(
+            db.query(func.count(Experiment.id))
+            .filter(
+                Experiment.source_type == "journey_hypothesis",
+                Experiment.source_id.in_(hypothesis_ids or ["__none__"]),
+            )
+            .scalar()
+            or 0
+        ),
+        "alerts": alerts,
+    }
+    output_counts = {
+        "journey_instances": int(
+            db.query(func.count(JourneyDefinitionInstanceFact.id))
+            .filter(JourneyDefinitionInstanceFact.journey_definition_id == definition_id)
+            .scalar()
+            or 0
+        ),
+        "path_days": int(
+            db.query(func.count(JourneyPathDaily.id))
+            .filter(JourneyPathDaily.journey_definition_id == definition_id)
+            .scalar()
+            or 0
+        ),
+        "transition_days": int(
+            db.query(func.count(JourneyTransitionDaily.id))
+            .filter(JourneyTransitionDaily.journey_definition_id == definition_id)
+            .scalar()
+            or 0
+        ),
+    }
+    dependency_total = sum(dependency_counts.values())
+    output_total = sum(output_counts.values())
+    warnings: list[str] = []
+    if dependency_total:
+        warnings.append(
+            f"This definition is referenced by {dependency_total} downstream items."
+        )
+    if output_total:
+        warnings.append(
+            f"This definition has {output_total} generated journey-output rows that should be preserved for restore/history."
+        )
+    return {
+        "definition": _serialize(item),
+        "dependency_counts": dependency_counts,
+        "output_counts": output_counts,
+        "allowed_actions": {
+            "can_archive": not bool(item.is_archived),
+            "can_restore": bool(item.is_archived),
+            "can_duplicate": True,
+            "can_delete": not bool(item.is_archived) and dependency_total == 0 and output_total == 0,
+        },
+        "warnings": warnings,
+    }
 
 
 def serialize_journey_definition(item: JourneyDefinition) -> dict:

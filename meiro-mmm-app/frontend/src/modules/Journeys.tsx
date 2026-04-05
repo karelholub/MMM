@@ -32,6 +32,36 @@ interface JourneyDefinition {
   conversion_kpi_id?: string | null
   lookback_window_days: number
   mode_default: 'conversion_only' | 'all_journeys'
+  is_archived?: boolean
+  lifecycle_status?: 'active' | 'archived' | string
+  created_by?: string | null
+  updated_by?: string | null
+  archived_by?: string | null
+  archived_at?: string | null
+  updated_at?: string | null
+}
+
+interface JourneyDefinitionLifecycle {
+  definition: JourneyDefinition
+  dependency_counts: {
+    saved_views: number
+    funnels: number
+    hypotheses: number
+    experiments: number
+    alerts: number
+  }
+  output_counts: {
+    journey_instances: number
+    path_days: number
+    transition_days: number
+  }
+  allowed_actions: {
+    can_archive: boolean
+    can_restore: boolean
+    can_duplicate: boolean
+    can_delete: boolean
+  }
+  warnings: string[]
 }
 
 interface JourneyPathRow {
@@ -847,18 +877,22 @@ export default function Journeys({
     counting_method: 'ordered',
     window_days: 30,
   })
+  const [showArchivedDefinitions, setShowArchivedDefinitions] = useState(false)
 
   const definitionsQuery = useQuery<PaginatedResponse<JourneyDefinition>>({
-    queryKey: ['journey-definitions', 'journeys-page'],
+    queryKey: ['journey-definitions', 'journeys-page', showArchivedDefinitions ? 'with-archived' : 'active-only'],
     queryFn: async () => {
-      return apiGetJson<PaginatedResponse<JourneyDefinition>>(withQuery('/api/journeys/definitions', buildListQuery({
+      const query = buildListQuery({
         page: 1,
         perPage: 100,
         order: 'desc',
-      })), {
+      })
+      if (showArchivedDefinitions) query.include_archived = 'true'
+      return apiGetJson<PaginatedResponse<JourneyDefinition>>(withQuery('/api/journeys/definitions', query), {
         fallbackMessage: 'Failed to load journey definitions',
       })
     },
+    enabled: !featureDisabled,
   })
 
   const kpisQuery = useQuery<KpiResponse>({
@@ -870,8 +904,20 @@ export default function Journeys({
     () => (definitionsQuery.data?.items ?? []).find((item) => item.id === selectedJourneyId) ?? null,
     [definitionsQuery.data?.items, selectedJourneyId],
   )
+  const selectedDefinitionArchived = Boolean(selectedDefinition?.is_archived)
+  const definitionWorkspaceReadOnly = featureDisabled || selectedDefinitionArchived
 
   const mode = selectedDefinition?.mode_default ?? 'conversion_only'
+
+  const definitionLifecycleQuery = useQuery<JourneyDefinitionLifecycle>({
+    queryKey: ['journey-definition-lifecycle', selectedJourneyId],
+    queryFn: async () => {
+      return apiGetJson<JourneyDefinitionLifecycle>(`/api/journeys/definitions/${selectedJourneyId}/lifecycle`, {
+        fallbackMessage: 'Failed to load journey definition lifecycle',
+      })
+    },
+    enabled: !!selectedJourneyId && !featureDisabled,
+  })
 
   const pathsQuery = useQuery<JourneyPathsResponse>({
     queryKey: [
@@ -903,7 +949,7 @@ export default function Journeys({
         fallbackMessage: 'Failed to load path aggregates',
       })
     },
-    enabled: !!selectedJourneyId && activeTab === 'paths' && !featureDisabled,
+    enabled: !!selectedJourneyId && activeTab === 'paths' && !definitionWorkspaceReadOnly,
   })
 
   const attributionSummaryQuery = useQuery<AttributionSummaryResponse>({
@@ -934,7 +980,7 @@ export default function Journeys({
         fallbackMessage: 'Failed to load attribution summary',
       })
     },
-    enabled: !!selectedJourneyId && !featureDisabled,
+    enabled: !!selectedJourneyId && !definitionWorkspaceReadOnly,
   })
 
   const pathAttributionQuery = useQuery<AttributionSummaryResponse>({
@@ -968,7 +1014,7 @@ export default function Journeys({
         fallbackMessage: 'Failed to load path credit split',
       })
     },
-    enabled: !!selectedJourneyId && !!selectedPath && !featureDisabled,
+    enabled: !!selectedJourneyId && !!selectedPath && !definitionWorkspaceReadOnly,
   })
 
   const funnelListQuery = useQuery<FunnelListResponse>({
@@ -982,7 +1028,7 @@ export default function Journeys({
         fallbackMessage: 'Failed to load funnels',
       })
     },
-    enabled: !!selectedJourneyId && funnelBuilderEnabled && !featureDisabled,
+    enabled: !!selectedJourneyId && funnelBuilderEnabled && !definitionWorkspaceReadOnly,
   })
 
   const funnelResultsQuery = useQuery<FunnelResultsResponse>({
@@ -1071,7 +1117,7 @@ export default function Journeys({
         fallbackMessage: 'Failed to load flow transitions',
       })
     },
-    enabled: !!selectedJourneyId && activeTab === 'flow' && !featureDisabled,
+    enabled: !!selectedJourneyId && activeTab === 'flow' && !definitionWorkspaceReadOnly,
   })
 
   const examplesQuery = useQuery<JourneyExamplesResponse>({
@@ -1103,7 +1149,7 @@ export default function Journeys({
         fallbackMessage: 'Failed to load journey examples',
       })
     },
-    enabled: !!selectedJourneyId && activeTab === 'examples' && !featureDisabled,
+    enabled: !!selectedJourneyId && activeTab === 'examples' && !definitionWorkspaceReadOnly,
   })
 
   const insightsQuery = useQuery<JourneyInsightsResponse>({
@@ -1132,7 +1178,7 @@ export default function Journeys({
         fallbackMessage: 'Failed to load journey insights',
       })
     },
-    enabled: !!selectedJourneyId && activeTab === 'insights' && !featureDisabled,
+    enabled: !!selectedJourneyId && activeTab === 'insights' && !definitionWorkspaceReadOnly,
   })
 
   const hypothesesQuery = useQuery<JourneyHypothesesResponse>({
@@ -1144,7 +1190,7 @@ export default function Journeys({
         fallbackMessage: 'Failed to load journey hypotheses',
       })
     },
-    enabled: !!selectedJourneyId && (activeTab === 'hypotheses' || activeTab === 'insights' || activeTab === 'policy' || activeTab === 'experiments') && !featureDisabled,
+    enabled: !!selectedJourneyId && (activeTab === 'hypotheses' || activeTab === 'insights' || activeTab === 'policy' || activeTab === 'experiments') && !definitionWorkspaceReadOnly,
   })
 
   const linkedExperimentSourceIds = useMemo(
@@ -1161,7 +1207,7 @@ export default function Journeys({
         fallbackMessage: 'Failed to load linked journey experiments',
       })
     },
-    enabled: !!selectedJourneyId && activeTab === 'experiments' && linkedExperimentSourceIds.length > 0 && !featureDisabled,
+    enabled: !!selectedJourneyId && activeTab === 'experiments' && linkedExperimentSourceIds.length > 0 && !definitionWorkspaceReadOnly,
   })
 
   const linkedExperimentDetailQuery = useQuery<LinkedExperimentDetail>({
@@ -1171,7 +1217,7 @@ export default function Journeys({
         fallbackMessage: 'Failed to load journey experiment detail',
       })
     },
-    enabled: activeTab === 'experiments' && selectedJourneyExperimentId != null && !featureDisabled,
+    enabled: activeTab === 'experiments' && selectedJourneyExperimentId != null && !definitionWorkspaceReadOnly,
   })
 
   const linkedExperimentResultsQuery = useQuery<LinkedExperimentResults>({
@@ -1181,7 +1227,7 @@ export default function Journeys({
         fallbackMessage: 'Failed to load journey experiment results',
       })
     },
-    enabled: activeTab === 'experiments' && selectedJourneyExperimentId != null && !featureDisabled,
+    enabled: activeTab === 'experiments' && selectedJourneyExperimentId != null && !definitionWorkspaceReadOnly,
   })
 
   const linkedExperimentHealthQuery = useQuery<LinkedExperimentHealth>({
@@ -1191,7 +1237,7 @@ export default function Journeys({
         fallbackMessage: 'Failed to load journey experiment health',
       })
     },
-    enabled: activeTab === 'experiments' && selectedJourneyExperimentId != null && !featureDisabled,
+    enabled: activeTab === 'experiments' && selectedJourneyExperimentId != null && !definitionWorkspaceReadOnly,
   })
 
   const policySimulationQuery = useQuery<JourneyPolicySimulationResponse>({
@@ -1205,7 +1251,7 @@ export default function Journeys({
         { fallbackMessage: 'Failed to simulate journey policy' },
       )
     },
-    enabled: !!sandboxHypothesisId && activeTab === 'policy' && !featureDisabled,
+    enabled: !!sandboxHypothesisId && activeTab === 'policy' && !definitionWorkspaceReadOnly,
   })
 
   const policyRecommendationsQuery = useQuery<JourneyPolicyRecommendationsResponse>({
@@ -1215,7 +1261,7 @@ export default function Journeys({
         fallbackMessage: 'Failed to load learned journey policies',
       })
     },
-    enabled: !!selectedJourneyId && (activeTab === 'insights' || activeTab === 'policy' || activeTab === 'hypotheses' || activeTab === 'experiments') && !featureDisabled,
+    enabled: !!selectedJourneyId && (activeTab === 'insights' || activeTab === 'policy' || activeTab === 'hypotheses' || activeTab === 'experiments') && !definitionWorkspaceReadOnly,
   })
 
   const savedViewsQuery = useQuery<SavedJourneyViewsResponse>({
@@ -1242,6 +1288,46 @@ export default function Journeys({
       setDraft((prev) => ({ ...prev, name: '', description: '' }))
     },
     onError: (err) => setCreateError((err as Error).message || 'Failed to create journey'),
+  })
+
+  const archiveDefinitionMutation = useMutation({
+    mutationFn: async (definitionId: string) => {
+      return apiSendJson<{ id: string; status: string }>(`/api/journeys/definitions/${definitionId}/archive`, 'POST', undefined, {
+        fallbackMessage: 'Failed to archive journey definition',
+      })
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['journey-definitions', 'journeys-page'] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-definition-lifecycle'] })
+    },
+  })
+
+  const restoreDefinitionMutation = useMutation({
+    mutationFn: async (definitionId: string) => {
+      return apiSendJson<JourneyDefinition>(`/api/journeys/definitions/${definitionId}/restore`, 'POST', undefined, {
+        fallbackMessage: 'Failed to restore journey definition',
+      })
+    },
+    onSuccess: async (restored) => {
+      await queryClient.invalidateQueries({ queryKey: ['journey-definitions', 'journeys-page'] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-definition-lifecycle'] })
+      setSelectedJourneyId(restored.id)
+    },
+  })
+
+  const duplicateDefinitionMutation = useMutation({
+    mutationFn: async (payload: { definitionId: string; name?: string }) => {
+      return apiSendJson<JourneyDefinition>(`/api/journeys/definitions/${payload.definitionId}/duplicate`, 'POST', {
+        name: payload.name,
+      }, {
+        fallbackMessage: 'Failed to duplicate journey definition',
+      })
+    },
+    onSuccess: async (created) => {
+      await queryClient.invalidateQueries({ queryKey: ['journey-definitions', 'journeys-page'] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-definition-lifecycle'] })
+      setSelectedJourneyId(created.id)
+    },
   })
 
   const createFunnelMutation = useMutation({
@@ -1580,7 +1666,10 @@ export default function Journeys({
 
   const definitions = definitionsQuery.data?.items ?? []
   const kpiOptions = kpisQuery.data?.definitions ?? []
-  const journeyOptions = definitions.map((item) => ({ value: item.id, label: item.name }))
+  const journeyOptions = definitions.map((item) => ({
+    value: item.id,
+    label: item.is_archived ? `${item.name} (archived)` : item.name,
+  }))
 
   const tabs = useMemo(
     () =>
@@ -2187,6 +2276,26 @@ export default function Journeys({
           subtitle="Select an existing journey or create a new one for this workspace."
           actions={
             <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
+              <label
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '8px 10px',
+                  border: `1px solid ${t.color.border}`,
+                  borderRadius: t.radius.sm,
+                  background: t.color.surface,
+                  fontSize: t.font.sizeSm,
+                  color: t.color.textSecondary,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={showArchivedDefinitions}
+                  onChange={(e) => setShowArchivedDefinitions(e.target.checked)}
+                />
+                Show archived
+              </label>
               <button
                 type="button"
                 onClick={() => {
@@ -2209,7 +2318,7 @@ export default function Journeys({
               >
                 Create journey
               </button>
-              {!!selectedJourneyId && (
+              {!!selectedJourneyId && !selectedDefinitionArchived && (
                 <button
                   type="button"
                   onClick={() =>
@@ -2263,11 +2372,140 @@ export default function Journeys({
             </select>
             {selectedDefinition ? (
               <div style={{ display: 'grid', gap: 4 }}>
+                <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <div
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      borderRadius: t.radius.full,
+                      padding: '4px 10px',
+                      fontSize: t.font.sizeXs,
+                      fontWeight: t.font.weightSemibold,
+                      background: selectedDefinitionArchived ? t.color.warningMuted : t.color.successMuted,
+                      color: selectedDefinitionArchived ? t.color.warning : t.color.success,
+                    }}
+                  >
+                    {selectedDefinitionArchived ? 'Archived' : 'Active'}
+                  </div>
+                  {selectedDefinition.updated_at ? (
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                      Updated {new Date(selectedDefinition.updated_at).toLocaleString()}
+                    </div>
+                  ) : null}
+                </div>
                 <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{selectedDefinition.description?.trim() || 'No description'}</div>
                 <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
                   Lookback: {selectedDefinition.lookback_window_days} days • Mode:{' '}
                   {selectedDefinition.mode_default === 'all_journeys' ? 'All journeys' : 'Conversion only'}
                 </div>
+                {definitionLifecycleQuery.data ? (
+                  <div
+                    style={{
+                      marginTop: t.space.xs,
+                      border: `1px solid ${t.color.borderLight}`,
+                      borderRadius: t.radius.md,
+                      background: t.color.bg,
+                      padding: t.space.md,
+                      display: 'grid',
+                      gap: t.space.sm,
+                    }}
+                  >
+                    <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                      Definition lifecycle
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: t.space.sm }}>
+                      {[
+                        { label: 'Saved views', value: definitionLifecycleQuery.data.dependency_counts.saved_views },
+                        { label: 'Funnels', value: definitionLifecycleQuery.data.dependency_counts.funnels },
+                        { label: 'Hypotheses', value: definitionLifecycleQuery.data.dependency_counts.hypotheses },
+                        { label: 'Experiments', value: definitionLifecycleQuery.data.dependency_counts.experiments },
+                        { label: 'Alerts', value: definitionLifecycleQuery.data.dependency_counts.alerts },
+                        { label: 'Journey rows', value: definitionLifecycleQuery.data.output_counts.journey_instances },
+                      ].map((item) => (
+                        <div key={item.label} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.surface }}>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                          <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>{item.value.toLocaleString()}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {(definitionLifecycleQuery.data.warnings || []).length ? (
+                      <div style={{ display: 'grid', gap: 4 }}>
+                        {definitionLifecycleQuery.data.warnings.map((warning) => (
+                          <div key={warning} style={{ fontSize: t.font.sizeXs, color: t.color.warning }}>
+                            {warning}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    {canManageDefinitions ? (
+                      <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const defaultName = `${selectedDefinition.name} copy`
+                            const nextName = window.prompt('Name for duplicated journey definition', defaultName)?.trim()
+                            if (!nextName) return
+                            duplicateDefinitionMutation.mutate({ definitionId: selectedDefinition.id, name: nextName })
+                          }}
+                          disabled={!definitionLifecycleQuery.data.allowed_actions.can_duplicate || duplicateDefinitionMutation.isPending}
+                          style={{
+                            border: `1px solid ${t.color.border}`,
+                            background: t.color.surface,
+                            color: t.color.text,
+                            borderRadius: t.radius.sm,
+                            fontSize: t.font.sizeSm,
+                            padding: '8px 12px',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {duplicateDefinitionMutation.isPending ? 'Duplicating…' : 'Duplicate'}
+                        </button>
+                        {!selectedDefinitionArchived ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const confirmed = window.confirm(
+                                `Archive "${selectedDefinition.name}"? Downstream views, funnels, hypotheses, alerts, and outputs will be preserved, but the definition becomes read-only until restored.`,
+                              )
+                              if (!confirmed) return
+                              archiveDefinitionMutation.mutate(selectedDefinition.id)
+                            }}
+                            disabled={!definitionLifecycleQuery.data.allowed_actions.can_archive || archiveDefinitionMutation.isPending}
+                            style={{
+                              border: `1px solid ${t.color.warning}`,
+                              background: t.color.surface,
+                              color: t.color.warning,
+                              borderRadius: t.radius.sm,
+                              fontSize: t.font.sizeSm,
+                              padding: '8px 12px',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {archiveDefinitionMutation.isPending ? 'Archiving…' : 'Archive'}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => restoreDefinitionMutation.mutate(selectedDefinition.id)}
+                            disabled={!definitionLifecycleQuery.data.allowed_actions.can_restore || restoreDefinitionMutation.isPending}
+                            style={{
+                              border: `1px solid ${t.color.accent}`,
+                              background: t.color.accent,
+                              color: '#fff',
+                              borderRadius: t.radius.sm,
+                              fontSize: t.font.sizeSm,
+                              padding: '8px 12px',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {restoreDefinitionMutation.isPending ? 'Restoring…' : 'Restore'}
+                          </button>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             ) : (
               <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
@@ -2277,13 +2515,28 @@ export default function Journeys({
           </div>
         </SectionCard>
 
-        <SectionCard title="Journey workspace" subtitle="Credit + paths in one workspace.">
+        <SectionCard title="Journey workspace" subtitle={selectedDefinitionArchived ? 'Archived definitions are visible but read-only until restored.' : 'Credit + paths in one workspace.'}>
+          {selectedDefinitionArchived ? (
+            <div
+              style={{
+                marginBottom: t.space.md,
+                border: `1px solid ${t.color.warning}`,
+                borderRadius: t.radius.md,
+                background: t.color.warningMuted,
+                color: t.color.warning,
+                padding: t.space.md,
+                fontSize: t.font.sizeSm,
+              }}
+            >
+              This journey definition is archived. Restore it to re-enable paths, flow, examples, experiments, and other workspace analysis.
+            </div>
+          ) : null}
           <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', marginBottom: t.space.md }}>
             {tabs.map((tab) => (
               <button
                 key={tab.key}
                 type="button"
-                disabled={tab.disabled}
+                disabled={tab.disabled || selectedDefinitionArchived}
                 onClick={() => setActiveTab(tab.key)}
                 style={{
                   border: `1px solid ${tab.key === activeTab ? t.color.accent : t.color.borderLight}`,
@@ -2293,8 +2546,8 @@ export default function Journeys({
                   fontSize: t.font.sizeSm,
                   fontWeight: t.font.weightMedium,
                   padding: '6px 12px',
-                  cursor: tab.disabled ? 'not-allowed' : 'pointer',
-                  opacity: tab.disabled ? 0.75 : 1,
+                  cursor: tab.disabled || selectedDefinitionArchived ? 'not-allowed' : 'pointer',
+                  opacity: tab.disabled || selectedDefinitionArchived ? 0.75 : 1,
                 }}
               >
                 {tab.label}
@@ -2302,7 +2555,7 @@ export default function Journeys({
             ))}
           </div>
 
-          {activeTab === 'insights' && (
+          {!selectedDefinitionArchived && activeTab === 'insights' && (
             <div style={{ display: 'grid', gap: t.space.md }}>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: t.space.sm }}>
                 <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bg }}>
@@ -2510,7 +2763,7 @@ export default function Journeys({
             </div>
           )}
 
-          {activeTab === 'hypotheses' && (
+          {!selectedDefinitionArchived && activeTab === 'hypotheses' && (
             <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))' }}>
               <SectionCard
                 title={editingHypothesisId ? 'Edit hypothesis' : 'New hypothesis'}
@@ -2964,7 +3217,7 @@ export default function Journeys({
             </div>
           )}
 
-          {activeTab === 'experiments' && (
+          {!selectedDefinitionArchived && activeTab === 'experiments' && (
             <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'minmax(280px, 360px) minmax(0, 1fr)' }}>
               <div style={{ display: 'grid', gap: t.space.md }}>
                 <SectionCard title="Experiment queue" subtitle="Journey hypotheses already linked into Incrementality.">
@@ -3209,7 +3462,7 @@ export default function Journeys({
             </div>
           )}
 
-          {activeTab === 'policy' && (
+          {!selectedDefinitionArchived && activeTab === 'policy' && (
             <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'minmax(260px, 340px) minmax(0, 1fr)' }}>
               <div style={{ display: 'grid', gap: t.space.md }}>
                 <SectionCard title="Learned policies" subtitle="Promote validated journey policies or inspect what should be tested next.">
@@ -3481,7 +3734,7 @@ export default function Journeys({
             </div>
           )}
 
-          {activeTab === 'paths' && (
+          {!selectedDefinitionArchived && activeTab === 'paths' && (
             <>
               <AnalyticsTable
                 columns={pathTableColumns}
@@ -3597,7 +3850,7 @@ export default function Journeys({
             </>
           )}
 
-          {activeTab === 'funnels' && (
+          {!selectedDefinitionArchived && activeTab === 'funnels' && (
             <div style={{ display: 'grid', gap: t.space.md }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: t.space.md, flexWrap: 'wrap' }}>
                 <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
@@ -3726,7 +3979,7 @@ export default function Journeys({
             </div>
           )}
 
-          {activeTab === 'flow' && (
+          {!selectedDefinitionArchived && activeTab === 'flow' && (
             <div style={{ display: 'grid', gap: t.space.md }}>
               <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', alignItems: 'end' }}>
                 <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
@@ -3794,7 +4047,7 @@ export default function Journeys({
             </div>
           )}
 
-          {activeTab === 'examples' && (
+          {!selectedDefinitionArchived && activeTab === 'examples' && (
             <div style={{ display: 'grid', gap: t.space.md }}>
               <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', alignItems: 'end' }}>
                 <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, flex: '1 1 240px' }}>

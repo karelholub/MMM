@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.modules.journeys.schemas import (
     JourneyDefinitionCreate,
+    JourneyDefinitionDuplicatePayload,
     JourneyExperimentCreatePayload,
     JourneyDefinitionUpdate,
     JourneyHypothesisPayload,
@@ -18,8 +19,11 @@ from app.services_journey_attribution import build_journey_attribution_summary
 from app.services_journey_definitions import (
     archive_journey_definition,
     create_journey_definition,
+    duplicate_journey_definition,
     get_journey_definition,
+    get_journey_definition_lifecycle,
     list_journey_definitions,
+    restore_journey_definition,
     serialize_journey_definition,
     update_journey_definition,
 )
@@ -468,11 +472,63 @@ def create_router(
         item = archive_journey_definition(db, definition_id, archived_by=user_id)
         if not item:
             raise HTTPException(status_code=404, detail="Journey definition not found")
-        try:
-            purge_journey_definition_outputs_fn(db, definition_id=item.id)
-        except Exception as exc:
-            logger.warning("Journey definition output purge after archive failed: %s", exc, exc_info=True)
         return {"id": item.id, "status": "archived"}
+
+    @router.post("/api/journeys/definitions/{definition_id}/archive")
+    def api_archive_journey_definition(
+        definition_id: str,
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("journeys.manage")),
+    ):
+        user_id = ctx.user_id
+        item = archive_journey_definition(db, definition_id, archived_by=user_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="Journey definition not found")
+        return {"id": item.id, "status": "archived"}
+
+    @router.post("/api/journeys/definitions/{definition_id}/restore")
+    def api_restore_journey_definition(
+        definition_id: str,
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("journeys.manage")),
+    ):
+        user_id = ctx.user_id
+        item = restore_journey_definition(db, definition_id, restored_by=user_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="Journey definition not found")
+        try:
+            rebuild_journey_definition_outputs_fn(db, definition_id=item.id)
+        except Exception as exc:
+            logger.warning("Journey definition rebuild after restore failed: %s", exc, exc_info=True)
+        return serialize_journey_definition(item)
+
+    @router.post("/api/journeys/definitions/{definition_id}/duplicate")
+    def api_duplicate_journey_definition(
+        definition_id: str,
+        body: JourneyDefinitionDuplicatePayload = JourneyDefinitionDuplicatePayload(),
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("journeys.manage")),
+    ):
+        user_id = ctx.user_id
+        item = duplicate_journey_definition(db, definition_id, created_by=user_id, name=body.name)
+        if not item:
+            raise HTTPException(status_code=404, detail="Journey definition not found")
+        try:
+            rebuild_journey_definition_outputs_fn(db, definition_id=item.id)
+        except Exception as exc:
+            logger.warning("Journey definition rebuild after duplicate failed: %s", exc, exc_info=True)
+        return serialize_journey_definition(item)
+
+    @router.get("/api/journeys/definitions/{definition_id}/lifecycle")
+    def api_get_journey_definition_lifecycle(
+        definition_id: str,
+        db=Depends(get_db_dependency),
+        _ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        item = get_journey_definition_lifecycle(db, definition_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="Journey definition not found")
+        return item
 
     @router.post("/api/journeys/definitions/{definition_id}/rebuild")
     def api_rebuild_journey_definition(
