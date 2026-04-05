@@ -1,7 +1,7 @@
 import { useEffect, useState, type Dispatch, type SetStateAction } from 'react'
 
 import { AnalyticsTable, type AnalyticsTableColumn } from '../../components/dashboard'
-import type { MeiroConfig, MeiroPullConfig, MeiroWebhookDiagnostics, MeiroWebhookEvent } from '../../connectors/meiroConnector'
+import type { MeiroConfig, MeiroEventArchiveBatch, MeiroPullConfig, MeiroWebhookDiagnostics, MeiroWebhookEvent } from '../../connectors/meiroConnector'
 import { tokens as t } from '../../theme/tokens'
 import { DEFAULT_MEIRO_PULL_CONFIG, type MeiroWebhookArchiveStatus } from './shared'
 
@@ -11,6 +11,7 @@ interface MeiroPipesSettingsProps {
   setMeiroPullDraft: Dispatch<SetStateAction<MeiroPullConfig>>
   webhookSecretValue: string | null
   meiroWebhookEvents?: { items: MeiroWebhookEvent[]; total: number }
+  meiroEventArchive?: { items: MeiroEventArchiveBatch[]; total: number }
   meiroWebhookDiagnostics?: MeiroWebhookDiagnostics
   meiroWebhookArchiveStatus?: MeiroWebhookArchiveStatus
   meiroEventArchiveStatus?: MeiroWebhookArchiveStatus
@@ -30,6 +31,7 @@ export default function MeiroPipesSettings({
   setMeiroPullDraft,
   webhookSecretValue,
   meiroWebhookEvents,
+  meiroEventArchive,
   meiroWebhookDiagnostics,
   meiroWebhookArchiveStatus,
   meiroEventArchiveStatus,
@@ -103,6 +105,38 @@ export default function MeiroPipesSettings({
       key: 'source_ip',
       label: 'Source IP',
       render: (event) => event.ip || '—',
+      cellStyle: { color: t.color.textSecondary },
+    },
+  ]
+
+  const eventArchiveColumns: AnalyticsTableColumn<MeiroEventArchiveBatch>[] = [
+    {
+      key: 'received',
+      label: 'Archived',
+      render: (batch) => relativeTime(batch.received_at),
+      cellStyle: { whiteSpace: 'nowrap' },
+    },
+    {
+      key: 'records',
+      label: 'Events',
+      align: 'right',
+      render: (batch) => Number(batch.received_count || batch.events?.length || 0).toLocaleString(),
+      cellStyle: { fontWeight: t.font.weightMedium },
+    },
+    {
+      key: 'mode',
+      label: 'Mode',
+      render: (batch) => (batch.replace ? 'replace' : 'append'),
+    },
+    {
+      key: 'shape',
+      label: 'Payload shape',
+      render: (batch) => batch.payload_shape || 'object',
+    },
+    {
+      key: 'parser',
+      label: 'Parser',
+      render: (batch) => batch.parser_version || '—',
       cellStyle: { color: t.color.textSecondary },
     },
   ]
@@ -536,7 +570,30 @@ export default function MeiroPipesSettings({
       </div>
 
       <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.bg, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
-        <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Recent webhook events</div>
+        <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Raw-event archive preview</div>
+        <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+          This is the actual raw-event archive used for replay. It is distinct from the recent webhook receipt log below.
+        </div>
+        <AnalyticsTable
+          columns={eventArchiveColumns}
+          rows={meiroEventArchive?.items || []}
+          rowKey={(batch, idx) => `${batch.received_at || 'archive'}-${idx}`}
+          tableLabel="Meiro raw-event archive preview"
+          density="compact"
+          minWidth={760}
+          stickyFirstColumn
+          emptyState="No raw-event archive batches available yet."
+        />
+        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+          Showing {Number(meiroEventArchive?.items?.length || 0).toLocaleString()} recent archived batches out of {Number(meiroEventArchiveStatus?.entries || 0).toLocaleString()} total.
+        </div>
+      </div>
+
+      <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.bg, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
+        <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Recent webhook receipt log</div>
+        <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+          This diagnostic log shows recent requests received by the webhook endpoint. It is not the full archive.
+        </div>
         {meiroWebhookEventsLoading ? (
           <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading events…</div>
         ) : meiroWebhookEventsError ? (
@@ -546,7 +603,7 @@ export default function MeiroPipesSettings({
             columns={webhookEventColumns}
             rows={meiroWebhookEvents?.items || []}
             rowKey={(event, idx) => `${event.received_at || 'event'}-${idx}`}
-            tableLabel="Recent Meiro webhook events"
+            tableLabel="Recent Meiro webhook receipt log"
             density="compact"
             minWidth={760}
             stickyFirstColumn

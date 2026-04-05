@@ -66,6 +66,15 @@ export interface MeiroWebhookEvent {
   error_detail?: string | null
 }
 
+export interface MeiroEventArchiveBatch {
+  received_at: string
+  received_count: number
+  parser_version?: string | null
+  replace?: boolean
+  payload_shape?: string | null
+  events?: Array<Record<string, unknown>>
+}
+
 export interface MeiroWebhookDiagnostics {
   ok: boolean
   health_url: string
@@ -318,6 +327,13 @@ export async function getMeiroWebhookEvents(limit = 100): Promise<{ items: Meiro
   return apiGetJson<{ items: MeiroWebhookEvent[]; total: number }>(
     withQuery('/api/connectors/meiro/webhook/events', { limit }),
     { fallbackMessage: 'Failed to fetch webhook event log' },
+  )
+}
+
+export async function getMeiroEventArchive(limit = 25): Promise<{ items: MeiroEventArchiveBatch[]; total: number }> {
+  return apiGetJson<{ items: MeiroEventArchiveBatch[]; total: number }>(
+    withQuery('/api/connectors/meiro/events/archive', { limit }),
+    { fallbackMessage: 'Failed to fetch Meiro raw-event archive' },
   )
 }
 

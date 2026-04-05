@@ -9,6 +9,7 @@ import { tokens as t } from '../theme/tokens'
 import {
   connectMeiroCDP,
   disconnectMeiroCDP,
+  getMeiroEventArchive,
   getMeiroConfig,
   type MeiroQuarantineReprocessResult,
   getMeiroMapping,
@@ -127,6 +128,10 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
   const meiroWebhookEventsQuery = useQuery({
     queryKey: ['meiro-webhook-events-page'],
     queryFn: () => getMeiroWebhookEvents(100),
+  })
+  const meiroEventArchiveQuery = useQuery({
+    queryKey: ['meiro-event-archive-page'],
+    queryFn: () => getMeiroEventArchive(25),
   })
   const meiroWebhookDiagnosticsQuery = useQuery<MeiroWebhookDiagnostics>({
     queryKey: ['meiro-webhook-diagnostics-page'],
@@ -459,6 +464,7 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
               meiroMappingState={meiroMappingQuery.data}
               meiroWebhookSuggestions={meiroWebhookSuggestionsQuery.data}
               meiroWebhookEvents={meiroWebhookEventsQuery.data}
+              meiroEventArchive={meiroEventArchiveQuery.data}
               meiroWebhookDiagnostics={meiroWebhookDiagnosticsQuery.data}
               meiroWebhookArchiveStatus={meiroWebhookArchiveStatusQuery.data}
               meiroEventArchiveStatus={meiroEventArchiveStatusQuery.data}

@@ -7,6 +7,7 @@ import type {
   MeiroPullConfig,
   MeiroQuarantineReprocessResult,
   MeiroQuarantineRun,
+  MeiroEventArchiveBatch,
   MeiroWebhookEvent,
   MeiroWebhookDiagnostics,
   MeiroWebhookSuggestions,
@@ -35,6 +36,7 @@ interface MeiroIntegrationPanelProps {
   meiroMappingState?: MeiroMappingState
   meiroWebhookSuggestions?: MeiroWebhookSuggestions
   meiroWebhookEvents?: { items: MeiroWebhookEvent[]; total: number }
+  meiroEventArchive?: { items: MeiroEventArchiveBatch[]; total: number }
   meiroWebhookDiagnostics?: MeiroWebhookDiagnostics
   meiroWebhookArchiveStatus?: MeiroWebhookArchiveStatus
   meiroEventArchiveStatus?: MeiroWebhookArchiveStatus
@@ -169,6 +171,7 @@ export default function MeiroIntegrationPanel(props: MeiroIntegrationPanelProps)
           setMeiroPullDraft={props.setMeiroPullDraft}
           webhookSecretValue={props.webhookSecretValue}
           meiroWebhookEvents={props.meiroWebhookEvents}
+          meiroEventArchive={props.meiroEventArchive}
           meiroWebhookDiagnostics={props.meiroWebhookDiagnostics}
           meiroWebhookArchiveStatus={props.meiroWebhookArchiveStatus}
           meiroEventArchiveStatus={props.meiroEventArchiveStatus}
