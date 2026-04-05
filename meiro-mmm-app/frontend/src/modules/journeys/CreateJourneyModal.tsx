@@ -16,8 +16,11 @@ interface KpiOption {
 interface CreateJourneyModalProps {
   draft: JourneyDraft
   kpiOptions: KpiOption[]
-  createError: string | null
-  creating: boolean
+  errorMessage: string | null
+  submitting: boolean
+  title?: string
+  subtitle?: string
+  submitLabel?: string
   onClose: () => void
   onSubmit: () => void
   onDraftChange: (next: JourneyDraft) => void
@@ -27,8 +30,11 @@ interface CreateJourneyModalProps {
 export default function CreateJourneyModal({
   draft,
   kpiOptions,
-  createError,
-  creating,
+  errorMessage,
+  submitting,
+  title = 'Create journey',
+  subtitle,
+  submitLabel = 'Create',
   onClose,
   onSubmit,
   onDraftChange,
@@ -37,7 +43,8 @@ export default function CreateJourneyModal({
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 50, background: 'rgba(15, 23, 42, 0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
       <div style={{ width: 'min(620px, 100%)', background: t.color.surface, borderRadius: t.radius.lg, border: `1px solid ${t.color.border}`, boxShadow: t.shadowLg, padding: t.space.xl, display: 'grid', gap: t.space.md }}>
-        <h3 style={{ margin: 0, fontSize: t.font.sizeLg, color: t.color.text }}>Create journey</h3>
+        <h3 style={{ margin: 0, fontSize: t.font.sizeLg, color: t.color.text }}>{title}</h3>
+        {subtitle ? <div style={{ marginTop: -4, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{subtitle}</div> : null}
         <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>Name
           <input value={draft.name} onChange={(e) => onDraftChange({ ...draft, name: e.target.value })} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
         </label>
@@ -56,10 +63,10 @@ export default function CreateJourneyModal({
           <button type="button" onClick={() => onDraftChange({ ...draft, mode_default: 'conversion_only' })} style={{ border: `1px solid ${draft.mode_default === 'conversion_only' ? t.color.accent : t.color.border}`, background: draft.mode_default === 'conversion_only' ? t.color.accentMuted : t.color.surface, borderRadius: t.radius.full, padding: '6px 12px', cursor: 'pointer' }}>Conversion only</button>
           <button type="button" onClick={() => onDraftChange({ ...draft, mode_default: 'all_journeys' })} style={{ border: `1px solid ${draft.mode_default === 'all_journeys' ? t.color.accent : t.color.border}`, background: draft.mode_default === 'all_journeys' ? t.color.accentMuted : t.color.surface, borderRadius: t.radius.full, padding: '6px 12px', cursor: 'pointer' }}>All journeys</button>
         </div>
-        {createError && <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{createError}</div>}
+        {errorMessage && <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{errorMessage}</div>}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: t.space.sm }}>
           <button type="button" onClick={onClose} style={{ border: `1px solid ${t.color.border}`, background: 'transparent', borderRadius: t.radius.sm, padding: '8px 12px', cursor: 'pointer' }}>Cancel</button>
-          <button type="button" onClick={onSubmit} disabled={creating} style={{ border: `1px solid ${t.color.accent}`, background: t.color.accent, color: '#fff', borderRadius: t.radius.sm, padding: '8px 14px', cursor: creating ? 'wait' : 'pointer' }}>{creating ? 'Creating…' : 'Create'}</button>
+          <button type="button" onClick={onSubmit} disabled={submitting} style={{ border: `1px solid ${t.color.accent}`, background: t.color.accent, color: '#fff', borderRadius: t.radius.sm, padding: '8px 14px', cursor: submitting ? 'wait' : 'pointer' }}>{submitting ? `${submitLabel}…` : submitLabel}</button>
         </div>
       </div>
     </div>

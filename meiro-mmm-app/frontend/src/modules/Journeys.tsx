@@ -870,6 +870,7 @@ export default function Journeys({
   const [activeTab, setActiveTab] = useState<JourneysTab>('paths')
   const [selectedJourneyId, setSelectedJourneyId] = useState('')
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [showEditModal, setShowEditModal] = useState(false)
   const [showCreateFunnelModal, setShowCreateFunnelModal] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
   const [createFunnelError, setCreateFunnelError] = useState<string | null>(null)
@@ -1428,6 +1429,24 @@ export default function Journeys({
     onError: (err) => setCreateError((err as Error).message || 'Failed to create journey'),
   })
 
+  const updateMutation = useMutation({
+    mutationFn: async (payload: { definitionId: string; body: CreateJourneyDraft }) => {
+      return apiSendJson<JourneyDefinition>(`/api/journeys/definitions/${payload.definitionId}`, 'PUT', payload.body, {
+        fallbackMessage: 'Failed to update journey definition',
+      })
+    },
+    onSuccess: async (updated) => {
+      await queryClient.invalidateQueries({ queryKey: ['journey-definitions', 'journeys-page'] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-definition-lifecycle'] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-definition-audit'] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-dimensions'] })
+      setSelectedJourneyId(updated.id)
+      setShowEditModal(false)
+      setCreateError(null)
+    },
+    onError: (err) => setCreateError((err as Error).message || 'Failed to update journey'),
+  })
+
   const archiveDefinitionMutation = useMutation({
     mutationFn: async (definitionId: string) => {
       return apiSendJson<{ id: string; status: string }>(`/api/journeys/definitions/${definitionId}/archive`, 'POST', undefined, {
@@ -1914,6 +1933,24 @@ export default function Journeys({
       description: draft.description.trim(),
       lookback_window_days: clampLookback(draft.lookback_window_days),
       conversion_kpi_id: draft.conversion_kpi_id || '',
+    })
+  }
+
+  const submitEdit = () => {
+    if (!selectedDefinition) return
+    if (!draft.name.trim()) {
+      setCreateError('Journey name is required')
+      return
+    }
+    updateMutation.mutate({
+      definitionId: selectedDefinition.id,
+      body: {
+        ...draft,
+        name: draft.name.trim(),
+        description: draft.description.trim(),
+        lookback_window_days: clampLookback(draft.lookback_window_days),
+        conversion_kpi_id: draft.conversion_kpi_id || '',
+      },
     })
   }
 
@@ -2516,6 +2553,14 @@ export default function Journeys({
                 type="button"
                 onClick={() => {
                   if (!canManageDefinitions) return
+                  setCreateError(null)
+                  setDraft({
+                    name: '',
+                    description: '',
+                    conversion_kpi_id: kpisQuery.data?.primary_kpi_id || kpiOptions[0]?.id || '',
+                    lookback_window_days: 30,
+                    mode_default: 'conversion_only',
+                  })
                   setShowCreateModal(true)
                 }}
                 disabled={!canManageDefinitions}
@@ -2572,6 +2617,35 @@ export default function Journeys({
               )}
               {canManageDefinitions && selectedDefinition && definitionLifecycleQuery.data ? (
                 <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCreateError(null)
+                      setDraft({
+                        name: selectedDefinition.name || '',
+                        description: selectedDefinition.description || '',
+                        conversion_kpi_id: selectedDefinition.conversion_kpi_id || kpisQuery.data?.primary_kpi_id || kpiOptions[0]?.id || '',
+                        lookback_window_days: clampLookback(selectedDefinition.lookback_window_days || 30),
+                        mode_default: selectedDefinition.mode_default || 'conversion_only',
+                      })
+                      setShowEditModal(true)
+                    }}
+                    disabled={selectedDefinitionArchived || updateMutation.isPending}
+                    style={{
+                      border: `1px solid ${t.color.border}`,
+                      background: t.color.surface,
+                      color: t.color.text,
+                      borderRadius: t.radius.sm,
+                      fontSize: t.font.sizeSm,
+                      fontWeight: t.font.weightMedium,
+                      padding: '8px 14px',
+                      cursor: selectedDefinitionArchived || updateMutation.isPending ? 'not-allowed' : 'pointer',
+                      opacity: selectedDefinitionArchived ? 0.5 : 1,
+                    }}
+                    title={selectedDefinitionArchived ? 'Restore the journey definition before editing it' : undefined}
+                  >
+                    {updateMutation.isPending ? 'Saving…' : 'Edit'}
+                  </button>
                   <button
                     type="button"
                     onClick={() => {
@@ -2697,6 +2771,26 @@ export default function Journeys({
                 </option>
               ))}
             </select>
+            <div
+              style={{
+                display: 'grid',
+                gap: 4,
+                padding: '10px 12px',
+                borderRadius: t.radius.md,
+                border: `1px solid ${t.color.border}`,
+                background: t.color.surface,
+                fontSize: t.font.sizeSm,
+                color: t.color.textSecondary,
+              }}
+            >
+              <div>Filters are derived from observed journey rows for the selected definition and date range.</div>
+              <div>
+                {dimensionsQuery.data
+                  ? `${dimensionsQuery.data.summary.journey_rows.toLocaleString()} rows observed from ${dimensionsQuery.data.summary.date_from} to ${dimensionsQuery.data.summary.date_to}.`
+                  : 'Filter values load from current workspace activity once the selected definition resolves.'}
+              </div>
+              <div>Segment is intentionally hidden here until it becomes a real modeled journey dimension.</div>
+            </div>
             {selectedDefinition ? (
               <div style={{ display: 'grid', gap: 4 }}>
                 <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -4932,10 +5026,35 @@ export default function Journeys({
         <CreateJourneyModal
           draft={draft}
           kpiOptions={kpiOptions}
-          createError={createError}
-          creating={createMutation.isPending}
-          onClose={() => setShowCreateModal(false)}
+          errorMessage={createError}
+          submitting={createMutation.isPending}
+          title="Create journey"
+          subtitle="Start a new journey definition for this workspace. You can refine lifecycle, settings, and outputs afterward."
+          submitLabel="Create"
+          onClose={() => {
+            setShowCreateModal(false)
+            setCreateError(null)
+          }}
           onSubmit={submitCreate}
+          onDraftChange={setDraft}
+          onClampLookback={clampLookback}
+        />
+      )}
+
+      {showEditModal && canManageDefinitions && selectedDefinition && (
+        <CreateJourneyModal
+          draft={draft}
+          kpiOptions={kpiOptions}
+          errorMessage={createError}
+          submitting={updateMutation.isPending}
+          title="Edit journey"
+          subtitle="Update the active definition metadata and defaults. Saving will rebuild journey outputs in the background."
+          submitLabel="Save changes"
+          onClose={() => {
+            setShowEditModal(false)
+            setCreateError(null)
+          }}
+          onSubmit={submitEdit}
           onDraftChange={setDraft}
           onClampLookback={clampLookback}
         />
