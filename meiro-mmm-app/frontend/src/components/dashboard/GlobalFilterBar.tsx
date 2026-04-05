@@ -20,7 +20,12 @@ interface Option {
 interface GlobalFilterBarProps {
   value: GlobalFiltersState
   onChange: (next: GlobalFiltersState) => void
-  channels?: string[]
+  channels?: Option[]
+  campaigns?: Option[]
+  devices?: Option[]
+  geos?: Option[]
+  segments?: Option[]
+  showSegment?: boolean
 }
 
 const FIELD_STYLE: CSSProperties = {
@@ -33,8 +38,9 @@ const FIELD_STYLE: CSSProperties = {
   fontSize: t.font.sizeSm,
 }
 
-function asOptions(values: string[]): Option[] {
-  return values.map((value) => ({ value, label: value }))
+function ensureAllOption(values: Option[], fallbackLabel: string): Option[] {
+  const options = values.length ? values : []
+  return [{ value: 'all', label: fallbackLabel }, ...options]
 }
 
 function updateSelect(
@@ -50,32 +56,17 @@ export default function GlobalFilterBar({
   value,
   onChange,
   channels = [],
+  campaigns = [],
+  devices = [],
+  geos = [],
+  segments = [],
+  showSegment = true,
 }: GlobalFilterBarProps) {
-  const channelOptions = [{ value: 'all', label: 'All channels' }, ...asOptions(channels)]
-  const campaignOptions = [
-    { value: 'all', label: 'All campaigns' },
-    { value: 'newsletter', label: 'Newsletter' },
-    { value: 'brand', label: 'Brand' },
-    { value: 'retargeting', label: 'Retargeting' },
-  ]
-  const deviceOptions = [
-    { value: 'all', label: 'All devices' },
-    { value: 'desktop', label: 'Desktop' },
-    { value: 'mobile', label: 'Mobile' },
-    { value: 'tablet', label: 'Tablet' },
-  ]
-  const geoOptions = [
-    { value: 'all', label: 'All geos' },
-    { value: 'us', label: 'United States' },
-    { value: 'eu', label: 'Europe' },
-    { value: 'apac', label: 'APAC' },
-  ]
-  const segmentOptions = [
-    { value: 'all', label: 'All segments' },
-    { value: 'new', label: 'New users' },
-    { value: 'returning', label: 'Returning users' },
-    { value: 'high_value', label: 'High value' },
-  ]
+  const channelOptions = ensureAllOption(channels, 'All channels')
+  const campaignOptions = ensureAllOption(campaigns, 'All campaigns')
+  const deviceOptions = ensureAllOption(devices, 'All devices')
+  const geoOptions = ensureAllOption(geos, 'All geos')
+  const segmentOptions = ensureAllOption(segments, 'All segments')
 
   return (
     <div
@@ -153,18 +144,20 @@ export default function GlobalFilterBar({
         ))}
       </select>
 
-      <select
-        value={value.segment}
-        onChange={(event) => updateSelect(event, 'segment', value, onChange)}
-        style={FIELD_STYLE}
-        aria-label="Segment filter"
-      >
-        {segmentOptions.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+      {showSegment ? (
+        <select
+          value={value.segment}
+          onChange={(event) => updateSelect(event, 'segment', value, onChange)}
+          style={FIELD_STYLE}
+          aria-label="Segment filter"
+        >
+          {segmentOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      ) : null}
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -32,6 +32,7 @@ from app.services_journey_definition_audit import (
     list_journey_definition_audit,
     write_journey_definition_audit,
 )
+from app.services_journey_dimensions import build_journey_filter_dimensions
 from app.services_journey_examples import list_examples_for_journey_definition
 from app.services_journey_hypotheses import (
     create_journey_hypothesis,
@@ -686,6 +687,32 @@ def create_router(
             country=country,
             page=page,
             limit=limit,
+        )
+
+    @router.get("/api/journeys/{definition_id}/dimensions")
+    def api_get_journey_dimensions(
+        definition_id: str,
+        date_from: date,
+        date_to: date,
+        channel_group: Optional[str] = Query(None),
+        campaign_id: Optional[str] = Query(None),
+        device: Optional[str] = Query(None),
+        country: Optional[str] = Query(None),
+        db=Depends(get_db_dependency),
+        _ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        jd = get_journey_definition(db, definition_id)
+        if not jd:
+            raise HTTPException(status_code=404, detail="Journey definition not found")
+        return build_journey_filter_dimensions(
+            db,
+            definition_id=definition_id,
+            date_from=date_from,
+            date_to=date_to,
+            channel_group=channel_group,
+            campaign_id=campaign_id,
+            device=device,
+            country=country,
         )
 
     @router.get("/api/journeys/{definition_id}/insights")

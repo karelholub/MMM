@@ -462,6 +462,25 @@ interface JourneyPolicyPromotionResponse {
   policy_candidate: JourneyPolicyRecommendationRecord
 }
 
+interface JourneyFilterDimensionValue {
+  value: string
+  count: number
+}
+
+interface JourneyFilterDimensionsResponse {
+  summary: {
+    journey_rows: number
+    date_from: string
+    date_to: string
+    segment_supported: boolean
+  }
+  channels: JourneyFilterDimensionValue[]
+  campaigns: JourneyFilterDimensionValue[]
+  devices: JourneyFilterDimensionValue[]
+  countries: JourneyFilterDimensionValue[]
+  segments: JourneyFilterDimensionValue[]
+}
+
 interface JourneyHypothesisRequest {
   journey_definition_id: string
   title: string
@@ -617,6 +636,10 @@ function formatSeconds(v: number | null | undefined): string {
   const mins = v / 60
   if (mins < 60) return `${mins.toFixed(1)}m`
   return `${(mins / 60).toFixed(1)}h`
+}
+
+function dimensionLabel(value: string, count: number): string {
+  return `${value} (${count.toLocaleString()})`
 }
 
 function formatLifecycleActor(value?: string | null): string {
@@ -964,6 +987,41 @@ export default function Journeys({
   })
   const selectedDefinitionLifecycleStatus =
     definitionLifecycleQuery.data?.definition.lifecycle_status ?? (selectedDefinitionArchived ? 'archived' : 'active')
+  const dimensionsQuery = useQuery<JourneyFilterDimensionsResponse>({
+    queryKey: [
+      'journey-dimensions',
+      selectedJourneyId,
+      filters.dateFrom,
+      filters.dateTo,
+      filters.channel,
+      filters.campaign,
+      filters.device,
+      filters.geo,
+    ],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        date_from: filters.dateFrom,
+        date_to: filters.dateTo,
+      })
+      if (filters.channel !== 'all') params.set('channel_group', filters.channel)
+      if (filters.campaign !== 'all') params.set('campaign_id', filters.campaign)
+      if (filters.device !== 'all') params.set('device', filters.device)
+      if (filters.geo !== 'all') params.set('country', filters.geo)
+      return apiGetJson<JourneyFilterDimensionsResponse>(`/api/journeys/${selectedJourneyId}/dimensions?${params.toString()}`, {
+        fallbackMessage: 'Failed to load journey filter dimensions',
+      })
+    },
+    enabled: !!selectedJourneyId && !featureDisabled,
+  })
+  const journeyFilterOptions = useMemo(() => {
+    const dims = dimensionsQuery.data
+    return {
+      channels: (dims?.channels ?? []).map((item) => ({ value: item.value, label: dimensionLabel(item.value, item.count) })),
+      campaigns: (dims?.campaigns ?? []).map((item) => ({ value: item.value, label: dimensionLabel(item.value, item.count) })),
+      devices: (dims?.devices ?? []).map((item) => ({ value: item.value, label: dimensionLabel(item.value, item.count) })),
+      geos: (dims?.countries ?? []).map((item) => ({ value: item.value, label: dimensionLabel(String(item.value).toUpperCase(), item.count) })),
+    }
+  }, [dimensionsQuery.data])
 
   function openAlertsForDefinition(definitionId: string) {
     if (typeof window === 'undefined') return
@@ -1024,7 +1082,7 @@ export default function Journeys({
       if (filters.channel !== 'all') params.set('channel_group', filters.channel)
       if (filters.campaign !== 'all') params.set('campaign_id', filters.campaign)
       if (filters.device !== 'all') params.set('device', filters.device)
-      if (filters.geo !== 'all') params.set('country', filters.geo.toUpperCase())
+      if (filters.geo !== 'all') params.set('country', filters.geo)
       return apiGetJson<JourneyPathsResponse>(`/api/journeys/${selectedJourneyId}/paths?${params.toString()}`, {
         fallbackMessage: 'Failed to load path aggregates',
       })
@@ -1055,7 +1113,7 @@ export default function Journeys({
       if (filters.channel !== 'all') params.set('channel_group', filters.channel)
       if (filters.campaign !== 'all') params.set('campaign_id', filters.campaign)
       if (filters.device !== 'all') params.set('device', filters.device)
-      if (filters.geo !== 'all') params.set('country', filters.geo.toUpperCase())
+      if (filters.geo !== 'all') params.set('country', filters.geo)
       return apiGetJson<AttributionSummaryResponse>(`/api/journeys/${selectedJourneyId}/attribution-summary?${params.toString()}`, {
         fallbackMessage: 'Failed to load attribution summary',
       })
@@ -1089,7 +1147,7 @@ export default function Journeys({
       if (filters.channel !== 'all') params.set('channel_group', filters.channel)
       if (filters.campaign !== 'all') params.set('campaign_id', filters.campaign)
       if (filters.device !== 'all') params.set('device', filters.device)
-      if (filters.geo !== 'all') params.set('country', filters.geo.toUpperCase())
+      if (filters.geo !== 'all') params.set('country', filters.geo)
       return apiGetJson<AttributionSummaryResponse>(`/api/journeys/${selectedJourneyId}/attribution-summary?${params.toString()}`, {
         fallbackMessage: 'Failed to load path credit split',
       })
@@ -1127,7 +1185,7 @@ export default function Journeys({
       if (filters.channel !== 'all') params.set('channel_group', filters.channel)
       if (filters.campaign !== 'all') params.set('campaign_id', filters.campaign)
       if (filters.device !== 'all') params.set('device', filters.device)
-      if (filters.geo !== 'all') params.set('country', filters.geo.toUpperCase())
+      if (filters.geo !== 'all') params.set('country', filters.geo)
       return apiGetJson<FunnelResultsResponse>(`/api/funnels/${selectedFunnelId}/results?${params.toString()}`, {
         fallbackMessage: 'Failed to load funnel results',
       })
@@ -1157,7 +1215,7 @@ export default function Journeys({
       if (filters.channel !== 'all') params.set('channel_group', filters.channel)
       if (filters.campaign !== 'all') params.set('campaign_id', filters.campaign)
       if (filters.device !== 'all') params.set('device', filters.device)
-      if (filters.geo !== 'all') params.set('country', filters.geo.toUpperCase())
+      if (filters.geo !== 'all') params.set('country', filters.geo)
       return apiGetJson<FunnelDiagnosticItem[]>(`/api/funnels/${selectedFunnelId}/diagnostics?${params.toString()}`, {
         fallbackMessage: 'Failed to load diagnostics',
       })
@@ -1192,7 +1250,7 @@ export default function Journeys({
       if (filters.channel !== 'all') params.set('channel_group', filters.channel)
       if (filters.campaign !== 'all') params.set('campaign_id', filters.campaign)
       if (filters.device !== 'all') params.set('device', filters.device)
-      if (filters.geo !== 'all') params.set('country', filters.geo.toUpperCase())
+      if (filters.geo !== 'all') params.set('country', filters.geo)
       return apiGetJson<JourneyTransitionsResponse>(`/api/journeys/${selectedJourneyId}/transitions?${params.toString()}`, {
         fallbackMessage: 'Failed to load flow transitions',
       })
@@ -1222,7 +1280,7 @@ export default function Journeys({
       if (filters.channel !== 'all') params.set('channel_group', filters.channel)
       if (filters.campaign !== 'all') params.set('campaign_id', filters.campaign)
       if (filters.device !== 'all') params.set('device', filters.device)
-      if (filters.geo !== 'all') params.set('country', filters.geo.toUpperCase())
+      if (filters.geo !== 'all') params.set('country', filters.geo)
       if (examplesPathHash) params.set('path_hash', examplesPathHash)
       if (examplesStepFilter.trim()) params.set('contains_step', examplesStepFilter.trim())
       return apiGetJson<JourneyExamplesResponse>(`/api/journeys/${selectedJourneyId}/examples?${params.toString()}`, {
@@ -1253,7 +1311,7 @@ export default function Journeys({
       if (filters.channel !== 'all') params.set('channel_group', filters.channel)
       if (filters.campaign !== 'all') params.set('campaign_id', filters.campaign)
       if (filters.device !== 'all') params.set('device', filters.device)
-      if (filters.geo !== 'all') params.set('country', filters.geo.toUpperCase())
+      if (filters.geo !== 'all') params.set('country', filters.geo)
       return apiGetJson<JourneyInsightsResponse>(`/api/journeys/${selectedJourneyId}/insights?${params.toString()}`, {
         fallbackMessage: 'Failed to load journey insights',
       })
@@ -1672,7 +1730,7 @@ export default function Journeys({
       campaign: params.get('campaign') || prev.campaign,
       device: params.get('device') || prev.device,
       geo: params.get('geo') || prev.geo,
-      segment: params.get('segment') || prev.segment,
+      segment: 'all',
     }))
   }, [])
 
@@ -1708,6 +1766,33 @@ export default function Journeys({
       setSelectedJourneyId(fallback)
     }
   }, [definitionsQuery.data?.items, selectedJourneyId])
+
+  useEffect(() => {
+    const dims = dimensionsQuery.data
+    if (!dims) return
+    setFilters((prev) => {
+      const next = { ...prev }
+      const validChannels = new Set((dims.channels ?? []).map((item) => item.value))
+      const validCampaigns = new Set((dims.campaigns ?? []).map((item) => item.value))
+      const validDevices = new Set((dims.devices ?? []).map((item) => item.value))
+      const validGeos = new Set((dims.countries ?? []).map((item) => item.value))
+      if (next.channel !== 'all' && !validChannels.has(next.channel)) next.channel = 'all'
+      if (next.campaign !== 'all' && !validCampaigns.has(next.campaign)) next.campaign = 'all'
+      if (next.device !== 'all' && !validDevices.has(next.device)) next.device = 'all'
+      if (next.geo !== 'all' && !validGeos.has(next.geo.toLowerCase())) next.geo = 'all'
+      next.segment = 'all'
+      if (
+        next.channel === prev.channel &&
+        next.campaign === prev.campaign &&
+        next.device === prev.device &&
+        next.geo === prev.geo &&
+        next.segment === prev.segment
+      ) {
+        return prev
+      }
+      return next
+    })
+  }, [dimensionsQuery.data])
 
   useEffect(() => {
     setEditingHypothesisId(null)
@@ -1751,7 +1836,7 @@ export default function Journeys({
     params.set('campaign', filters.campaign)
     params.set('device', filters.device)
     params.set('geo', filters.geo)
-    params.set('segment', filters.segment)
+    params.delete('segment')
     if (examplesPathHash) params.set('examples_path_hash', examplesPathHash)
     else params.delete('examples_path_hash')
     if (examplesStepFilter.trim()) params.set('examples_step', examplesStepFilter.trim())
@@ -2375,7 +2460,17 @@ export default function Journeys({
       <DashboardPage
         title="Journeys"
         description="Customer journey paths + attribution overlay"
-        filters={<GlobalFilterBar value={filters} onChange={setFilters} channels={journeysSummary?.channels ?? []} />}
+        filters={
+          <GlobalFilterBar
+            value={filters}
+            onChange={setFilters}
+            channels={journeyFilterOptions.channels}
+            campaigns={journeyFilterOptions.campaigns}
+            devices={journeyFilterOptions.devices}
+            geos={journeyFilterOptions.geos}
+            showSegment={false}
+          />
+        }
         isEmpty={featureDisabled}
         emptyState={
           <SectionCard
@@ -2456,7 +2551,7 @@ export default function Journeys({
                           channel_group: filters.channel !== 'all' ? filters.channel : null,
                           campaign_id: filters.campaign !== 'all' ? filters.campaign : null,
                           device: filters.device !== 'all' ? filters.device : null,
-                          country: filters.geo !== 'all' ? filters.geo.toUpperCase() : null,
+                          country: filters.geo !== 'all' ? filters.geo : null,
                         },
                       },
                     )
@@ -2475,6 +2570,117 @@ export default function Journeys({
                   Create alert
                 </button>
               )}
+              {canManageDefinitions && selectedDefinition && definitionLifecycleQuery.data ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const defaultName = `${selectedDefinition.name} copy`
+                      const nextName = window.prompt('Name for duplicated journey definition', defaultName)?.trim()
+                      if (!nextName) return
+                      duplicateDefinitionMutation.mutate({ definitionId: selectedDefinition.id, name: nextName })
+                    }}
+                    disabled={!definitionLifecycleQuery.data.allowed_actions.can_duplicate || duplicateDefinitionMutation.isPending}
+                    style={{
+                      border: `1px solid ${t.color.border}`,
+                      background: t.color.surface,
+                      color: t.color.text,
+                      borderRadius: t.radius.sm,
+                      fontSize: t.font.sizeSm,
+                      fontWeight: t.font.weightMedium,
+                      padding: '8px 14px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {duplicateDefinitionMutation.isPending ? 'Duplicating…' : 'Duplicate'}
+                  </button>
+                  {!selectedDefinitionArchived ? (
+                    <button
+                      type="button"
+                      onClick={() => rebuildDefinitionMutation.mutate({ definitionId: selectedDefinition.id })}
+                      disabled={!definitionLifecycleQuery.data.allowed_actions.can_rebuild || rebuildDefinitionMutation.isPending}
+                      style={{
+                        border: `1px solid ${t.color.accent}`,
+                        background: t.color.surface,
+                        color: t.color.accent,
+                        borderRadius: t.radius.sm,
+                        fontSize: t.font.sizeSm,
+                        fontWeight: t.font.weightMedium,
+                        padding: '8px 14px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {rebuildDefinitionMutation.isPending ? 'Rebuilding…' : 'Rebuild outputs'}
+                    </button>
+                  ) : null}
+                  {!selectedDefinitionArchived ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const confirmed = window.confirm(
+                          `Archive "${selectedDefinition.name}"? Downstream views, funnels, hypotheses, alerts, and outputs will be preserved, but the definition becomes read-only until restored.`,
+                        )
+                        if (!confirmed) return
+                        archiveDefinitionMutation.mutate(selectedDefinition.id)
+                      }}
+                      disabled={!definitionLifecycleQuery.data.allowed_actions.can_archive || archiveDefinitionMutation.isPending}
+                      style={{
+                        border: `1px solid ${t.color.warning}`,
+                        background: t.color.surface,
+                        color: t.color.warning,
+                        borderRadius: t.radius.sm,
+                        fontSize: t.font.sizeSm,
+                        fontWeight: t.font.weightMedium,
+                        padding: '8px 14px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {archiveDefinitionMutation.isPending ? 'Archiving…' : 'Archive'}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => restoreDefinitionMutation.mutate(selectedDefinition.id)}
+                      disabled={!definitionLifecycleQuery.data.allowed_actions.can_restore || restoreDefinitionMutation.isPending}
+                      style={{
+                        border: `1px solid ${t.color.accent}`,
+                        background: t.color.accent,
+                        color: '#fff',
+                        borderRadius: t.radius.sm,
+                        fontSize: t.font.sizeSm,
+                        fontWeight: t.font.weightMedium,
+                        padding: '8px 14px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {restoreDefinitionMutation.isPending ? 'Restoring…' : 'Restore'}
+                    </button>
+                  )}
+                  {definitionLifecycleQuery.data.allowed_actions.can_delete ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const confirmed = window.confirm(`Delete "${selectedDefinition.name}" permanently? This cannot be undone.`)
+                        if (!confirmed) return
+                        hardDeleteDefinitionMutation.mutate(selectedDefinition.id)
+                      }}
+                      disabled={hardDeleteDefinitionMutation.isPending}
+                      style={{
+                        border: `1px solid ${t.color.danger}`,
+                        background: t.color.dangerMuted,
+                        color: t.color.danger,
+                        borderRadius: t.radius.sm,
+                        fontSize: t.font.sizeSm,
+                        fontWeight: t.font.weightMedium,
+                        padding: '8px 14px',
+                        cursor: hardDeleteDefinitionMutation.isPending ? 'wait' : 'pointer',
+                      }}
+                    >
+                      {hardDeleteDefinitionMutation.isPending ? 'Deleting…' : 'Delete permanently'}
+                    </button>
+                  ) : null}
+                </>
+              ) : null}
             </div>
           }
         >
@@ -2691,111 +2897,8 @@ export default function Journeys({
                       Permanent delete unlocks only after archive, and only for definitions with no downstream dependencies or generated journey outputs.
                     </div>
                     {canManageDefinitions ? (
-                      <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const defaultName = `${selectedDefinition.name} copy`
-                            const nextName = window.prompt('Name for duplicated journey definition', defaultName)?.trim()
-                            if (!nextName) return
-                            duplicateDefinitionMutation.mutate({ definitionId: selectedDefinition.id, name: nextName })
-                          }}
-                          disabled={!definitionLifecycleQuery.data.allowed_actions.can_duplicate || duplicateDefinitionMutation.isPending}
-                          style={{
-                            border: `1px solid ${t.color.border}`,
-                            background: t.color.surface,
-                            color: t.color.text,
-                            borderRadius: t.radius.sm,
-                            fontSize: t.font.sizeSm,
-                            padding: '8px 12px',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          {duplicateDefinitionMutation.isPending ? 'Duplicating…' : 'Duplicate'}
-                        </button>
-                        {!selectedDefinitionArchived ? (
-                          <button
-                            type="button"
-                            onClick={() => rebuildDefinitionMutation.mutate({ definitionId: selectedDefinition.id })}
-                            disabled={!definitionLifecycleQuery.data.allowed_actions.can_rebuild || rebuildDefinitionMutation.isPending}
-                            style={{
-                              border: `1px solid ${t.color.accent}`,
-                              background: t.color.surface,
-                              color: t.color.accent,
-                              borderRadius: t.radius.sm,
-                              fontSize: t.font.sizeSm,
-                              padding: '8px 12px',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            {rebuildDefinitionMutation.isPending ? 'Rebuilding…' : 'Rebuild outputs'}
-                          </button>
-                        ) : null}
-                        {!selectedDefinitionArchived ? (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const confirmed = window.confirm(
-                                `Archive "${selectedDefinition.name}"? Downstream views, funnels, hypotheses, alerts, and outputs will be preserved, but the definition becomes read-only until restored.`,
-                              )
-                              if (!confirmed) return
-                              archiveDefinitionMutation.mutate(selectedDefinition.id)
-                            }}
-                            disabled={!definitionLifecycleQuery.data.allowed_actions.can_archive || archiveDefinitionMutation.isPending}
-                            style={{
-                              border: `1px solid ${t.color.warning}`,
-                              background: t.color.surface,
-                              color: t.color.warning,
-                              borderRadius: t.radius.sm,
-                              fontSize: t.font.sizeSm,
-                              padding: '8px 12px',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            {archiveDefinitionMutation.isPending ? 'Archiving…' : 'Archive'}
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => restoreDefinitionMutation.mutate(selectedDefinition.id)}
-                            disabled={!definitionLifecycleQuery.data.allowed_actions.can_restore || restoreDefinitionMutation.isPending}
-                            style={{
-                              border: `1px solid ${t.color.accent}`,
-                              background: t.color.accent,
-                              color: '#fff',
-                              borderRadius: t.radius.sm,
-                              fontSize: t.font.sizeSm,
-                              padding: '8px 12px',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            {restoreDefinitionMutation.isPending ? 'Restoring…' : 'Restore'}
-                          </button>
-                        )}
-                        {definitionLifecycleQuery.data.allowed_actions.can_delete ? (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const confirmed = window.confirm(
-                                `Delete "${selectedDefinition.name}" permanently? This cannot be undone.`,
-                              )
-                              if (!confirmed) return
-                              hardDeleteDefinitionMutation.mutate(selectedDefinition.id)
-                            }}
-                            disabled={hardDeleteDefinitionMutation.isPending}
-                            style={{
-                              border: `1px solid ${t.color.danger}`,
-                              background: t.color.dangerMuted,
-                              color: t.color.danger,
-                              borderRadius: t.radius.sm,
-                              fontSize: t.font.sizeSm,
-                              padding: '8px 12px',
-                              cursor: hardDeleteDefinitionMutation.isPending ? 'wait' : 'pointer',
-                            }}
-                          >
-                            {hardDeleteDefinitionMutation.isPending ? 'Deleting…' : 'Delete permanently'}
-                          </button>
-                        ) : null}
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                        Lifecycle actions are available in the Journey Definition header above so archive, restore, rebuild, and delete are visible without opening this panel.
                       </div>
                     ) : null}
                     {hardDeleteDefinitionMutation.isError ? (
@@ -4608,7 +4711,7 @@ export default function Journeys({
                           channel_group: filters.channel !== 'all' ? filters.channel : null,
                           campaign_id: filters.campaign !== 'all' ? filters.campaign : null,
                           device: filters.device !== 'all' ? filters.device : null,
-                          country: filters.geo !== 'all' ? filters.geo.toUpperCase() : null,
+                          country: filters.geo !== 'all' ? filters.geo : null,
                         },
                       },
                     )
@@ -4803,7 +4906,7 @@ export default function Journeys({
                         channel_group: filters.channel !== 'all' ? filters.channel : null,
                         campaign_id: filters.campaign !== 'all' ? filters.campaign : null,
                         device: filters.device !== 'all' ? filters.device : null,
-                        country: filters.geo !== 'all' ? filters.geo.toUpperCase() : null,
+                        country: filters.geo !== 'all' ? filters.geo : null,
                       },
                     },
                   )

@@ -8,6 +8,7 @@ from sqlalchemy.pool import StaticPool
 from app.db import Base, get_db
 from app.main import app
 import app.main as main_module
+from app.models_config_dq import JourneyDefinitionInstanceFact
 from app.utils.kpi_config import default_kpi_config
 
 
@@ -173,6 +174,91 @@ def test_journey_definition_hard_delete_requires_archive_and_unused_state(client
         headers=view_headers,
     )
     assert lifecycle_missing.status_code == 404
+
+
+def test_journey_definition_dimensions_are_workspace_derived(client: TestClient):
+    headers = {"X-User-Role": "editor", "X-User-Id": "qa-editor"}
+    view_headers = {"X-User-Role": "viewer", "X-User-Id": "qa-viewer"}
+
+    create_resp = client.post(
+        "/api/journeys/definitions",
+        headers=headers,
+        json={
+            "name": "Dimensioned journey",
+            "description": "Has filter dimensions",
+            "conversion_kpi_id": "purchase",
+            "lookback_window_days": 30,
+            "mode_default": "conversion_only",
+        },
+    )
+    assert create_resp.status_code == 200
+    definition_id = create_resp.json()["id"]
+
+    db_gen = app.dependency_overrides[get_db]()
+    db = next(db_gen)
+    try:
+        db.add_all(
+            [
+                JourneyDefinitionInstanceFact(
+                    date=datetime(2026, 4, 1, tzinfo=timezone.utc).date(),
+                    journey_definition_id=definition_id,
+                    conversion_id="c1",
+                    profile_id="p1",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2026, 4, 1, tzinfo=timezone.utc),
+                    path_hash="path-a",
+                    steps_json=["Paid Landing", "Conversion"],
+                    path_length=2,
+                    channel_group="paid_search",
+                    campaign_id="brand_search",
+                    device="desktop",
+                    country="cz",
+                    gross_conversions_total=1.0,
+                    net_conversions_total=1.0,
+                    gross_revenue_total=10.0,
+                    net_revenue_total=10.0,
+                ),
+                JourneyDefinitionInstanceFact(
+                    date=datetime(2026, 4, 2, tzinfo=timezone.utc).date(),
+                    journey_definition_id=definition_id,
+                    conversion_id="c2",
+                    profile_id="p2",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2026, 4, 2, tzinfo=timezone.utc),
+                    path_hash="path-b",
+                    steps_json=["Organic Landing", "Conversion"],
+                    path_length=2,
+                    channel_group="organic_search",
+                    campaign_id="seo_content",
+                    device="mobile",
+                    country="sk",
+                    gross_conversions_total=1.0,
+                    net_conversions_total=1.0,
+                    gross_revenue_total=5.0,
+                    net_revenue_total=5.0,
+                ),
+            ]
+        )
+        db.commit()
+    finally:
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
+
+    resp = client.get(
+        f"/api/journeys/{definition_id}/dimensions",
+        params={"date_from": "2026-04-01", "date_to": "2026-04-05"},
+        headers=view_headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["summary"]["journey_rows"] == 2
+    assert body["summary"]["segment_supported"] is False
+    assert any(item["value"] == "brand_search" for item in body["campaigns"])
+    assert any(item["value"] == "desktop" for item in body["devices"])
+    assert any(item["value"] == "cz" for item in body["countries"])
+    assert body["segments"] == []
 
 
 def test_journey_definitions_list_search_and_sort(client: TestClient):
