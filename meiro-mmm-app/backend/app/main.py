@@ -244,6 +244,9 @@ from app.services_mmm_platform import build_mmm_dataset_from_platform
 from app.services_mmm_mapping import build_smart_suggestions, validate_mapping
 from app.services_incrementality import (
     assign_profiles_deterministic,
+    build_channel_observation_provenance,
+    build_experiment_design_recommendation,
+    build_experiment_setup_context,
     create_experiment_record,
     record_exposure,
     record_exposures_batch,
@@ -3569,6 +3572,62 @@ class ExperimentCreate(BaseModel):
     segment: Dict[str, Any] = Field(default_factory=dict)
     policy: Dict[str, Any] = Field(default_factory=dict)
     guardrails: Dict[str, Any] = Field(default_factory=dict)
+    setup_source: Optional[str] = None
+    assignment_unit: Optional[str] = None
+    assignment_method: Optional[str] = None
+    treatment_rate: Optional[float] = None
+    baseline_rate_estimate: Optional[float] = None
+    min_runtime_days: Optional[int] = None
+    exclusion_window_days: Optional[int] = None
+    stop_rule: Optional[str] = None
+    alpha: Optional[float] = None
+    power: Optional[float] = None
+    mde_target: Optional[float] = None
+    config_id: Optional[str] = None
+    config_version: Optional[int] = None
+
+
+@app.get("/api/experiments/setup-context")
+def get_experiment_setup_context(
+    date_from: Optional[date] = Query(None),
+    date_to: Optional[date] = Query(None),
+    db=Depends(get_db),
+):
+    journeys = _ensure_journeys_loaded(db)
+    start_dt = datetime.combine(date_from, datetime.min.time()) if date_from else None
+    end_dt = datetime.combine(date_to + timedelta(days=1), datetime.min.time()) if date_to else None
+    return build_experiment_setup_context(
+        journeys=journeys,
+        kpi_config=KPI_CONFIG,
+        date_from=start_dt,
+        date_to=end_dt,
+    )
+
+
+@app.get("/api/experiments/recommend-design")
+def recommend_experiment_design(
+    channel: str = Query(...),
+    conversion_key: Optional[str] = Query(None),
+    date_from: Optional[date] = Query(None),
+    date_to: Optional[date] = Query(None),
+    alpha: float = Query(0.05),
+    power: float = Query(0.8),
+    mde: float = Query(0.01),
+    db=Depends(get_db),
+):
+    journeys = _ensure_journeys_loaded(db)
+    start_dt = datetime.combine(date_from, datetime.min.time()) if date_from else None
+    end_dt = datetime.combine(date_to + timedelta(days=1), datetime.min.time()) if date_to else None
+    return build_experiment_design_recommendation(
+        journeys=journeys,
+        channel=channel,
+        conversion_key=conversion_key,
+        date_from=start_dt,
+        date_to=end_dt,
+        alpha=alpha,
+        power=power,
+        mde=mde,
+    )
 
 
 class ExperimentSummary(BaseModel):
@@ -3584,6 +3643,9 @@ class ExperimentSummary(BaseModel):
     source_id: Optional[str] = None
     source_name: Optional[str] = None
     source_journey_definition_id: Optional[str] = None
+    config_id: Optional[str] = None
+    config_version: Optional[int] = None
+    execution: Dict[str, Any] = Field(default_factory=dict)
 
 
 def _resolve_experiment_source_context(db, rows: List[Experiment]) -> Dict[str, Dict[str, Optional[str]]]:
@@ -3635,6 +3697,47 @@ def list_experiments(
 
 @app.post("/api/experiments", response_model=ExperimentSummary)
 def create_experiment(body: ExperimentCreate, db=Depends(get_db)):
+    policy = dict(body.policy or {})
+    guardrails = dict(body.guardrails or {})
+    if body.setup_source and "setup_source" not in policy:
+        policy["setup_source"] = body.setup_source
+    if body.assignment_unit and "assignment_unit" not in policy:
+        policy["assignment_unit"] = body.assignment_unit
+    if body.assignment_method and "assignment_method" not in policy:
+        policy["assignment_method"] = body.assignment_method
+    if body.treatment_rate is not None and "treatment_rate" not in policy:
+        policy["treatment_rate"] = body.treatment_rate
+    if body.baseline_rate_estimate is not None and "baseline_rate_estimate" not in policy:
+        policy["baseline_rate_estimate"] = body.baseline_rate_estimate
+
+    if body.min_runtime_days is not None and "min_runtime_days" not in guardrails:
+        guardrails["min_runtime_days"] = body.min_runtime_days
+    if body.exclusion_window_days is not None and "exclusion_window_days" not in guardrails:
+        guardrails["exclusion_window_days"] = body.exclusion_window_days
+    if body.stop_rule and "stop_rule" not in guardrails:
+        guardrails["stop_rule"] = body.stop_rule
+
+    power_plan = dict(guardrails.get("power_plan") or {})
+    if body.alpha is not None and "alpha" not in power_plan:
+        power_plan["alpha"] = body.alpha
+    if body.power is not None and "power" not in power_plan:
+        power_plan["power"] = body.power
+    if body.mde_target is not None and "mde" not in power_plan:
+        power_plan["mde"] = body.mde_target
+    if body.treatment_rate is not None and "treatment_rate" not in power_plan:
+        power_plan["treatment_rate"] = body.treatment_rate
+    if body.baseline_rate_estimate is not None and "baseline_rate" not in power_plan:
+        power_plan["baseline_rate"] = body.baseline_rate_estimate
+    if power_plan:
+        guardrails["power_plan"] = power_plan
+
+    resolved_config_id = (body.config_id or "").strip() or None
+    resolved_config_version = body.config_version
+    if resolved_config_id and resolved_config_version is None:
+        cfg = db.get(ORMModelConfig, resolved_config_id)
+        if cfg is not None:
+            resolved_config_version = int(getattr(cfg, "version", 0) or 0) or None
+
     exp = create_experiment_record(
         db,
         name=body.name,
@@ -3647,8 +3750,10 @@ def create_experiment(body: ExperimentCreate, db=Depends(get_db)):
         source_type=body.source_type,
         source_id=body.source_id,
         segment=body.segment,
-        policy=body.policy,
-        guardrails=body.guardrails,
+        policy=policy,
+        guardrails=guardrails,
+        config_id=resolved_config_id,
+        config_version=resolved_config_version,
     )
     return ExperimentSummary(**serialize_experiment_summary(exp))
 
@@ -3909,6 +4014,18 @@ class ExposuresRequest(BaseModel):
     exposures: List[ExposurePayload]
 
 
+class AssignmentPreview(BaseModel):
+    profile_id: str
+    group: str
+    assigned_at: datetime
+
+
+class OutcomePreview(BaseModel):
+    profile_id: str
+    conversion_ts: datetime
+    value: float
+
+
 @app.post("/api/experiments/{exp_id}/exposures")
 def record_experiment_exposures(exp_id: int, body: ExposuresRequest, db=Depends(get_db)):
     """
@@ -3960,6 +4077,54 @@ def get_experiment_exposures(exp_id: int, limit: int = 100, db=Depends(get_db)):
             "message_id": e.message_id,
         }
         for e in exposures
+    ]
+
+
+@app.get("/api/experiments/{exp_id}/assignments", response_model=List[AssignmentPreview])
+def get_experiment_assignments(exp_id: int, limit: int = 100, db=Depends(get_db)):
+    exp = db.get(Experiment, exp_id)
+    if not exp:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    assignments = (
+        db.query(ExperimentAssignment)
+        .filter(ExperimentAssignment.experiment_id == exp_id)
+        .order_by(ExperimentAssignment.assigned_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return [
+        AssignmentPreview(
+            profile_id=row.profile_id,
+            group=row.group,
+            assigned_at=row.assigned_at,
+        )
+        for row in assignments
+    ]
+
+
+@app.get("/api/experiments/{exp_id}/outcomes", response_model=List[OutcomePreview])
+def get_experiment_outcomes(exp_id: int, limit: int = 100, db=Depends(get_db)):
+    exp = db.get(Experiment, exp_id)
+    if not exp:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    outcomes = (
+        db.query(ExperimentOutcome)
+        .filter(ExperimentOutcome.experiment_id == exp_id)
+        .order_by(ExperimentOutcome.conversion_ts.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return [
+        OutcomePreview(
+            profile_id=row.profile_id,
+            conversion_ts=row.conversion_ts,
+            value=float(row.value or 0.0),
+        )
+        for row in outcomes
     ]
 
 
@@ -4050,12 +4215,17 @@ def run_nightly_report_endpoint(db=Depends(get_db)):
 
 class ExperimentHealth(BaseModel):
     experiment_id: int
+    execution: Dict[str, Any]
+    provenance: Dict[str, Any]
     sample: Dict[str, int]
     exposures: Dict[str, int]
     outcomes: Dict[str, int]
     balance: Dict[str, Any]
     data_completeness: Dict[str, Dict[str, str]]
     overlap_risk: Dict[str, Any]
+    plan: Dict[str, Any]
+    runtime: Dict[str, Any]
+    launch_readiness: Dict[str, Any]
     ready_state: Dict[str, Any]
 
 
@@ -4066,16 +4236,24 @@ def get_experiment_health(exp_id: int, db=Depends(get_db)):
 
     Designed as a trust layer for the Incrementality dashboard:
     - sample sizes and conversions by group
-    - basic balance check vs an assumed 50/50 split (or close)
+    - basic balance check vs the stored planned split
     - data completeness for assignments, outcomes, and exposures
     - minimal contamination / overlap heuristic
     - coarse readiness classification (not_ready / early / ready)
+    - plan-vs-actual sample and runtime progress
     """
     exp = db.get(Experiment, exp_id)
     if not exp:
         raise HTTPException(status_code=404, detail="Experiment not found")
 
     payload = compute_experiment_health(db, exp_id)
+    journeys = _ensure_journeys_loaded(db)
+    payload["provenance"] = build_channel_observation_provenance(
+        journeys=journeys,
+        channel=exp.channel,
+        date_from=exp.start_at,
+        date_to=exp.end_at,
+    )
     return ExperimentHealth(**payload)
 
 

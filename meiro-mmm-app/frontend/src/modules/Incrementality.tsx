@@ -3,8 +3,7 @@ import { useQuery, useMutation } from '@tanstack/react-query'
 import { tokens as t } from '../theme/tokens'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
-
-const OWNED_CHANNELS = ['email', 'push', 'sms', 'whatsapp', 'onsite']
+import { useWorkspaceContext } from '../components/WorkspaceContext'
 
 function objectPreview(value: Record<string, unknown> | null | undefined): string {
   if (!value || typeof value !== 'object') return '—'
@@ -43,6 +42,72 @@ interface ExperimentSummary {
   source_id?: string | null
   source_name?: string | null
   source_journey_definition_id?: string | null
+  config_id?: string | null
+  config_version?: number | null
+  execution?: ExperimentExecution | null
+}
+
+interface ExperimentSetup {
+  setup_source?: string | null
+  assignment_unit?: string | null
+  assignment_method?: string | null
+  treatment_rate?: number | null
+  baseline_rate_estimate?: number | null
+  kpi_label?: string | null
+  min_runtime_days?: number | null
+  exclusion_window_days?: number | null
+  stop_rule?: string | null
+  planner_window?: {
+    date_from?: string | null
+    date_to?: string | null
+  } | null
+  power_plan?: {
+    baseline_rate?: number | null
+    mde?: number | null
+    alpha?: number | null
+    power?: number | null
+    treatment_rate?: number | null
+  } | null
+  config_id?: string | null
+  config_version?: number | null
+}
+
+interface ExperimentExecution {
+  channel?: string | null
+  status?: 'planner_ready' | 'manual_only' | 'not_supported' | string
+  planner_ready?: boolean
+  can_auto_assign_history?: boolean
+  can_log_exposures?: boolean
+  can_log_outcomes?: boolean
+  can_start_with_manual_logging?: boolean
+  assignment_mode?: string | null
+  exposure_mode?: string | null
+  delivery_support?: string | null
+  history_support?: string | null
+  tracking_requirements?: string[]
+  launch_blockers?: string[]
+  launch_warnings?: string[]
+  notes?: string[]
+}
+
+interface ChannelProvenance {
+  touchpoints: number
+  source_examples: string[]
+  medium_examples: string[]
+  campaign_examples: string[]
+  recent_examples: Array<{
+    timestamp?: string | null
+    source?: string | null
+    medium?: string | null
+    campaign?: string | null
+  }>
+}
+
+interface LaunchReadiness {
+  status?: 'ready' | 'manual_review' | 'blocked' | string
+  blockers: string[]
+  warnings: string[]
+  tracking_gaps: string[]
 }
 
 interface ExperimentDetail extends ExperimentSummary {
@@ -50,6 +115,8 @@ interface ExperimentDetail extends ExperimentSummary {
   segment?: Record<string, unknown>
   policy?: Record<string, unknown>
   guardrails?: Record<string, unknown>
+  setup?: ExperimentSetup | null
+  execution?: ExperimentExecution | null
 }
 
 interface ExperimentResults {
@@ -100,6 +167,8 @@ interface PowerAnalysisResult {
 type ReadyLabel = 'not_ready' | 'early' | 'ready'
 
 interface ExperimentHealth {
+  execution?: ExperimentExecution | null
+  provenance?: ChannelProvenance | null
   experiment_id: number
   sample: { treatment: number; control: number }
   exposures: { treatment: number; control: number }
@@ -111,7 +180,240 @@ interface ExperimentHealth {
     exposures: { status: 'ok' | 'warn' }
   }
   overlap_risk: { status: 'ok' | 'warn'; overlapping_profiles: number }
+  plan: {
+    treatment_rate?: number | null
+    sample_target_total?: number | null
+    sample_target_treatment?: number | null
+    sample_target_control?: number | null
+    sample_target_status?: 'ok' | 'warn' | string
+    progress_treatment?: number | null
+    progress_control?: number | null
+  }
+  runtime: {
+    status?: 'ok' | 'warn' | 'not_started' | string
+    elapsed_days?: number | null
+    planned_min_days?: number | null
+    scheduled_days?: number | null
+  }
+  launch_readiness?: LaunchReadiness | null
   ready_state: { label: ReadyLabel; reasons: string[] }
+}
+
+interface SetupContextChannel {
+  channel: string
+  label: string
+  journeys: number
+  converted_journeys: number
+  non_converted_journeys: number
+  observed_profiles: number
+  baseline_conversion_rate: number
+  share_of_journeys: number
+  last_seen_at?: string | null
+  eligible: boolean
+  delivery_class: 'owned' | 'observed'
+  provenance?: ChannelProvenance | null
+  notes: string[]
+  execution?: ExperimentExecution | null
+}
+
+interface SetupContextKpi {
+  id: string
+  label: string
+  type: string
+  event_name?: string | null
+  count: number
+  is_primary: boolean
+}
+
+interface SetupContext {
+  date_from?: string | null
+  date_to?: string | null
+  defaults: {
+    channel?: string | null
+    conversion_key?: string | null
+    treatment_rate: number
+    min_runtime_days: number
+    alpha: number
+    power: number
+    mde: number
+  }
+  channels: SetupContextChannel[]
+  kpis: SetupContextKpi[]
+  summary: {
+    journeys: number
+    converted_journeys: number
+    non_converted_journeys: number
+    observed_channels: number
+  }
+  warnings: string[]
+}
+
+interface ModelConfigDetail {
+  id: string
+  name: string
+  status: string
+  version: number
+}
+
+interface DesignRecommendation {
+  channel?: string | null
+  conversion_key?: string | null
+  date_from?: string | null
+  date_to?: string | null
+  observed: {
+    journeys: number
+    matching_kpi_conversions: number
+    non_converted_journeys: number
+    converted_journeys_any_kpi: number
+    observed_profiles: number
+    baseline_conversion_rate: number
+    avg_daily_eligible: number
+    window_days: number
+  }
+  recommendation: {
+    treatment_rate?: number | null
+    sample_target_total?: number | null
+    sample_target_treatment?: number | null
+    sample_target_control?: number | null
+    projected_runtime_days?: number | null
+    min_runtime_days?: number | null
+    alpha?: number | null
+    power?: number | null
+    mde?: number | null
+    readiness?: 'ready_to_launch' | 'needs_more_volume' | 'insufficient_signal' | 'no_data' | string
+    reason?: string | null
+  }
+  execution?: ExperimentExecution | null
+  provenance?: ChannelProvenance | null
+  warnings: string[]
+}
+
+interface AssignmentPreview {
+  profile_id: string
+  group: string
+  assigned_at: string
+}
+
+interface ExposurePreview {
+  profile_id: string
+  exposure_ts: string
+  campaign_id?: string | null
+  message_id?: string | null
+}
+
+interface OutcomePreview {
+  profile_id: string
+  conversion_ts: string
+  value: number
+}
+
+function formatRate(value?: number | null): string {
+  if (value == null || !Number.isFinite(value)) return '—'
+  return `${(value * 100).toFixed(1)}%`
+}
+
+function formatDateRangeLabel(dateFrom?: string | null, dateTo?: string | null): string {
+  if (!dateFrom && !dateTo) return '—'
+  if (dateFrom && dateTo) return `${dateFrom} – ${dateTo}`
+  return dateFrom || dateTo || '—'
+}
+
+function plannerReadinessLabel(value?: string | null): string {
+  if (value === 'ready_to_launch') return 'Ready to launch'
+  if (value === 'needs_more_volume') return 'Needs more volume'
+  if (value === 'insufficient_signal') return 'Insufficient signal'
+  if (value === 'no_data') return 'No data'
+  return value || 'Unknown'
+}
+
+function runtimeStatusLabel(value?: string | null): string {
+  if (value === 'ok') return 'On track'
+  if (value === 'warn') return 'Below planned runtime'
+  if (value === 'not_started') return 'Not started'
+  return value || 'Unknown'
+}
+
+function executionStatusLabel(value?: string | null): string {
+  if (value === 'planner_ready') return 'Planner-ready'
+  if (value === 'manual_only') return 'Manual execution'
+  if (value === 'not_supported') return 'Not supported'
+  return value || 'Unknown'
+}
+
+function executionSummaryLabel(execution?: ExperimentExecution | null): string | null {
+  if (!execution) return null
+  if (execution.status === 'not_supported') return 'Not valid for holdout'
+  if (execution.status === 'manual_only') return 'Manual delivery + logging'
+  if (execution.status === 'planner_ready') {
+    if (execution.can_auto_assign_history) return 'Planner-backed + history seeding'
+    return 'Planner-backed setup'
+  }
+  return executionStatusLabel(execution.status)
+}
+
+function launchReadinessLabel(value?: string | null): string {
+  if (value === 'ready') return 'Ready'
+  if (value === 'manual_review') return 'Needs operator review'
+  if (value === 'blocked') return 'Blocked'
+  return value || 'Unknown'
+}
+
+function provenancePreview(provenance?: ChannelProvenance | null): string {
+  if (!provenance) return 'No observed touchpoint provenance yet.'
+  const parts: string[] = []
+  if (provenance.source_examples?.length) parts.push(`Sources: ${provenance.source_examples.join(', ')}`)
+  if (provenance.medium_examples?.length) parts.push(`Mediums: ${provenance.medium_examples.join(', ')}`)
+  if (provenance.campaign_examples?.length) parts.push(`Campaigns: ${provenance.campaign_examples.slice(0, 3).join(', ')}`)
+  if (!parts.length) return 'Observed touchpoints exist, but source/medium/campaign details are sparse.'
+  return parts.join(' · ')
+}
+
+function parseProfileIdsInput(raw: string): string[] {
+  return Array.from(
+    new Set(
+      raw
+        .split(/\r?\n|,/) 
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  )
+}
+
+function parseExposureInput(raw: string): Array<{ profile_id: string; exposure_ts: string; campaign_id?: string; message_id?: string }> {
+  const nowIso = new Date().toISOString()
+  return raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [profile_id, campaign_id, message_id, exposure_ts] = line.split(',').map((part) => part.trim())
+      if (!profile_id) throw new Error('Each exposure row must start with a profile id.')
+      return {
+        profile_id,
+        campaign_id: campaign_id || undefined,
+        message_id: message_id || undefined,
+        exposure_ts: exposure_ts || nowIso,
+      }
+    })
+}
+
+function parseOutcomeInput(raw: string): Array<{ profile_id: string; conversion_ts: string; value: number }> {
+  const nowIso = new Date().toISOString()
+  return raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [profile_id, valueRaw, conversion_ts] = line.split(',').map((part) => part.trim())
+      if (!profile_id) throw new Error('Each outcome row must start with a profile id.')
+      const value = Number(valueRaw || 0)
+      if (!Number.isFinite(value)) throw new Error(`Invalid outcome value for profile ${profile_id}.`)
+      return {
+        profile_id,
+        value,
+        conversion_ts: conversion_ts || nowIso,
+      }
+    })
 }
 
 function buildJourneyLabHref(summary?: ExperimentSummary | null): string | null {
@@ -128,6 +430,7 @@ function buildJourneyLabHref(summary?: ExperimentSummary | null): string | null 
 }
 
 export default function IncrementalityPage() {
+  const { globalDateFrom, globalDateTo, journeysSummary, selectedConfigId } = useWorkspaceContext()
   const [selectedId, setSelectedId] = useState<number | null>(() => {
     if (typeof window === 'undefined') return null
     const params = new URLSearchParams(window.location.search)
@@ -141,6 +444,10 @@ export default function IncrementalityPage() {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | 'draft' | 'running' | 'stopped'>('all')
   const [powerPlans, setPowerPlans] = useState<Record<number, PowerAnalysisResult>>({})
+  const [assignmentSeedInput, setAssignmentSeedInput] = useState('')
+  const [exposureLogInput, setExposureLogInput] = useState('')
+  const [outcomeLogInput, setOutcomeLogInput] = useState('')
+  const [executionFormError, setExecutionFormError] = useState('')
   const [form, setForm] = useState({
     name: '',
     channel: '',
@@ -160,6 +467,55 @@ export default function IncrementalityPage() {
     alpha: 0.05,
     power: 0.8,
     treatment_rate: 0.5,
+  })
+
+  const setupContextQuery = useQuery<SetupContext>({
+    queryKey: ['experiment-setup-context', globalDateFrom, globalDateTo],
+    queryFn: async () => {
+      const params = new URLSearchParams()
+      if (globalDateFrom) params.set('date_from', globalDateFrom)
+      if (globalDateTo) params.set('date_to', globalDateTo)
+      const suffix = params.toString() ? `?${params.toString()}` : ''
+      return apiGetJson<SetupContext>(`/api/experiments/setup-context${suffix}`, {
+        fallbackMessage: 'Failed to load experiment setup context',
+      })
+    },
+  })
+
+  const selectedConfigQuery = useQuery<ModelConfigDetail>({
+    queryKey: ['incrementality-selected-config', selectedConfigId],
+    queryFn: async () =>
+      apiGetJson<ModelConfigDetail>(`/api/model-configs/${selectedConfigId}`, {
+        fallbackMessage: 'Failed to load selected model config',
+      }),
+    enabled: !!selectedConfigId,
+  })
+
+  const designRecommendationQuery = useQuery<DesignRecommendation>({
+    queryKey: [
+      'experiment-design-recommendation',
+      form.channel,
+      form.conversion_key,
+      form.start_at,
+      form.end_at,
+      powerForm.alpha,
+      powerForm.power,
+      powerForm.mde,
+    ],
+    queryFn: async () => {
+      const params = new URLSearchParams()
+      params.set('channel', form.channel)
+      params.set('conversion_key', form.conversion_key)
+      params.set('date_from', form.start_at)
+      params.set('date_to', form.end_at)
+      params.set('alpha', String(powerForm.alpha))
+      params.set('power', String(powerForm.power))
+      params.set('mde', String(powerForm.mde))
+      return apiGetJson<DesignRecommendation>(`/api/experiments/recommend-design?${params.toString()}`, {
+        fallbackMessage: 'Failed to load experiment design recommendation',
+      })
+    },
+    enabled: !!form.channel && !!form.conversion_key && !!form.start_at && !!form.end_at,
   })
 
   const experimentsQuery = useQuery<ExperimentSummary[]>({
@@ -206,6 +562,90 @@ export default function IncrementalityPage() {
     },
   })
 
+  const autoAssignMutation = useMutation<
+    { treatment: number; control: number; total: number },
+    Error,
+    { id: number; channel: string; start_at: string; end_at: string; treatment_rate: number }
+  >({
+    mutationFn: async ({ id, channel, start_at, end_at, treatment_rate }) =>
+      apiSendJson<{ treatment: number; control: number; total: number }>(
+        `/api/experiments/${id}/auto-assign`,
+        'POST',
+        {
+          channel,
+          start_date: start_at,
+          end_date: end_at,
+          treatment_rate,
+        },
+        { fallbackMessage: 'Failed to auto-assign experiment from observed journeys' },
+      ),
+    onSuccess: () => {
+      healthQuery.refetch()
+      resultsQuery.refetch()
+      detailQuery.refetch()
+    },
+  })
+
+  const manualAssignMutation = useMutation<
+    { assigned: number; treatment: number; control: number },
+    Error,
+    { id: number; profile_ids: string[]; treatment_rate: number }
+  >({
+    mutationFn: async ({ id, profile_ids, treatment_rate }) =>
+      apiSendJson<{ assigned: number; treatment: number; control: number }>(
+        `/api/experiments/${id}/assign`,
+        'POST',
+        { profile_ids, treatment_rate },
+        { fallbackMessage: 'Failed to assign profiles' },
+      ),
+    onSuccess: () => {
+      healthQuery.refetch()
+      resultsQuery.refetch()
+      setAssignmentSeedInput('')
+      setExecutionFormError('')
+    },
+  })
+
+  const exposureLogMutation = useMutation<
+    { recorded: number },
+    Error,
+    { id: number; exposures: Array<{ profile_id: string; exposure_ts: string; campaign_id?: string; message_id?: string }> }
+  >({
+    mutationFn: async ({ id, exposures }) =>
+      apiSendJson<{ recorded: number }>(
+        `/api/experiments/${id}/exposures`,
+        'POST',
+        { exposures },
+        { fallbackMessage: 'Failed to log exposures' },
+      ),
+    onSuccess: () => {
+      healthQuery.refetch()
+      resultsQuery.refetch()
+      setExposureLogInput('')
+      setExecutionFormError('')
+    },
+  })
+
+  const outcomeLogMutation = useMutation<
+    { inserted: number },
+    Error,
+    { id: number; outcomes: Array<{ profile_id: string; conversion_ts: string; value: number }> }
+  >({
+    mutationFn: async ({ id, outcomes }) =>
+      apiSendJson<{ inserted: number }>(
+        `/api/experiments/${id}/outcomes`,
+        'POST',
+        { outcomes },
+        { fallbackMessage: 'Failed to log outcomes' },
+      ),
+    onSuccess: () => {
+      healthQuery.refetch()
+      resultsQuery.refetch()
+      setOutcomeLogInput('')
+      setExecutionFormError('')
+    },
+  })
+
   const healthQuery = useQuery<ExperimentHealth>({
     queryKey: ['experiment-health', selectedId],
     queryFn: async () => apiGetJson<ExperimentHealth>(`/api/experiments/${selectedId}/health`, {
@@ -214,39 +654,84 @@ export default function IncrementalityPage() {
     enabled: selectedId != null,
   })
 
+  const assignmentsPreviewQuery = useQuery<AssignmentPreview[]>({
+    queryKey: ['experiment-assignments', selectedId],
+    queryFn: async () =>
+      apiGetJson<AssignmentPreview[]>(`/api/experiments/${selectedId}/assignments?limit=5`, {
+        fallbackMessage: 'Failed to load assignment preview',
+      }),
+    enabled: selectedId != null,
+  })
+
+  const exposuresPreviewQuery = useQuery<ExposurePreview[]>({
+    queryKey: ['experiment-exposures-preview', selectedId],
+    queryFn: async () =>
+      apiGetJson<ExposurePreview[]>(`/api/experiments/${selectedId}/exposures?limit=5`, {
+        fallbackMessage: 'Failed to load exposure preview',
+      }),
+    enabled: selectedId != null,
+  })
+
+  const outcomesPreviewQuery = useQuery<OutcomePreview[]>({
+    queryKey: ['experiment-outcomes-preview', selectedId],
+    queryFn: async () =>
+      apiGetJson<OutcomePreview[]>(`/api/experiments/${selectedId}/outcomes?limit=5`, {
+        fallbackMessage: 'Failed to load outcome preview',
+      }),
+    enabled: selectedId != null,
+  })
+
   const createMutation = useMutation({
     mutationFn: async () => {
       if (!form.name || !form.channel || !form.start_at || !form.end_at || !form.conversion_key) {
         throw new Error('Name, channel, primary metric, start and end are required')
       }
-      const plannedBits: string[] = []
-      plannedBits.push(`Type: holdout (unit: profile_id, assignment: random hash)`)
-      plannedBits.push(
-        `Planned split: ${(form.treatment_rate * 100).toFixed(0)}% treatment / ${(
-          (1 - form.treatment_rate) *
-          100
-        ).toFixed(0)}% control`
-      )
-      if (form.min_runtime_days) {
-        plannedBits.push(`Minimum runtime: ${form.min_runtime_days} days (not auto-enforced)`)
-      }
-      if (form.stop_rule) {
-        plannedBits.push(`Stop rule: ${form.stop_rule} (operator-reviewed, not auto-enforced)`)
-      }
-      if (form.exclusion_window_days) {
-        plannedBits.push(
-          `Exclusion rule: exclude profiles converted in last ${form.exclusion_window_days} days (not enforced yet)`
-        )
-      }
-      const planNote = plannedBits.length ? `Experiment plan (not enforced by system yet):\n- ${plannedBits.join('\n- ')}` : ''
-      const combinedNotes = [form.notes, planNote].filter(Boolean).join('\n\n')
+      const selectedChannel = setupContextQuery.data?.channels.find((item) => item.channel === form.channel) ?? null
+      const selectedKpi = setupContextQuery.data?.kpis.find((item) => item.id === form.conversion_key) ?? null
       const body = {
         name: form.name,
         channel: form.channel,
         conversion_key: form.conversion_key,
         start_at: new Date(form.start_at).toISOString(),
         end_at: new Date(form.end_at).toISOString(),
-        notes: combinedNotes || null,
+        setup_source: 'planner_setup_context',
+        assignment_unit: 'profile_id',
+        assignment_method: 'deterministic_hash',
+        treatment_rate: form.treatment_rate,
+        baseline_rate_estimate: selectedChannel?.baseline_conversion_rate ?? null,
+        min_runtime_days: form.min_runtime_days ? Number(form.min_runtime_days) : null,
+        exclusion_window_days: form.exclusion_window_days ? Number(form.exclusion_window_days) : null,
+        stop_rule: form.stop_rule || null,
+        alpha: powerForm.alpha,
+        power: powerForm.power,
+        mde_target: powerForm.mde,
+        config_id: selectedConfigId || null,
+        config_version: selectedConfigQuery.data?.version ?? null,
+        policy: {
+          setup_source: 'planner_setup_context',
+          assignment_unit: 'profile_id',
+          assignment_method: 'deterministic_hash',
+          treatment_rate: form.treatment_rate,
+          baseline_rate_estimate: selectedChannel?.baseline_conversion_rate ?? null,
+          kpi_label: selectedKpi?.label ?? form.conversion_key,
+        },
+        guardrails: {
+          min_runtime_days: form.min_runtime_days ? Number(form.min_runtime_days) : null,
+          exclusion_window_days: form.exclusion_window_days ? Number(form.exclusion_window_days) : null,
+          stop_rule: form.stop_rule || null,
+          planner_window: {
+            date_from: globalDateFrom || setupContextQuery.data?.date_from || null,
+            date_to: globalDateTo || setupContextQuery.data?.date_to || null,
+          },
+          power_plan: {
+            baseline_rate: powerForm.baseline_rate,
+            mde: powerForm.mde,
+            alpha: powerForm.alpha,
+            power: powerForm.power,
+            treatment_rate: powerForm.treatment_rate,
+          },
+        },
+        notes: form.notes || null,
       }
       return apiSendJson<ExperimentSummary>('/api/experiments', 'POST', body, {
         fallbackMessage: 'Failed to create experiment',
@@ -276,6 +761,35 @@ export default function IncrementalityPage() {
   const selectedSummary =
     selectedId != null ? experimentsQuery.data?.find((e) => e.id === selectedId) : undefined
   const selectedJourneyHref = buildJourneyLabHref(selectedSummary)
+  const detailSetup = detailQuery.data?.setup ?? null
+  const designRecommendation = designRecommendationQuery.data
+  const detailExecution = healthQuery.data?.execution ?? detailQuery.data?.execution ?? selectedSummary?.execution ?? null
+  const launchReadiness = healthQuery.data?.launch_readiness ?? null
+  const executionChecklist = useMemo(() => {
+    if (!healthQuery.data) return []
+    return [
+      {
+        label: 'Assignments logged',
+        status: healthQuery.data.data_completeness.assignments.status === 'ok' ? 'done' : 'todo',
+      },
+      {
+        label: 'Exposures logged',
+        status: healthQuery.data.data_completeness.exposures.status === 'ok' ? 'done' : 'todo',
+      },
+      {
+        label: 'Outcomes logged',
+        status: healthQuery.data.data_completeness.outcomes.status === 'ok' ? 'done' : 'todo',
+      },
+      {
+        label: 'Balance within plan',
+        status: healthQuery.data.balance.status === 'ok' ? 'done' : 'warn',
+      },
+      {
+        label: 'Runtime target met',
+        status: healthQuery.data.runtime.status === 'ok' ? 'done' : 'todo',
+      },
+    ]
+  }, [healthQuery.data])
 
   const statusLabel = (status: string): string => {
     if (status === 'completed') return 'Stopped'
@@ -346,6 +860,79 @@ export default function IncrementalityPage() {
       window.history.replaceState({}, '', next)
     }
   }, [selectedId])
+
+  const setupContext = setupContextQuery.data
+  const setupChannels = setupContext?.channels ?? []
+  const eligibleChannels = useMemo(() => setupChannels.filter((item) => item.eligible), [setupChannels])
+  const selectedSetupChannel = useMemo(
+    () => setupChannels.find((item) => item.channel === form.channel) ?? eligibleChannels[0] ?? null,
+    [setupChannels, eligibleChannels, form.channel],
+  )
+
+  useEffect(() => {
+    if (!setupContext) return
+    setForm((prev) => {
+      const nextChannel = prev.channel || setupContext.defaults.channel || eligibleChannels[0]?.channel || ''
+      const nextConversionKey =
+        prev.conversion_key ||
+        setupContext.defaults.conversion_key ||
+        setupContext.kpis.find((item) => item.is_primary)?.id ||
+        setupContext.kpis[0]?.id ||
+        ''
+      const nextStart = prev.start_at || globalDateFrom || setupContext.date_from || ''
+      const nextEnd = prev.end_at || globalDateTo || setupContext.date_to || ''
+      const nextTreatmentRate = prev.treatment_rate || setupContext.defaults.treatment_rate
+      const nextRuntime =
+        prev.min_runtime_days || String(setupContext.defaults.min_runtime_days || 14)
+      if (
+        nextChannel === prev.channel &&
+        nextConversionKey === prev.conversion_key &&
+        nextStart === prev.start_at &&
+        nextEnd === prev.end_at &&
+        nextTreatmentRate === prev.treatment_rate &&
+        nextRuntime === prev.min_runtime_days
+      ) {
+        return prev
+      }
+      return {
+        ...prev,
+        channel: nextChannel,
+        conversion_key: nextConversionKey,
+        start_at: nextStart,
+        end_at: nextEnd,
+        treatment_rate: nextTreatmentRate,
+        min_runtime_days: nextRuntime,
+      }
+    })
+  }, [setupContext, eligibleChannels, globalDateFrom, globalDateTo])
+
+  useEffect(() => {
+    if (!setupContext) return
+    setPowerForm((prev) => {
+      const nextBaseline = selectedSetupChannel?.baseline_conversion_rate ?? prev.baseline_rate
+      const nextTreatmentRate = form.treatment_rate || setupContext.defaults.treatment_rate
+      const nextMde = setupContext.defaults.mde || prev.mde
+      const nextAlpha = setupContext.defaults.alpha || prev.alpha
+      const nextPower = setupContext.defaults.power || prev.power
+      if (
+        nextBaseline === prev.baseline_rate &&
+        nextTreatmentRate === prev.treatment_rate &&
+        nextMde === prev.mde &&
+        nextAlpha === prev.alpha &&
+        nextPower === prev.power
+      ) {
+        return prev
+      }
+      return {
+        ...prev,
+        baseline_rate: nextBaseline,
+        treatment_rate: nextTreatmentRate,
+        mde: nextMde,
+        alpha: nextAlpha,
+        power: nextPower,
+      }
+    })
+  }, [setupContext, selectedSetupChannel, form.treatment_rate])
 
   return (
     <div style={{ maxWidth: 1200, margin: '0 auto' }}>
@@ -682,6 +1269,11 @@ export default function IncrementalityPage() {
                           {new Date(e.start_at).toLocaleDateString()} –{' '}
                           {new Date(e.end_at).toLocaleDateString()}
                         </div>
+                        {e.execution && (
+                          <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted, marginTop: 2 }}>
+                            {executionSummaryLabel(e.execution)}
+                          </div>
+                        )}
                         {(e.source_type || e.source_name) && (
                           <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted, marginTop: 2 }}>
                             {sourceBadgeLabel(e.source_type) || 'Linked source'}
@@ -760,21 +1352,24 @@ export default function IncrementalityPage() {
                     backgroundColor: 'white',
                   }}
                 >
-                  <option value="">Select owned channel</option>
-                  {OWNED_CHANNELS.map((ch) => (
-                    <option key={ch} value={ch}>
-                      {ch}
+                  <option value="">Select observed channel</option>
+                  {eligibleChannels.map((ch) => (
+                    <option key={ch.channel} value={ch.channel}>
+                      {ch.label}
                     </option>
                   ))}
                 </select>
+                <span style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>
+                  {setupContextQuery.isLoading
+                    ? 'Loading channel options from observed journeys…'
+                    : `${eligibleChannels.length} channels available from real journey data in the selected window.`}
+                </span>
               </label>
               <label style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
-                Primary metric (conversion key)
-                <input
-                  type="text"
+                Primary metric
+                <select
                   value={form.conversion_key}
                   onChange={(e) => setForm((f) => ({ ...f, conversion_key: e.target.value }))}
-                  placeholder="e.g. purchase, lead"
                   style={{
                     width: '100%',
                     marginTop: 4,
@@ -782,9 +1377,220 @@ export default function IncrementalityPage() {
                     border: `1px solid ${tkn.color.border}`,
                     borderRadius: tkn.radius.sm,
                     fontSize: tkn.font.sizeSm,
+                    backgroundColor: 'white',
                   }}
-                />
+                >
+                  <option value="">Select KPI</option>
+                  {(setupContext?.kpis ?? []).map((kpi) => (
+                    <option key={kpi.id} value={kpi.id}>
+                      {kpi.label}
+                      {kpi.is_primary ? ' (Primary)' : ''}
+                    </option>
+                  ))}
+                </select>
+                <span style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>
+                  Source: Settings KPI definitions
+                  {journeysSummary?.primary_kpi_label ? ` · workspace primary KPI: ${journeysSummary.primary_kpi_label}` : ''}
+                </span>
               </label>
+              {selectedSetupChannel && (
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+                    gap: tkn.space.sm,
+                    padding: tkn.space.sm,
+                    border: `1px solid ${tkn.color.borderLight}`,
+                    borderRadius: tkn.radius.sm,
+                    background: tkn.color.surfaceMuted ?? tkn.color.surface,
+                  }}
+                >
+                  <div>
+                    <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>Observed journeys</div>
+                    <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>{selectedSetupChannel.journeys}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>Observed profiles</div>
+                    <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>{selectedSetupChannel.observed_profiles}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>Baseline conversion</div>
+                    <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>{formatRate(selectedSetupChannel.baseline_conversion_rate)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>Observed mix</div>
+                    <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>
+                      {selectedSetupChannel.converted_journeys} converted / {selectedSetupChannel.non_converted_journeys} non-converted
+                    </div>
+                  </div>
+                  {!!selectedSetupChannel.notes.length && (
+                    <div style={{ gridColumn: '1 / -1', fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                      {selectedSetupChannel.notes.join(' ')}
+                    </div>
+                  )}
+                  {selectedSetupChannel.execution && (
+                    <div style={{ gridColumn: '1 / -1', fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                      Execution: <strong style={{ color: tkn.color.text }}>{executionSummaryLabel(selectedSetupChannel.execution)}</strong>
+                      {selectedSetupChannel.execution.launch_warnings?.length
+                        ? ` · ${selectedSetupChannel.execution.launch_warnings[0]}`
+                        : selectedSetupChannel.execution.notes?.length
+                        ? ` · ${selectedSetupChannel.execution.notes[0]}`
+                        : ''}
+                    </div>
+                  )}
+                  {selectedSetupChannel.provenance && (
+                    <div style={{ gridColumn: '1 / -1', fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                      Observed evidence: <strong style={{ color: tkn.color.text }}>{selectedSetupChannel.provenance.touchpoints}</strong> touchpoints
+                      {` · ${provenancePreview(selectedSetupChannel.provenance)}`}
+                    </div>
+                  )}
+                </div>
+              )}
+              {!!setupContext?.warnings?.length && (
+                <div
+                  style={{
+                    fontSize: tkn.font.sizeXs,
+                    color: tkn.color.textSecondary,
+                    background: tkn.color.surfaceMuted ?? tkn.color.surface,
+                    borderRadius: tkn.radius.sm,
+                    padding: tkn.space.sm,
+                  }}
+                >
+                  {setupContext.warnings.join(' ')}
+                </div>
+              )}
+              {designRecommendation && (
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: tkn.space.sm,
+                    padding: tkn.space.md,
+                    border: `1px solid ${tkn.color.borderLight}`,
+                    borderRadius: tkn.radius.sm,
+                    background: tkn.color.surface,
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: tkn.space.sm, alignItems: 'center' }}>
+                    <div>
+                      <div style={{ fontSize: tkn.font.sizeSm, fontWeight: tkn.font.weightSemibold, color: tkn.color.text }}>
+                        Planner recommendation
+                      </div>
+                      <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                        {plannerReadinessLabel(designRecommendation.recommendation.readiness)}
+                        {designRecommendation.recommendation.reason ? ` · ${designRecommendation.recommendation.reason}` : ''}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setForm((prev) => ({
+                          ...prev,
+                          treatment_rate: designRecommendation.recommendation.treatment_rate ?? prev.treatment_rate,
+                          min_runtime_days:
+                            designRecommendation.recommendation.min_runtime_days != null
+                              ? String(designRecommendation.recommendation.min_runtime_days)
+                              : prev.min_runtime_days,
+                        }))
+                        setPowerForm((prev) => ({
+                          ...prev,
+                          baseline_rate: designRecommendation.observed.baseline_conversion_rate ?? prev.baseline_rate,
+                          mde: designRecommendation.recommendation.mde ?? prev.mde,
+                          alpha: designRecommendation.recommendation.alpha ?? prev.alpha,
+                          power: designRecommendation.recommendation.power ?? prev.power,
+                          treatment_rate: designRecommendation.recommendation.treatment_rate ?? prev.treatment_rate,
+                        }))
+                      }}
+                      style={{
+                        padding: `${tkn.space.xs}px ${tkn.space.md}px`,
+                        fontSize: tkn.font.sizeXs,
+                        fontWeight: tkn.font.weightMedium,
+                        color: tkn.color.accent,
+                        backgroundColor: 'transparent',
+                        border: `1px solid ${tkn.color.accent}`,
+                        borderRadius: tkn.radius.sm,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Apply recommendation
+                    </button>
+                  </div>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+                      gap: tkn.space.sm,
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>Recommended split</div>
+                      <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>
+                        {designRecommendation.recommendation.treatment_rate != null
+                          ? `${(designRecommendation.recommendation.treatment_rate * 100).toFixed(0)}% / ${((1 - designRecommendation.recommendation.treatment_rate) * 100).toFixed(0)}%`
+                          : '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>Sample target</div>
+                      <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>
+                        {designRecommendation.recommendation.sample_target_total?.toLocaleString() ?? '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>Projected runtime</div>
+                      <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>
+                        {designRecommendation.recommendation.projected_runtime_days != null
+                          ? `${designRecommendation.recommendation.projected_runtime_days} days`
+                          : '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>Observed daily volume</div>
+                      <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>
+                        {designRecommendation.observed.avg_daily_eligible}
+                      </div>
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                      gap: tkn.space.sm,
+                      fontSize: tkn.font.sizeXs,
+                      color: tkn.color.textSecondary,
+                    }}
+                  >
+                    <div>Baseline: <strong style={{ color: tkn.color.text }}>{formatRate(designRecommendation.observed.baseline_conversion_rate)}</strong></div>
+                    <div>KPI conversions: <strong style={{ color: tkn.color.text }}>{designRecommendation.observed.matching_kpi_conversions}</strong></div>
+                    <div>Profiles: <strong style={{ color: tkn.color.text }}>{designRecommendation.observed.observed_profiles}</strong></div>
+                  </div>
+                  {!!designRecommendation.warnings.length && (
+                    <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                      {designRecommendation.warnings.join(' ')}
+                    </div>
+                  )}
+                  {designRecommendation.execution && (
+                    <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                      Execution path: <strong style={{ color: tkn.color.text }}>{executionSummaryLabel(designRecommendation.execution)}</strong>
+                      {designRecommendation.execution.launch_warnings?.length
+                        ? ` · ${designRecommendation.execution.launch_warnings[0]}`
+                        : designRecommendation.execution.notes?.length
+                        ? ` · ${designRecommendation.execution.notes[0]}`
+                        : ''}
+                    </div>
+                  )}
+                  {designRecommendation.provenance && (
+                    <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                      Observed channel evidence: <strong style={{ color: tkn.color.text }}>{designRecommendation.provenance.touchpoints}</strong> touchpoints
+                      {` · ${provenancePreview(designRecommendation.provenance)}`}
+                    </div>
+                  )}
+                </div>
+              )}
+              {designRecommendationQuery.isLoading && form.channel && form.conversion_key && form.start_at && form.end_at && (
+                <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>
+                  Loading planner recommendation…
+                </div>
+              )}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tkn.space.sm }}>
                 <label style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
                   Start
@@ -995,7 +1801,7 @@ export default function IncrementalityPage() {
                         }}
                       />
                       <span style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>
-                        Document your operational stop rule. This dashboard does not yet enforce it automatically.
+                        Saved with the experiment plan so operators can review it alongside health and results.
                       </span>
                     </label>
                   </div>
@@ -1130,6 +1936,11 @@ export default function IncrementalityPage() {
                       {' • '}Conversion key <strong>{selectedSummary.conversion_key}</strong>
                     </>
                   )}
+                  {selectedSummary?.config_version != null && (
+                    <>
+                      {' • '}Config v<strong>{selectedSummary.config_version}</strong>
+                    </>
+                  )}
                 </p>
                 {(selectedSummary?.source_type || selectedSummary?.source_name) && (
                   <p style={{ margin: '0 0 4px', fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
@@ -1146,6 +1957,18 @@ export default function IncrementalityPage() {
                     ) : null}
                   </p>
                 )}
+                {detailExecution && (
+                  <p style={{ margin: '0 0 4px', fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                    Execution <strong>{executionSummaryLabel(detailExecution) ?? executionStatusLabel(detailExecution.status)}</strong>
+                    {detailExecution.assignment_mode ? <> • Assignment <strong>{detailExecution.assignment_mode}</strong></> : null}
+                    {detailExecution.exposure_mode ? <> • Exposures <strong>{detailExecution.exposure_mode}</strong></> : null}
+                    {launchReadiness?.status ? (
+                      <>
+                        {' • '}Launch <strong>{launchReadinessLabel(launchReadiness.status)}</strong>
+                      </>
+                    ) : null}
+                  </p>
+                )}
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: tkn.space.xs, marginTop: tkn.space.sm }}>
                   {selectedSummary?.status === 'draft' && (
                     <button
@@ -1154,6 +1977,7 @@ export default function IncrementalityPage() {
                         selectedSummary &&
                         statusMutation.mutate({ id: selectedSummary.id, nextStatus: 'running' })
                       }
+                      disabled={launchReadiness?.status === 'blocked'}
                       style={{
                         padding: `${tkn.space.xs}px ${tkn.space.md}px`,
                         fontSize: tkn.font.sizeXs,
@@ -1162,9 +1986,14 @@ export default function IncrementalityPage() {
                         backgroundColor: tkn.color.accent,
                         border: 'none',
                         borderRadius: tkn.radius.sm,
-                        cursor: 'pointer',
+                        opacity: launchReadiness?.status === 'blocked' ? 0.6 : 1,
+                        cursor: launchReadiness?.status === 'blocked' ? 'not-allowed' : 'pointer',
                       }}
-                      title="Start experiment. Make sure assignments, exposures, and outcomes are being logged."
+                      title={
+                        launchReadiness?.status === 'blocked'
+                          ? 'Resolve the launch blockers below before starting this experiment.'
+                          : 'Start experiment. Make sure assignments, exposures, and outcomes are being logged.'
+                      }
                     >
                       Start experiment
                     </button>
@@ -1191,6 +2020,33 @@ export default function IncrementalityPage() {
                       Stop experiment
                     </button>
                   )}
+                  {selectedSummary && detailExecution?.can_auto_assign_history && selectedSummary.status !== 'completed' && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        autoAssignMutation.mutate({
+                          id: selectedSummary.id,
+                          channel: selectedSummary.channel,
+                          start_at: selectedSummary.start_at,
+                          end_at: selectedSummary.end_at,
+                          treatment_rate: detailSetup?.treatment_rate ?? 0.5,
+                        })
+                      }
+                      style={{
+                        padding: `${tkn.space.xs}px ${tkn.space.md}px`,
+                        fontSize: tkn.font.sizeXs,
+                        fontWeight: tkn.font.weightMedium,
+                        color: tkn.color.accent,
+                        backgroundColor: 'transparent',
+                        border: `1px solid ${tkn.color.accent}`,
+                        borderRadius: tkn.radius.sm,
+                        cursor: autoAssignMutation.isPending ? 'wait' : 'pointer',
+                      }}
+                      title="Seed assignments from observed journeys for this channel and date window."
+                    >
+                      {autoAssignMutation.isPending ? 'Auto-assigning…' : 'Auto-assign from journeys'}
+                    </button>
+                  )}
                   {selectedSummary?.status === 'completed' && (
                     <button
                       type="button"
@@ -1204,6 +2060,11 @@ export default function IncrementalityPage() {
                           start_at: '',
                           end_at: '',
                           notes: detailQuery.data?.notes ?? '',
+                          treatment_rate: detailQuery.data?.setup?.treatment_rate ?? f.treatment_rate,
+                          min_runtime_days: detailQuery.data?.setup?.min_runtime_days != null ? String(detailQuery.data.setup.min_runtime_days) : '',
+                          stop_rule: detailQuery.data?.setup?.stop_rule ?? '',
+                          exclusion_window_days:
+                            detailQuery.data?.setup?.exclusion_window_days != null ? String(detailQuery.data.setup.exclusion_window_days) : '',
                         }))
                       }}
                       style={{
@@ -1231,11 +2092,146 @@ export default function IncrementalityPage() {
                       {(statusMutation.error as Error).message}
                     </span>
                   )}
+                  {autoAssignMutation.isSuccess && (
+                    <span style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                      Auto-assigned {autoAssignMutation.data.total} profiles from observed journeys.
+                    </span>
+                  )}
+                  {autoAssignMutation.isError && (
+                    <span style={{ fontSize: tkn.font.sizeXs, color: tkn.color.danger }}>
+                      {autoAssignMutation.error.message}
+                    </span>
+                  )}
                 </div>
+                {launchReadiness && (
+                  <div
+                    style={{
+                      marginTop: tkn.space.md,
+                      padding: tkn.space.sm,
+                      borderRadius: tkn.radius.sm,
+                      border: `1px solid ${
+                        launchReadiness.status === 'blocked'
+                          ? '#f0b2b2'
+                          : launchReadiness.status === 'manual_review'
+                          ? '#efd8a6'
+                          : tkn.color.borderLight
+                      }`,
+                      background:
+                        launchReadiness.status === 'blocked'
+                          ? '#fff3f3'
+                          : launchReadiness.status === 'manual_review'
+                          ? '#fff9ec'
+                          : tkn.color.surfaceMuted ?? tkn.color.surface,
+                    }}
+                  >
+                    <div style={{ fontSize: tkn.font.sizeSm, fontWeight: tkn.font.weightSemibold, color: tkn.color.text }}>
+                      Launch readiness: {launchReadinessLabel(launchReadiness.status)}
+                    </div>
+                    {launchReadiness.blockers.length > 0 && (
+                      <div style={{ marginTop: 4, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                        <strong style={{ color: tkn.color.text }}>Blockers:</strong> {launchReadiness.blockers.join(' • ')}
+                      </div>
+                    )}
+                    {launchReadiness.warnings.length > 0 && (
+                      <div style={{ marginTop: 4, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                        <strong style={{ color: tkn.color.text }}>Warnings:</strong> {launchReadiness.warnings.join(' • ')}
+                      </div>
+                    )}
+                    {launchReadiness.tracking_gaps.length > 0 && (
+                      <div style={{ marginTop: 4, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                        <strong style={{ color: tkn.color.text }}>Tracking gaps:</strong> {launchReadiness.tracking_gaps.join(' • ')}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {healthQuery.data?.provenance && (
+                  <div
+                    style={{
+                      marginTop: tkn.space.md,
+                      padding: tkn.space.sm,
+                      borderRadius: tkn.radius.sm,
+                      border: `1px solid ${tkn.color.borderLight}`,
+                      background: tkn.color.surfaceMuted ?? tkn.color.surface,
+                    }}
+                  >
+                    <div style={{ fontSize: tkn.font.sizeSm, fontWeight: tkn.font.weightSemibold, color: tkn.color.text }}>
+                      Observed channel provenance
+                    </div>
+                    <div style={{ marginTop: 4, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                      {healthQuery.data.provenance.touchpoints} touchpoints in the experiment window.
+                    </div>
+                    <div style={{ marginTop: 4, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                      {provenancePreview(healthQuery.data.provenance)}
+                    </div>
+                    {!!healthQuery.data.provenance.recent_examples.length && (
+                      <div style={{ marginTop: 6, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                        Latest observed touchpoints:{' '}
+                        {healthQuery.data.provenance.recent_examples
+                          .map((row) =>
+                            [row.medium || row.source || 'unknown', row.campaign].filter(Boolean).join(' / ')
+                          )
+                          .join(' • ')}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {detailQuery.data?.notes && (
                   <p style={{ margin: '8px 0 0', fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
                     {detailQuery.data.notes}
                   </p>
+                )}
+                {detailSetup && (
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                      gap: tkn.space.sm,
+                      marginTop: tkn.space.md,
+                      padding: tkn.space.md,
+                      border: `1px solid ${tkn.color.borderLight}`,
+                      borderRadius: tkn.radius.sm,
+                      background: tkn.color.surfaceMuted ?? tkn.color.surface,
+                    }}
+                  >
+                    <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                      <strong style={{ color: tkn.color.text }}>Planned split:</strong>{' '}
+                      {detailSetup.treatment_rate != null ? `${(detailSetup.treatment_rate * 100).toFixed(0)}% / ${((1 - detailSetup.treatment_rate) * 100).toFixed(0)}%` : '—'}
+                    </div>
+                    <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                      <strong style={{ color: tkn.color.text }}>Assignment:</strong>{' '}
+                      {[detailSetup.assignment_unit, detailSetup.assignment_method].filter(Boolean).join(' · ') || '—'}
+                    </div>
+                    <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                      <strong style={{ color: tkn.color.text }}>Baseline rate:</strong> {formatRate(detailSetup.baseline_rate_estimate)}
+                    </div>
+                    <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                      <strong style={{ color: tkn.color.text }}>Min runtime:</strong>{' '}
+                      {detailSetup.min_runtime_days != null ? `${detailSetup.min_runtime_days} days` : '—'}
+                    </div>
+                    <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                      <strong style={{ color: tkn.color.text }}>Exclusion window:</strong>{' '}
+                      {detailSetup.exclusion_window_days != null ? `${detailSetup.exclusion_window_days} days` : '—'}
+                    </div>
+                    <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                      <strong style={{ color: tkn.color.text }}>Planner window:</strong>{' '}
+                      {formatDateRangeLabel(detailSetup.planner_window?.date_from, detailSetup.planner_window?.date_to)}
+                    </div>
+                    <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                      <strong style={{ color: tkn.color.text }}>Power plan:</strong>{' '}
+                      {detailSetup.power_plan
+                        ? `${formatRate(detailSetup.power_plan.baseline_rate)} baseline · ${(Number(detailSetup.power_plan.mde ?? 0) * 100).toFixed(1)}pp MDE · α ${detailSetup.power_plan.alpha ?? '—'} · power ${detailSetup.power_plan.power ?? '—'}`
+                        : '—'}
+                    </div>
+                    <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                      <strong style={{ color: tkn.color.text }}>Config snapshot:</strong>{' '}
+                      {detailSetup.config_id ? `${detailSetup.config_id}${detailSetup.config_version != null ? ` · v${detailSetup.config_version}` : ''}` : '—'}
+                    </div>
+                    {detailSetup.stop_rule && (
+                      <div style={{ gridColumn: '1 / -1', fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                        <strong style={{ color: tkn.color.text }}>Stop rule:</strong> {detailSetup.stop_rule}
+                      </div>
+                    )}
+                  </div>
                 )}
                 {(detailQuery.data?.segment && Object.keys(detailQuery.data.segment).length > 0) ||
                 (detailQuery.data?.policy && Object.keys(detailQuery.data.policy).length > 0) ||
@@ -1258,6 +2254,333 @@ export default function IncrementalityPage() {
                     )}
                   </div>
                 ) : null}
+              </div>
+
+              {/* Health + results */}
+              <div
+                style={{
+                  background: tkn.color.surface,
+                  border: `1px solid ${tkn.color.borderLight}`,
+                  borderRadius: tkn.radius.lg,
+                  padding: tkn.space.lg,
+                  boxShadow: tkn.shadowSm,
+                  marginBottom: tkn.space.lg,
+                }}
+              >
+                <h3
+                  style={{
+                    margin: 0,
+                    fontSize: tkn.font.sizeSm,
+                    fontWeight: tkn.font.weightSemibold,
+                    color: tkn.color.text,
+                  }}
+                >
+                  Execution
+                </h3>
+                <p style={{ margin: '4px 0 10px', fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                  Seed assignments and log exposures/outcomes directly when the channel is planner-ready or still manually operated.
+                </p>
+                {detailExecution && (
+                  <div style={{ marginBottom: tkn.space.md, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                    <strong style={{ color: tkn.color.text }}>Execution mode:</strong> {executionStatusLabel(detailExecution.status)}
+                    {detailExecution.notes?.length ? ` · ${detailExecution.notes.join(' ')}` : ''}
+                  </div>
+                )}
+                {!!executionChecklist.length && (
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
+                      gap: tkn.space.xs,
+                      marginBottom: tkn.space.md,
+                    }}
+                  >
+                    {executionChecklist.map((item) => (
+                      <div
+                        key={item.label}
+                        style={{
+                          padding: tkn.space.xs,
+                          borderRadius: tkn.radius.sm,
+                          border: `1px solid ${tkn.color.borderLight}`,
+                          background:
+                            item.status === 'done'
+                              ? tkn.color.accentMuted
+                              : item.status === 'warn'
+                                ? '#fff4e5'
+                                : tkn.color.surfaceMuted ?? tkn.color.surface,
+                          fontSize: tkn.font.sizeXs,
+                          color: tkn.color.textSecondary,
+                        }}
+                      >
+                        <strong style={{ color: tkn.color.text }}>
+                          {item.status === 'done' ? 'Done' : item.status === 'warn' ? 'Warn' : 'Todo'}
+                        </strong>
+                        <br />
+                        {item.label}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                    gap: tkn.space.md,
+                  }}
+                >
+                  <div style={{ display: 'grid', gap: tkn.space.xs }}>
+                    <strong style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>Assignments</strong>
+                    <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                      Paste profile ids separated by commas or new lines.
+                    </div>
+                    <textarea
+                      rows={6}
+                      value={assignmentSeedInput}
+                      onChange={(e) => setAssignmentSeedInput(e.target.value)}
+                      placeholder={'profile_001\nprofile_002\nprofile_003'}
+                      style={{
+                        width: '100%',
+                        padding: tkn.space.sm,
+                        border: `1px solid ${tkn.color.border}`,
+                        borderRadius: tkn.radius.sm,
+                        fontSize: tkn.font.sizeSm,
+                        resize: 'vertical',
+                      }}
+                    />
+                    <button
+                      type="button"
+                      disabled={!selectedSummary || manualAssignMutation.isPending}
+                      onClick={() => {
+                        if (!selectedSummary) return
+                        const profile_ids = parseProfileIdsInput(assignmentSeedInput)
+                        if (!profile_ids.length) {
+                          setExecutionFormError('Add at least one profile id to assign.')
+                          return
+                        }
+                        setExecutionFormError('')
+                        manualAssignMutation.mutate({
+                          id: selectedSummary.id,
+                          profile_ids,
+                          treatment_rate: detailSetup?.treatment_rate ?? 0.5,
+                        })
+                      }}
+                      style={{
+                        padding: `${tkn.space.xs}px ${tkn.space.md}px`,
+                        fontSize: tkn.font.sizeXs,
+                        fontWeight: tkn.font.weightMedium,
+                        color: tkn.color.surface,
+                        backgroundColor: tkn.color.accent,
+                        border: 'none',
+                        borderRadius: tkn.radius.sm,
+                        cursor: manualAssignMutation.isPending ? 'wait' : 'pointer',
+                      }}
+                    >
+                      {manualAssignMutation.isPending ? 'Assigning…' : 'Assign profiles'}
+                    </button>
+                    {manualAssignMutation.isSuccess && (
+                      <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                        Assigned {manualAssignMutation.data.assigned} profiles.
+                      </div>
+                    )}
+                    {manualAssignMutation.isError && (
+                      <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.danger }}>
+                        {manualAssignMutation.error.message}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display: 'grid', gap: tkn.space.xs }}>
+                    <strong style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>Exposures</strong>
+                    <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                      One line per exposure: `profile_id,campaign_id,message_id,exposure_ts`
+                    </div>
+                    <textarea
+                      rows={6}
+                      value={exposureLogInput}
+                      onChange={(e) => setExposureLogInput(e.target.value)}
+                      placeholder={'profile_001,email_q2,msg_1001,2026-04-04T09:00:00Z'}
+                      style={{
+                        width: '100%',
+                        padding: tkn.space.sm,
+                        border: `1px solid ${tkn.color.border}`,
+                        borderRadius: tkn.radius.sm,
+                        fontSize: tkn.font.sizeSm,
+                        resize: 'vertical',
+                      }}
+                    />
+                    <button
+                      type="button"
+                      disabled={!selectedSummary || exposureLogMutation.isPending}
+                      onClick={() => {
+                        if (!selectedSummary) return
+                        try {
+                          const exposures = parseExposureInput(exposureLogInput)
+                          if (!exposures.length) {
+                            setExecutionFormError('Add at least one exposure row.')
+                            return
+                          }
+                          setExecutionFormError('')
+                          exposureLogMutation.mutate({ id: selectedSummary.id, exposures })
+                        } catch (error) {
+                          setExecutionFormError(error instanceof Error ? error.message : 'Failed to parse exposure rows.')
+                        }
+                      }}
+                      style={{
+                        padding: `${tkn.space.xs}px ${tkn.space.md}px`,
+                        fontSize: tkn.font.sizeXs,
+                        fontWeight: tkn.font.weightMedium,
+                        color: tkn.color.surface,
+                        backgroundColor: tkn.color.accent,
+                        border: 'none',
+                        borderRadius: tkn.radius.sm,
+                        cursor: exposureLogMutation.isPending ? 'wait' : 'pointer',
+                      }}
+                    >
+                      {exposureLogMutation.isPending ? 'Logging…' : 'Log exposures'}
+                    </button>
+                    {exposureLogMutation.isSuccess && (
+                      <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                        Logged {exposureLogMutation.data.recorded} exposures.
+                      </div>
+                    )}
+                    {exposureLogMutation.isError && (
+                      <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.danger }}>
+                        {exposureLogMutation.error.message}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display: 'grid', gap: tkn.space.xs }}>
+                    <strong style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>Outcomes</strong>
+                    <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                      One line per outcome: `profile_id,value,conversion_ts`
+                    </div>
+                    <textarea
+                      rows={6}
+                      value={outcomeLogInput}
+                      onChange={(e) => setOutcomeLogInput(e.target.value)}
+                      placeholder={'profile_001,120,2026-04-05T13:30:00Z'}
+                      style={{
+                        width: '100%',
+                        padding: tkn.space.sm,
+                        border: `1px solid ${tkn.color.border}`,
+                        borderRadius: tkn.radius.sm,
+                        fontSize: tkn.font.sizeSm,
+                        resize: 'vertical',
+                      }}
+                    />
+                    <button
+                      type="button"
+                      disabled={!selectedSummary || outcomeLogMutation.isPending}
+                      onClick={() => {
+                        if (!selectedSummary) return
+                        try {
+                          const outcomes = parseOutcomeInput(outcomeLogInput)
+                          if (!outcomes.length) {
+                            setExecutionFormError('Add at least one outcome row.')
+                            return
+                          }
+                          setExecutionFormError('')
+                          outcomeLogMutation.mutate({ id: selectedSummary.id, outcomes })
+                        } catch (error) {
+                          setExecutionFormError(error instanceof Error ? error.message : 'Failed to parse outcome rows.')
+                        }
+                      }}
+                      style={{
+                        padding: `${tkn.space.xs}px ${tkn.space.md}px`,
+                        fontSize: tkn.font.sizeXs,
+                        fontWeight: tkn.font.weightMedium,
+                        color: tkn.color.surface,
+                        backgroundColor: tkn.color.accent,
+                        border: 'none',
+                        borderRadius: tkn.radius.sm,
+                        cursor: outcomeLogMutation.isPending ? 'wait' : 'pointer',
+                      }}
+                    >
+                      {outcomeLogMutation.isPending ? 'Logging…' : 'Log outcomes'}
+                    </button>
+                    {outcomeLogMutation.isSuccess && (
+                      <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                        Logged {outcomeLogMutation.data.inserted} outcomes.
+                      </div>
+                    )}
+                    {outcomeLogMutation.isError && (
+                      <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.danger }}>
+                        {outcomeLogMutation.error.message}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                {executionFormError && (
+                  <div style={{ marginTop: tkn.space.sm, fontSize: tkn.font.sizeXs, color: tkn.color.danger }}>
+                    {executionFormError}
+                  </div>
+                )}
+                <div
+                  style={{
+                    marginTop: tkn.space.md,
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                    gap: tkn.space.md,
+                    fontSize: tkn.font.sizeXs,
+                  }}
+                >
+                  <div
+                    style={{
+                      padding: tkn.space.sm,
+                      borderRadius: tkn.radius.sm,
+                      border: `1px solid ${tkn.color.borderLight}`,
+                      background: tkn.color.surfaceMuted ?? tkn.color.surface,
+                    }}
+                  >
+                    <strong style={{ color: tkn.color.text }}>Recent assignments</strong>
+                    <div style={{ marginTop: 4, color: tkn.color.textSecondary }}>
+                      {assignmentsPreviewQuery.isLoading
+                        ? 'Loading…'
+                        : assignmentsPreviewQuery.data?.length
+                        ? assignmentsPreviewQuery.data
+                            .map((row) => `${row.profile_id} (${row.group})`)
+                            .join(' • ')
+                        : 'No assignments logged yet.'}
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      padding: tkn.space.sm,
+                      borderRadius: tkn.radius.sm,
+                      border: `1px solid ${tkn.color.borderLight}`,
+                      background: tkn.color.surfaceMuted ?? tkn.color.surface,
+                    }}
+                  >
+                    <strong style={{ color: tkn.color.text }}>Recent exposures</strong>
+                    <div style={{ marginTop: 4, color: tkn.color.textSecondary }}>
+                      {exposuresPreviewQuery.isLoading
+                        ? 'Loading…'
+                        : exposuresPreviewQuery.data?.length
+                        ? exposuresPreviewQuery.data
+                            .map((row) => `${row.profile_id}${row.campaign_id ? ` (${row.campaign_id})` : ''}`)
+                            .join(' • ')
+                        : 'No exposures logged yet.'}
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      padding: tkn.space.sm,
+                      borderRadius: tkn.radius.sm,
+                      border: `1px solid ${tkn.color.borderLight}`,
+                      background: tkn.color.surfaceMuted ?? tkn.color.surface,
+                    }}
+                  >
+                    <strong style={{ color: tkn.color.text }}>Recent outcomes</strong>
+                    <div style={{ marginTop: 4, color: tkn.color.textSecondary }}>
+                      {outcomesPreviewQuery.isLoading
+                        ? 'Loading…'
+                        : outcomesPreviewQuery.data?.length
+                        ? outcomesPreviewQuery.data
+                            .map((row) => `${row.profile_id} (${row.value})`)
+                            .join(' • ')
+                        : 'No outcomes logged yet.'}
+                    </div>
+                  </div>
+                </div>
               </div>
 
               {/* Health + results */}
@@ -1327,7 +2650,8 @@ export default function IncrementalityPage() {
                           <strong>Balance</strong>
                           <br />
                           {healthQuery.data.balance.status === 'ok' ? 'OK' : 'Warning'} • T share:{' '}
-                          {(healthQuery.data.balance.observed_share * 100).toFixed(1)}%
+                          {(healthQuery.data.balance.observed_share * 100).toFixed(1)}% vs plan{' '}
+                          {(healthQuery.data.balance.expected_share * 100).toFixed(1)}%
                         </div>
                         <div title="Are assignments and outcomes being recorded in the underlying tables?">
                           <strong>Data completeness</strong>
@@ -1345,7 +2669,7 @@ export default function IncrementalityPage() {
                             : `Warning (${healthQuery.data.overlap_risk.overlapping_profiles} profiles)`}
                         </div>
                       </div>
-                      {powerPlans[selectedId!] && (
+                      {healthQuery.data.plan.sample_target_treatment != null && healthQuery.data.plan.sample_target_control != null ? (
                         <div
                           style={{
                             marginTop: tkn.space.xs,
@@ -1354,7 +2678,33 @@ export default function IncrementalityPage() {
                             background: tkn.color.accentMuted,
                             fontSize: tkn.font.sizeXs,
                           }}
-                          title="Target per group from the power calculator and current progress based on assignments."
+                          title="Target per group from the stored experiment plan and current assignment progress."
+                        >
+                          Target sample size:{' '}
+                          <strong>
+                            {healthQuery.data.plan.sample_target_treatment.toLocaleString()} T /{' '}
+                            {healthQuery.data.plan.sample_target_control.toLocaleString()} C
+                          </strong>
+                          <br />
+                          Progress:{' '}
+                          {Math.round(
+                            Math.min(
+                              healthQuery.data.plan.progress_treatment ?? 0,
+                              healthQuery.data.plan.progress_control ?? 0,
+                            ) * 100,
+                          )}
+                          %
+                        </div>
+                      ) : powerPlans[selectedId!] ? (
+                        <div
+                          style={{
+                            marginTop: tkn.space.xs,
+                            padding: tkn.space.xs,
+                            borderRadius: tkn.radius.sm,
+                            background: tkn.color.accentMuted,
+                            fontSize: tkn.font.sizeXs,
+                          }}
+                          title="Target per group from the local power calculator and current progress based on assignments."
                         >
                           Target sample size:{' '}
                           <strong>
@@ -1375,7 +2725,27 @@ export default function IncrementalityPage() {
                             return <>Progress: {pct}%</>
                           })()}
                         </div>
-                      )}
+                      ) : null}
+                      <div
+                        style={{
+                          marginTop: tkn.space.xs,
+                          padding: tkn.space.xs,
+                          borderRadius: tkn.radius.sm,
+                          background: tkn.color.surfaceMuted ?? tkn.color.surface,
+                          fontSize: tkn.font.sizeXs,
+                        }}
+                        title="Checks experiment progress against the stored minimum runtime plan."
+                      >
+                        Runtime: <strong>{runtimeStatusLabel(healthQuery.data.runtime.status)}</strong>
+                        {' · '}
+                        {healthQuery.data.runtime.elapsed_days ?? 0} elapsed
+                        {healthQuery.data.runtime.planned_min_days != null
+                          ? ` / ${healthQuery.data.runtime.planned_min_days} planned minimum`
+                          : ''}
+                        {healthQuery.data.runtime.scheduled_days != null
+                          ? ` · ${healthQuery.data.runtime.scheduled_days} scheduled`
+                          : ''}
+                      </div>
                       {healthQuery.data.ready_state.reasons.length > 0 && (
                         <div style={{ marginTop: tkn.space.xs }}>
                           <strong style={{ fontSize: tkn.font.sizeXs }}>Top blockers</strong>
