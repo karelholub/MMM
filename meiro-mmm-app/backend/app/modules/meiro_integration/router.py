@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import pandas as pd
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import OperationalError
 
 from app.connectors import meiro_cdp
 from app.modules.meiro_integration.schemas import (
@@ -66,6 +67,19 @@ from app.services_meiro_replay_snapshots import create_meiro_replay_snapshot
 from app.utils.taxonomy import load_taxonomy
 
 logger = logging.getLogger(__name__)
+
+
+def _is_retryable_sqlite_operational_error(exc: Exception) -> bool:
+    message = str(getattr(exc, "orig", exc) or exc).lower()
+    retryable_markers = (
+        "disk i/o error",
+        "database is locked",
+        "database table is locked",
+        "unable to open database file",
+        "readonly database",
+        "cannot commit transaction",
+    )
+    return any(marker in message for marker in retryable_markers)
 
 
 MEIRO_MAPPING_PRESETS = {
@@ -978,80 +992,169 @@ def create_router(
                 "last_trigger": trigger,
             }
         )
-        archive_entries, archived_profiles, use_event_archive, replay_scope = _load_archived_profiles_for_replay(
-            db,
-            replay_mode=replay_mode,
-            archive_source="events",
-            archive_limit=archive_limit,
-            date_from=date_from,
-            date_to=date_to,
-            incremental_after_db_id=incremental_after_db_id,
-        )
-        if not use_event_archive or not archive_entries or not archived_profiles:
-            state = update_auto_replay_state(
-                {
-                    "last_status": "skipped",
-                    "last_reason": "No raw-event archive data was available for auto-replay.",
-                    "last_archive_entries_seen": int(event_archive_status.get("entries") or 0),
-                    "last_archive_received_at": event_archive_status.get("last_received_at"),
-                    "last_event_batch_db_id_seen": current_event_batch_db_id,
-                }
-            )
-            _record_auto_replay_run(
-                db,
-                status="skipped",
-                trigger=trigger,
-                replay_mode=replay_mode,
-                reason=state.get("last_reason"),
-                started_at=now_iso,
-                completed_at=now_iso,
-                current_event_batch_db_id=current_event_batch_db_id,
-                event_archive_status=event_archive_status,
-            )
-            return {"ok": False, "status": "skipped", "reason": state.get("last_reason"), "state": state}
-
-        mapping = _build_saved_mapping_config()
-        settings = get_settings_obj()
-        revenue_config = settings.revenue_config
-        preflight = canonicalize_meiro_profiles_fn(
-            archived_profiles,
-            mapping=mapping,
-            revenue_config=(revenue_config.model_dump() if hasattr(revenue_config, "model_dump") else revenue_config),
-            dedup_config=pull_config,
-        )
-        import_summary = preflight.get("import_summary") or {}
-        total_profiles = int(import_summary.get("total") or len(archived_profiles) or 0)
-        quarantine_count = int(
-            import_summary.get("quarantined")
-            or import_summary.get("quarantine_count")
-            or preflight.get("quarantine_count")
-            or 0
-        )
-        quarantine_share = (quarantine_count / total_profiles) if total_profiles > 0 else 0.0
-        quarantine_threshold_raw = pull_config.get("auto_replay_quarantine_spike_threshold_pct")
+        archive_entries: List[Dict[str, Any]] = []
+        archived_profiles: List[Dict[str, Any]] = []
+        replay_scope: Dict[str, Any] = {}
         try:
-            quarantine_threshold_pct = int(quarantine_threshold_raw) if quarantine_threshold_raw is not None else 40
-        except Exception:
-            quarantine_threshold_pct = 40
-        quarantine_threshold = max(0, min(100, quarantine_threshold_pct)) / 100.0
-        if quarantine_share > quarantine_threshold:
-            reason = (
-                f"Auto-replay blocked because quarantined journeys reached {round(quarantine_share * 100, 2)}% "
-                f"of the replay set, above the configured {round(quarantine_threshold * 100, 2)}% threshold."
+            archive_entries, archived_profiles, use_event_archive, replay_scope = _load_archived_profiles_for_replay(
+                db,
+                replay_mode=replay_mode,
+                archive_source="events",
+                archive_limit=archive_limit,
+                date_from=date_from,
+                date_to=date_to,
+                incremental_after_db_id=incremental_after_db_id,
             )
+            if not use_event_archive or not archive_entries or not archived_profiles:
+                state = update_auto_replay_state(
+                    {
+                        "last_status": "skipped",
+                        "last_reason": "No raw-event archive data was available for auto-replay.",
+                        "last_archive_entries_seen": int(event_archive_status.get("entries") or 0),
+                        "last_archive_received_at": event_archive_status.get("last_received_at"),
+                        "last_event_batch_db_id_seen": current_event_batch_db_id,
+                    }
+                )
+                _record_auto_replay_run(
+                    db,
+                    status="skipped",
+                    trigger=trigger,
+                    replay_mode=replay_mode,
+                    reason=state.get("last_reason"),
+                    started_at=now_iso,
+                    completed_at=now_iso,
+                    current_event_batch_db_id=current_event_batch_db_id,
+                    event_archive_status=event_archive_status,
+                )
+                return {"ok": False, "status": "skipped", "reason": state.get("last_reason"), "state": state}
+
+            mapping = _build_saved_mapping_config()
+            settings = get_settings_obj()
+            revenue_config = settings.revenue_config
+            preflight = canonicalize_meiro_profiles_fn(
+                archived_profiles,
+                mapping=mapping,
+                revenue_config=(revenue_config.model_dump() if hasattr(revenue_config, "model_dump") else revenue_config),
+                dedup_config=pull_config,
+            )
+            import_summary = preflight.get("import_summary") or {}
+            total_profiles = int(import_summary.get("total") or len(archived_profiles) or 0)
+            quarantine_count = int(
+                import_summary.get("quarantined")
+                or import_summary.get("quarantine_count")
+                or preflight.get("quarantine_count")
+                or 0
+            )
+            quarantine_share = (quarantine_count / total_profiles) if total_profiles > 0 else 0.0
+            quarantine_threshold_raw = pull_config.get("auto_replay_quarantine_spike_threshold_pct")
+            try:
+                quarantine_threshold_pct = int(quarantine_threshold_raw) if quarantine_threshold_raw is not None else 40
+            except Exception:
+                quarantine_threshold_pct = 40
+            quarantine_threshold = max(0, min(100, quarantine_threshold_pct)) / 100.0
+            if quarantine_share > quarantine_threshold:
+                reason = (
+                    f"Auto-replay blocked because quarantined journeys reached {round(quarantine_share * 100, 2)}% "
+                    f"of the replay set, above the configured {round(quarantine_threshold * 100, 2)}% threshold."
+                )
+                state = update_auto_replay_state(
+                    {
+                        "last_completed_at": now_iso,
+                        "last_status": "blocked",
+                        "last_reason": reason,
+                        "last_archive_entries_seen": int(event_archive_status.get("entries") or 0),
+                        "last_archive_received_at": event_archive_status.get("last_received_at"),
+                        "last_event_batch_db_id_seen": current_event_batch_db_id,
+                        "last_result_summary": {
+                            "archive_entries_used": len(archive_entries),
+                            "profiles_reconstructed": len(archived_profiles),
+                            "quarantine_count": quarantine_count,
+                            "quarantine_share_pct": round(quarantine_share * 100, 2),
+                            "latest_event_batch_db_id": current_event_batch_db_id,
+                            "incremental": bool(replay_scope.get("incremental")),
+                            "replace_profile_count": len(replay_scope.get("replace_profile_ids") or []),
+                        },
+                    }
+                )
+                _record_auto_replay_run(
+                    db,
+                    status="blocked",
+                    trigger=trigger,
+                    replay_mode=replay_mode,
+                    reason=reason,
+                    started_at=now_iso,
+                    completed_at=now_iso,
+                    current_event_batch_db_id=current_event_batch_db_id,
+                    event_archive_status=event_archive_status,
+                    archive_entries_used=len(archive_entries),
+                    profiles_reconstructed=len(archived_profiles),
+                    quarantine_count=quarantine_count,
+                    result_summary=state.get("last_result_summary") or {},
+                )
+                return {"ok": False, "status": "blocked", "reason": reason, "state": state}
+
+            replay_context_path = get_data_dir_obj() / "meiro_replay_context.json"
+            replay_diagnostics = _build_event_replay_reconstruction_diagnostics(
+                archive_entries=archive_entries,
+                archived_profiles=archived_profiles,
+            )
+            replay_snapshot = create_meiro_replay_snapshot(
+                db,
+                source_kind="events",
+                profiles_json=archived_profiles,
+                replay_mode=replay_mode,
+                latest_event_batch_db_id=current_event_batch_db_id,
+                archive_entries_used=len(archive_entries),
+                context_json={
+                    "archive_source": "events",
+                    "replay_mode": replay_mode,
+                    "archive_entries_used": len(archive_entries),
+                    "latest_event_batch_db_id": current_event_batch_db_id,
+                    "event_reconstruction_diagnostics": replay_diagnostics,
+                    "replace_profile_ids": replay_scope.get("replace_profile_ids") or [],
+                    "incremental": bool(replay_scope.get("incremental")),
+                    "auto_replay": True,
+                    "auto_replay_trigger": trigger,
+                },
+            )
+            replay_context_path.write_text(
+                json.dumps(
+                    {
+                        "archive_source": "events",
+                        "replay_mode": replay_mode,
+                        "archive_entries_used": len(archive_entries),
+                        "replay_snapshot_id": replay_snapshot.get("snapshot_id"),
+                        "latest_event_batch_db_id": current_event_batch_db_id,
+                        "event_reconstruction_diagnostics": replay_diagnostics,
+                        "replace_profile_ids": replay_scope.get("replace_profile_ids") or [],
+                        "incremental": bool(replay_scope.get("incremental")),
+                        "auto_replay": True,
+                        "auto_replay_trigger": trigger,
+                    },
+                    indent=2,
+                )
+            )
+            import_result = import_journeys_from_cdp_fn(
+                req=from_cdp_request_factory(
+                    import_note=f"Auto-replayed from raw-event archive ({trigger})",
+                    replay_snapshot_id=replay_snapshot.get("snapshot_id"),
+                ),
+                db=db,
+            )
+            completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             state = update_auto_replay_state(
                 {
-                    "last_completed_at": now_iso,
-                    "last_status": "blocked",
-                    "last_reason": reason,
+                    "last_completed_at": completed_at,
+                    "last_status": "success",
+                    "last_reason": None,
                     "last_archive_entries_seen": int(event_archive_status.get("entries") or 0),
                     "last_archive_received_at": event_archive_status.get("last_received_at"),
                     "last_event_batch_db_id_seen": current_event_batch_db_id,
                     "last_result_summary": {
                         "archive_entries_used": len(archive_entries),
                         "profiles_reconstructed": len(archived_profiles),
-                        "quarantine_count": quarantine_count,
-                        "quarantine_share_pct": round(quarantine_share * 100, 2),
+                        "persisted_count": int(import_result.get("count") or 0),
+                        "quarantine_count": int(import_result.get("quarantine_count") or 0),
                         "latest_event_batch_db_id": current_event_batch_db_id,
                         "incremental": bool(replay_scope.get("incremental")),
                         "replace_profile_count": len(replay_scope.get("replace_profile_ids") or []),
@@ -1060,7 +1163,58 @@ def create_router(
             )
             _record_auto_replay_run(
                 db,
-                status="blocked",
+                status="success",
+                trigger=trigger,
+                replay_mode=replay_mode,
+                reason=None,
+                started_at=now_iso,
+                completed_at=completed_at,
+                current_event_batch_db_id=current_event_batch_db_id,
+                event_archive_status=event_archive_status,
+                archive_entries_used=len(archive_entries),
+                profiles_reconstructed=len(archived_profiles),
+                quarantine_count=int(import_result.get("quarantine_count") or 0),
+                persisted_count=int(import_result.get("count") or 0),
+                result_summary=state.get("last_result_summary") or {},
+            )
+            return {
+                "ok": True,
+                "status": "success",
+                "state": state,
+                "import_result": import_result,
+                "archive_entries_used": len(archive_entries),
+                "profiles_reconstructed": len(archived_profiles),
+                "incremental": bool(replay_scope.get("incremental")),
+                "replace_profile_count": len(replay_scope.get("replace_profile_ids") or []),
+            }
+        except OperationalError as exc:
+            if not _is_retryable_sqlite_operational_error(exc):
+                raise
+            logger.warning("Auto-replay deferred because SQLite was temporarily unavailable", exc_info=True)
+            reason = (
+                "Auto-replay could not access the SQLite store. "
+                "The raw-event batch was saved and replay can be retried."
+            )
+            result_summary = {
+                "archive_entries_used": len(archive_entries),
+                "profiles_reconstructed": len(archived_profiles),
+                "latest_event_batch_db_id": current_event_batch_db_id,
+                "incremental": bool(replay_scope.get("incremental")),
+                "replace_profile_count": len(replay_scope.get("replace_profile_ids") or []),
+                "retryable": True,
+                "error_class": exc.__class__.__name__,
+            }
+            state = update_auto_replay_state(
+                {
+                    "last_completed_at": now_iso,
+                    "last_status": "unavailable",
+                    "last_reason": reason,
+                    "last_result_summary": result_summary,
+                }
+            )
+            _record_auto_replay_run(
+                db,
+                status="unavailable",
                 trigger=trigger,
                 replay_mode=replay_mode,
                 reason=reason,
@@ -1068,107 +1222,17 @@ def create_router(
                 completed_at=now_iso,
                 current_event_batch_db_id=current_event_batch_db_id,
                 event_archive_status=event_archive_status,
-                archive_entries_used=len(archive_entries),
-                profiles_reconstructed=len(archived_profiles),
-                quarantine_count=quarantine_count,
-                result_summary=state.get("last_result_summary") or {},
+                archive_entries_used=len(archive_entries) or None,
+                profiles_reconstructed=len(archived_profiles) or None,
+                result_summary=result_summary,
             )
-            return {"ok": False, "status": "blocked", "reason": reason, "state": state}
-
-        replay_context_path = get_data_dir_obj() / "meiro_replay_context.json"
-        replay_diagnostics = _build_event_replay_reconstruction_diagnostics(
-            archive_entries=archive_entries,
-            archived_profiles=archived_profiles,
-        )
-        replay_snapshot = create_meiro_replay_snapshot(
-            db,
-            source_kind="events",
-            profiles_json=archived_profiles,
-            replay_mode=replay_mode,
-            latest_event_batch_db_id=current_event_batch_db_id,
-            archive_entries_used=len(archive_entries),
-            context_json={
-                "archive_source": "events",
-                "replay_mode": replay_mode,
-                "archive_entries_used": len(archive_entries),
-                "latest_event_batch_db_id": current_event_batch_db_id,
-                "event_reconstruction_diagnostics": replay_diagnostics,
-                "replace_profile_ids": replay_scope.get("replace_profile_ids") or [],
-                "incremental": bool(replay_scope.get("incremental")),
-                "auto_replay": True,
-                "auto_replay_trigger": trigger,
-            },
-        )
-        replay_context_path.write_text(
-            json.dumps(
-                {
-                    "archive_source": "events",
-                    "replay_mode": replay_mode,
-                    "archive_entries_used": len(archive_entries),
-                    "replay_snapshot_id": replay_snapshot.get("snapshot_id"),
-                    "latest_event_batch_db_id": current_event_batch_db_id,
-                    "event_reconstruction_diagnostics": replay_diagnostics,
-                    "replace_profile_ids": replay_scope.get("replace_profile_ids") or [],
-                    "incremental": bool(replay_scope.get("incremental")),
-                    "auto_replay": True,
-                    "auto_replay_trigger": trigger,
-                },
-                indent=2,
-            )
-        )
-        import_result = import_journeys_from_cdp_fn(
-            req=from_cdp_request_factory(
-                import_note=f"Auto-replayed from raw-event archive ({trigger})",
-                replay_snapshot_id=replay_snapshot.get("snapshot_id"),
-            ),
-            db=db,
-        )
-        completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        state = update_auto_replay_state(
-            {
-                "last_completed_at": completed_at,
-                "last_status": "success",
-                "last_reason": None,
-                "last_archive_entries_seen": int(event_archive_status.get("entries") or 0),
-                "last_archive_received_at": event_archive_status.get("last_received_at"),
-                "last_event_batch_db_id_seen": current_event_batch_db_id,
-                "last_result_summary": {
-                    "archive_entries_used": len(archive_entries),
-                    "profiles_reconstructed": len(archived_profiles),
-                    "persisted_count": int(import_result.get("count") or 0),
-                    "quarantine_count": int(import_result.get("quarantine_count") or 0),
-                    "latest_event_batch_db_id": current_event_batch_db_id,
-                    "incremental": bool(replay_scope.get("incremental")),
-                    "replace_profile_count": len(replay_scope.get("replace_profile_ids") or []),
-                },
+            return {
+                "ok": False,
+                "status": "unavailable",
+                "reason": reason,
+                "state": state,
+                "retryable": True,
             }
-        )
-        _record_auto_replay_run(
-            db,
-            status="success",
-            trigger=trigger,
-            replay_mode=replay_mode,
-            reason=None,
-            started_at=now_iso,
-            completed_at=completed_at,
-            current_event_batch_db_id=current_event_batch_db_id,
-            event_archive_status=event_archive_status,
-            archive_entries_used=len(archive_entries),
-            profiles_reconstructed=len(archived_profiles),
-            quarantine_count=int(import_result.get("quarantine_count") or 0),
-            persisted_count=int(import_result.get("count") or 0),
-            result_summary=state.get("last_result_summary") or {},
-        )
-        return {
-            "ok": True,
-            "status": "success",
-            "state": state,
-            "import_result": import_result,
-            "archive_entries_used": len(archive_entries),
-            "profiles_reconstructed": len(archived_profiles),
-            "incremental": bool(replay_scope.get("incremental")),
-            "replace_profile_count": len(replay_scope.get("replace_profile_ids") or []),
-        }
 
     @router.post("/api/connectors/meiro/test")
     def meiro_test(req: MeiroCDPTestRequest = MeiroCDPTestRequest()):

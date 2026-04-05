@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
 
 from app.db import SessionLocal
 from app.main import app
@@ -1010,6 +1011,76 @@ def test_after_batch_auto_replay_replaces_only_affected_profiles(monkeypatch, tm
         assert any(row.profile_id == "cust-event-2" and row.import_source == "meiro_events_replay" for row in rows)
     finally:
         db.close()
+
+
+def test_raw_event_ingest_marks_auto_replay_unavailable_on_sqlite_io_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(meiro_config, "CONFIG_PATH", tmp_path / "meiro_config.json")
+    monkeypatch.setattr(meiro_config, "WEBHOOK_ARCHIVE_PATH", tmp_path / "meiro_webhook_archive.jsonl")
+    monkeypatch.setattr(meiro_config, "EVENT_ARCHIVE_PATH", tmp_path / "meiro_event_archive.jsonl")
+
+    _clear_meiro_raw_batches()
+    _clear_meiro_replay_runs()
+    meiro_config.save_mapping({})
+    meiro_config.update_mapping_approval("approved", "Ready")
+    meiro_config.save_pull_config(
+        {
+            "primary_ingest_source": "events",
+            "auto_replay_mode": "after_batch",
+        }
+    )
+
+    def fail_snapshot(*args, **kwargs):
+        raise OperationalError("INSERT INTO meiro_replay_snapshots ...", {}, Exception("disk I/O error"))
+
+    monkeypatch.setattr(meiro_router, "create_meiro_replay_snapshot", fail_snapshot)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/connectors/meiro/events",
+        json={
+            "events": [
+                {
+                    "event_id": "evt-io-touch",
+                    "event_payload": {
+                        "event_id": "evt-io-touch",
+                        "customer_id": "cust-io",
+                        "timestamp": "2026-03-29T10:00:00Z",
+                        "event_name": "page_view",
+                        "source": "google",
+                        "medium": "cpc",
+                        "campaign": "brand",
+                    },
+                },
+                {
+                    "event_id": "evt-io-conv",
+                    "event_payload": {
+                        "event_id": "evt-io-conv",
+                        "customer_id": "cust-io",
+                        "timestamp": "2026-03-29T10:05:00Z",
+                        "event_name": "purchase",
+                        "conversion_id": "conv-io-1",
+                        "value": 42.0,
+                        "currency": "EUR",
+                    },
+                },
+            ]
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()["auto_replay"]
+    assert payload["status"] == "unavailable"
+    assert payload["retryable"] is True
+    assert "saved and replay can be retried" in payload["reason"]
+    assert payload["state"]["last_status"] == "unavailable"
+    assert payload["state"].get("last_event_batch_db_id_seen") in (None, "")
+
+    status = client.get("/api/connectors/meiro/auto-replay")
+    assert status.status_code == 200
+    status_payload = status.json()
+    assert status_payload["state"]["last_status"] == "unavailable"
+    assert status_payload["history"]
+    assert status_payload["history"][0]["status"] == "unavailable"
 
 
 def test_auto_replay_status_endpoint_prefers_db_run_history(monkeypatch, tmp_path):
