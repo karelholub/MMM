@@ -21,6 +21,7 @@ import { apiGetJson, withQuery } from '../lib/apiClient'
 import { buildJourneyHypothesisHref } from '../lib/journeyLinks'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import DecisionStatusCard from '../components/DecisionStatusCard'
+import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn, SectionCard } from '../components/dashboard'
 
 interface ChannelPerformanceProps {
@@ -997,11 +998,16 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
         </div>
       )}
 
-      {showWhy && (
-        <div style={{ marginBottom: t.space.lg }}>
+      <div style={{ marginBottom: t.space.lg }}>
+        <CollapsiblePanel
+          title="Method & Explainability"
+          subtitle="How the channel view is computed and what assumptions drive the metrics."
+          open={showWhy}
+          onToggle={() => setShowWhy((v) => !v)}
+        >
           <ExplainabilityPanel scope="channel" configId={configId ?? undefined} model={model} />
-        </div>
-      )}
+        </CollapsiblePanel>
+      </div>
 
       <div style={{ marginBottom: t.space.xl }}>
         <div

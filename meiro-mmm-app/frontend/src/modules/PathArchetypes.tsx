@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { tokens as t } from '../theme/tokens'
 import DecisionStatusCard from '../components/DecisionStatusCard'
+import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { apiGetJson } from '../lib/apiClient'
 
@@ -184,6 +185,8 @@ export default function PathArchetypes() {
   const [directMode, setDirectMode] = useState<'include' | 'exclude'>('include')
   const [comparePrevious, setComparePrevious] = useState(false)
   const [showQualityHelp, setShowQualityHelp] = useState(false)
+  const [showContext, setShowContext] = useState(false)
+  const [showQualityPanel, setShowQualityPanel] = useState(false)
   const [channelFilter, setChannelFilter] = useState<string[]>([])
   const [minAvgLength, setMinAvgLength] = useState<number | ''>('')
   const [maxAvgLength, setMaxAvgLength] = useState<number | ''>('')
@@ -246,6 +249,7 @@ export default function PathArchetypes() {
   const qualityBadge = diagnostics?.quality_badge ?? 'ok'
   const stabilityPct = diagnostics?.stability_score_pct ?? null
   const stabilityLabel = diagnostics?.stability_label ?? null
+  const convertedMismatch = journeys?.converted != null && data?.total_converted != null ? journeys.converted !== data.total_converted : false
 
   const isCompareAvailable = Boolean(comparePrevious && diagnostics?.compare_available)
 
@@ -531,6 +535,181 @@ export default function PathArchetypes() {
 
       <div
         style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          gap: tkn.space.md,
+          marginBottom: tkn.space.lg,
+          padding: tkn.space.md,
+          borderRadius: tkn.radius.lg,
+          border: `1px solid ${tkn.color.borderLight}`,
+          background: tkn.color.surface,
+          boxShadow: tkn.shadowSm,
+        }}
+      >
+        <div>
+          <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted, textTransform: 'uppercase' }}>Source</div>
+          <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>Live attribution journeys</div>
+        </div>
+        <div>
+          <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted, textTransform: 'uppercase' }}>Period</div>
+          <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>{periodLabel}</div>
+        </div>
+        <div>
+          <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted, textTransform: 'uppercase' }}>Conversion KPI</div>
+          <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>{conversionLabel}</div>
+        </div>
+        <div>
+          <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted, textTransform: 'uppercase' }}>Converted journeys used</div>
+          <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>
+            {data?.total_converted != null ? data.total_converted.toLocaleString() : '—'}
+          </div>
+        </div>
+      </div>
+
+      {convertedMismatch ? (
+        <div
+          style={{
+            marginBottom: tkn.space.lg,
+            padding: tkn.space.md,
+            borderRadius: tkn.radius.md,
+            border: `1px solid ${tkn.color.warning}`,
+            background: tkn.color.warningMuted,
+            fontSize: tkn.font.sizeSm,
+            color: tkn.color.text,
+          }}
+        >
+          Workspace summary shows <strong>{journeys?.converted?.toLocaleString() ?? '—'}</strong> converted journeys, while Path Archetypes is currently using <strong>{data?.total_converted?.toLocaleString() ?? '—'}</strong>.
+        </div>
+      ) : null}
+
+      <div style={{ display: 'grid', gap: tkn.space.lg, marginBottom: tkn.space.lg }}>
+        <CollapsiblePanel
+          title="Method & Context"
+          subtitle="How archetypes are built and which filters shape this view."
+          open={showContext}
+          onToggle={() => setShowContext((v) => !v)}
+        >
+          <div style={{ display: 'grid', gap: tkn.space.md }}>
+            <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+              Archetypes cluster live attribution journeys by path similarity. Direct handling and compare-to-previous are view filters on this page.
+            </div>
+            <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+              Current settings: direct handling <strong style={{ color: tkn.color.text }}>{directMode}</strong> · clustering mode{' '}
+              <strong style={{ color: tkn.color.text }}>{kMode === 'fixed' ? `fixed K=${kFixed}` : 'auto'}</strong>
+              {comparePrevious ? (
+                <>
+                  {' '}· <strong style={{ color: tkn.color.text }}>compare to previous enabled</strong>
+                </>
+              ) : null}
+            </div>
+          </div>
+        </CollapsiblePanel>
+
+        <CollapsiblePanel
+          title="Cluster Quality"
+          subtitle="Separation, stability, and warnings for the current archetype run."
+          open={showQualityPanel}
+          onToggle={() => setShowQualityPanel((v) => !v)}
+        >
+          <div
+            style={{
+              borderRadius: tkn.radius.lg,
+              border: `1px solid ${tkn.color.borderLight}`,
+              padding: tkn.space.md,
+              backgroundColor: tkn.color.bg,
+              fontSize: tkn.font.sizeXs,
+              color: tkn.color.textSecondary,
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: tkn.space.xs }}>
+              <strong style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>Cluster quality</strong>
+              <span
+                style={{
+                  padding: '2px 8px',
+                  borderRadius: tkn.radius.full,
+                  border: `1px solid ${
+                    qualityBadge === 'ok'
+                      ? tkn.color.success
+                      : qualityBadge === 'warning'
+                      ? tkn.color.warning
+                      : tkn.color.danger
+                  }`,
+                  color:
+                    qualityBadge === 'ok'
+                      ? tkn.color.success
+                      : qualityBadge === 'warning'
+                      ? tkn.color.warning
+                      : tkn.color.danger,
+                  backgroundColor: tkn.color.surface,
+                  textTransform: 'capitalize',
+                }}
+              >
+                {qualityBadge}
+              </span>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: tkn.space.sm, marginBottom: tkn.space.sm }}>
+              <div>
+                <div style={{ color: tkn.color.textMuted }}>Silhouette (cosine)</div>
+                <div style={{ fontVariantNumeric: 'tabular-nums', color: tkn.color.text }}>
+                  {diagnostics?.silhouette_cosine != null ? diagnostics.silhouette_cosine.toFixed(3) : 'N/A'}
+                </div>
+              </div>
+              <div>
+                <div style={{ color: tkn.color.textMuted }}>Unique paths</div>
+                <div style={{ fontVariantNumeric: 'tabular-nums', color: tkn.color.text }}>
+                  {diagnostics?.n_unique_paths != null ? diagnostics.n_unique_paths.toLocaleString() : 'N/A'}
+                </div>
+              </div>
+              <div>
+                <div style={{ color: tkn.color.textMuted }}>Cluster size (min / median / max)</div>
+                <div style={{ fontVariantNumeric: 'tabular-nums', color: tkn.color.text }}>
+                  {diagnostics?.cluster_size_stats
+                    ? `${diagnostics.cluster_size_stats.min.toLocaleString()} / ${diagnostics.cluster_size_stats.median.toLocaleString()} / ${diagnostics.cluster_size_stats.max.toLocaleString()}`
+                    : 'N/A'}
+                </div>
+              </div>
+              <div>
+                <div style={{ color: tkn.color.textMuted }}>Stability</div>
+                <div style={{ fontVariantNumeric: 'tabular-nums', color: tkn.color.text }}>
+                  {stabilityPct != null ? `${stabilityPct}%${stabilityLabel ? ` (${stabilityLabel})` : ''}` : 'N/A'}
+                </div>
+              </div>
+            </div>
+            {diagnostics?.warnings && diagnostics.warnings.length > 0 ? (
+              <ul style={{ margin: 0, paddingLeft: 16, color: tkn.color.textSecondary }}>
+                {diagnostics.warnings.slice(0, 4).map((w) => (
+                  <li key={w.code} style={{ marginBottom: 2 }}>
+                    {w.message}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setShowQualityHelp((v) => !v)}
+              style={{
+                marginTop: tkn.space.xs,
+                padding: 0,
+                border: 'none',
+                background: 'none',
+                color: tkn.color.accent,
+                fontSize: tkn.font.sizeXs,
+                cursor: 'pointer',
+              }}
+            >
+              What does this mean?
+            </button>
+            {showQualityHelp ? (
+              <div style={{ marginTop: tkn.space.xs, color: tkn.color.textMuted }}>
+                Silhouette measures how well paths are separated between clusters. Stability re-runs clustering with a different seed and compares assignments. Warnings highlight low sample size, Direct/Unknown dominance, or weak cluster separation.
+              </div>
+            ) : null}
+          </div>
+        </CollapsiblePanel>
+      </div>
+
+      <div
+        style={{
           background: tkn.color.surface,
           border: `1px solid ${tkn.color.borderLight}`,
           borderRadius: tkn.radius.lg,
@@ -554,121 +733,6 @@ export default function PathArchetypes() {
 
         {data && clustersRaw.length > 0 && (
           <>
-            {/* Cluster quality & trust card */}
-            <div
-              style={{
-                display: 'flex',
-                flexWrap: 'wrap',
-                gap: tkn.space.md,
-                marginBottom: tkn.space.lg,
-                alignItems: 'flex-start',
-              }}
-            >
-              <div
-                style={{
-                  flex: '1 1 260px',
-                  borderRadius: tkn.radius.lg,
-                  border: `1px solid ${tkn.color.borderLight}`,
-                  padding: tkn.space.md,
-                  backgroundColor: tkn.color.bg,
-                  fontSize: tkn.font.sizeXs,
-                  color: tkn.color.textSecondary,
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: tkn.space.xs }}>
-                  <strong style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>Cluster quality</strong>
-                  <span
-                    style={{
-                      padding: '2px 8px',
-                      borderRadius: tkn.radius.full,
-                      border: `1px solid ${
-                        qualityBadge === 'ok'
-                          ? tkn.color.success
-                          : qualityBadge === 'warning'
-                          ? tkn.color.warning
-                          : tkn.color.danger
-                      }`,
-                      color:
-                        qualityBadge === 'ok'
-                          ? tkn.color.success
-                          : qualityBadge === 'warning'
-                          ? tkn.color.warning
-                          : tkn.color.danger,
-                      backgroundColor: tkn.color.surface,
-                      textTransform: 'capitalize',
-                    }}
-                  >
-                    {qualityBadge}
-                  </span>
-                </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: tkn.space.sm, marginBottom: tkn.space.sm }}>
-                  <div>
-                    <div style={{ color: tkn.color.textMuted }}>Silhouette (cosine)</div>
-                    <div style={{ fontVariantNumeric: 'tabular-nums', color: tkn.color.text }}>
-                      {diagnostics?.silhouette_cosine != null
-                        ? diagnostics.silhouette_cosine.toFixed(3)
-                        : 'N/A'}
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ color: tkn.color.textMuted }}>Unique paths</div>
-                    <div style={{ fontVariantNumeric: 'tabular-nums', color: tkn.color.text }}>
-                      {diagnostics?.n_unique_paths != null
-                        ? diagnostics.n_unique_paths.toLocaleString()
-                        : 'N/A'}
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ color: tkn.color.textMuted }}>Cluster size (min / median / max)</div>
-                    <div style={{ fontVariantNumeric: 'tabular-nums', color: tkn.color.text }}>
-                      {diagnostics?.cluster_size_stats
-                        ? `${diagnostics.cluster_size_stats.min.toLocaleString()} / ${diagnostics.cluster_size_stats.median.toLocaleString()} / ${diagnostics.cluster_size_stats.max.toLocaleString()}`
-                        : 'N/A'}
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ color: tkn.color.textMuted }}>Stability</div>
-                    <div style={{ fontVariantNumeric: 'tabular-nums', color: tkn.color.text }}>
-                      {stabilityPct != null
-                        ? `${stabilityPct}%${stabilityLabel ? ` (${stabilityLabel})` : ''}`
-                        : 'N/A'}
-                    </div>
-                  </div>
-                </div>
-                {diagnostics?.warnings && diagnostics.warnings.length > 0 && (
-                  <ul style={{ margin: 0, paddingLeft: 16, color: tkn.color.textSecondary }}>
-                    {diagnostics.warnings.slice(0, 4).map((w) => (
-                      <li key={w.code} style={{ marginBottom: 2 }}>
-                        {w.message}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setShowQualityHelp((v) => !v)}
-                  style={{
-                    marginTop: tkn.space.xs,
-                    padding: 0,
-                    border: 'none',
-                    background: 'none',
-                    color: tkn.color.accent,
-                    fontSize: tkn.font.sizeXs,
-                    cursor: 'pointer',
-                  }}
-                >
-                  What does this mean?
-                </button>
-                {showQualityHelp && (
-                  <div style={{ marginTop: tkn.space.xs, color: tkn.color.textMuted }}>
-                    Silhouette measures how well paths are separated between clusters (higher is better). Stability
-                    re-runs clustering with a different seed and compares assignments. Warnings highlight data issues
-                    like Direct/Unknown dominance or low sample size that can make archetypes less reliable.
-                  </div>
-                )}
-              </div>
-            </div>
-
             <div
               style={{
                 display: 'grid',

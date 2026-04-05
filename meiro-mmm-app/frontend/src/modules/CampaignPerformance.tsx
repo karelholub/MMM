@@ -11,6 +11,7 @@ import { buildJourneyHypothesisHref } from '../lib/journeyLinks'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import AdsActionsDrawer from '../components/ads/AdsActionsDrawer'
 import DecisionStatusCard from '../components/DecisionStatusCard'
+import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import { getAdsDeepLink, type AdsProviderKey } from '../connectors/adsManagerConnector'
 
 interface CampaignPerformanceProps {
@@ -1675,11 +1676,16 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
         </div>
       </div>
 
-      {showWhy && (
-        <div style={{ marginBottom: t.space.lg }}>
+      <div style={{ marginBottom: t.space.lg }}>
+        <CollapsiblePanel
+          title="Method & Explainability"
+          subtitle="How the campaign view is computed and what assumptions drive the metrics."
+          open={showWhy}
+          onToggle={() => setShowWhy((v) => !v)}
+        >
           <ExplainabilityPanel scope="campaign" configId={configId ?? undefined} model={model} />
-        </div>
-      )}
+        </CollapsiblePanel>
+      </div>
 
       {/* Search and filter */}
       <div style={{ marginBottom: t.space.xl }}>

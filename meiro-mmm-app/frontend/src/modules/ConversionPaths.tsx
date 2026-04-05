@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { tokens } from '../theme/tokens'
 import DashboardPage from '../components/dashboard/DashboardPage'
 import SectionCard from '../components/dashboard/SectionCard'
+import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import GlobalFilterBar, { type GlobalFiltersState } from '../components/dashboard/GlobalFilterBar'
 import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn } from '../components/dashboard'
 import DecisionStatusCard from '../components/DecisionStatusCard'
@@ -198,58 +199,6 @@ function normalizePathInput(raw: string): string {
     .map((part) => part.trim())
     .filter(Boolean)
     .join(' > ')
-}
-
-function CollapsiblePanel({
-  title,
-  subtitle,
-  open,
-  onToggle,
-  children,
-}: {
-  title: string
-  subtitle?: string
-  open: boolean
-  onToggle: () => void
-  children: ReactNode
-}) {
-  const t = tokens
-  return (
-    <div
-      style={{
-        background: t.color.surface,
-        border: `1px solid ${t.color.borderLight}`,
-        borderRadius: t.radius.lg,
-        boxShadow: t.shadowSm,
-      }}
-    >
-      <button
-        type="button"
-        onClick={onToggle}
-        style={{
-          width: '100%',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          gap: t.space.md,
-          padding: t.space.lg,
-          background: 'transparent',
-          border: 'none',
-          cursor: 'pointer',
-          textAlign: 'left',
-        }}
-      >
-        <div style={{ display: 'grid', gap: 4 }}>
-          <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>{title}</div>
-          {subtitle ? <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{subtitle}</div> : null}
-        </div>
-        <div style={{ fontSize: t.font.sizeXs, fontWeight: t.font.weightSemibold, color: t.color.accent }}>
-          {open ? 'Hide' : 'Show'}
-        </div>
-      </button>
-      {open ? <div style={{ padding: `0 ${t.space.lg}px ${t.space.lg}px` }}>{children}</div> : null}
-    </div>
-  )
 }
 
 function exportPathsCSV(
