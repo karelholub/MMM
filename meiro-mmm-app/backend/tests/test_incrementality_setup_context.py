@@ -48,7 +48,7 @@ def test_incrementality_setup_context_uses_settings_and_observed_journeys():
                     path_json={
                         "customer_id": "p-1",
                         "touchpoints": [
-                            {"channel": "email", "timestamp": "2026-03-01T09:00:00Z"},
+                            {"channel": "email", "timestamp": "2026-03-01T09:00:00Z", "source": "mailkit", "medium": "email", "campaign": {"name": "spring_sale"}},
                             {"channel": "direct", "timestamp": "2026-03-02T10:00:00Z"},
                         ],
                         "converted": True,
@@ -69,7 +69,7 @@ def test_incrementality_setup_context_uses_settings_and_observed_journeys():
                     path_json={
                         "customer_id": "p-2",
                         "touchpoints": [
-                            {"channel": "email", "timestamp": "2026-03-03T11:00:00Z"},
+                            {"channel": "email", "timestamp": "2026-03-03T11:00:00Z", "source": "mailkit", "medium": "email", "campaign": {"name": "spring_sale"}},
                         ],
                         "converted": False,
                         "conversion_value": 0.0,
@@ -145,6 +145,9 @@ def test_incrementality_setup_context_uses_settings_and_observed_journeys():
         assert channels["email"]["execution"]["delivery_support"] == "planner_guided"
         assert channels["email"]["execution"]["can_auto_assign_history"] is True
         assert channels["email"]["execution"]["launch_warnings"]
+        assert channels["email"]["provenance"]["touchpoints"] == 2
+        assert channels["email"]["provenance"]["source_examples"] == ["mailkit"]
+        assert channels["email"]["provenance"]["medium_examples"] == ["email"]
         assert "google_ads" not in channels
         assert channels["direct"]["eligible"] is False
         assert channels["direct"]["execution"]["status"] == "not_supported"
@@ -284,7 +287,13 @@ def test_incrementality_recommend_design_returns_guided_plan():
                     path_json={
                         "customer_id": f"profile-{idx}",
                         "touchpoints": [
-                            {"channel": "email", "timestamp": f"2026-03-{(idx % 10) + 1:02d}T09:00:00Z"},
+                            {
+                                "channel": "email",
+                                "timestamp": f"2026-03-{(idx % 10) + 1:02d}T09:00:00Z",
+                                "source": "mailkit",
+                                "medium": "email",
+                                "campaign": {"name": "promo_a"},
+                            },
                         ],
                         "converted": converted,
                         "conversion_value": 100.0 if converted else 0.0,
@@ -318,6 +327,9 @@ def test_incrementality_recommend_design_returns_guided_plan():
         assert payload["recommendation"]["readiness"] in {"ready_to_launch", "needs_more_volume", "insufficient_signal"}
         assert payload["execution"]["status"] == "planner_ready"
         assert payload["execution"]["launch_warnings"]
+        assert payload["provenance"]["touchpoints"] == 60
+        assert payload["provenance"]["source_examples"] == ["mailkit"]
+        assert payload["provenance"]["medium_examples"] == ["email"]
     finally:
         app.dependency_overrides.clear()
         main_module.KPI_CONFIG = original_kpi_config
@@ -398,6 +410,7 @@ def test_incrementality_health_uses_planned_sample_and_runtime():
         assert payload["plan"]["sample_target_status"] == "warn"
         assert payload["runtime"]["planned_min_days"] == 30
         assert payload["execution"]["status"] == "planner_ready"
+        assert payload["provenance"]["touchpoints"] == 0
         assert payload["launch_readiness"]["status"] == "manual_review"
         assert payload["launch_readiness"]["warnings"]
         assert "Exposure logging has not been observed yet." in payload["launch_readiness"]["tracking_gaps"]

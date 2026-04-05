@@ -90,6 +90,19 @@ interface ExperimentExecution {
   notes?: string[]
 }
 
+interface ChannelProvenance {
+  touchpoints: number
+  source_examples: string[]
+  medium_examples: string[]
+  campaign_examples: string[]
+  recent_examples: Array<{
+    timestamp?: string | null
+    source?: string | null
+    medium?: string | null
+    campaign?: string | null
+  }>
+}
+
 interface LaunchReadiness {
   status?: 'ready' | 'manual_review' | 'blocked' | string
   blockers: string[]
@@ -155,6 +168,7 @@ type ReadyLabel = 'not_ready' | 'early' | 'ready'
 
 interface ExperimentHealth {
   execution?: ExperimentExecution | null
+  provenance?: ChannelProvenance | null
   experiment_id: number
   sample: { treatment: number; control: number }
   exposures: { treatment: number; control: number }
@@ -197,6 +211,7 @@ interface SetupContextChannel {
   last_seen_at?: string | null
   eligible: boolean
   delivery_class: 'owned' | 'observed'
+  provenance?: ChannelProvenance | null
   notes: string[]
   execution?: ExperimentExecution | null
 }
@@ -269,7 +284,27 @@ interface DesignRecommendation {
     reason?: string | null
   }
   execution?: ExperimentExecution | null
+  provenance?: ChannelProvenance | null
   warnings: string[]
+}
+
+interface AssignmentPreview {
+  profile_id: string
+  group: string
+  assigned_at: string
+}
+
+interface ExposurePreview {
+  profile_id: string
+  exposure_ts: string
+  campaign_id?: string | null
+  message_id?: string | null
+}
+
+interface OutcomePreview {
+  profile_id: string
+  conversion_ts: string
+  value: number
 }
 
 function formatRate(value?: number | null): string {
@@ -321,6 +356,16 @@ function launchReadinessLabel(value?: string | null): string {
   if (value === 'manual_review') return 'Needs operator review'
   if (value === 'blocked') return 'Blocked'
   return value || 'Unknown'
+}
+
+function provenancePreview(provenance?: ChannelProvenance | null): string {
+  if (!provenance) return 'No observed touchpoint provenance yet.'
+  const parts: string[] = []
+  if (provenance.source_examples?.length) parts.push(`Sources: ${provenance.source_examples.join(', ')}`)
+  if (provenance.medium_examples?.length) parts.push(`Mediums: ${provenance.medium_examples.join(', ')}`)
+  if (provenance.campaign_examples?.length) parts.push(`Campaigns: ${provenance.campaign_examples.slice(0, 3).join(', ')}`)
+  if (!parts.length) return 'Observed touchpoints exist, but source/medium/campaign details are sparse.'
+  return parts.join(' · ')
 }
 
 function parseProfileIdsInput(raw: string): string[] {
@@ -606,6 +651,33 @@ export default function IncrementalityPage() {
     queryFn: async () => apiGetJson<ExperimentHealth>(`/api/experiments/${selectedId}/health`, {
       fallbackMessage: 'Failed to load experiment health',
     }),
+    enabled: selectedId != null,
+  })
+
+  const assignmentsPreviewQuery = useQuery<AssignmentPreview[]>({
+    queryKey: ['experiment-assignments', selectedId],
+    queryFn: async () =>
+      apiGetJson<AssignmentPreview[]>(`/api/experiments/${selectedId}/assignments?limit=5`, {
+        fallbackMessage: 'Failed to load assignment preview',
+      }),
+    enabled: selectedId != null,
+  })
+
+  const exposuresPreviewQuery = useQuery<ExposurePreview[]>({
+    queryKey: ['experiment-exposures-preview', selectedId],
+    queryFn: async () =>
+      apiGetJson<ExposurePreview[]>(`/api/experiments/${selectedId}/exposures?limit=5`, {
+        fallbackMessage: 'Failed to load exposure preview',
+      }),
+    enabled: selectedId != null,
+  })
+
+  const outcomesPreviewQuery = useQuery<OutcomePreview[]>({
+    queryKey: ['experiment-outcomes-preview', selectedId],
+    queryFn: async () =>
+      apiGetJson<OutcomePreview[]>(`/api/experiments/${selectedId}/outcomes?limit=5`, {
+        fallbackMessage: 'Failed to load outcome preview',
+      }),
     enabled: selectedId != null,
   })
 
@@ -1366,6 +1438,12 @@ export default function IncrementalityPage() {
                         : ''}
                     </div>
                   )}
+                  {selectedSetupChannel.provenance && (
+                    <div style={{ gridColumn: '1 / -1', fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                      Observed evidence: <strong style={{ color: tkn.color.text }}>{selectedSetupChannel.provenance.touchpoints}</strong> touchpoints
+                      {` · ${provenancePreview(selectedSetupChannel.provenance)}`}
+                    </div>
+                  )}
                 </div>
               )}
               {!!setupContext?.warnings?.length && (
@@ -1498,6 +1576,12 @@ export default function IncrementalityPage() {
                         : designRecommendation.execution.notes?.length
                         ? ` · ${designRecommendation.execution.notes[0]}`
                         : ''}
+                    </div>
+                  )}
+                  {designRecommendation.provenance && (
+                    <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                      Observed channel evidence: <strong style={{ color: tkn.color.text }}>{designRecommendation.provenance.touchpoints}</strong> touchpoints
+                      {` · ${provenancePreview(designRecommendation.provenance)}`}
                     </div>
                   )}
                 </div>
@@ -2060,6 +2144,37 @@ export default function IncrementalityPage() {
                     )}
                   </div>
                 )}
+                {healthQuery.data?.provenance && (
+                  <div
+                    style={{
+                      marginTop: tkn.space.md,
+                      padding: tkn.space.sm,
+                      borderRadius: tkn.radius.sm,
+                      border: `1px solid ${tkn.color.borderLight}`,
+                      background: tkn.color.surfaceMuted ?? tkn.color.surface,
+                    }}
+                  >
+                    <div style={{ fontSize: tkn.font.sizeSm, fontWeight: tkn.font.weightSemibold, color: tkn.color.text }}>
+                      Observed channel provenance
+                    </div>
+                    <div style={{ marginTop: 4, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                      {healthQuery.data.provenance.touchpoints} touchpoints in the experiment window.
+                    </div>
+                    <div style={{ marginTop: 4, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                      {provenancePreview(healthQuery.data.provenance)}
+                    </div>
+                    {!!healthQuery.data.provenance.recent_examples.length && (
+                      <div style={{ marginTop: 6, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                        Latest observed touchpoints:{' '}
+                        {healthQuery.data.provenance.recent_examples
+                          .map((row) =>
+                            [row.medium || row.source || 'unknown', row.campaign].filter(Boolean).join(' / ')
+                          )
+                          .join(' • ')}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {detailQuery.data?.notes && (
                   <p style={{ margin: '8px 0 0', fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
                     {detailQuery.data.notes}
@@ -2399,6 +2514,73 @@ export default function IncrementalityPage() {
                     {executionFormError}
                   </div>
                 )}
+                <div
+                  style={{
+                    marginTop: tkn.space.md,
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                    gap: tkn.space.md,
+                    fontSize: tkn.font.sizeXs,
+                  }}
+                >
+                  <div
+                    style={{
+                      padding: tkn.space.sm,
+                      borderRadius: tkn.radius.sm,
+                      border: `1px solid ${tkn.color.borderLight}`,
+                      background: tkn.color.surfaceMuted ?? tkn.color.surface,
+                    }}
+                  >
+                    <strong style={{ color: tkn.color.text }}>Recent assignments</strong>
+                    <div style={{ marginTop: 4, color: tkn.color.textSecondary }}>
+                      {assignmentsPreviewQuery.isLoading
+                        ? 'Loading…'
+                        : assignmentsPreviewQuery.data?.length
+                        ? assignmentsPreviewQuery.data
+                            .map((row) => `${row.profile_id} (${row.group})`)
+                            .join(' • ')
+                        : 'No assignments logged yet.'}
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      padding: tkn.space.sm,
+                      borderRadius: tkn.radius.sm,
+                      border: `1px solid ${tkn.color.borderLight}`,
+                      background: tkn.color.surfaceMuted ?? tkn.color.surface,
+                    }}
+                  >
+                    <strong style={{ color: tkn.color.text }}>Recent exposures</strong>
+                    <div style={{ marginTop: 4, color: tkn.color.textSecondary }}>
+                      {exposuresPreviewQuery.isLoading
+                        ? 'Loading…'
+                        : exposuresPreviewQuery.data?.length
+                        ? exposuresPreviewQuery.data
+                            .map((row) => `${row.profile_id}${row.campaign_id ? ` (${row.campaign_id})` : ''}`)
+                            .join(' • ')
+                        : 'No exposures logged yet.'}
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      padding: tkn.space.sm,
+                      borderRadius: tkn.radius.sm,
+                      border: `1px solid ${tkn.color.borderLight}`,
+                      background: tkn.color.surfaceMuted ?? tkn.color.surface,
+                    }}
+                  >
+                    <strong style={{ color: tkn.color.text }}>Recent outcomes</strong>
+                    <div style={{ marginTop: 4, color: tkn.color.textSecondary }}>
+                      {outcomesPreviewQuery.isLoading
+                        ? 'Loading…'
+                        : outcomesPreviewQuery.data?.length
+                        ? outcomesPreviewQuery.data
+                            .map((row) => `${row.profile_id} (${row.value})`)
+                            .join(' • ')
+                        : 'No outcomes logged yet.'}
+                    </div>
+                  </div>
+                </div>
               </div>
 
               {/* Health + results */}

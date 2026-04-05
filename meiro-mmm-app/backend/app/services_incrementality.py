@@ -254,6 +254,96 @@ def _touchpoint_datetime(touchpoint: Dict[str, Any]) -> Optional[datetime]:
     return ts_py
 
 
+def build_channel_observation_provenance(
+    *,
+    journeys: List[Dict[str, Any]],
+    channel: Optional[str],
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    normalized_channel = str(channel or "").strip()
+    source_counts: Dict[str, int] = {}
+    medium_counts: Dict[str, int] = {}
+    campaign_counts: Dict[str, int] = {}
+    recent_examples: List[Tuple[datetime, Dict[str, Any]]] = []
+    touchpoint_count = 0
+
+    if not normalized_channel:
+        return {
+            "touchpoints": 0,
+            "source_examples": [],
+            "medium_examples": [],
+            "campaign_examples": [],
+            "recent_examples": [],
+        }
+
+    def _top_examples(counter: Dict[str, int], limit: int = 5) -> List[str]:
+        return [
+            key
+            for key, _count in sorted(counter.items(), key=lambda item: (-int(item[1] or 0), str(item[0])))
+            if key
+        ][:limit]
+
+    for journey in journeys or []:
+        filtered_touchpoints = _filtered_touchpoints_for_window(
+            journey,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        for tp, tp_dt in filtered_touchpoints:
+            channel_value = str((tp.get("channel") or "unknown")).strip() or "unknown"
+            if channel_value != normalized_channel:
+                continue
+            touchpoint_count += 1
+            source_value = str(
+                tp.get("source")
+                or (tp.get("utm") or {}).get("source")
+                or ""
+            ).strip()
+            medium_value = str(
+                tp.get("medium")
+                or (tp.get("utm") or {}).get("medium")
+                or ""
+            ).strip()
+            campaign = tp.get("campaign") or {}
+            campaign_value = ""
+            if isinstance(campaign, dict):
+                campaign_value = str(campaign.get("name") or campaign.get("id") or "").strip()
+            if not campaign_value:
+                campaign_value = str(
+                    (tp.get("utm") or {}).get("campaign")
+                    or tp.get("campaign_name")
+                    or ""
+                ).strip()
+            if source_value:
+                source_counts[source_value] = source_counts.get(source_value, 0) + 1
+            if medium_value:
+                medium_counts[medium_value] = medium_counts.get(medium_value, 0) + 1
+            if campaign_value:
+                campaign_counts[campaign_value] = campaign_counts.get(campaign_value, 0) + 1
+            if tp_dt is not None:
+                recent_examples.append(
+                    (
+                        tp_dt,
+                        {
+                            "timestamp": tp_dt.isoformat(),
+                            "source": source_value or None,
+                            "medium": medium_value or None,
+                            "campaign": campaign_value or None,
+                        },
+                    )
+                )
+
+    recent_examples.sort(key=lambda item: item[0], reverse=True)
+    return {
+        "touchpoints": touchpoint_count,
+        "source_examples": _top_examples(source_counts),
+        "medium_examples": _top_examples(medium_counts),
+        "campaign_examples": _top_examples(campaign_counts),
+        "recent_examples": [item[1] for item in recent_examples[:5]],
+    }
+
+
 def build_experiment_setup_context(
     *,
     journeys: List[Dict[str, Any]],
@@ -354,6 +444,12 @@ def build_experiment_setup_context(
                 "last_seen_at": stat["last_seen_at"].isoformat() if stat["last_seen_at"] else None,
                 "eligible": eligible,
                 "delivery_class": "owned" if channel in OWNED_CHANNEL_HINTS else "observed",
+                "provenance": build_channel_observation_provenance(
+                    journeys=journeys,
+                    channel=channel,
+                    date_from=date_from,
+                    date_to=date_to,
+                ),
                 "notes": notes,
                 "execution": build_experiment_execution_capability(
                     channel,
@@ -622,6 +718,12 @@ def build_experiment_design_recommendation(
             normalized_channel,
             has_observed_data=total_journeys > 0,
             non_converted_journeys=non_converted_journeys,
+        ),
+        "provenance": build_channel_observation_provenance(
+            journeys=journeys,
+            channel=normalized_channel,
+            date_from=date_from,
+            date_to=date_to,
         ),
         "warnings": warnings,
     }

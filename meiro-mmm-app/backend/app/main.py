@@ -244,6 +244,7 @@ from app.services_mmm_platform import build_mmm_dataset_from_platform
 from app.services_mmm_mapping import build_smart_suggestions, validate_mapping
 from app.services_incrementality import (
     assign_profiles_deterministic,
+    build_channel_observation_provenance,
     build_experiment_design_recommendation,
     build_experiment_setup_context,
     create_experiment_record,
@@ -4013,6 +4014,18 @@ class ExposuresRequest(BaseModel):
     exposures: List[ExposurePayload]
 
 
+class AssignmentPreview(BaseModel):
+    profile_id: str
+    group: str
+    assigned_at: datetime
+
+
+class OutcomePreview(BaseModel):
+    profile_id: str
+    conversion_ts: datetime
+    value: float
+
+
 @app.post("/api/experiments/{exp_id}/exposures")
 def record_experiment_exposures(exp_id: int, body: ExposuresRequest, db=Depends(get_db)):
     """
@@ -4064,6 +4077,54 @@ def get_experiment_exposures(exp_id: int, limit: int = 100, db=Depends(get_db)):
             "message_id": e.message_id,
         }
         for e in exposures
+    ]
+
+
+@app.get("/api/experiments/{exp_id}/assignments", response_model=List[AssignmentPreview])
+def get_experiment_assignments(exp_id: int, limit: int = 100, db=Depends(get_db)):
+    exp = db.get(Experiment, exp_id)
+    if not exp:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    assignments = (
+        db.query(ExperimentAssignment)
+        .filter(ExperimentAssignment.experiment_id == exp_id)
+        .order_by(ExperimentAssignment.assigned_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return [
+        AssignmentPreview(
+            profile_id=row.profile_id,
+            group=row.group,
+            assigned_at=row.assigned_at,
+        )
+        for row in assignments
+    ]
+
+
+@app.get("/api/experiments/{exp_id}/outcomes", response_model=List[OutcomePreview])
+def get_experiment_outcomes(exp_id: int, limit: int = 100, db=Depends(get_db)):
+    exp = db.get(Experiment, exp_id)
+    if not exp:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    outcomes = (
+        db.query(ExperimentOutcome)
+        .filter(ExperimentOutcome.experiment_id == exp_id)
+        .order_by(ExperimentOutcome.conversion_ts.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return [
+        OutcomePreview(
+            profile_id=row.profile_id,
+            conversion_ts=row.conversion_ts,
+            value=float(row.value or 0.0),
+        )
+        for row in outcomes
     ]
 
 
@@ -4155,6 +4216,7 @@ def run_nightly_report_endpoint(db=Depends(get_db)):
 class ExperimentHealth(BaseModel):
     experiment_id: int
     execution: Dict[str, Any]
+    provenance: Dict[str, Any]
     sample: Dict[str, int]
     exposures: Dict[str, int]
     outcomes: Dict[str, int]
@@ -4185,6 +4247,13 @@ def get_experiment_health(exp_id: int, db=Depends(get_db)):
         raise HTTPException(status_code=404, detail="Experiment not found")
 
     payload = compute_experiment_health(db, exp_id)
+    journeys = _ensure_journeys_loaded(db)
+    payload["provenance"] = build_channel_observation_provenance(
+        journeys=journeys,
+        channel=exp.channel,
+        date_from=exp.start_at,
+        date_to=exp.end_at,
+    )
     return ExperimentHealth(**payload)
 
 
