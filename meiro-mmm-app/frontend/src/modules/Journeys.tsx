@@ -72,6 +72,15 @@ interface JourneyDefinitionLifecycle {
   warnings: string[]
 }
 
+interface JourneyDefinitionAuditItem {
+  id: number
+  journey_definition_id: string
+  actor: string
+  action: string
+  diff_json?: Record<string, unknown> | null
+  created_at?: string | null
+}
+
 interface JourneyPathRow {
   path_hash: string
   path_steps: string[] | string
@@ -621,6 +630,12 @@ function formatLifecycleTimestamp(value?: string | null): string {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString()
 }
 
+function formatLifecycleAction(value?: string | null): string {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (!normalized) return 'Unknown'
+  return normalized.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
 function buildIncrementalityHref(experimentId: number): string {
   const params = new URLSearchParams()
   params.set('page', 'incrementality')
@@ -934,6 +949,15 @@ export default function Journeys({
     queryFn: async () => {
       return apiGetJson<JourneyDefinitionLifecycle>(`/api/journeys/definitions/${selectedJourneyId}/lifecycle`, {
         fallbackMessage: 'Failed to load journey definition lifecycle',
+      })
+    },
+    enabled: !!selectedJourneyId && !featureDisabled,
+  })
+  const definitionAuditQuery = useQuery<JourneyDefinitionAuditItem[]>({
+    queryKey: ['journey-definition-audit', selectedJourneyId],
+    queryFn: async () => {
+      return apiGetJson<JourneyDefinitionAuditItem[]>(`/api/journeys/definitions/${selectedJourneyId}/audit?limit=20`, {
+        fallbackMessage: 'Failed to load journey definition audit',
       })
     },
     enabled: !!selectedJourneyId && !featureDisabled,
@@ -1355,6 +1379,7 @@ export default function Journeys({
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['journey-definitions', 'journeys-page'] })
       await queryClient.invalidateQueries({ queryKey: ['journey-definition-lifecycle'] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-definition-audit'] })
     },
   })
 
@@ -1367,6 +1392,7 @@ export default function Journeys({
     onSuccess: async (restored) => {
       await queryClient.invalidateQueries({ queryKey: ['journey-definitions', 'journeys-page'] })
       await queryClient.invalidateQueries({ queryKey: ['journey-definition-lifecycle'] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-definition-audit'] })
       setSelectedJourneyId(restored.id)
     },
   })
@@ -1382,6 +1408,7 @@ export default function Journeys({
     onSuccess: async (created) => {
       await queryClient.invalidateQueries({ queryKey: ['journey-definitions', 'journeys-page'] })
       await queryClient.invalidateQueries({ queryKey: ['journey-definition-lifecycle'] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-definition-audit'] })
       setSelectedJourneyId(created.id)
     },
   })
@@ -1395,6 +1422,7 @@ export default function Journeys({
     onSuccess: async (_, definitionId) => {
       await queryClient.invalidateQueries({ queryKey: ['journey-definitions', 'journeys-page'] })
       await queryClient.invalidateQueries({ queryKey: ['journey-definition-lifecycle'] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-definition-audit'] })
       if (selectedJourneyId === definitionId) setSelectedJourneyId('')
     },
   })
@@ -1412,6 +1440,7 @@ export default function Journeys({
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['journey-definition-lifecycle'] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-definition-audit'] })
       await queryClient.invalidateQueries({ queryKey: ['journey-paths'] })
       await queryClient.invalidateQueries({ queryKey: ['journey-attribution-summary'] })
       await queryClient.invalidateQueries({ queryKey: ['journey-transitions'] })
@@ -2595,8 +2624,59 @@ export default function Journeys({
                         ) : null}
                       </div>
                       <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
-                        Restore actions are reflected in the last-changed fields. Separate restore history is not tracked yet.
+                        This shows the recent lifecycle events for the selected journey definition.
                       </div>
+                    </div>
+                    <div
+                      style={{
+                        border: `1px solid ${t.color.borderLight}`,
+                        borderRadius: t.radius.sm,
+                        background: t.color.surface,
+                        padding: t.space.sm,
+                        display: 'grid',
+                        gap: 6,
+                      }}
+                    >
+                      <div style={{ fontSize: t.font.sizeXs, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                        Lifecycle history
+                      </div>
+                      {definitionAuditQuery.isLoading ? (
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Loading audit history…</div>
+                      ) : definitionAuditQuery.isError ? (
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.danger }}>
+                          {(definitionAuditQuery.error as Error).message}
+                        </div>
+                      ) : !(definitionAuditQuery.data ?? []).length ? (
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                          No lifecycle events recorded yet.
+                        </div>
+                      ) : (
+                        <div style={{ display: 'grid', gap: 6 }}>
+                          {(definitionAuditQuery.data ?? []).map((entry) => (
+                            <div
+                              key={entry.id}
+                              style={{
+                                borderLeft: `2px solid ${t.color.border}`,
+                                paddingLeft: t.space.sm,
+                                display: 'grid',
+                                gap: 2,
+                              }}
+                            >
+                              <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+                                {formatLifecycleAction(entry.action)} by {formatLifecycleActor(entry.actor)}
+                              </div>
+                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                                {formatLifecycleTimestamp(entry.created_at)}
+                              </div>
+                              {entry.diff_json ? (
+                                <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                                  {JSON.stringify(entry.diff_json)}
+                                </div>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                     {(definitionLifecycleQuery.data.warnings || []).length ? (
                       <div style={{ display: 'grid', gap: 4 }}>

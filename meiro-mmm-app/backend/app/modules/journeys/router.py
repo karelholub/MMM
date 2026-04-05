@@ -28,6 +28,10 @@ from app.services_journey_definitions import (
     serialize_journey_definition,
     update_journey_definition,
 )
+from app.services_journey_definition_audit import (
+    list_journey_definition_audit,
+    write_journey_definition_audit,
+)
 from app.services_journey_examples import list_examples_for_journey_definition
 from app.services_journey_hypotheses import (
     create_journey_hypothesis,
@@ -432,6 +436,18 @@ def create_router(
             rebuild_journey_definition_outputs_fn(db, definition_id=item.id)
         except Exception as exc:
             logger.warning("Journey definition rebuild after create failed: %s", exc, exc_info=True)
+        write_journey_definition_audit(
+            db,
+            journey_definition_id=item.id,
+            actor=user_id,
+            action="create",
+            diff_json={
+                "name": item.name,
+                "conversion_kpi_id": item.conversion_kpi_id,
+                "lookback_window_days": item.lookback_window_days,
+                "mode_default": item.mode_default,
+            },
+        )
         return serialize_journey_definition(item)
 
     @router.put("/api/journeys/definitions/{definition_id}")
@@ -461,6 +477,18 @@ def create_router(
             rebuild_journey_definition_outputs_fn(db, definition_id=item.id)
         except Exception as exc:
             logger.warning("Journey definition rebuild after update failed: %s", exc, exc_info=True)
+        write_journey_definition_audit(
+            db,
+            journey_definition_id=item.id,
+            actor=user_id,
+            action="update",
+            diff_json={
+                "name": item.name,
+                "conversion_kpi_id": item.conversion_kpi_id,
+                "lookback_window_days": item.lookback_window_days,
+                "mode_default": item.mode_default,
+            },
+        )
         return serialize_journey_definition(item)
 
     @router.delete("/api/journeys/definitions/{definition_id}")
@@ -473,6 +501,13 @@ def create_router(
         item = archive_journey_definition(db, definition_id, archived_by=user_id)
         if not item:
             raise HTTPException(status_code=404, detail="Journey definition not found")
+        write_journey_definition_audit(
+            db,
+            journey_definition_id=item.id,
+            actor=user_id,
+            action="archive",
+            diff_json=None,
+        )
         return {"id": item.id, "status": "archived"}
 
     @router.post("/api/journeys/definitions/{definition_id}/archive")
@@ -485,6 +520,13 @@ def create_router(
         item = archive_journey_definition(db, definition_id, archived_by=user_id)
         if not item:
             raise HTTPException(status_code=404, detail="Journey definition not found")
+        write_journey_definition_audit(
+            db,
+            journey_definition_id=item.id,
+            actor=user_id,
+            action="archive",
+            diff_json=None,
+        )
         return {"id": item.id, "status": "archived"}
 
     @router.post("/api/journeys/definitions/{definition_id}/restore")
@@ -501,6 +543,13 @@ def create_router(
             rebuild_journey_definition_outputs_fn(db, definition_id=item.id)
         except Exception as exc:
             logger.warning("Journey definition rebuild after restore failed: %s", exc, exc_info=True)
+        write_journey_definition_audit(
+            db,
+            journey_definition_id=item.id,
+            actor=user_id,
+            action="restore",
+            diff_json=None,
+        )
         return serialize_journey_definition(item)
 
     @router.post("/api/journeys/definitions/{definition_id}/duplicate")
@@ -518,6 +567,16 @@ def create_router(
             rebuild_journey_definition_outputs_fn(db, definition_id=item.id)
         except Exception as exc:
             logger.warning("Journey definition rebuild after duplicate failed: %s", exc, exc_info=True)
+        write_journey_definition_audit(
+            db,
+            journey_definition_id=item.id,
+            actor=user_id,
+            action="duplicate",
+            diff_json={
+                "source_definition_id": definition_id,
+                "name": item.name,
+            },
+        )
         return serialize_journey_definition(item)
 
     @router.post("/api/journeys/definitions/{definition_id}/hard-delete")
@@ -546,6 +605,18 @@ def create_router(
             raise HTTPException(status_code=404, detail="Journey definition not found")
         return item
 
+    @router.get("/api/journeys/definitions/{definition_id}/audit")
+    def api_list_journey_definition_audit(
+        definition_id: str,
+        limit: int = Query(25, ge=1, le=200),
+        db=Depends(get_db_dependency),
+        _ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        item = get_journey_definition(db, definition_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="Journey definition not found")
+        return list_journey_definition_audit(db, journey_definition_id=definition_id, limit=limit)
+
     @router.post("/api/journeys/definitions/{definition_id}/rebuild")
     def api_rebuild_journey_definition(
         definition_id: str,
@@ -565,6 +636,13 @@ def create_router(
         except Exception as exc:
             logger.warning("Journey definition rebuild failed: %s", exc, exc_info=True)
             raise HTTPException(status_code=500, detail="Journey definition rebuild failed")
+        write_journey_definition_audit(
+            db,
+            journey_definition_id=definition_id,
+            actor=getattr(_ctx, "user_id", "system"),
+            action="rebuild",
+            diff_json={"metrics": metrics, "reprocess_days": reprocess_days},
+        )
         return {
             "definition_id": definition_id,
             "metrics": metrics,

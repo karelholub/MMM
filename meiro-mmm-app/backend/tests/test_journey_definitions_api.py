@@ -474,3 +474,64 @@ def test_journey_definition_rebuild_endpoint_invokes_definition_job(client: Test
     assert rebuild_resp.status_code == 200
     assert calls == [(definition_id, 7)]
     assert rebuild_resp.json()["metrics"]["days_processed"] == 2
+
+
+def test_journey_definition_audit_lists_recent_lifecycle_events(client: TestClient, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        main_module,
+        "rebuild_journey_definition_outputs",
+        lambda db, definition_id, reprocess_days=None: calls.append((definition_id, reprocess_days)) or {
+            "definition_id": definition_id,
+            "days_processed": 2,
+        },
+    )
+
+    headers = {"X-User-Role": "editor", "X-User-Id": "qa-editor"}
+    view_headers = {"X-User-Role": "viewer", "X-User-Id": "qa-viewer"}
+
+    create_resp = client.post(
+        "/api/journeys/definitions",
+        headers=headers,
+        json={"name": "Audited journey", "conversion_kpi_id": "purchase", "lookback_window_days": 30, "mode_default": "conversion_only"},
+    )
+    assert create_resp.status_code == 200
+    definition_id = create_resp.json()["id"]
+
+    update_resp = client.put(
+        f"/api/journeys/definitions/{definition_id}",
+        headers=headers,
+        json={"name": "Audited journey v2", "conversion_kpi_id": "lead", "lookback_window_days": 21, "mode_default": "all_journeys"},
+    )
+    assert update_resp.status_code == 200
+
+    archive_resp = client.post(
+        f"/api/journeys/definitions/{definition_id}/archive",
+        headers=headers,
+    )
+    assert archive_resp.status_code == 200
+
+    restore_resp = client.post(
+        f"/api/journeys/definitions/{definition_id}/restore",
+        headers=headers,
+    )
+    assert restore_resp.status_code == 200
+
+    rebuild_resp = client.post(
+        f"/api/journeys/definitions/{definition_id}/rebuild",
+        headers=headers,
+        params={"reprocess_days": 7},
+    )
+    assert rebuild_resp.status_code == 200
+
+    audit_resp = client.get(
+        f"/api/journeys/definitions/{definition_id}/audit",
+        headers=view_headers,
+    )
+    assert audit_resp.status_code == 200
+    actions = [item["action"] for item in audit_resp.json()]
+    assert "create" in actions
+    assert "update" in actions
+    assert "archive" in actions
+    assert "restore" in actions
+    assert "rebuild" in actions

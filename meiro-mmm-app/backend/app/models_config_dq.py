@@ -588,6 +588,22 @@ class JourneyDefinition(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class JourneyDefinitionAudit(Base):
+    __tablename__ = "journey_definition_audit"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    journey_definition_id = Column(
+        String(36),
+        ForeignKey("journey_definitions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    actor = Column(String(255), nullable=False)
+    action = Column(String(64), nullable=False)  # create / update / archive / restore / duplicate / rebuild / hard_delete
+    diff_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
 class JourneyPathDaily(Base):
     __tablename__ = "journey_paths_daily"
 
