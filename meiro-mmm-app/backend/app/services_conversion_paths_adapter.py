@@ -80,8 +80,20 @@ def _select_definition_for_window(
         return None
 
     if date_from and date_to:
+        best_row: Optional[JourneyDefinition] = None
+        best_score: Tuple[float, float, float] = (-1.0, -1.0, -1.0)
         for row in candidates:
-            has_daily = (
+            daily_journeys = (
+                db.query(func.sum(JourneyPathDaily.count_journeys))
+                .filter(
+                    JourneyPathDaily.journey_definition_id == row.id,
+                    JourneyPathDaily.date >= date_from,
+                    JourneyPathDaily.date <= date_to,
+                )
+                .scalar()
+                or 0
+            )
+            daily_rows = (
                 db.query(func.count(JourneyPathDaily.id))
                 .filter(
                     JourneyPathDaily.journey_definition_id == row.id,
@@ -91,9 +103,7 @@ def _select_definition_for_window(
                 .scalar()
                 or 0
             )
-            if has_daily > 0:
-                return row
-            has_facts = (
+            fact_rows = (
                 db.query(func.count(JourneyDefinitionInstanceFact.id))
                 .filter(
                     JourneyDefinitionInstanceFact.journey_definition_id == row.id,
@@ -103,26 +113,40 @@ def _select_definition_for_window(
                 .scalar()
                 or 0
             )
-            if has_facts > 0:
-                return row
+            score = (float(daily_journeys), float(daily_rows), float(fact_rows))
+            if score > best_score:
+                best_score = score
+                best_row = row
+        if best_row and best_score > (0.0, 0.0, 0.0):
+            return best_row
 
+    best_row = None
+    best_score = (-1.0, -1.0, -1.0)
     for row in candidates:
-        has_daily = (
+        daily_journeys = (
+            db.query(func.sum(JourneyPathDaily.count_journeys))
+            .filter(JourneyPathDaily.journey_definition_id == row.id)
+            .scalar()
+            or 0
+        )
+        daily_rows = (
             db.query(func.count(JourneyPathDaily.id))
             .filter(JourneyPathDaily.journey_definition_id == row.id)
             .scalar()
             or 0
         )
-        if has_daily > 0:
-            return row
-        has_facts = (
+        fact_rows = (
             db.query(func.count(JourneyDefinitionInstanceFact.id))
             .filter(JourneyDefinitionInstanceFact.journey_definition_id == row.id)
             .scalar()
             or 0
         )
-        if has_facts > 0:
-            return row
+        score = (float(daily_journeys), float(daily_rows), float(fact_rows))
+        if score > best_score:
+            best_score = score
+            best_row = row
+    if best_row and best_score > (0.0, 0.0, 0.0):
+        return best_row
     return fallback
 
 

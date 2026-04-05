@@ -240,6 +240,101 @@ def test_analysis_prefers_definition_with_rows_in_requested_window():
         db.close()
 
 
+def test_analysis_prefers_definition_with_stronger_window_coverage():
+    db = _unit_db_session()
+    try:
+        sparse = JourneyDefinition(
+            id="jd-sparse-window",
+            name="Sparse Journey",
+            conversion_kpi_id="purchase",
+            lookback_window_days=30,
+            mode_default="conversion_only",
+            created_by="test",
+            updated_by="test",
+            is_archived=False,
+            created_at=datetime(2026, 4, 2, tzinfo=timezone.utc),
+            updated_at=datetime(2026, 4, 2, tzinfo=timezone.utc),
+        )
+        dense = JourneyDefinition(
+            id="jd-dense-window",
+            name="Dense Journey",
+            conversion_kpi_id="purchase",
+            lookback_window_days=30,
+            mode_default="conversion_only",
+            created_by="test",
+            updated_by="test",
+            is_archived=False,
+            created_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+            updated_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+        )
+        db.add_all([sparse, dense])
+        db.add(
+            JourneyPathDaily(
+                date=date(2026, 4, 1),
+                journey_definition_id="jd-sparse-window",
+                path_hash="sparse",
+                path_steps=["Referral", "Purchase / Lead Won (conversion)"],
+                path_length=2,
+                count_journeys=1,
+                count_conversions=1,
+                gross_conversions_total=1.0,
+                net_conversions_total=1.0,
+                gross_revenue_total=100.0,
+                net_revenue_total=100.0,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+        db.add_all(
+            [
+                JourneyPathDaily(
+                    date=date(2026, 4, 1),
+                    journey_definition_id="jd-dense-window",
+                    path_hash="dense-1",
+                    path_steps=["Paid Landing", "Checkout", "Purchase / Lead Won (conversion)"],
+                    path_length=3,
+                    count_journeys=12,
+                    count_conversions=11,
+                    gross_conversions_total=11.0,
+                    net_conversions_total=11.0,
+                    gross_revenue_total=1200.0,
+                    net_revenue_total=1150.0,
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                ),
+                JourneyPathDaily(
+                    date=date(2026, 4, 2),
+                    journey_definition_id="jd-dense-window",
+                    path_hash="dense-2",
+                    path_steps=["Organic Landing", "Purchase / Lead Won (conversion)"],
+                    path_length=2,
+                    count_journeys=7,
+                    count_conversions=7,
+                    gross_conversions_total=7.0,
+                    net_conversions_total=7.0,
+                    gross_revenue_total=700.0,
+                    net_revenue_total=700.0,
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                ),
+            ]
+        )
+        db.commit()
+
+        out = build_conversion_paths_analysis_from_daily(
+            db,
+            date_from=date(2026, 4, 1),
+            date_to=date(2026, 4, 3),
+            direct_mode="include",
+            path_scope="converted",
+        )
+
+        assert out["journey_definition_id"] == "jd-dense-window"
+        assert out["total_journeys"] == 19
+    finally:
+        db.close()
+
+
 def test_details_returns_selected_path_summary():
     db = _unit_db_session()
     try:
