@@ -810,12 +810,19 @@ def _collect_campaign_rollups(
     prev_store: Dict[str, Dict[str, Dict[str, float]]] = {}
     curr_outcomes: Dict[str, Dict[str, float]] = {}
     prev_outcomes: Dict[str, Dict[str, float]] = {}
+    curr_spend_meta: Dict[str, Dict[str, float]] = {}
+    prev_spend_meta: Dict[str, Dict[str, float]] = {}
     meta: Dict[str, Dict[str, Any]] = {}
     dedupe_curr: set[str] = set()
     dedupe_prev: set[str] = set()
 
     def campaign_key(channel: str, campaign: Optional[str]) -> str:
         return f"{channel}:{campaign}" if campaign else channel
+
+    def _add_spend_meta(target: Dict[str, Dict[str, float]], c_key: str, *, measured: float = 0.0, allocated: float = 0.0) -> None:
+        row = target.setdefault(c_key, {"measured_spend": 0.0, "allocated_spend": 0.0})
+        row["measured_spend"] += float(measured or 0.0)
+        row["allocated_spend"] += float(allocated or 0.0)
 
     for journey in journeys or []:
         matches_conversion_key = True
@@ -947,8 +954,10 @@ def _collect_campaign_rollups(
             )
             if curr_from <= day <= curr_to:
                 _add_metric_rollup(curr_store, c_key, bucket, spend=amount)
+                _add_spend_meta(curr_spend_meta, c_key, measured=amount)
             elif compare and prev_from <= day <= prev_to:
                 _add_metric_rollup(prev_store, c_key, bucket, spend=amount)
+                _add_spend_meta(prev_spend_meta, c_key, measured=amount)
             continue
         if curr_from <= day <= curr_to:
             by_bucket = channel_spend_curr.setdefault(channel, {})
@@ -983,16 +992,26 @@ def _collect_campaign_rollups(
                         if rev <= 0:
                             continue
                         _add_metric_rollup(target_store, c_key, bucket, spend=amount * (rev / total_rev))
+                        if target_store is curr_store:
+                            _add_spend_meta(curr_spend_meta, c_key, allocated=amount * (rev / total_rev))
+                        elif target_store is prev_store:
+                            _add_spend_meta(prev_spend_meta, c_key, allocated=amount * (rev / total_rev))
                 else:
                     equal_share = amount / float(len(campaign_keys))
                     for c_key in campaign_keys:
                         _add_metric_rollup(target_store, c_key, bucket, spend=equal_share)
+                        if target_store is curr_store:
+                            _add_spend_meta(curr_spend_meta, c_key, allocated=equal_share)
+                        elif target_store is prev_store:
+                            _add_spend_meta(prev_spend_meta, c_key, allocated=equal_share)
 
     _allocate_spend(channel_spend_curr, curr_store)
     if compare:
         _allocate_spend(channel_spend_prev, prev_store)
     meta["__current_outcomes__"] = curr_outcomes
     meta["__previous_outcomes__"] = prev_outcomes
+    meta["__current_spend_meta__"] = curr_spend_meta
+    meta["__previous_spend_meta__"] = prev_spend_meta
     return curr_store, prev_store, meta
 
 
@@ -1265,12 +1284,18 @@ def build_campaign_summary_response(
     )
     curr_outcomes = meta.pop("__current_outcomes__", {}) if isinstance(meta.get("__current_outcomes__"), dict) else {}
     prev_outcomes = meta.pop("__previous_outcomes__", {}) if isinstance(meta.get("__previous_outcomes__"), dict) else {}
+    curr_spend_meta = meta.pop("__current_spend_meta__", {}) if isinstance(meta.get("__current_spend_meta__"), dict) else {}
+    prev_spend_meta = meta.pop("__previous_spend_meta__", {}) if isinstance(meta.get("__previous_spend_meta__"), dict) else {}
     dims = sorted(set(curr_store.keys()) | (set(prev_store.keys()) if compare else set()))
     items: List[Dict[str, Any]] = []
     for dim in dims:
         curr_totals, curr_derived = summarize_rows(curr_store.get(dim, {}))
         prev_totals, _ = summarize_rows(prev_store.get(dim, {}))
         m = meta.get(dim, {"campaign_id": dim, "campaign_name": None, "channel": dim.split(":", 1)[0], "platform": None})
+        spend_meta_current = curr_spend_meta.get(dim, {"measured_spend": 0.0, "allocated_spend": 0.0})
+        spend_meta_previous = prev_spend_meta.get(dim, {"measured_spend": 0.0, "allocated_spend": 0.0})
+        current_spend_total = float(curr_totals.get("spend", 0.0) or 0.0)
+        previous_spend_total = float(prev_totals.get("spend", 0.0) or 0.0)
         items.append(
             {
                 "campaign_id": m["campaign_id"],
@@ -1280,6 +1305,26 @@ def build_campaign_summary_response(
                 "current": curr_totals,
                 "previous": prev_totals if compare else None,
                 "derived": {"roas": curr_derived["roas"], "cpa": curr_derived["cpa"]},
+                "spend_source": {
+                    "current": {
+                        "measured_spend": float(spend_meta_current.get("measured_spend", 0.0) or 0.0),
+                        "allocated_spend": float(spend_meta_current.get("allocated_spend", 0.0) or 0.0),
+                        "allocated_share": (
+                            float(spend_meta_current.get("allocated_spend", 0.0) or 0.0) / current_spend_total
+                            if current_spend_total > 0
+                            else 0.0
+                        ),
+                    },
+                    "previous": {
+                        "measured_spend": float(spend_meta_previous.get("measured_spend", 0.0) or 0.0),
+                        "allocated_spend": float(spend_meta_previous.get("allocated_spend", 0.0) or 0.0),
+                        "allocated_share": (
+                            float(spend_meta_previous.get("allocated_spend", 0.0) or 0.0) / previous_spend_total
+                            if previous_spend_total > 0
+                            else 0.0
+                        ),
+                    } if compare else None,
+                },
                 "outcomes": {
                     "current": curr_outcomes.get(dim, _empty_outcome_metrics()),
                     "previous": prev_outcomes.get(dim, _empty_outcome_metrics()) if compare else None,
@@ -1300,11 +1345,16 @@ def build_campaign_summary_response(
         totals_previous["revenue"] += float(prev_row.get("revenue", 0.0))
     totals_outcomes_current = _empty_outcome_metrics()
     totals_outcomes_previous = _empty_outcome_metrics()
+    measured_spend_total = 0.0
+    allocated_spend_total = 0.0
     for item in items:
         for key, value in (item.get("outcomes") or {}).get("current", {}).items():
             totals_outcomes_current[key] = totals_outcomes_current.get(key, 0.0) + float(value or 0.0)
         for key, value in ((item.get("outcomes") or {}).get("previous") or {}).items():
             totals_outcomes_previous[key] = totals_outcomes_previous.get(key, 0.0) + float(value or 0.0)
+        spend_source_current = (item.get("spend_source") or {}).get("current") or {}
+        measured_spend_total += float(spend_source_current.get("measured_spend", 0.0) or 0.0)
+        allocated_spend_total += float(spend_source_current.get("allocated_spend", 0.0) or 0.0)
     notes: List[str] = []
     if totals_outcomes_current["view_through_conversions"] > totals_outcomes_current["click_through_conversions"]:
         notes.append("View-through conversions exceed click-through conversions in the selected period.")
@@ -1312,6 +1362,17 @@ def build_campaign_summary_response(
         notes.append("Invalid or disqualified leads are present; compare gross vs net conversion totals.")
     if totals_outcomes_current["refunded_value"] > 0 or totals_outcomes_current["cancelled_value"] > 0:
         notes.append("Refunded or cancelled value is present; net revenue is lower than gross revenue.")
+    total_spend_current = float(totals_current.get("spend", 0.0) or 0.0)
+    allocated_share_total = allocated_spend_total / total_spend_current if total_spend_current > 0 else 0.0
+    spend_quality_status = "measured"
+    if total_spend_current <= 0:
+        spend_quality_status = "no_spend"
+    elif measured_spend_total <= 0 and allocated_spend_total > 0:
+        spend_quality_status = "allocated_only"
+        notes.append("Campaign spend is fully allocated from channel-level expenses in the selected period; spend-based charts are directional only.")
+    elif allocated_spend_total > 0:
+        spend_quality_status = "mixed"
+        notes.append("Campaign spend mixes directly measured and channel-allocated spend in the selected period.")
     return {
         "current_period": windows["current_period"],
         "previous_period": windows["previous_period"],
@@ -1321,6 +1382,12 @@ def build_campaign_summary_response(
             "previous": totals_previous if compare else None,
             "outcomes_current": totals_outcomes_current,
             "outcomes_previous": totals_outcomes_previous if compare else None,
+        },
+        "spend_quality": {
+            "status": spend_quality_status,
+            "measured_spend": measured_spend_total,
+            "allocated_spend": allocated_spend_total,
+            "allocated_share": allocated_share_total,
         },
         "notes": [
             "Channel-level spend is allocated across campaign keys per bucket (revenue-weighted, equal-split fallback).",

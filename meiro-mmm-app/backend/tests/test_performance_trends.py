@@ -582,7 +582,12 @@ def test_campaign_summary_spend_is_allocated_without_double_counting():
     rows = {r["campaign_id"]: r for r in out["items"]}
     assert round(rows["meta_ads:A"]["current"]["spend"], 4) == 20.0
     assert round(rows["meta_ads:B"]["current"]["spend"], 4) == 60.0
+    assert round(rows["meta_ads:A"]["spend_source"]["current"]["allocated_spend"], 4) == 20.0
+    assert round(rows["meta_ads:B"]["spend_source"]["current"]["allocated_spend"], 4) == 60.0
+    assert rows["meta_ads:A"]["spend_source"]["current"]["measured_spend"] == 0.0
     assert round(out["totals"]["current"]["spend"], 4) == 80.0
+    assert out["spend_quality"]["status"] == "allocated_only"
+    assert round(out["spend_quality"]["allocated_share"], 4) == 1.0
 
 
 def test_trend_and_summary_respect_conversion_key_filter():

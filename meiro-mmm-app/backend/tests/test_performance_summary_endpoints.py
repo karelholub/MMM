@@ -52,6 +52,7 @@ def test_campaign_summary_response_shape_and_note():
     assert "totals" in body
     assert "config" in body
     assert "mapping_coverage" in body
+    assert "spend_quality" in body
     assert "notes" in body
     assert body["notes"]
     assert "meta" in body

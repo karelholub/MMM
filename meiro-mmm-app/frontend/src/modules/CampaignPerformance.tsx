@@ -73,6 +73,18 @@ interface CampaignData {
   holdout_n?: number
   confidence?: Confidence
   confidence_score?: number
+  spend_source?: {
+    current?: {
+      measured_spend: number
+      allocated_spend: number
+      allocated_share: number
+    } | null
+    previous?: {
+      measured_spend: number
+      allocated_spend: number
+      allocated_share: number
+    } | null
+  } | null
 }
 
 interface CampaignTrendV2Row {
@@ -117,6 +129,18 @@ interface CampaignSummaryItem {
     cvr?: number | null
     cost_per_visit?: number | null
     revenue_per_visit?: number | null
+  } | null
+  spend_source?: {
+    current?: {
+      measured_spend: number
+      allocated_spend: number
+      allocated_share: number
+    } | null
+    previous?: {
+      measured_spend: number
+      allocated_spend: number
+      allocated_share: number
+    } | null
   } | null
   diagnostics?: {
     roles?: {
@@ -171,6 +195,12 @@ interface CampaignSummaryResponse {
     value_mapped: number
     value_total: number
   } | null
+  spend_quality?: {
+    status: 'measured' | 'mixed' | 'allocated_only' | 'no_spend' | string
+    measured_spend: number
+    allocated_spend: number
+    allocated_share: number
+  } | null
   readiness?: {
     status: string
     blockers: string[]
@@ -211,7 +241,7 @@ const MODEL_LABELS: Record<string, string> = {
 }
 
 const METRIC_DEFINITIONS: Record<string, string> = {
-  'Total Spend': 'Sum of expenses by channel (campaigns inherit channel spend).',
+  'Total Spend': 'Sum of campaign spend. When direct campaign spend is unavailable, channel spend is allocated across campaigns.',
   'Visits': 'Normalized touchpoint count observed for each campaign in the selected period.',
   'Attributed Revenue': 'Revenue attributed to each campaign by the selected model.',
   'Conversions': 'Attributed conversion count.',
@@ -225,6 +255,11 @@ function formatCurrency(val: number): string {
   if (val >= 1000000) return `$${(val / 1000000).toFixed(1)}M`
   if (val >= 1000) return `$${(val / 1000).toFixed(1)}K`
   return `$${val.toFixed(0)}`
+}
+
+function truncateLabel(value: string, max = 26): string {
+  if (!value) return '—'
+  return value.length > max ? `${value.slice(0, Math.max(0, max - 1))}…` : value
 }
 
 function providerFromChannel(channel: string): AdsProviderKey | null {
@@ -467,6 +502,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
         holdout_n: undefined,
         confidence: item.confidence || undefined,
         confidence_score: item.confidence?.score,
+        spend_source: item.spend_source || null,
       } as CampaignData
     })
   }, [summaryQuery.data?.items, suggestionsQuery.data?.items])
@@ -1062,27 +1098,31 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
 
   const chartData = filteredCampaigns.map((c) => ({
     name: c.campaign_name ? `${c.channel} / ${c.campaign_name}` : c.campaign,
+    shortName: truncateLabel(c.campaign_name ? `${c.channel} / ${c.campaign_name}` : c.campaign, 28),
     spend: c.spend,
     attributed_value: c.attributed_value,
   }))
   const topCampaignChartData = [...filteredCampaigns]
     .sort((a, b) => b.spend - a.spend || b.attributed_value - a.attributed_value)
-    .slice(0, 12)
+    .slice(0, 10)
     .map((c) => ({
       name: c.campaign_name ? `${c.channel} / ${c.campaign_name}` : c.campaign,
+      shortName: truncateLabel(c.campaign_name ? `${c.channel} / ${c.campaign_name}` : c.campaign, 28),
       spend: c.spend,
       attributed_value: c.attributed_value,
+      spendAllocatedShare: c.spend_source?.current?.allocated_share ?? 0,
     }))
   const paretoChartData = (() => {
     const ranked = [...filteredCampaigns]
       .sort((a, b) => b.spend - a.spend || b.attributed_value - a.attributed_value)
-      .slice(0, 12)
+      .slice(0, 8)
     const totalSpendBase = ranked.reduce((sum, campaign) => sum + campaign.spend, 0)
     let cumulativeSpend = 0
     return ranked.map((campaign) => {
       cumulativeSpend += campaign.spend
       return {
         name: campaign.campaign_name ? `${campaign.channel} / ${campaign.campaign_name}` : campaign.campaign,
+        shortName: truncateLabel(campaign.campaign_name ? `${campaign.channel} / ${campaign.campaign_name}` : campaign.campaign, 18),
         spend: campaign.spend,
         cumulative_spend_share_pct: totalSpendBase > 0 ? (cumulativeSpend / totalSpendBase) * 100 : 0,
         revenue: campaign.attributed_value,
@@ -1101,7 +1141,12 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       conversions: campaign.attributed_conversions,
       cpa: campaign.cpa,
       channel: campaign.channel,
+      spendAllocatedShare: campaign.spend_source?.current?.allocated_share ?? 0,
     }))
+  const spendQuality = summaryQuery.data?.spend_quality ?? null
+  const spendSignalWeak = filteredTotalSpend < 50
+  const spendMostlyAllocated = (spendQuality?.allocated_share ?? 0) >= 0.9
+  const showSpendBasedCharts = !spendSignalWeak && !spendMostlyAllocated
 
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto' }}>
@@ -1120,6 +1165,18 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
         <span>Mixed paths: {Number(summaryOutcomesCurrent.mixed_path_conversions || 0).toLocaleString()}</span>
         <span>Refunded value: {formatCurrency(Number(summaryOutcomesCurrent.refunded_value || 0))}</span>
         <span>Invalid leads: {Number(summaryOutcomesCurrent.invalid_leads || 0).toLocaleString()}</span>
+        {spendQuality ? (
+          <span>
+            Spend quality:{' '}
+            {spendQuality.status === 'measured'
+              ? 'measured'
+              : spendQuality.status === 'mixed'
+              ? 'mixed measured + allocated'
+              : spendQuality.status === 'allocated_only'
+              ? 'allocated only'
+              : 'no spend'}
+          </span>
+        ) : null}
       </div>
       {/* Page title + measurement context bar */}
       <div
@@ -1697,19 +1754,36 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
           }}
         >
           <h3 style={{ margin: `0 0 ${t.space.lg}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-            Spend vs. Attributed Revenue by Campaign
+            {showSpendBasedCharts ? 'Spend vs. Attributed Revenue by Campaign' : 'Attributed Revenue by Campaign'}
           </h3>
           <ResponsiveContainer width="100%" height={320}>
-            <BarChart data={topCampaignChartData} layout="vertical" margin={{ left: 8, right: 16 }}>
+            <BarChart data={topCampaignChartData} layout="vertical" margin={{ left: 24, right: 16, top: 8, bottom: 8 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
               <XAxis type="number" tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }} tickFormatter={(v) => formatCurrency(v)} />
-              <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: t.font.sizeSm, fill: t.color.text }} />
-              <Tooltip formatter={(value: number) => formatCurrency(value)} contentStyle={{ fontSize: t.font.sizeSm, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+              <YAxis
+                type="category"
+                dataKey="shortName"
+                width={180}
+                tick={{ fontSize: t.font.sizeSm, fill: t.color.text }}
+              />
+              <Tooltip
+                labelFormatter={(_label, payload) => String(payload?.[0]?.payload?.name || _label || '')}
+                formatter={(value: number, key: string) => {
+                  if (key === 'spend') return formatCurrency(value)
+                  return formatCurrency(value)
+                }}
+                contentStyle={{ fontSize: t.font.sizeSm, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+              />
               <Legend wrapperStyle={{ fontSize: t.font.sizeSm }} />
-              <Bar dataKey="spend" fill={t.color.danger} name="Spend" radius={[0, 4, 4, 0]} />
+              {showSpendBasedCharts ? <Bar dataKey="spend" fill={t.color.danger} name="Spend" radius={[0, 4, 4, 0]} /> : null}
               <Bar dataKey="attributed_value" fill={t.color.success} name="Attributed Revenue" radius={[0, 4, 4, 0]} />
             </BarChart>
           </ResponsiveContainer>
+          {!showSpendBasedCharts ? (
+            <p style={{ margin: `${t.space.md}px 0 0`, fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+              Spend bars are hidden because the selected period has very low or mostly allocated spend. Revenue remains usable, but spend-based comparisons are only directional.
+            </p>
+          ) : null}
         </div>
 
         <div
@@ -1724,24 +1798,31 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
           <h3 style={{ margin: `0 0 ${t.space.lg}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
             Spend concentration (Pareto)
           </h3>
-          <ResponsiveContainer width="100%" height={320}>
-            <ComposedChart data={paretoChartData} margin={{ top: 8, right: 16, left: 8, bottom: 20 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
-              <XAxis dataKey="name" tick={{ fontSize: t.font.sizeXs, fill: t.color.textSecondary }} interval={0} angle={-18} textAnchor="end" height={72} />
-              <YAxis yAxisId="left" tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }} tickFormatter={(v) => formatCurrency(v)} />
-              <YAxis yAxisId="right" orientation="right" domain={[0, 100]} tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }} tickFormatter={(v) => `${v}%`} />
-              <Tooltip
-                contentStyle={{ fontSize: t.font.sizeSm, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
-                formatter={(value: number, key: string) => {
-                  if (key === 'cumulative_spend_share_pct') return `${value.toFixed(1)}%`
-                  return formatCurrency(value)
-                }}
-              />
-              <Legend wrapperStyle={{ fontSize: t.font.sizeSm }} />
-              <Bar yAxisId="left" dataKey="spend" fill={t.color.chart[0]} name="Spend" radius={[4, 4, 0, 0]} />
-              <Line yAxisId="right" type="monotone" dataKey="cumulative_spend_share_pct" stroke={t.color.accent} strokeWidth={2} dot={{ r: 3 }} name="Cumulative spend share" />
-            </ComposedChart>
-          </ResponsiveContainer>
+          {showSpendBasedCharts ? (
+            <ResponsiveContainer width="100%" height={320}>
+              <ComposedChart data={paretoChartData} margin={{ top: 8, right: 16, left: 8, bottom: 72 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
+                <XAxis dataKey="shortName" tick={{ fontSize: t.font.sizeXs, fill: t.color.textSecondary }} interval={0} angle={-24} textAnchor="end" height={92} />
+                <YAxis yAxisId="left" tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }} tickFormatter={(v) => formatCurrency(v)} />
+                <YAxis yAxisId="right" orientation="right" domain={[0, 100]} tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }} tickFormatter={(v) => `${v}%`} />
+                <Tooltip
+                  labelFormatter={(_label, payload) => String(payload?.[0]?.payload?.name || _label || '')}
+                  contentStyle={{ fontSize: t.font.sizeSm, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                  formatter={(value: number, key: string) => {
+                    if (key === 'cumulative_spend_share_pct') return `${value.toFixed(1)}%`
+                    return formatCurrency(value)
+                  }}
+                />
+                <Legend wrapperStyle={{ fontSize: t.font.sizeSm }} />
+                <Bar yAxisId="left" dataKey="spend" fill={t.color.chart[0]} name="Spend" radius={[4, 4, 0, 0]} />
+                <Line yAxisId="right" type="monotone" dataKey="cumulative_spend_share_pct" stroke={t.color.accent} strokeWidth={2} dot={{ r: 3 }} name="Cumulative spend share" />
+              </ComposedChart>
+            </ResponsiveContainer>
+          ) : (
+            <div style={{ minHeight: 320, display: 'grid', placeItems: 'center', padding: t.space.lg, color: t.color.textSecondary, fontSize: t.font.sizeSm }}>
+              Spend concentration is hidden because the selected period does not have enough trustworthy campaign-level spend.
+            </div>
+          )}
         </div>
 
         <div
@@ -1756,49 +1837,58 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
           <h3 style={{ margin: `0 0 ${t.space.lg}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
             Spend vs. ROAS scatter
           </h3>
-          <ResponsiveContainer width="100%" height={320}>
-            <ScatterChart margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
-              <XAxis
-                type="number"
-                dataKey="x"
-                name="Spend"
-                tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }}
-                tickFormatter={(v) => formatCurrency(v)}
-              />
-              <YAxis
-                type="number"
-                dataKey="y"
-                name="ROAS"
-                tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }}
-                tickFormatter={(v) => `${v.toFixed(1)}×`}
-              />
-              <ZAxis type="number" dataKey="z" range={[60, 360]} name="Conversions" />
-              <Tooltip
-                cursor={{ strokeDasharray: '3 3' }}
-                contentStyle={{ fontSize: t.font.sizeSm, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
-                formatter={(value: number, _key: string, payload: { payload?: typeof efficiencyScatterData[number] }) => {
-                  const point = payload?.payload
-                  if (!point) return value
-                  return [
-                    <div key="tooltip" style={{ display: 'grid', gap: 2 }}>
-                      <strong>{point.name}</strong>
-                      <span>Spend: {formatCurrency(point.x)}</span>
-                      <span>Revenue: {formatCurrency(point.revenue)}</span>
-                      <span>ROAS: {point.y.toFixed(2)}×</span>
-                      <span>Conversions: {point.conversions.toFixed(1)}</span>
-                      <span>CPA: {point.cpa != null ? formatCurrency(point.cpa) : '—'}</span>
-                    </div>,
-                    point.channel,
-                  ]
-                }}
-              />
-              <Scatter name="Campaign efficiency" data={efficiencyScatterData} fill={t.color.chart[3]} />
-            </ScatterChart>
-          </ResponsiveContainer>
-          <p style={{ margin: `${t.space.md}px 0 0`, fontSize: t.font.sizeXs, color: t.color.textMuted }}>
-            Bubble size reflects attributed conversions. High-spend points below the cluster are the first low-efficiency campaigns to inspect.
-          </p>
+          {showSpendBasedCharts ? (
+            <>
+              <ResponsiveContainer width="100%" height={320}>
+                <ScatterChart margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
+                  <XAxis
+                    type="number"
+                    dataKey="x"
+                    name="Spend"
+                    tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }}
+                    tickFormatter={(v) => formatCurrency(v)}
+                  />
+                  <YAxis
+                    type="number"
+                    dataKey="y"
+                    name="ROAS"
+                    tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }}
+                    tickFormatter={(v) => `${v.toFixed(1)}×`}
+                  />
+                  <ZAxis type="number" dataKey="z" range={[60, 360]} name="Conversions" />
+                  <Tooltip
+                    cursor={{ strokeDasharray: '3 3' }}
+                    contentStyle={{ fontSize: t.font.sizeSm, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                    formatter={(value: number, _key: string, payload: { payload?: typeof efficiencyScatterData[number] }) => {
+                      const point = payload?.payload
+                      if (!point) return value
+                      return [
+                        <div key="tooltip" style={{ display: 'grid', gap: 2 }}>
+                          <strong>{point.name}</strong>
+                          <span>Spend: {formatCurrency(point.x)}</span>
+                          <span>Revenue: {formatCurrency(point.revenue)}</span>
+                          <span>ROAS: {point.y.toFixed(2)}×</span>
+                          <span>Conversions: {point.conversions.toFixed(1)}</span>
+                          <span>CPA: {point.cpa != null ? formatCurrency(point.cpa) : '—'}</span>
+                          {point.spendAllocatedShare > 0 ? <span>Allocated spend share: {(point.spendAllocatedShare * 100).toFixed(0)}%</span> : null}
+                        </div>,
+                        point.channel,
+                      ]
+                    }}
+                  />
+                  <Scatter name="Campaign efficiency" data={efficiencyScatterData} fill={t.color.chart[3]} />
+                </ScatterChart>
+              </ResponsiveContainer>
+              <p style={{ margin: `${t.space.md}px 0 0`, fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                Bubble size reflects attributed conversions. High-spend points below the cluster are the first low-efficiency campaigns to inspect.
+              </p>
+            </>
+          ) : (
+            <div style={{ minHeight: 320, display: 'grid', placeItems: 'center', padding: t.space.lg, color: t.color.textSecondary, fontSize: t.font.sizeSm }}>
+              Spend vs. ROAS is hidden because the selected period does not have enough trustworthy campaign spend.
+            </div>
+          )}
         </div>
 
         <div
