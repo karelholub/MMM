@@ -334,6 +334,109 @@ def validate_journey_settings(settings_json: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _build_step_rule_evidence(
+    db: Session,
+    *,
+    normalized_settings_json: Dict[str, Any],
+) -> Dict[str, Any]:
+    rules = list((normalized_settings_json.get("step_canonicalization") or {}).get("rules") or [])
+    total_touchpoints = int(db.query(func.count(SilverTouchpointFact.id)).scalar() or 0)
+    observed_channels = {
+        str(value).strip().lower()
+        for value, in db.query(SilverTouchpointFact.channel)
+        .filter(SilverTouchpointFact.channel.isnot(None))
+        .filter(SilverTouchpointFact.channel != "")
+        .distinct()
+        .all()
+        if str(value or "").strip()
+    }
+    observed_events = {
+        str(value).strip().lower()
+        for value, in db.query(SilverTouchpointFact.event_name)
+        .filter(SilverTouchpointFact.event_name.isnot(None))
+        .filter(SilverTouchpointFact.event_name != "")
+        .distinct()
+        .all()
+        if str(value or "").strip()
+    }
+
+    rule_rows: List[Dict[str, Any]] = []
+    for idx, rule in enumerate(rules):
+        channels = sorted({str(value).strip().lower() for value in (rule.get("channel_group_equals") or []) if str(value or "").strip()})
+        events = sorted({str(value).strip().lower() for value in (rule.get("event_name_equals") or []) if str(value or "").strip()})
+        unsupported_clauses = [
+            key
+            for key in ("url_contains", "url_regex", "referrer_contains", "custom_predicate")
+            if rule.get(key)
+        ]
+
+        query = db.query(func.count(SilverTouchpointFact.id))
+        if channels:
+            query = query.filter(func.lower(SilverTouchpointFact.channel).in_(channels))
+        if events:
+            query = query.filter(func.lower(SilverTouchpointFact.event_name).in_(events))
+        matched_touchpoints = int(query.scalar() or 0) if (channels or events) else 0
+
+        warnings: List[str] = []
+        if not channels and not events and not unsupported_clauses:
+            warnings.append("No supported evidence clauses found for preview matching.")
+        if unsupported_clauses:
+            warnings.append(
+                "Preview evidence ignores clauses not stored in current silver facts: "
+                + ", ".join(sorted(unsupported_clauses))
+                + "."
+            )
+        unknown_channels = [value for value in channels if value not in observed_channels]
+        if unknown_channels:
+            warnings.append("Channels not observed in workspace facts: " + ", ".join(unknown_channels) + ".")
+        unknown_events = [value for value in events if value not in observed_events]
+        if unknown_events:
+            warnings.append("Event names not observed in workspace facts: " + ", ".join(unknown_events) + ".")
+        if (channels or events) and matched_touchpoints == 0:
+            warnings.append("Rule matches zero observed touchpoints in current workspace facts.")
+
+        rule_rows.append(
+            {
+                "index": idx,
+                "step_name": rule.get("step_name"),
+                "enabled": bool(rule.get("enabled", True)),
+                "priority": int(rule.get("priority") or 0),
+                "matched_touchpoints": matched_touchpoints,
+                "match_share": (matched_touchpoints / total_touchpoints) if total_touchpoints else 0.0,
+                "channels": channels,
+                "events": events,
+                "unsupported_clauses": sorted(unsupported_clauses),
+                "warnings": warnings,
+            }
+        )
+
+    return {
+        "summary": {
+            "rule_count": len(rules),
+            "total_touchpoints": total_touchpoints,
+            "rules_with_matches": sum(1 for row in rule_rows if row["matched_touchpoints"] > 0),
+        },
+        "rules": rule_rows,
+    }
+
+
+def build_journey_settings_validation_report(
+    db: Session,
+    *,
+    settings_json: Dict[str, Any],
+) -> Dict[str, Any]:
+    validation = validate_journey_settings(settings_json)
+    normalized = validation.get("normalized")
+    rule_evidence = _build_step_rule_evidence(db, normalized_settings_json=normalized) if normalized else None
+    return {
+        "valid": validation["valid"],
+        "errors": validation["errors"],
+        "warnings": validation["warnings"],
+        "normalized": normalized,
+        "rule_evidence": rule_evidence,
+    }
+
+
 def _top_level_diff(old: Optional[Dict[str, Any]], new: Dict[str, Any]) -> Dict[str, Any]:
     old_map = old if isinstance(old, dict) else {}
     changed_keys = sorted(
@@ -553,7 +656,7 @@ def build_journey_settings_impact_preview(
     draft_settings_json: Dict[str, Any],
     workspace_id: str = DEFAULT_WORKSPACE_ID,
 ) -> Dict[str, Any]:
-    validation = validate_journey_settings(draft_settings_json)
+    validation = build_journey_settings_validation_report(db, settings_json=draft_settings_json)
     normalized = validation.get("normalized")
     if normalized is None:
         return {
@@ -626,6 +729,7 @@ def build_journey_settings_impact_preview(
         "estimated_paths_returned": estimated_paths_returned,
         "warnings": warnings,
         "validation": {k: v for k, v in validation.items() if k != "normalized"},
+        "rule_evidence": validation.get("rule_evidence"),
     }
 
 

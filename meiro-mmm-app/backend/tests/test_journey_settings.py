@@ -10,6 +10,7 @@ from app.services_journey_settings import (
     activate_journey_settings_version,
     build_journey_settings_context,
     build_journey_settings_impact_preview,
+    build_journey_settings_validation_report,
     create_journey_settings_draft,
     ensure_active_journey_settings,
     validate_journey_settings,
@@ -194,6 +195,66 @@ def test_build_journey_settings_context_uses_observed_workspace_values():
         db.close()
 
 
+def test_build_journey_settings_validation_report_returns_rule_evidence():
+    db = _unit_db_session()
+    try:
+        db.add_all(
+            [
+                SilverTouchpointFact(
+                    conversion_id="c1",
+                    profile_id="p1",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2026, 4, 1, tzinfo=timezone.utc),
+                    ordinal=1,
+                    channel="paid_search",
+                    event_name="product_view",
+                ),
+                SilverTouchpointFact(
+                    conversion_id="c2",
+                    profile_id="p2",
+                    conversion_key="lead",
+                    conversion_ts=datetime(2026, 4, 2, tzinfo=timezone.utc),
+                    ordinal=1,
+                    channel="organic_search",
+                    event_name="form_submit",
+                ),
+            ]
+        )
+        db.commit()
+
+        report = build_journey_settings_validation_report(
+            db,
+            settings_json={
+                "schema_version": "1.0",
+                "step_canonicalization": {
+                    "rules": [
+                        {
+                            "step_name": "Paid Landing",
+                            "priority": 10,
+                            "enabled": True,
+                            "channel_group_equals": ["paid_search"],
+                            "event_name_equals": ["product_view"],
+                        },
+                        {
+                            "step_name": "Unknown Rule",
+                            "priority": 10,
+                            "enabled": True,
+                            "channel_group_equals": ["unknown_channel"],
+                        },
+                    ]
+                },
+            },
+        )
+
+        assert report["valid"] is True
+        assert report["rule_evidence"]["summary"]["total_touchpoints"] == 2
+        assert report["rule_evidence"]["rules"][0]["matched_touchpoints"] == 1
+        assert report["rule_evidence"]["rules"][1]["matched_touchpoints"] == 0
+        assert any("unknown_channel" in warning for warning in report["rule_evidence"]["rules"][1]["warnings"])
+    finally:
+        db.close()
+
+
 def test_journey_settings_context_route_returns_scaffold():
     client = TestClient(app)
     resp = client.get(
@@ -204,3 +265,31 @@ def test_journey_settings_context_route_returns_scaffold():
     body = resp.json()
     assert "scaffold_settings_json" in body
     assert "workspace_summary" in body
+
+
+def test_journey_settings_validate_route_returns_rule_evidence():
+    client = TestClient(app)
+    resp = client.post(
+        "/api/settings/journeys/validate",
+        json={
+            "settings_json": {
+                "schema_version": "1.0",
+                "step_canonicalization": {
+                    "rules": [
+                        {
+                            "step_name": "Paid Landing",
+                            "priority": 10,
+                            "enabled": True,
+                            "channel_group_equals": ["paid_search"],
+                            "event_name_equals": ["product_view"],
+                        }
+                    ]
+                },
+            }
+        },
+        headers={"X-User-Role": "viewer"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "rule_evidence" in body
+    assert "rules" in body["rule_evidence"]

@@ -64,6 +64,7 @@ def create_router(
     archive_journey_settings_version_fn: Callable[..., Any],
     ensure_active_journey_settings_fn: Callable[..., Any],
     validate_journey_settings_fn: Callable[[Dict[str, Any]], Dict[str, Any]],
+    build_journey_settings_validation_report_fn: Callable[..., Dict[str, Any]],
     build_journey_settings_impact_preview_fn: Callable[..., Dict[str, Any]],
     build_journey_settings_context_fn: Callable[..., Dict[str, Any]],
     activate_journey_settings_version_fn: Callable[..., Any],
@@ -461,8 +462,13 @@ def create_router(
             target = item.settings_json or {}
         else:
             target = payload.settings_json or {}
-        result = validate_journey_settings_fn(target)
-        return {"valid": result["valid"], "errors": result["errors"], "warnings": result["warnings"]}
+        result = build_journey_settings_validation_report_fn(db, settings_json=target)
+        return {
+            "valid": result["valid"],
+            "errors": result["errors"],
+            "warnings": result["warnings"],
+            "rule_evidence": result.get("rule_evidence"),
+        }
 
     @router.post("/api/settings/journeys/preview")
     def preview_journeys_settings_route(

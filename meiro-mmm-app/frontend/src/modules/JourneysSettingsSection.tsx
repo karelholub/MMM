@@ -79,6 +79,25 @@ interface JourneySettingsContext {
   scaffold_settings_json: Record<string, any>
 }
 
+interface JourneyRuleEvidenceRow {
+  index: number
+  step_name?: string | null
+  enabled: boolean
+  priority: number
+  matched_touchpoints: number
+  match_share: number
+  warnings?: string[]
+}
+
+interface JourneyRuleEvidence {
+  summary?: {
+    rule_count: number
+    total_touchpoints: number
+    rules_with_matches: number
+  }
+  rules?: JourneyRuleEvidenceRow[]
+}
+
 type FieldBadgeKind = 'derived' | 'recommended' | 'advanced' | 'inactive'
 
 function formatDateTime(value?: string | null): string {
@@ -556,6 +575,11 @@ export default function JourneysSettingsSection({
   const observedEventSet = useMemo(
     () => new Set((contextQuery.data?.observed_event_names ?? []).map((item) => String(item.value ?? '').trim().toLowerCase()).filter(Boolean)),
     [contextQuery.data?.observed_event_names],
+  )
+  const activeRuleEvidence = (previewResult?.rule_evidence ?? validationResult?.rule_evidence ?? null) as JourneyRuleEvidence | null
+  const ruleEvidenceByIndex = useMemo(
+    () => new Map((activeRuleEvidence?.rules ?? []).map((row) => [row.index, row])),
+    [activeRuleEvidence],
   )
 
   return (
@@ -1160,6 +1184,7 @@ export default function JourneysSettingsSection({
                             </button>
                           </div>
                           {(draftStepRules ?? []).length ? draftStepRules.map((rule: Record<string, any>, index: number) => {
+                            const evidence = ruleEvidenceByIndex.get(index)
                             const ruleWarnings = analyzeStepRule(rule, {
                               observedChannels: observedChannelSet,
                               observedEvents: observedEventSet,
@@ -1307,6 +1332,16 @@ export default function JourneysSettingsSection({
                                 <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
                                   {summarizeStepRule(rule).join(' · ') || 'Add at least one channel or event condition to make this rule meaningful.'}
                                 </div>
+                                {evidence ? (
+                                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                                    <FieldBadge kind={evidence.matched_touchpoints > 0 ? 'recommended' : 'inactive'}>
+                                      {`${evidence.matched_touchpoints} matches`}
+                                    </FieldBadge>
+                                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                                      {`${(evidence.match_share * 100).toFixed(1)}% of observed touchpoints`}
+                                    </div>
+                                  </div>
+                                ) : null}
                                 {ruleWarnings.length ? (
                                   <div style={{ display: 'grid', gap: 4 }}>
                                     {ruleWarnings.map((warning) => (
@@ -1317,6 +1352,25 @@ export default function JourneysSettingsSection({
                                           color: t.color.warning,
                                           background: t.color.warningSubtle,
                                           border: `1px solid ${t.color.warning}`,
+                                          borderRadius: t.radius.sm,
+                                          padding: `${t.space.xs}px ${t.space.sm}px`,
+                                        }}
+                                      >
+                                        {warning}
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : null}
+                                {!!evidence?.warnings?.length ? (
+                                  <div style={{ display: 'grid', gap: 4 }}>
+                                    {evidence.warnings.map((warning) => (
+                                      <div
+                                        key={`evidence-${warning}`}
+                                        style={{
+                                          fontSize: t.font.sizeXs,
+                                          color: t.color.textSecondary,
+                                          background: t.color.bgSubtle,
+                                          border: `1px solid ${t.color.borderLight}`,
                                           borderRadius: t.radius.sm,
                                           padding: `${t.space.xs}px ${t.space.sm}px`,
                                         }}
@@ -1338,6 +1392,11 @@ export default function JourneysSettingsSection({
                       <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
                         Basic mode keeps step mapping readable and workspace-backed. Use Advanced JSON only for custom predicates, regex rules, or exhaustive manual mapping.
                       </div>
+                      {activeRuleEvidence?.summary ? (
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                          Evidence from latest validate/preview: {activeRuleEvidence.summary.rules_with_matches} of {activeRuleEvidence.summary.rule_count} rules match observed touchpoints across {activeRuleEvidence.summary.total_touchpoints} stored touchpoints.
+                        </div>
+                      ) : null}
                     </details>
 
                     <details open style={cardStyle}>
