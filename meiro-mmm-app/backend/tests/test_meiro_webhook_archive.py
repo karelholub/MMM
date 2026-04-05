@@ -608,6 +608,74 @@ def test_event_archive_endpoints_prefer_db_batches_when_json_archive_is_unavaila
     assert items[0]["events"][0]["event_id"] == "evt-db-status-1"
 
 
+def test_event_archive_status_prefers_file_archive_totals_when_both_sources_exist(monkeypatch, tmp_path):
+    monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(meiro_config, "CONFIG_PATH", tmp_path / "meiro_config.json")
+    monkeypatch.setattr(meiro_config, "WEBHOOK_ARCHIVE_PATH", tmp_path / "meiro_webhook_archive.jsonl")
+    monkeypatch.setattr(meiro_config, "EVENT_ARCHIVE_PATH", tmp_path / "meiro_event_archive.jsonl")
+
+    _clear_meiro_raw_batches()
+    _clear_meiro_replay_runs()
+
+    meiro_config.append_event_archive_entry(
+        {
+            "received_at": "2026-03-28T09:00:00Z",
+            "parser_version": "v3",
+            "replace": False,
+            "events": [{"event_id": "evt-file-1"}, {"event_id": "evt-file-2"}],
+            "received_count": 2,
+        }
+    )
+    meiro_config.append_event_archive_entry(
+        {
+            "received_at": "2026-03-28T09:05:00Z",
+            "parser_version": "v3",
+            "replace": False,
+            "events": [{"event_id": "evt-file-3"}],
+            "received_count": 1,
+        }
+    )
+
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/connectors/meiro/events",
+        json={
+            "events": [
+                {
+                    "event_id": "evt-db-status-1",
+                    "event_payload": {
+                        "event_id": "evt-db-status-1",
+                        "customer_id": "cust-event-status-1",
+                        "timestamp": "2026-03-28T10:00:00Z",
+                        "event_name": "page_view",
+                    },
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+
+    status = client.get("/api/connectors/meiro/events/archive-status")
+    assert status.status_code == 200
+    payload = status.json()
+    assert payload["available"] is True
+    file_status = meiro_config.get_event_archive_status()
+    assert payload["entries"] == file_status["entries"]
+    assert payload["events_received"] == file_status["events_received"]
+    assert payload["last_received_at"] == file_status["last_received_at"]
+    assert isinstance(payload["latest_batch_db_id"], int)
+
+    archive = client.get("/api/connectors/meiro/events/archive?limit=2")
+    assert archive.status_code == 200
+    items = archive.json()["items"]
+    assert len(items) == 2
+    expected_items = meiro_config.get_event_archive_entries(limit=2)
+    assert [item["received_at"] for item in items] == [item["received_at"] for item in expected_items]
+    assert items[0]["events"][0]["event_id"] == expected_items[0]["events"][0]["event_id"]
+
+
 def test_webhook_reprocess_uses_db_event_batches_when_json_archive_is_unavailable(monkeypatch, tmp_path):
     monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(meiro_config, "CONFIG_PATH", tmp_path / "meiro_config.json")

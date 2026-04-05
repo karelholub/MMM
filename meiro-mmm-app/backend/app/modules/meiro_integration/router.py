@@ -643,8 +643,15 @@ def create_router(
         return status if status.get("available") else get_webhook_archive_status()
 
     def _get_event_archive_status(db: Any) -> Dict[str, Any]:
-        status = get_meiro_raw_batch_status(db, source_kind="events")
-        return status if status.get("available") else get_event_archive_status()
+        file_status = get_event_archive_status()
+        db_status = get_meiro_raw_batch_status(db, source_kind="events")
+        if file_status.get("available"):
+            merged = dict(file_status)
+            latest_batch_db_id = db_status.get("latest_batch_db_id")
+            if latest_batch_db_id is not None:
+                merged["latest_batch_db_id"] = latest_batch_db_id
+            return merged
+        return db_status if db_status.get("available") else file_status
 
     def _get_profile_archive_entries(
         db: Any,
@@ -1857,7 +1864,9 @@ def create_router(
 
     @router.get("/api/connectors/meiro/events/archive")
     def meiro_event_archive(limit: int = Query(25, ge=1, le=500), db=Depends(get_db_dependency)):
-        items = _get_event_archive_entries(db, limit=limit)
+        items = query_event_archive_entries(limit=limit)
+        if not items:
+            items = _get_event_archive_entries(db, limit=limit)
         return {"items": items, "total": len(items)}
 
     @router.get("/api/connectors/meiro/quarantine")
