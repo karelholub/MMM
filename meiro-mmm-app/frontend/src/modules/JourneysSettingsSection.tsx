@@ -79,6 +79,8 @@ interface JourneySettingsContext {
   scaffold_settings_json: Record<string, any>
 }
 
+type FieldBadgeKind = 'derived' | 'recommended' | 'advanced' | 'inactive'
+
 function formatDateTime(value?: string | null): string {
   if (!value) return '—'
   const d = new Date(value)
@@ -199,6 +201,66 @@ function summarizeStepRule(rule: Record<string, any>): string[] {
   if (urls.length) parts.push(`url contains: ${urls.join(', ')}`)
   if (referrers.length) parts.push(`referrer: ${referrers.join(', ')}`)
   return parts
+}
+
+function badgeStyle(kind: FieldBadgeKind): CSSProperties {
+  if (kind === 'derived') {
+    return {
+      fontSize: t.font.sizeXs,
+      padding: '2px 8px',
+      borderRadius: 999,
+      background: t.color.accentMuted,
+      color: t.color.accent,
+      border: `1px solid ${t.color.accent}`,
+    }
+  }
+  if (kind === 'recommended') {
+    return {
+      fontSize: t.font.sizeXs,
+      padding: '2px 8px',
+      borderRadius: 999,
+      background: t.color.successMuted,
+      color: t.color.success,
+      border: `1px solid ${t.color.success}`,
+    }
+  }
+  if (kind === 'inactive') {
+    return {
+      fontSize: t.font.sizeXs,
+      padding: '2px 8px',
+      borderRadius: 999,
+      background: t.color.bgSubtle,
+      color: t.color.textMuted,
+      border: `1px solid ${t.color.borderLight}`,
+    }
+  }
+  return {
+    fontSize: t.font.sizeXs,
+    padding: '2px 8px',
+    borderRadius: 999,
+    background: t.color.warningSubtle,
+    color: t.color.warning,
+    border: `1px solid ${t.color.warning}`,
+  }
+}
+
+function FieldBadge({ kind, children }: { kind: FieldBadgeKind; children: string }) {
+  return <span style={badgeStyle(kind)}>{children}</span>
+}
+
+function LabeledField({
+  label,
+  kind,
+}: {
+  label: string
+  kind?: FieldBadgeKind
+}) {
+  return (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontSize: t.font.sizeXs }}>
+      <span>{label}</span>
+      {kind ? <FieldBadge kind={kind}>{kind}</FieldBadge> : null}
+    </span>
+  )
 }
 
 export default function JourneysSettingsSection({
@@ -394,6 +456,11 @@ export default function JourneysSettingsSection({
   const recommendedMaxNodes = contextQuery.data?.recommendations?.flow_defaults?.max_nodes ?? 30
   const draftMatchesSuggestedRules = valuesEqual(draftStepRules, suggestedStepRules)
   const draftMatchesActiveRules = valuesEqual(draftStepRules, activeStepRules)
+  const hasObservedSignals = (contextQuery.data?.workspace_summary.observed_channels ?? 0) > 0 || (contextQuery.data?.workspace_summary.observed_event_names ?? 0) > 0
+  const hasObservedStepSignals = (contextQuery.data?.workspace_summary.observed_event_names ?? 0) > 0 || (contextQuery.data?.workspace_summary.observed_steps ?? 0) > 0
+  const showFunnelsDiagnosticsSection = featureFlags.funnel_builder_enabled || featureFlags.funnel_diagnostics_enabled
+  const diagnosticsInactive = !featureFlags.funnel_diagnostics_enabled
+  const funnelsInactive = !featureFlags.funnel_builder_enabled
 
   return (
     <div style={{ display: 'grid', gap: t.space.xl }}>
@@ -534,6 +601,15 @@ export default function JourneysSettingsSection({
             ))}
           </div>
         )}
+
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <FieldBadge kind="derived">derived</FieldBadge>
+          <FieldBadge kind="recommended">recommended</FieldBadge>
+          <FieldBadge kind="advanced">advanced</FieldBadge>
+          <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+            Derived values come from observed workspace data. Recommended values are planner defaults. Advanced values stay available in JSON but are not needed for most workspaces.
+          </div>
+        </div>
       </div>
 
       <div style={cardStyle}>
@@ -825,23 +901,30 @@ export default function JourneysSettingsSection({
                 ) : (
                   <div style={{ display: 'grid', gap: t.space.sm }}>
                     <details open style={cardStyle}>
-                      <summary style={{ cursor: 'pointer', fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>
+                      <summary style={{ cursor: 'pointer', fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                         Data bindings & Journey Construction
+                        <FieldBadge kind="derived">derived</FieldBadge>
+                        <FieldBadge kind="recommended">recommended</FieldBadge>
                       </summary>
                       <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
                         These controls shape how journeys are built from your workspace data. Channels, events, and suggested steps are derived from observed data above.
                       </div>
+                      {!hasObservedSignals ? (
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.warning }}>
+                          No strong workspace signals are available yet. New drafts will still work, but they are closer to generic defaults until more journeys and touchpoints are loaded.
+                        </div>
+                      ) : null}
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: t.space.sm }}>
                         <label style={{ display: 'grid', gap: 4 }}>
-                          <span style={{ fontSize: t.font.sizeXs }}>Session timeout (minutes)</span>
+                          <LabeledField label="Session timeout (minutes)" kind="recommended" />
                           <input type="number" value={draftObj?.sessionization?.session_timeout_minutes ?? 30} onChange={(e) => updateDraft(setIn(draftObj, ['sessionization', 'session_timeout_minutes'], asInt(e.target.value, 30)))} disabled={!isDraft} />
                         </label>
                         <label style={{ display: 'grid', gap: 4 }}>
-                          <span style={{ fontSize: t.font.sizeXs }}>Lookback window (days)</span>
+                          <LabeledField label="Lookback window (days)" kind="recommended" />
                           <input type="number" value={draftObj?.sessionization?.lookback_window_days ?? 30} onChange={(e) => updateDraft(setIn(draftObj, ['sessionization', 'lookback_window_days'], asInt(e.target.value, 30)))} disabled={!isDraft} />
                         </label>
                         <label style={{ display: 'grid', gap: 4 }}>
-                          <span style={{ fontSize: t.font.sizeXs }}>Max steps per journey</span>
+                          <LabeledField label="Max steps per journey" kind="advanced" />
                           <input type="number" value={draftObj?.sessionization?.max_steps_per_journey ?? 20} onChange={(e) => updateDraft(setIn(draftObj, ['sessionization', 'max_steps_per_journey'], asInt(e.target.value, 20)))} disabled={!isDraft} />
                         </label>
                       </div>
@@ -858,9 +941,18 @@ export default function JourneysSettingsSection({
                     </details>
 
                     <details open style={cardStyle}>
-                      <summary style={{ cursor: 'pointer', fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>
+                      <summary style={{ cursor: 'pointer', fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                         Step Canonicalization
+                        <FieldBadge kind="derived">derived</FieldBadge>
+                        <FieldBadge kind={hasObservedStepSignals ? 'recommended' : 'advanced'}>
+                          {hasObservedStepSignals ? 'recommended' : 'advanced'}
+                        </FieldBadge>
                       </summary>
+                      {!hasObservedStepSignals ? (
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                          This workspace has not produced enough event/step evidence yet, so step mapping remains mostly manual until more touchpoint data is available.
+                        </div>
+                      ) : null}
                       <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
                         <button
                           type="button"
@@ -898,7 +990,7 @@ export default function JourneysSettingsSection({
                         </button>
                       </div>
                       <label style={{ display: 'grid', gap: 4 }}>
-                        <span style={{ fontSize: t.font.sizeXs }}>Fallback step</span>
+                        <LabeledField label="Fallback step" kind="recommended" />
                         <input value={draftObj?.step_canonicalization?.fallback_step ?? 'Other'} onChange={(e) => updateDraft(setIn(draftObj, ['step_canonicalization', 'fallback_step'], e.target.value))} disabled={!isDraft} />
                       </label>
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: t.space.sm }}>
@@ -942,8 +1034,9 @@ export default function JourneysSettingsSection({
                     </details>
 
                     <details open style={cardStyle}>
-                      <summary style={{ cursor: 'pointer', fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>
+                      <summary style={{ cursor: 'pointer', fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                         Paths / Flow defaults
+                        <FieldBadge kind="recommended">recommended</FieldBadge>
                       </summary>
                       <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
                         <button
@@ -997,25 +1090,25 @@ export default function JourneysSettingsSection({
                       </div>
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: t.space.sm }}>
                         <label style={{ display: 'grid', gap: 4 }}>
-                          <span style={{ fontSize: t.font.sizeXs }}>Top paths limit</span>
+                          <LabeledField label="Top paths limit" kind="recommended" />
                           <input type="number" value={draftObj?.paths_explorer_defaults?.top_paths_limit ?? 50} onChange={(e) => updateDraft(setIn(draftObj, ['paths_explorer_defaults', 'top_paths_limit'], asInt(e.target.value, 50)))} disabled={!isDraft} />
                           <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
                             Recommended: {contextQuery.data?.recommendations?.paths_explorer_defaults?.top_paths_limit ?? 50}
                           </span>
                         </label>
                         <label style={{ display: 'grid', gap: 4 }}>
-                          <span style={{ fontSize: t.font.sizeXs }}>Flow max depth</span>
+                          <LabeledField label="Flow max depth" kind="advanced" />
                           <input type="number" value={draftObj?.flow_defaults?.max_depth ?? 4} onChange={(e) => updateDraft(setIn(draftObj, ['flow_defaults', 'max_depth'], asInt(e.target.value, 4)))} disabled={!isDraft} />
                         </label>
                         <label style={{ display: 'grid', gap: 4 }}>
-                          <span style={{ fontSize: t.font.sizeXs }}>Min volume threshold</span>
+                          <LabeledField label="Min volume threshold" kind="recommended" />
                           <input type="number" value={draftObj?.flow_defaults?.min_volume_threshold ?? 20} onChange={(e) => updateDraft(setIn(draftObj, ['flow_defaults', 'min_volume_threshold'], asInt(e.target.value, 20)))} disabled={!isDraft} />
                           <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
                             Recommended: {contextQuery.data?.recommendations?.flow_defaults?.min_volume_threshold ?? 20}
                           </span>
                         </label>
                         <label style={{ display: 'grid', gap: 4 }}>
-                          <span style={{ fontSize: t.font.sizeXs }}>Max nodes</span>
+                          <LabeledField label="Max nodes" kind="recommended" />
                           <input type="number" value={draftObj?.flow_defaults?.max_nodes ?? 30} onChange={(e) => updateDraft(setIn(draftObj, ['flow_defaults', 'max_nodes'], asInt(e.target.value, 30)))} disabled={!isDraft} />
                           <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
                             Recommended: {contextQuery.data?.recommendations?.flow_defaults?.max_nodes ?? 30}
@@ -1024,46 +1117,56 @@ export default function JourneysSettingsSection({
                       </div>
                     </details>
 
-                    <details open style={cardStyle}>
-                      <summary style={{ cursor: 'pointer', fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>
-                        Funnels & Diagnostics
-                      </summary>
-                      {!featureFlags.funnel_builder_enabled ? (
-                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
-                          Funnel builder feature is disabled for this workspace.
-                        </div>
-                      ) : (
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: t.space.sm }}>
-                          <label style={{ display: 'grid', gap: 4 }}>
-                            <span style={{ fontSize: t.font.sizeXs }}>Funnel counting method</span>
-                            <select value={draftObj?.funnels_defaults?.default_counting_method ?? 'uniques'} onChange={(e) => updateDraft(setIn(draftObj, ['funnels_defaults', 'default_counting_method'], e.target.value))} disabled={!isDraft}>
-                              <option value="uniques">Uniques</option>
-                              <option value="totals">Totals</option>
-                            </select>
-                          </label>
-                          <label style={{ display: 'grid', gap: 4 }}>
-                            <span style={{ fontSize: t.font.sizeXs }}>Conversion window (seconds)</span>
-                            <input type="number" value={draftObj?.funnels_defaults?.default_conversion_window_seconds ?? 604800} onChange={(e) => updateDraft(setIn(draftObj, ['funnels_defaults', 'default_conversion_window_seconds'], asInt(e.target.value, 604800)))} disabled={!isDraft} />
-                          </label>
-                        </div>
-                      )}
-
-                      {!featureFlags.funnel_diagnostics_enabled ? (
-                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
-                          Diagnostics feature is disabled for this workspace.
-                        </div>
-                      ) : (
-                        <>
-                          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: t.font.sizeXs }}>
-                            <input type="checkbox" checked={!!draftObj?.diagnostics_defaults?.enabled} onChange={(e) => updateDraft(setIn(draftObj, ['diagnostics_defaults', 'enabled'], e.target.checked))} disabled={!isDraft} />
-                            Enable diagnostics
-                          </label>
-                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-                            Output policy is fixed to hypotheses with evidence-required claims.
+                    {showFunnelsDiagnosticsSection ? (
+                      <details open style={cardStyle}>
+                        <summary style={{ cursor: 'pointer', fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          Funnels & Diagnostics
+                          {funnelsInactive ? <FieldBadge kind="inactive">funnels inactive</FieldBadge> : <FieldBadge kind="recommended">recommended</FieldBadge>}
+                          {diagnosticsInactive ? <FieldBadge kind="inactive">diagnostics inactive</FieldBadge> : <FieldBadge kind="advanced">advanced</FieldBadge>}
+                        </summary>
+                        {featureFlags.funnel_builder_enabled ? (
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: t.space.sm }}>
+                            <label style={{ display: 'grid', gap: 4 }}>
+                              <LabeledField label="Funnel counting method" kind="recommended" />
+                              <select value={draftObj?.funnels_defaults?.default_counting_method ?? 'uniques'} onChange={(e) => updateDraft(setIn(draftObj, ['funnels_defaults', 'default_counting_method'], e.target.value))} disabled={!isDraft}>
+                                <option value="uniques">Uniques</option>
+                                <option value="totals">Totals</option>
+                              </select>
+                            </label>
+                            <label style={{ display: 'grid', gap: 4 }}>
+                              <LabeledField label="Conversion window (seconds)" kind="recommended" />
+                              <input type="number" value={draftObj?.funnels_defaults?.default_conversion_window_seconds ?? 604800} onChange={(e) => updateDraft(setIn(draftObj, ['funnels_defaults', 'default_conversion_window_seconds'], asInt(e.target.value, 604800)))} disabled={!isDraft} />
+                            </label>
                           </div>
-                        </>
-                      )}
-                    </details>
+                        ) : null}
+
+                        {featureFlags.funnel_builder_enabled && featureFlags.funnel_diagnostics_enabled ? (
+                          <div style={{ height: 1, background: t.color.borderLight }} />
+                        ) : null}
+
+                        {featureFlags.funnel_diagnostics_enabled ? (
+                          <>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: t.font.sizeXs }}>
+                              <input type="checkbox" checked={!!draftObj?.diagnostics_defaults?.enabled} onChange={(e) => updateDraft(setIn(draftObj, ['diagnostics_defaults', 'enabled'], e.target.checked))} disabled={!isDraft} />
+                              <LabeledField label="Enable diagnostics" kind="advanced" />
+                            </label>
+                            <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                              Output policy is fixed to hypotheses with evidence-required claims.
+                            </div>
+                          </>
+                        ) : null}
+                      </details>
+                    ) : (
+                      <div style={{ ...cardStyle, background: t.color.bgSubtle }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>Funnels & Diagnostics</div>
+                          <FieldBadge kind="inactive">inactive in this workspace</FieldBadge>
+                        </div>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                          This workspace does not currently use funnel builder or diagnostics features, so their settings stay out of the main editing path.
+                        </div>
+                      </div>
+                    )}
 
                     <div style={{ ...cardStyle, background: t.color.bgSubtle }}>
                       <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>Advanced controls moved out of the main path</div>
