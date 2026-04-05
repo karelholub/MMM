@@ -14,6 +14,7 @@ from .models_config_dq import (
     FunnelDefinition,
     JourneyAlertDefinition,
     JourneyDefinition,
+    JourneyExampleFact,
     JourneyDefinitionInstanceFact,
     JourneyDefinitionMode,
     JourneyHypothesis,
@@ -276,9 +277,39 @@ def get_journey_definition_lifecycle(db: Session, definition_id: str) -> Optiona
             .scalar()
             or 0
         ),
+        "example_days": int(
+            db.query(func.count(JourneyExampleFact.id))
+            .filter(JourneyExampleFact.journey_definition_id == definition_id)
+            .scalar()
+            or 0
+        ),
     }
     dependency_total = sum(dependency_counts.values())
     output_total = sum(output_counts.values())
+    output_updated_candidates = [
+        db.query(func.max(JourneyDefinitionInstanceFact.updated_at))
+        .filter(JourneyDefinitionInstanceFact.journey_definition_id == definition_id)
+        .scalar(),
+        db.query(func.max(JourneyPathDaily.updated_at))
+        .filter(JourneyPathDaily.journey_definition_id == definition_id)
+        .scalar(),
+        db.query(func.max(JourneyTransitionDaily.updated_at))
+        .filter(JourneyTransitionDaily.journey_definition_id == definition_id)
+        .scalar(),
+        db.query(func.max(JourneyExampleFact.updated_at))
+        .filter(JourneyExampleFact.journey_definition_id == definition_id)
+        .scalar(),
+    ]
+    latest_output_updated_at = max((value for value in output_updated_candidates if value is not None), default=None)
+    stale_reason: Optional[str] = None
+    lifecycle_status = "archived" if bool(item.is_archived) else "active"
+    if not item.is_archived:
+        if latest_output_updated_at is None:
+            lifecycle_status = "stale"
+            stale_reason = "no_outputs_built"
+        elif item.updated_at and latest_output_updated_at and item.updated_at > latest_output_updated_at:
+            lifecycle_status = "stale"
+            stale_reason = "definition_changed_since_build"
     warnings: list[str] = []
     if dependency_total:
         warnings.append(
@@ -288,8 +319,14 @@ def get_journey_definition_lifecycle(db: Session, definition_id: str) -> Optiona
         warnings.append(
             f"This definition has {output_total} generated journey-output rows that should be preserved for restore/history."
         )
+    if stale_reason == "no_outputs_built":
+        warnings.append("Outputs have not been built for this definition yet.")
+    elif stale_reason == "definition_changed_since_build":
+        warnings.append("Definition metadata changed after the last output build. Rebuild is recommended.")
+    definition_payload = _serialize(item)
+    definition_payload["lifecycle_status"] = lifecycle_status
     return {
-        "definition": _serialize(item),
+        "definition": definition_payload,
         "dependency_counts": dependency_counts,
         "output_counts": output_counts,
         "allowed_actions": {
@@ -297,6 +334,12 @@ def get_journey_definition_lifecycle(db: Session, definition_id: str) -> Optiona
             "can_restore": bool(item.is_archived),
             "can_duplicate": True,
             "can_delete": not bool(item.is_archived) and dependency_total == 0 and output_total == 0,
+            "can_rebuild": not bool(item.is_archived),
+        },
+        "rebuild_state": {
+            "status": lifecycle_status,
+            "stale_reason": stale_reason,
+            "last_rebuilt_at": latest_output_updated_at.isoformat() if latest_output_updated_at else None,
         },
         "warnings": warnings,
     }

@@ -54,12 +54,19 @@ interface JourneyDefinitionLifecycle {
     journey_instances: number
     path_days: number
     transition_days: number
+    example_days?: number
   }
   allowed_actions: {
     can_archive: boolean
     can_restore: boolean
     can_duplicate: boolean
     can_delete: boolean
+    can_rebuild?: boolean
+  }
+  rebuild_state?: {
+    status: 'active' | 'stale' | 'archived' | string
+    stale_reason?: string | null
+    last_rebuilt_at?: string | null
   }
   warnings: string[]
 }
@@ -918,6 +925,8 @@ export default function Journeys({
     },
     enabled: !!selectedJourneyId && !featureDisabled,
   })
+  const selectedDefinitionLifecycleStatus =
+    definitionLifecycleQuery.data?.definition.lifecycle_status ?? (selectedDefinitionArchived ? 'archived' : 'active')
 
   const pathsQuery = useQuery<JourneyPathsResponse>({
     queryKey: [
@@ -1327,6 +1336,29 @@ export default function Journeys({
       await queryClient.invalidateQueries({ queryKey: ['journey-definitions', 'journeys-page'] })
       await queryClient.invalidateQueries({ queryKey: ['journey-definition-lifecycle'] })
       setSelectedJourneyId(created.id)
+    },
+  })
+
+  const rebuildDefinitionMutation = useMutation({
+    mutationFn: async (payload: { definitionId: string; reprocessDays?: number }) => {
+      const query = new URLSearchParams()
+      if (payload.reprocessDays) query.set('reprocess_days', String(payload.reprocessDays))
+      return apiSendJson<{ definition_id: string; metrics: Record<string, unknown> }>(
+        `/api/journeys/definitions/${payload.definitionId}/rebuild${query.toString() ? `?${query.toString()}` : ''}`,
+        'POST',
+        undefined,
+        { fallbackMessage: 'Failed to rebuild journey definition' },
+      )
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['journey-definition-lifecycle'] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-paths'] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-attribution-summary'] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-transitions'] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-examples'] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-insights'] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-hypotheses'] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-policy-recommendations'] })
     },
   })
 
@@ -2382,11 +2414,25 @@ export default function Journeys({
                       padding: '4px 10px',
                       fontSize: t.font.sizeXs,
                       fontWeight: t.font.weightSemibold,
-                      background: selectedDefinitionArchived ? t.color.warningMuted : t.color.successMuted,
-                      color: selectedDefinitionArchived ? t.color.warning : t.color.success,
+                      background:
+                        selectedDefinitionLifecycleStatus === 'archived'
+                          ? t.color.warningMuted
+                          : selectedDefinitionLifecycleStatus === 'stale'
+                            ? t.color.accentMuted
+                            : t.color.successMuted,
+                      color:
+                        selectedDefinitionLifecycleStatus === 'archived'
+                          ? t.color.warning
+                          : selectedDefinitionLifecycleStatus === 'stale'
+                            ? t.color.accent
+                            : t.color.success,
                     }}
                   >
-                    {selectedDefinitionArchived ? 'Archived' : 'Active'}
+                    {selectedDefinitionLifecycleStatus === 'archived'
+                      ? 'Archived'
+                      : selectedDefinitionLifecycleStatus === 'stale'
+                        ? 'Needs rebuild'
+                        : 'Active'}
                   </div>
                   {selectedDefinition.updated_at ? (
                     <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
@@ -2429,6 +2475,9 @@ export default function Journeys({
                         </div>
                       ))}
                     </div>
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                      Last rebuilt: {definitionLifecycleQuery.data.rebuild_state?.last_rebuilt_at ? new Date(definitionLifecycleQuery.data.rebuild_state.last_rebuilt_at).toLocaleString() : 'Never'}
+                    </div>
                     {(definitionLifecycleQuery.data.warnings || []).length ? (
                       <div style={{ display: 'grid', gap: 4 }}>
                         {definitionLifecycleQuery.data.warnings.map((warning) => (
@@ -2461,6 +2510,24 @@ export default function Journeys({
                         >
                           {duplicateDefinitionMutation.isPending ? 'Duplicating…' : 'Duplicate'}
                         </button>
+                        {!selectedDefinitionArchived ? (
+                          <button
+                            type="button"
+                            onClick={() => rebuildDefinitionMutation.mutate({ definitionId: selectedDefinition.id })}
+                            disabled={!definitionLifecycleQuery.data.allowed_actions.can_rebuild || rebuildDefinitionMutation.isPending}
+                            style={{
+                              border: `1px solid ${t.color.accent}`,
+                              background: t.color.surface,
+                              color: t.color.accent,
+                              borderRadius: t.radius.sm,
+                              fontSize: t.font.sizeSm,
+                              padding: '8px 12px',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {rebuildDefinitionMutation.isPending ? 'Rebuilding…' : 'Rebuild outputs'}
+                          </button>
+                        ) : null}
                         {!selectedDefinitionArchived ? (
                           <button
                             type="button"

@@ -66,6 +66,7 @@ Turn journey definitions into manageable product assets instead of one-way metad
 ## Follow-up Slices
 
 - Add `stale` / `needs rebuild` state.
+  - implemented in the next slice via output timestamp comparison and direct rebuild CTA
 - Add owner / usage metadata.
 - Add hard delete only for definitions with zero dependencies and zero outputs.
 - Add cross-links from lifecycle summary to dependent objects.

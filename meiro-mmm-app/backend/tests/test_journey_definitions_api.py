@@ -374,6 +374,8 @@ def test_journey_definition_lifecycle_reports_dependencies_and_actions(client: T
     assert lifecycle_resp.status_code == 200
     lifecycle = lifecycle_resp.json()
     assert lifecycle["definition"]["id"] == definition_id
+    assert lifecycle["definition"]["lifecycle_status"] == "stale"
+    assert lifecycle["rebuild_state"]["stale_reason"] == "no_outputs_built"
     assert lifecycle["dependency_counts"]["saved_views"] == 1
     assert lifecycle["dependency_counts"]["funnels"] == 1
     assert lifecycle["dependency_counts"]["hypotheses"] == 1
