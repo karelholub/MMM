@@ -4,6 +4,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsive
 import { tokens } from '../theme/tokens'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
+import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import { apiGetJson } from '../lib/apiClient'
 
@@ -383,35 +384,16 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
         />
       ) : null}
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-          gap: t.space.md,
-          marginBottom: t.space.lg,
-        }}
-      >
-        {[
-          { label: 'Source', value: 'Live attribution results' },
-          { label: 'Period', value: periodLabel },
-          { label: 'Conversion', value: conversionKey ? `Conversion: ${conversionKey}` : 'Conversion: N/A' },
-          { label: 'Freshness', value: freshnessLabel },
-          { label: 'Coverage', value: coverageLabel },
-        ].map((item) => (
-          <div
-            key={item.label}
-            style={{
-              background: t.color.surface,
-              border: `1px solid ${t.color.borderLight}`,
-              borderRadius: t.radius.md,
-              padding: t.space.md,
-              boxShadow: t.shadowSm,
-            }}
-          >
-            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>{item.label}</div>
-            <div style={{ marginTop: 4, fontSize: t.font.sizeSm, color: t.color.text }}>{item.value}</div>
-          </div>
-        ))}
+      <div style={{ marginBottom: t.space.lg }}>
+        <ContextSummaryStrip
+          items={[
+            { label: 'Source', value: 'Live attribution results' },
+            { label: 'Period', value: periodLabel },
+            { label: 'Conversion', value: conversionKey ? `Conversion: ${conversionKey}` : 'Conversion: N/A' },
+            { label: 'Freshness', value: freshnessLabel },
+            { label: 'Coverage', value: coverageLabel },
+          ]}
+        />
       </div>
 
       <div

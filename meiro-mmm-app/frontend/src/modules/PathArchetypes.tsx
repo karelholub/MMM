@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { tokens as t } from '../theme/tokens'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
+import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { apiGetJson } from '../lib/apiClient'
 
@@ -533,37 +534,19 @@ export default function PathArchetypes() {
         />
       ) : null}
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-          gap: tkn.space.md,
-          marginBottom: tkn.space.lg,
-          padding: tkn.space.md,
-          borderRadius: tkn.radius.lg,
-          border: `1px solid ${tkn.color.borderLight}`,
-          background: tkn.color.surface,
-          boxShadow: tkn.shadowSm,
-        }}
-      >
-        <div>
-          <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted, textTransform: 'uppercase' }}>Source</div>
-          <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>Live attribution journeys</div>
-        </div>
-        <div>
-          <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted, textTransform: 'uppercase' }}>Period</div>
-          <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>{periodLabel}</div>
-        </div>
-        <div>
-          <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted, textTransform: 'uppercase' }}>Conversion KPI</div>
-          <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>{conversionLabel}</div>
-        </div>
-        <div>
-          <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted, textTransform: 'uppercase' }}>Converted journeys used</div>
-          <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.text }}>
-            {data?.total_converted != null ? data.total_converted.toLocaleString() : '—'}
-          </div>
-        </div>
+      <div style={{ marginBottom: tkn.space.lg }}>
+        <ContextSummaryStrip
+          minItemWidth={220}
+          items={[
+            { label: 'Source', value: 'Live attribution journeys' },
+            { label: 'Period', value: periodLabel },
+            { label: 'Conversion KPI', value: conversionLabel },
+            {
+              label: 'Converted journeys used',
+              value: data?.total_converted != null ? data.total_converted.toLocaleString() : '—',
+            },
+          ]}
+        />
       </div>
 
       {convertedMismatch ? (

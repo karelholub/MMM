@@ -5,6 +5,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsi
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
+import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 
 function objectPreview(value: Record<string, unknown> | null | undefined): string {
   if (!value || typeof value !== 'object') return '—'
@@ -991,35 +992,16 @@ export default function IncrementalityPage() {
         </button>
       </div>
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-          gap: tkn.space.md,
-          marginBottom: tkn.space.lg,
-        }}
-      >
-        {[
-          { label: 'Source', value: 'Observed journeys + KPI settings' },
-          { label: 'Planner period', value: plannerPeriodLabel },
-          { label: 'Observed channels', value: (setupContext?.summary.observed_channels ?? 0).toLocaleString() },
-          { label: 'KPIs', value: (setupContext?.kpis.length ?? 0).toLocaleString() },
-          { label: 'Freshness', value: plannerFreshnessLabel },
-        ].map((item) => (
-          <div
-            key={item.label}
-            style={{
-              background: tkn.color.surface,
-              border: `1px solid ${tkn.color.borderLight}`,
-              borderRadius: tkn.radius.md,
-              padding: tkn.space.md,
-              boxShadow: tkn.shadowSm,
-            }}
-          >
-            <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted, textTransform: 'uppercase' }}>{item.label}</div>
-            <div style={{ marginTop: 4, fontSize: tkn.font.sizeSm, color: tkn.color.text }}>{item.value}</div>
-          </div>
-        ))}
+      <div style={{ marginBottom: tkn.space.lg }}>
+        <ContextSummaryStrip
+          items={[
+            { label: 'Source', value: 'Observed journeys + KPI settings' },
+            { label: 'Planner period', value: plannerPeriodLabel },
+            { label: 'Observed channels', value: (setupContext?.summary.observed_channels ?? 0).toLocaleString() },
+            { label: 'KPIs', value: (setupContext?.kpis.length ?? 0).toLocaleString() },
+            { label: 'Freshness', value: plannerFreshnessLabel },
+          ]}
+        />
       </div>
 
       <div style={{ marginBottom: tkn.space.lg }}>

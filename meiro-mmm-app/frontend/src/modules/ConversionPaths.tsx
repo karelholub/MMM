@@ -5,6 +5,7 @@ import { tokens } from '../theme/tokens'
 import DashboardPage from '../components/dashboard/DashboardPage'
 import SectionCard from '../components/dashboard/SectionCard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
+import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import GlobalFilterBar, { type GlobalFiltersState } from '../components/dashboard/GlobalFilterBar'
 import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn } from '../components/dashboard'
 import DecisionStatusCard from '../components/DecisionStatusCard'
@@ -877,32 +878,21 @@ export default function ConversionPaths() {
           subtitle="Which definition, source, and time coverage this page is actually using."
         >
           <div style={{ display: 'grid', gap: t.space.md }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: t.space.md }}>
-              <div>
-                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>Journey definition</div>
-                <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightSemibold }}>{selectedDefinitionName}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>Data source</div>
-                <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{data?.source || '—'}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>Covered period</div>
-                <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{data?.date_from && data?.date_to ? `${data.date_from} – ${data.date_to}` : periodLabel}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>Last rebuilt</div>
-                <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{formatLifecycleTimestamp(definitionLifecycleQuery.data?.rebuild_state?.last_rebuilt_at)}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>Lifecycle status</div>
-                <div style={{ fontSize: t.font.sizeSm, color: lifecycleStatus === 'stale' ? t.color.warning : t.color.text }}>{lifecycleStatus}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>Conversion KPI</div>
-                <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{conversionLabel}</div>
-              </div>
-            </div>
+            <ContextSummaryStrip
+              minItemWidth={220}
+              items={[
+                { label: 'Journey definition', value: <strong style={{ fontWeight: t.font.weightSemibold }}>{selectedDefinitionName}</strong> },
+                { label: 'Data source', value: data?.source || '—' },
+                { label: 'Covered period', value: data?.date_from && data?.date_to ? `${data.date_from} – ${data.date_to}` : periodLabel },
+                { label: 'Last rebuilt', value: formatLifecycleTimestamp(definitionLifecycleQuery.data?.rebuild_state?.last_rebuilt_at) },
+                {
+                  label: 'Lifecycle status',
+                  value: lifecycleStatus,
+                  valueColor: lifecycleStatus === 'stale' ? t.color.warning : t.color.text,
+                },
+                { label: 'Conversion KPI', value: conversionLabel },
+              ]}
+            />
             {countMismatch || rangeMismatch ? (
               <div style={{ padding: t.space.md, borderRadius: t.radius.md, border: `1px solid ${t.color.warning}`, background: t.color.warningMuted, fontSize: t.font.sizeSm, color: t.color.text }}>
                 Workspace attribution currently shows <strong>{liveJourneyCount?.toLocaleString() ?? '—'}</strong> live journeys through{' '}
