@@ -1,13 +1,18 @@
-import { useState, useMemo } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { tokens } from '../theme/tokens'
+import DashboardPage from '../components/dashboard/DashboardPage'
+import SectionCard from '../components/dashboard/SectionCard'
+import GlobalFilterBar, { type GlobalFiltersState } from '../components/dashboard/GlobalFilterBar'
 import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn } from '../components/dashboard'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import ExplainabilityPanel from '../components/ExplainabilityPanel'
 import ConfidenceBadge, { type Confidence } from '../components/ConfidenceBadge'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { apiGetJson } from '../lib/apiClient'
+import { buildListQuery, type PaginatedResponse } from '../lib/apiSchemas'
+import { defaultRecentDateRange } from '../lib/dateRange'
 import { buildJourneyHypothesisHref } from '../lib/journeyLinks'
 
 interface NextBestRec {
@@ -22,6 +27,42 @@ interface NextBestRec {
   promoted_policy_title?: string | null
   promoted_policy_hypothesis_id?: string | null
   promoted_policy_journey_definition_id?: string | null
+}
+
+interface JourneyDefinition {
+  id: string
+  name: string
+  description?: string | null
+  is_archived?: boolean
+  lifecycle_status?: string
+}
+
+interface JourneyFilterDimensionValue {
+  value: string
+  count: number
+}
+
+interface JourneyFilterDimensionsResponse {
+  summary: {
+    journey_rows: number
+    date_from: string
+    date_to: string
+    segment_supported: boolean
+  }
+  channels: JourneyFilterDimensionValue[]
+  campaigns: JourneyFilterDimensionValue[]
+  devices: JourneyFilterDimensionValue[]
+  countries: JourneyFilterDimensionValue[]
+  segments: JourneyFilterDimensionValue[]
+}
+
+interface JourneyDefinitionLifecycle {
+  definition: JourneyDefinition
+  rebuild_state?: {
+    status: 'active' | 'stale' | 'archived' | string
+    stale_reason?: string | null
+    last_rebuilt_at?: string | null
+  }
 }
 
 interface PathAnalysis {
@@ -63,6 +104,10 @@ interface PathAnalysis {
   } | null
   next_best_by_prefix?: Record<string, NextBestRec[]>
   next_best_by_prefix_campaign?: Record<string, NextBestRec[]>
+  source?: string
+  journey_definition_id?: string | null
+  date_from?: string | null
+  date_to?: string | null
 }
 
 interface PathStepBreakdown {
@@ -112,6 +157,99 @@ const METRIC_DEFINITIONS: Record<string, string> = {
   'Avg Path Length': 'Average number of touchpoints per journey before conversion.',
   'Avg Time to Convert': 'Average days from first touch to conversion.',
   'Path Length Range': 'Min and max touchpoints observed in paths.',
+}
+
+function buildInitialFilters(dateMin?: string | null, dateMax?: string | null): GlobalFiltersState {
+  const fallback = defaultRecentDateRange(30)
+  return {
+    dateFrom: dateMin?.slice(0, 10) ?? fallback.dateFrom,
+    dateTo: dateMax?.slice(0, 10) ?? fallback.dateTo,
+    channel: 'all',
+    campaign: 'all',
+    device: 'all',
+    geo: 'all',
+    segment: 'all',
+  }
+}
+
+function dimensionLabel(value: string, count: number): string {
+  return `${value} (${count.toLocaleString()})`
+}
+
+function formatLifecycleTimestamp(value?: string | null): string {
+  if (!value) return '—'
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString()
+}
+
+function buildJourneyPathsHref(journeyDefinitionId?: string | null): string | null {
+  const journeyId = String(journeyDefinitionId || '').trim()
+  if (!journeyId) return null
+  const params = new URLSearchParams()
+  params.set('page', 'analytics_journeys')
+  params.set('journey_id', journeyId)
+  params.set('tab', 'paths')
+  return `/?${params.toString()}`
+}
+
+function normalizePathInput(raw: string): string {
+  return raw
+    .split(/>|,/g)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join(' > ')
+}
+
+function CollapsiblePanel({
+  title,
+  subtitle,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string
+  subtitle?: string
+  open: boolean
+  onToggle: () => void
+  children: ReactNode
+}) {
+  const t = tokens
+  return (
+    <div
+      style={{
+        background: t.color.surface,
+        border: `1px solid ${t.color.borderLight}`,
+        borderRadius: t.radius.lg,
+        boxShadow: t.shadowSm,
+      }}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        style={{
+          width: '100%',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: t.space.md,
+          padding: t.space.lg,
+          background: 'transparent',
+          border: 'none',
+          cursor: 'pointer',
+          textAlign: 'left',
+        }}
+      >
+        <div style={{ display: 'grid', gap: 4 }}>
+          <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>{title}</div>
+          {subtitle ? <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{subtitle}</div> : null}
+        </div>
+        <div style={{ fontSize: t.font.sizeXs, fontWeight: t.font.weightSemibold, color: t.color.accent }}>
+          {open ? 'Hide' : 'Show'}
+        </div>
+      </button>
+      {open ? <div style={{ padding: `0 ${t.space.lg}px ${t.space.lg}px` }}>{children}</div> : null}
+    </div>
+  )
 }
 
 function exportPathsCSV(
@@ -171,6 +309,8 @@ function exportPathsCSV(
 
 export default function ConversionPaths() {
   const { journeysSummary: journeys } = useWorkspaceContext()
+  const [filters, setFilters] = useState<GlobalFiltersState>(() => buildInitialFilters(journeys?.date_min, journeys?.date_max))
+  const [selectedJourneyId, setSelectedJourneyId] = useState('')
   const [pathSort, setPathSort] = useState<'count' | 'share' | 'avg_time' | 'length'>('count')
   const [pathSortDir, setPathSortDir] = useState<'asc' | 'desc'>('desc')
   const [freqSort, setFreqSort] = useState<'channel' | 'count' | 'pct'>('count')
@@ -178,11 +318,9 @@ export default function ConversionPaths() {
   const [tryPathInput, setTryPathInput] = useState('')
   const [tryPathLevel, setTryPathLevel] = useState<'channel' | 'campaign'>('channel')
   const [tryPathResult, setTryPathResult] = useState<{ path_so_far: string; level: string; recommendations: NextBestRec[] } | null>(null)
-  const [tryPathLoading, setTryPathLoading] = useState(false)
   const [tryPathError, setTryPathError] = useState<string | null>(null)
-  const [tryPathWhyOpen, setTryPathWhyOpen] = useState(false)
-  const [showWhy, setShowWhy] = useState(false)
-  const [showAnomalies, setShowAnomalies] = useState(true)
+  const [showContext, setShowContext] = useState(false)
+  const [showDiagnostics, setShowDiagnostics] = useState(false)
 
   const [directMode, setDirectMode] = useState<'include' | 'exclude'>('include')
   const [pathScope, setPathScope] = useState<'converted' | 'all'>('converted')
@@ -197,19 +335,77 @@ export default function ConversionPaths() {
   const [selectedPathLoading, setSelectedPathLoading] = useState(false)
   const [selectedPathError, setSelectedPathError] = useState<string | null>(null)
 
+  const definitionsQuery = useQuery<PaginatedResponse<JourneyDefinition>>({
+    queryKey: ['journey-definitions', 'conversion-paths'],
+    queryFn: async () => {
+      const query = buildListQuery({ page: 1, perPage: 100, order: 'desc' })
+      return apiGetJson<PaginatedResponse<JourneyDefinition>>(`/api/journeys/definitions?${new URLSearchParams(query as Record<string, string>).toString()}`, {
+        fallbackMessage: 'Failed to load journey definitions',
+      })
+    },
+  })
+
+  const selectedDefinition = useMemo(
+    () => (definitionsQuery.data?.items ?? []).find((item) => item.id === selectedJourneyId) ?? null,
+    [definitionsQuery.data?.items, selectedJourneyId],
+  )
+
+  const definitionLifecycleQuery = useQuery<JourneyDefinitionLifecycle>({
+    queryKey: ['journey-definition-lifecycle', 'conversion-paths', selectedJourneyId],
+    queryFn: async () =>
+      apiGetJson<JourneyDefinitionLifecycle>(`/api/journeys/definitions/${selectedJourneyId}/lifecycle`, {
+        fallbackMessage: 'Failed to load journey definition lifecycle',
+      }),
+    enabled: !!selectedJourneyId,
+  })
+
+  const dimensionsQuery = useQuery<JourneyFilterDimensionsResponse>({
+    queryKey: ['journey-dimensions', 'conversion-paths', selectedJourneyId, filters.dateFrom, filters.dateTo, filters.channel, filters.campaign, filters.device, filters.geo],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        date_from: filters.dateFrom,
+        date_to: filters.dateTo,
+      })
+      if (filters.channel !== 'all') params.set('channel_group', filters.channel)
+      if (filters.campaign !== 'all') params.set('campaign_id', filters.campaign)
+      if (filters.device !== 'all') params.set('device', filters.device)
+      if (filters.geo !== 'all') params.set('country', filters.geo)
+      return apiGetJson<JourneyFilterDimensionsResponse>(`/api/journeys/${selectedJourneyId}/dimensions?${params.toString()}`, {
+        fallbackMessage: 'Failed to load conversion path filter dimensions',
+      })
+    },
+    enabled: !!selectedJourneyId,
+  })
+
+  const journeyFilterOptions = useMemo(
+    () => ({
+      channels: (dimensionsQuery.data?.channels ?? []).map((item) => ({ value: item.value, label: dimensionLabel(item.value, item.count) })),
+      campaigns: (dimensionsQuery.data?.campaigns ?? []).map((item) => ({ value: item.value, label: dimensionLabel(item.value, item.count) })),
+      devices: (dimensionsQuery.data?.devices ?? []).map((item) => ({ value: item.value, label: dimensionLabel(item.value, item.count) })),
+      geos: (dimensionsQuery.data?.countries ?? []).map((item) => ({ value: item.value, label: dimensionLabel(String(item.value).toUpperCase(), item.count) })),
+    }),
+    [dimensionsQuery.data],
+  )
+
   const pathsQuery = useQuery<PathAnalysis>({
-    queryKey: ['path-analysis', directMode, pathScope, journeys?.date_min, journeys?.date_max],
+    queryKey: ['path-analysis', selectedJourneyId, directMode, pathScope, filters.dateFrom, filters.dateTo, filters.channel, filters.campaign, filters.device, filters.geo],
     queryFn: async () => {
       const params = new URLSearchParams({
         direct_mode: directMode,
         path_scope: pathScope === 'all' ? 'all' : 'converted',
+        definition_id: selectedJourneyId,
+        date_from: filters.dateFrom,
+        date_to: filters.dateTo,
       })
-      if (journeys?.date_min) params.set('date_from', journeys.date_min.slice(0, 10))
-      if (journeys?.date_max) params.set('date_to', journeys.date_max.slice(0, 10))
+      if (filters.channel !== 'all') params.set('channel_group', filters.channel)
+      if (filters.campaign !== 'all') params.set('campaign_id', filters.campaign)
+      if (filters.device !== 'all') params.set('device', filters.device)
+      if (filters.geo !== 'all') params.set('country', filters.geo)
       return apiGetJson<PathAnalysis>(`/api/conversion-paths/analysis?${params.toString()}`, {
         fallbackMessage: 'Failed to fetch path analysis',
       })
     },
+    enabled: !!selectedJourneyId,
   })
 
   const anomaliesQuery = useQuery<{ anomalies: PathAnomaly[] }>({
@@ -218,6 +414,58 @@ export default function ConversionPaths() {
       fallbackMessage: 'Failed to fetch path anomalies',
     }),
   })
+
+  useEffect(() => {
+    if (journeys?.date_min && journeys?.date_max) {
+      setFilters((prev) => ({
+        ...prev,
+        dateFrom: journeys.date_min?.slice(0, 10) ?? prev.dateFrom,
+        dateTo: journeys.date_max?.slice(0, 10) ?? prev.dateTo,
+      }))
+    }
+  }, [journeys?.date_min, journeys?.date_max])
+
+  useEffect(() => {
+    const defs = definitionsQuery.data?.items ?? []
+    if (!defs.length) return
+    if (!selectedJourneyId || !defs.some((item) => item.id === selectedJourneyId)) {
+      const preferred = defs.find((item) => !item.is_archived) ?? defs[0]
+      setSelectedJourneyId(preferred.id)
+    }
+  }, [definitionsQuery.data?.items, selectedJourneyId])
+
+  useEffect(() => {
+    const dims = dimensionsQuery.data
+    if (!dims) return
+    setFilters((prev) => {
+      const next = { ...prev }
+      const validChannels = new Set((dims.channels ?? []).map((item) => item.value))
+      const validCampaigns = new Set((dims.campaigns ?? []).map((item) => item.value))
+      const validDevices = new Set((dims.devices ?? []).map((item) => item.value))
+      const validGeos = new Set((dims.countries ?? []).map((item) => item.value))
+      if (next.channel !== 'all' && !validChannels.has(next.channel)) next.channel = 'all'
+      if (next.campaign !== 'all' && !validCampaigns.has(next.campaign)) next.campaign = 'all'
+      if (next.device !== 'all' && !validDevices.has(next.device)) next.device = 'all'
+      if (next.geo !== 'all' && !validGeos.has(next.geo)) next.geo = 'all'
+      next.segment = 'all'
+      if (
+        next.channel === prev.channel &&
+        next.campaign === prev.campaign &&
+        next.device === prev.device &&
+        next.geo === prev.geo &&
+        next.segment === prev.segment
+      ) {
+        return prev
+      }
+      return next
+    })
+  }, [dimensionsQuery.data])
+
+  useEffect(() => {
+    setSelectedPath(null)
+    setSelectedPathDetails(null)
+    setSelectedPathError(null)
+  }, [selectedJourneyId, filters.dateFrom, filters.dateTo, filters.channel, filters.campaign, filters.device, filters.geo, directMode, pathScope])
 
   const data = pathsQuery.data
   const t = tokens
@@ -298,82 +546,21 @@ export default function ConversionPaths() {
       ]
     : []
 
-  if (pathsQuery.isError) {
-    return (
-      <div
-        style={{
-          background: t.color.surface,
-          border: `1px solid ${t.color.danger}`,
-          borderRadius: t.radius.lg,
-          padding: t.space.xxl,
-          boxShadow: t.shadowSm,
-        }}
-      >
-        <h3 style={{ margin: '0 0 8px', fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.danger }}>
-          Could not load path analysis
-        </h3>
-        <p style={{ margin: 0, fontSize: t.font.sizeMd, color: t.color.textSecondary }}>
-          {(pathsQuery.error as Error)?.message || 'Backend may be unreachable. Check that the API is running and CORS/proxy is correct.'}
-        </p>
-      </div>
-    )
-  }
-
-  if (pathsQuery.isLoading) {
-    return (
-      <div
-        style={{
-          background: t.color.surface,
-          border: `1px solid ${t.color.border}`,
-          borderRadius: t.radius.lg,
-          padding: t.space.xxl * 2,
-          textAlign: 'center',
-          boxShadow: t.shadowSm,
-        }}
-      >
-        <p style={{ fontSize: t.font.sizeBase, color: t.color.textSecondary, margin: 0 }}>
-          Analyzing conversion paths…
-        </p>
-      </div>
-    )
-  }
-
-  if (!data || data.total_journeys === 0) {
-    return (
-      <div
-        style={{
-          background: t.color.surface,
-          border: `1px solid ${t.color.border}`,
-          borderRadius: t.radius.lg,
-          padding: t.space.xxl,
-          boxShadow: t.shadowSm,
-        }}
-      >
-        <h3 style={{ margin: '0 0 8px', fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-          No conversion path data
-        </h3>
-        <p style={{ margin: 0, fontSize: t.font.sizeMd, color: t.color.textSecondary }}>
-          Load journeys in Data Sources, then return here to analyze paths.
-        </p>
-      </div>
-    )
-  }
-
   const periodLabel =
-    journeys?.date_min && journeys?.date_max
-      ? `${journeys.date_min.slice(0, 10)} – ${journeys.date_max.slice(0, 10)}`
+    filters.dateFrom && filters.dateTo
+      ? `${filters.dateFrom} – ${filters.dateTo}`
       : 'current dataset'
 
   const conversionLabel =
-    data.config?.conversion_key ||
+    data?.config?.conversion_key ||
     journeys?.primary_kpi_label ||
     journeys?.primary_kpi_id ||
     'All conversions'
 
-  const pathLenDist = data.path_length_distribution
-  const timeDist = data.time_to_conversion_distribution
-  const directDiag = data.direct_unknown_diagnostics
-  const nbaConfig = data.nba_config
+  const pathLenDist = data?.path_length_distribution ?? { min: 0, max: 0, median: 0, p90: 0 }
+  const timeDist = data?.time_to_conversion_distribution ?? null
+  const directDiag = data?.direct_unknown_diagnostics ?? null
+  const nbaConfig = data?.nba_config ?? null
   const hasAvgTimeColumn = filteredAndSortedPaths.some((path) => path.avg_time_to_convert_days != null)
 
   const loadPathDetails = async (path: string) => {
@@ -386,9 +573,14 @@ export default function ConversionPaths() {
         path,
         direct_mode: directMode,
         path_scope: pathScope === 'all' ? 'all' : 'converted',
+        definition_id: selectedJourneyId,
+        date_from: filters.dateFrom,
+        date_to: filters.dateTo,
       })
-      if (journeys?.date_min) params.set('date_from', journeys.date_min.slice(0, 10))
-      if (journeys?.date_max) params.set('date_to', journeys.date_max.slice(0, 10))
+      if (filters.channel !== 'all') params.set('channel_group', filters.channel)
+      if (filters.campaign !== 'all') params.set('campaign_id', filters.campaign)
+      if (filters.device !== 'all') params.set('device', filters.device)
+      if (filters.geo !== 'all') params.set('country', filters.geo)
       const json = await apiGetJson<PathDetails>(`/api/conversion-paths/details?${params.toString()}`, {
         fallbackMessage: 'Failed to load path details',
       })
@@ -538,7 +730,7 @@ export default function ConversionPaths() {
       label: 'Suggested next',
       render: (path) => {
         const prefix = path.path.split(' > ').slice(0, -1).join(' > ')
-        const top = data.next_best_by_prefix?.[prefix]?.[0]
+        const top = data?.next_best_by_prefix?.[prefix]?.[0]
         return top ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: t.space.xs, flexWrap: 'wrap' }}>
             <span
@@ -595,266 +787,261 @@ export default function ConversionPaths() {
     },
   ]
 
+  const definitions = definitionsQuery.data?.items ?? []
+  const journeyOptions = definitions
+    .filter((item) => !item.is_archived)
+    .map((item) => ({ value: item.id, label: item.name }))
+  const selectedDefinitionName = selectedDefinition?.name || 'Journey definition'
+  const lifecycleStatus = definitionLifecycleQuery.data?.rebuild_state?.status || selectedDefinition?.lifecycle_status || 'active'
+  const liveJourneyCount = journeys?.count ?? null
+  const countMismatch = liveJourneyCount != null && data ? liveJourneyCount !== data.total_journeys : false
+  const rangeMismatch =
+    Boolean(journeys?.date_max && data?.date_to) && journeys?.date_max?.slice(0, 10) !== data?.date_to
+  const dashboardLoading = definitionsQuery.isLoading || (definitions.length > 0 && !selectedJourneyId) || (!!selectedJourneyId && pathsQuery.isLoading)
+  const dashboardError =
+    (definitionsQuery.error as Error | undefined)?.message ||
+    (pathsQuery.error as Error | undefined)?.message ||
+    (dimensionsQuery.error as Error | undefined)?.message ||
+    null
+  const noDefinitions = !dashboardLoading && definitions.length === 0
+  const noDataForSelection = !dashboardLoading && !!selectedJourneyId && !!data && data.total_journeys === 0
+
   return (
-    <div style={{ maxWidth: 1400, margin: '0 auto' }}>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-start',
-          gap: t.space.md,
-          marginBottom: t.space.sm,
-          flexWrap: 'wrap',
-        }}
-      >
-        <div>
-          <h1
-            style={{
-              margin: 0,
-              fontSize: t.font.size2xl,
-              fontWeight: t.font.weightBold,
-              color: t.color.text,
-              letterSpacing: '-0.02em',
-            }}
-          >
-            Conversion Path Analysis
-          </h1>
-          <p style={{ margin: `${t.space.xs}px 0 0`, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-            How customers interact with channels before converting.
-          </p>
-        </div>
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'flex-end',
-            gap: t.space.xs,
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: t.space.sm,
-              alignItems: 'center',
-              justifyContent: 'flex-end',
-            }}
-          >
-            <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-              <strong>Period:</strong> {periodLabel}
-            </div>
-            <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-              <strong>Conversion:</strong> {conversionLabel} (read‑only)
-            </div>
-            {data.config?.time_window && (
-              <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-                <strong>Config:</strong>{' '}
-                {[
-                  data.config.time_window.click_lookback_days != null
-                    ? `Click ${data.config.time_window.click_lookback_days}d`
-                    : null,
-                  data.config.time_window.impression_lookback_days != null
-                    ? `Impr. ${data.config.time_window.impression_lookback_days}d`
-                    : null,
-                  data.config.time_window.session_timeout_minutes != null
-                    ? `Session ${data.config.time_window.session_timeout_minutes}m`
-                    : null,
-                ]
-                  .filter(Boolean)
-                  .join(' · ')}
-              </div>
-            )}
-          </div>
-          <div
-            style={{
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: t.space.sm,
-              alignItems: 'center',
-              justifyContent: 'flex-end',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: t.font.sizeXs }}>
-              <span style={{ color: t.color.textSecondary }}>Direct handling:</span>
-              <button
-                type="button"
-                onClick={() => setDirectMode((m) => (m === 'include' ? 'exclude' : 'include'))}
-                style={{
-                  border: `1px solid ${t.color.borderLight}`,
-                  borderRadius: t.radius.full,
-                  padding: '2px 8px',
-                  fontSize: t.font.sizeXs,
-                  backgroundColor: t.color.bg,
-                  cursor: 'pointer',
-                }}
-                title="View filter only; underlying attribution models are unchanged."
-              >
-                View filter: {directMode === 'include' ? 'Include Direct' : 'Exclude Direct'}
-              </button>
-            </div>
-            {journeys && journeys.non_converted > 0 && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: t.font.sizeXs }}>
-                <span style={{ color: t.color.textSecondary }}>Path scope:</span>
-                <button
-                  type="button"
-                  onClick={() => setPathScope((s) => (s === 'converted' ? 'all' : 'converted'))}
-                  style={{
-                    border: `1px solid ${t.color.borderLight}`,
-                    borderRadius: t.radius.full,
-                    padding: '2px 8px',
-                    fontSize: t.font.sizeXs,
-                    backgroundColor: t.color.bg,
-                    cursor: 'pointer',
-                  }}
-                  title="Include non‑converted journeys in path statistics."
-                >
-                  {pathScope === 'converted' ? 'Converted only' : 'Converted + non‑converted'}
-                </button>
-              </div>
-            )}
-            <button
-              type="button"
-              onClick={() => setShowWhy((v) => !v)}
-              style={{
-                border: 'none',
-                backgroundColor: showWhy ? t.color.accentMuted : 'transparent',
-                color: t.color.accent,
-                padding: `${t.space.xs}px ${t.space.sm}px`,
-                borderRadius: t.radius.full,
-                fontSize: t.font.sizeXs,
-                fontWeight: t.font.weightSemibold,
-                cursor: 'pointer',
-                alignSelf: 'center',
-              }}
+    <DashboardPage
+      title="Conversion Paths"
+      description="Top paths, next steps, and path quality for the selected journey definition."
+      filters={
+        <div style={{ display: 'grid', gap: t.space.sm }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: t.space.sm, alignItems: 'center' }}>
+            <select
+              value={selectedJourneyId}
+              onChange={(e) => setSelectedJourneyId(e.target.value)}
+              style={{ minWidth: 220, padding: '6px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.borderLight}`, background: t.color.surface, color: t.color.text, fontSize: t.font.sizeSm }}
             >
-              Why?
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {journeys?.readiness && (journeys.readiness.status === 'blocked' || journeys.readiness.warnings.length > 0) ? (
-        <DecisionStatusCard
-          title="Path Analysis Reliability Warning"
-          status={journeys.readiness.status}
-          blockers={journeys.readiness.blockers}
-          warnings={journeys.readiness.warnings.slice(0, 3)}
-        />
-      ) : null}
-
-      {showWhy && (
-        <div style={{ marginBottom: t.space.lg }}>
-          <ExplainabilityPanel scope="paths" />
-        </div>
-      )}
-
-      {anomaliesQuery.data && anomaliesQuery.data.anomalies.length > 0 && (
-        <div
-          style={{
-            marginBottom: t.space.xl,
-            padding: t.space.md,
-            borderRadius: t.radius.lg,
-            border: `1px solid ${t.color.warning}`,
-            background: t.color.warningMuted,
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.md, flexWrap: 'wrap' }}>
-            <strong
-              style={{
-                display: 'block',
-                fontSize: t.font.sizeSm,
-                color: t.color.warning,
-              }}
-            >
-              Path anomalies detected
-            </strong>
-            <button
-              type="button"
-              onClick={() => setShowAnomalies((v) => !v)}
-              style={{
-                padding: `${t.space.xs}px ${t.space.md}px`,
-                fontSize: t.font.sizeXs,
-                fontWeight: t.font.weightMedium,
-                color: t.color.warning,
-                backgroundColor: 'transparent',
-                border: `1px solid ${t.color.warning}`,
-                borderRadius: t.radius.sm,
-                cursor: 'pointer',
-              }}
-            >
-              {showAnomalies ? 'Hide' : 'Show'} details
-            </button>
-          </div>
-
-          {showAnomalies ? (
-            <div style={{ marginTop: t.space.sm, overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: t.font.sizeSm }}>
-                <thead>
-                  <tr style={{ borderBottom: `2px solid ${t.color.border}` }}>
-                    <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Severity</th>
-                    <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Issue</th>
-                    <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right' }}>Value</th>
-                    <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right' }}>Baseline</th>
-                    <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right' }}>z</th>
-                    <th style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'left' }}>Suggestion</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {anomaliesQuery.data.anomalies.map((a, idx) => {
-                    const sevColor =
-                      a.severity === 'critical' ? t.color.danger : a.severity === 'warn' ? t.color.warning : t.color.textSecondary
-                    const formatValue = (v: number) => {
-                      const isShare = /share|pct|rate/i.test(a.metric_key)
-                      return isShare ? `${(v * 100).toFixed(1)}%` : v.toFixed(2)
-                    }
-                    return (
-                      <tr key={`${a.type}-${idx}`} style={{ borderBottom: `1px solid ${t.color.borderLight}` }}>
-                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, color: sevColor, fontWeight: t.font.weightSemibold }}>
-                          {a.severity}
-                        </td>
-                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, color: t.color.text }}>
-                          <div style={{ fontWeight: t.font.weightMedium }}>{a.type}</div>
-                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>{a.message}</div>
-                          {a.details && (
-                            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, marginTop: 4 }}>
-                              {JSON.stringify(a.details)}
-                            </div>
-                          )}
-                        </td>
-                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                          {formatValue(a.metric_value)}
-                        </td>
-                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: t.color.textSecondary }}>
-                          {a.baseline_value != null ? formatValue(a.baseline_value) : '—'}
-                        </td>
-                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: t.color.textSecondary }}>
-                          {a.z_score != null ? a.z_score.toFixed(1) : '—'}
-                        </td>
-                        <td style={{ padding: `${t.space.sm}px ${t.space.md}px`, color: t.color.textSecondary }}>
-                          {a.suggestion ?? '—'}
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <ul
-              style={{
-                margin: `${t.space.sm}px 0 0`,
-                paddingLeft: 20,
-                fontSize: t.font.sizeSm,
-                color: t.color.textSecondary,
-              }}
-            >
-              {anomaliesQuery.data.anomalies.map((a, idx) => (
-                <li key={`${a.type}-${idx}`}>{a.message}</li>
+              {!journeyOptions.length && <option value="">No journey definitions</option>}
+              {journeyOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
               ))}
-            </ul>
-          )}
+            </select>
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+              Path analysis uses observed workspace values for the selected journey definition and date window.
+            </div>
+          </div>
+          <GlobalFilterBar
+            value={filters}
+            onChange={setFilters}
+            channels={journeyFilterOptions.channels}
+            campaigns={journeyFilterOptions.campaigns}
+            devices={journeyFilterOptions.devices}
+            geos={journeyFilterOptions.geos}
+            showSegment={false}
+          />
         </div>
-      )}
+      }
+      actions={
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: t.space.sm, alignItems: 'center' }}>
+          <button
+            type="button"
+            onClick={() => setDirectMode((m) => (m === 'include' ? 'exclude' : 'include'))}
+            style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.full, padding: '6px 10px', fontSize: t.font.sizeXs, backgroundColor: t.color.bg, cursor: 'pointer' }}
+            title="View filter only; underlying attribution models are unchanged."
+          >
+            {directMode === 'include' ? 'Include Direct' : 'Exclude Direct'}
+          </button>
+          {journeys && journeys.non_converted > 0 ? (
+            <button
+              type="button"
+              onClick={() => setPathScope((s) => (s === 'converted' ? 'all' : 'converted'))}
+              style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.full, padding: '6px 10px', fontSize: t.font.sizeXs, backgroundColor: t.color.bg, cursor: 'pointer' }}
+              title="Include non-converted journeys in path statistics."
+            >
+              {pathScope === 'converted' ? 'Converted only' : 'Converted + non-converted'}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => setShowContext((v) => !v)}
+            style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.full, padding: '6px 10px', fontSize: t.font.sizeXs, backgroundColor: showContext ? t.color.accentMuted : t.color.surface, color: t.color.accent, cursor: 'pointer' }}
+          >
+            {showContext ? 'Hide context' : 'Show context'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowDiagnostics((v) => !v)}
+            style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.full, padding: '6px 10px', fontSize: t.font.sizeXs, backgroundColor: showDiagnostics ? t.color.warningMuted : t.color.surface, color: t.color.warning, cursor: 'pointer' }}
+          >
+            {showDiagnostics ? 'Hide diagnostics' : 'Show diagnostics'}
+          </button>
+        </div>
+      }
+      isLoading={dashboardLoading}
+      isError={Boolean(dashboardError)}
+      errorMessage={dashboardError}
+      isEmpty={noDefinitions || noDataForSelection}
+      emptyState={
+        noDefinitions ? (
+          <SectionCard title="No journey definitions" subtitle="Create a journey definition first.">
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Conversion Paths now follows the selected journey definition and its workspace-derived filters.
+            </div>
+          </SectionCard>
+        ) : (
+          <SectionCard title="No conversion path data" subtitle="No path rows were found for the selected definition and filter window.">
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Try widening the date range, clearing campaign/device/geo filters, or rebuilding the journey definition outputs.
+            </div>
+          </SectionCard>
+        )
+      }
+    >
+      <div style={{ maxWidth: 1400, margin: '0 auto', display: 'grid', gap: t.space.xl }}>
+        <SectionCard
+          title="Analysis context"
+          subtitle="Which definition, source, and time coverage this page is actually using."
+        >
+          <div style={{ display: 'grid', gap: t.space.md }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: t.space.md }}>
+              <div>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>Journey definition</div>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightSemibold }}>{selectedDefinitionName}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>Data source</div>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{data?.source || '—'}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>Covered period</div>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{data?.date_from && data?.date_to ? `${data.date_from} – ${data.date_to}` : periodLabel}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>Last rebuilt</div>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{formatLifecycleTimestamp(definitionLifecycleQuery.data?.rebuild_state?.last_rebuilt_at)}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>Lifecycle status</div>
+                <div style={{ fontSize: t.font.sizeSm, color: lifecycleStatus === 'stale' ? t.color.warning : t.color.text }}>{lifecycleStatus}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>Conversion KPI</div>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{conversionLabel}</div>
+              </div>
+            </div>
+            {countMismatch || rangeMismatch ? (
+              <div style={{ padding: t.space.md, borderRadius: t.radius.md, border: `1px solid ${t.color.warning}`, background: t.color.warningMuted, fontSize: t.font.sizeSm, color: t.color.text }}>
+                Workspace attribution currently shows <strong>{liveJourneyCount?.toLocaleString() ?? '—'}</strong> live journeys through{' '}
+                <strong>{journeys?.date_max?.slice(0, 10) ?? '—'}</strong>. Conversion Paths is using{' '}
+                <strong>{data?.total_journeys.toLocaleString() ?? '—'}</strong> materialized journey outputs through{' '}
+                <strong>{data?.date_to ?? '—'}</strong>.
+              </div>
+            ) : null}
+            {buildJourneyPathsHref(selectedJourneyId) ? (
+              <div>
+                <a href={buildJourneyPathsHref(selectedJourneyId) || '#'} style={{ fontSize: t.font.sizeSm, color: t.color.accent, textDecoration: 'none' }}>
+                  Open selected definition in Journey Lab
+                </a>
+              </div>
+            ) : null}
+          </div>
+        </SectionCard>
+
+        <CollapsiblePanel
+          title="Method & Context"
+          subtitle="Why the counts look the way they do, and which attribution settings shape this view."
+          open={showContext}
+          onToggle={() => setShowContext((v) => !v)}
+        >
+          <div style={{ display: 'grid', gap: t.space.lg }}>
+            {journeys?.readiness && (journeys.readiness.status === 'blocked' || journeys.readiness.warnings.length > 0) ? (
+              <DecisionStatusCard
+                title="Path Analysis Reliability Warning"
+                status={journeys.readiness.status}
+                blockers={journeys.readiness.blockers}
+                warnings={journeys.readiness.warnings.slice(0, 3)}
+              />
+            ) : null}
+            <ExplainabilityPanel scope="paths" />
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              <strong style={{ color: t.color.text }}>Current settings:</strong>{' '}
+              {data?.config?.time_window
+                ? [
+                    data?.config?.time_window?.click_lookback_days != null ? `Click ${data.config.time_window.click_lookback_days}d` : null,
+                    data?.config?.time_window?.impression_lookback_days != null ? `Impr. ${data.config.time_window.impression_lookback_days}d` : null,
+                    data?.config?.time_window?.session_timeout_minutes != null ? `Session ${data.config.time_window.session_timeout_minutes}m` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')
+                : 'Read-only attribution defaults'}
+            </div>
+          </div>
+        </CollapsiblePanel>
+
+        <CollapsiblePanel
+          title="Diagnostics"
+          subtitle="Coverage gaps, Direct/Unknown reliance, and path anomalies."
+          open={showDiagnostics}
+          onToggle={() => setShowDiagnostics((v) => !v)}
+        >
+          <div style={{ display: 'grid', gap: t.space.lg }}>
+            {directDiag ? (
+              <div
+                style={{
+                  padding: t.space.md,
+                  borderRadius: t.radius.lg,
+                  border: `1px solid ${t.color.borderLight}`,
+                  background: t.color.surface,
+                  boxShadow: t.shadowSm,
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: t.space.md,
+                  flexWrap: 'wrap',
+                }}
+              >
+                <div>
+                  <h3 style={{ margin: '0 0 4px', fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                    Direct / Unknown impact
+                  </h3>
+                  <p style={{ margin: 0, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                    Approximate share of all touchpoints and converted journeys dominated by direct or unknown channels.
+                  </p>
+                </div>
+                <div style={{ display: 'flex', gap: t.space.lg, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+                    <strong>{(directDiag.touchpoint_share * 100).toFixed(1)}%</strong>{' '}
+                    <span style={{ color: t.color.textSecondary }}>Direct/Unknown touchpoints</span>
+                  </div>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+                    <strong>{(directDiag.journeys_ending_direct_share * 100).toFixed(1)}%</strong>{' '}
+                    <span style={{ color: t.color.textSecondary }}>journeys ending on Direct</span>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+            {anomaliesQuery.data && anomaliesQuery.data.anomalies.length > 0 ? (
+              <div
+                style={{
+                  padding: t.space.md,
+                  borderRadius: t.radius.lg,
+                  border: `1px solid ${t.color.warning}`,
+                  background: t.color.warningMuted,
+                }}
+              >
+                <strong style={{ display: 'block', marginBottom: t.space.sm, fontSize: t.font.sizeSm, color: t.color.warning }}>
+                  Path anomalies detected
+                </strong>
+                <ul style={{ margin: 0, paddingLeft: 20, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  {anomaliesQuery.data.anomalies.map((a, idx) => (
+                    <li key={`${a.type}-${idx}`}>{a.message}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>No path anomalies detected for the current view.</div>
+            )}
+          </div>
+        </CollapsiblePanel>
 
       {/* KPI strip */}
       <div
@@ -1067,7 +1254,7 @@ export default function ConversionPaths() {
             }}
             onKeyDown={(e) => e.key === 'Enter' && (document.querySelector('[data-try-path-btn]') as HTMLButtonElement)?.click()}
           />
-          {data.next_best_by_prefix_campaign && (
+          {data?.next_best_by_prefix_campaign && (
             <label style={{ display: 'flex', alignItems: 'center', gap: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
               <input
                 type="radio"
@@ -1077,7 +1264,7 @@ export default function ConversionPaths() {
               Channel
             </label>
           )}
-          {data.next_best_by_prefix_campaign && (
+          {data?.next_best_by_prefix_campaign && (
             <label style={{ display: 'flex', alignItems: 'center', gap: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
               <input
                 type="radio"
@@ -1090,30 +1277,22 @@ export default function ConversionPaths() {
           <button
             data-try-path-btn
             type="button"
-            disabled={tryPathLoading}
+            disabled={!data}
             onClick={async () => {
               setTryPathError(null)
               setTryPathResult(null)
-              setTryPathWhyOpen(false)
-              setTryPathLoading(true)
-              try {
-                const pathParam = encodeURIComponent(tryPathInput.trim())
-                const levelParam = tryPathLevel === 'campaign' && data.next_best_by_prefix_campaign ? 'campaign' : 'channel'
-                const json = await apiGetJson<any>(`/api/attribution/next_best_action?path_so_far=${pathParam}&level=${levelParam}`, {
-                  fallbackMessage: 'Failed to fetch next best action',
-                })
-                setTryPathResult({
-                  path_so_far: json.path_so_far,
-                  level: json.level,
-                  recommendations: json.recommendations || [],
-                  why_samples: json.why_samples || [],
-                  nba_config: json.nba_config || undefined,
-                } as any)
-              } catch (e) {
-                setTryPathError((e as Error).message)
-              } finally {
-                setTryPathLoading(false)
+              const normalized = normalizePathInput(tryPathInput)
+              if (!normalized) {
+                setTryPathError('Enter at least one observed step.')
+                return
               }
+              const level = tryPathLevel === 'campaign' && data?.next_best_by_prefix_campaign ? 'campaign' : 'channel'
+              const source = level === 'campaign' ? data?.next_best_by_prefix_campaign : data?.next_best_by_prefix
+              setTryPathResult({
+                path_so_far: normalized,
+                level,
+                recommendations: source?.[normalized] ?? [],
+              })
             }}
             style={{
               padding: `${t.space.sm}px ${t.space.lg}px`,
@@ -1123,10 +1302,10 @@ export default function ConversionPaths() {
               backgroundColor: t.color.accent,
               border: 'none',
               borderRadius: t.radius.sm,
-              cursor: tryPathLoading ? 'wait' : 'pointer',
+              cursor: data ? 'pointer' : 'not-allowed',
             }}
           >
-            {tryPathLoading ? 'Loading…' : 'Get next best'}
+            Get next best
           </button>
         </div>
         {tryPathError && (
@@ -1194,7 +1373,7 @@ export default function ConversionPaths() {
                       Confidence {(rec.conversion_rate * 100).toFixed(1)}% · support {rec.count} journeys · avg ${rec.avg_value}
                     </span>
                     {((tryPathResult as any).nba_config ?? nbaConfig) &&
-                      rec.count < (((tryPathResult as any).nba_config ?? nbaConfig).min_prefix_support || 0) * 2 && (
+                      rec.count < (nbaConfig?.min_prefix_support || 0) * 2 && (
                         <span style={{ marginLeft: t.space.sm, fontSize: t.font.sizeXs, color: t.color.warning }}>
                           Low sample size: recommendation may be unreliable
                         </span>
@@ -1203,50 +1382,6 @@ export default function ConversionPaths() {
                 ))
               )}
             </ul>
-            {(tryPathResult as any).why_samples && (tryPathResult as any).why_samples.length > 0 && (
-              <div style={{ marginTop: t.space.md }}>
-                <button
-                  type="button"
-                  onClick={() => setTryPathWhyOpen((v) => !v)}
-                  style={{
-                    border: 'none',
-                    backgroundColor: tryPathWhyOpen ? t.color.accentMuted : t.color.bg,
-                    color: t.color.accent,
-                    padding: `${t.space.xs}px ${t.space.sm}px`,
-                    borderRadius: t.radius.full,
-                    fontSize: t.font.sizeXs,
-                    fontWeight: t.font.weightSemibold,
-                    cursor: 'pointer',
-                  }}
-                >
-                  {tryPathWhyOpen ? 'Hide' : 'Why this recommendation?'}
-                </button>
-                {tryPathWhyOpen && (
-                  <div
-                    style={{
-                      marginTop: t.space.sm,
-                      borderRadius: t.radius.md,
-                      border: `1px solid ${t.color.borderLight}`,
-                      background: t.color.bg,
-                      padding: t.space.sm,
-                    }}
-                  >
-                    <p style={{ margin: '0 0 4px', fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-                      Top historical continuation paths behind these suggestions (Direct/Unknown‑heavy paths are marked for caution).
-                    </p>
-                    <ul style={{ margin: 0, paddingLeft: t.space.lg, listStyle: 'disc' }}>
-                      {(tryPathResult as any).why_samples.map((s: any, idx: number) => (
-                        <li key={idx} style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-                          <span style={{ fontWeight: t.font.weightMedium, color: t.color.text }}>{s.path}</span>{' '}
-                          · {s.count} journeys ({(s.share * 100).toFixed(1)}% of prefix) · Direct/Unknown share{' '}
-                          {(s.direct_unknown_share * 100).toFixed(1)}%
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            )}
           </div>
         )}
       </div>
@@ -1390,10 +1525,10 @@ export default function ConversionPaths() {
                 <button
                   type="button"
                   onClick={() =>
-                    exportPathsCSV(filteredAndSortedPaths, data.next_best_by_prefix, {
+                    exportPathsCSV(filteredAndSortedPaths, data?.next_best_by_prefix, {
                       period: periodLabel,
-                      conversionKey: data.config?.conversion_key ?? null,
-                      configVersion: data.config?.config_version ?? null,
+                      conversionKey: data?.config?.conversion_key ?? null,
+                      configVersion: data?.config?.config_version ?? null,
                       directMode,
                       pathScope,
                       filters: {
@@ -1564,6 +1699,27 @@ export default function ConversionPaths() {
                 overflowY: 'auto',
               }}
             >
+              <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+                {buildJourneyPathsHref(selectedJourneyId) ? (
+                  <a
+                    href={buildJourneyPathsHref(selectedJourneyId) || '#'}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      border: `1px solid ${t.color.accent}`,
+                      color: t.color.accent,
+                      textDecoration: 'none',
+                      borderRadius: t.radius.sm,
+                      padding: '6px 10px',
+                      fontSize: t.font.sizeXs,
+                      fontWeight: t.font.weightSemibold,
+                    }}
+                  >
+                    Open in Journey Lab
+                  </a>
+                ) : null}
+              </div>
               {/* Summary */}
               <div>
                 <h4
@@ -1713,6 +1869,7 @@ export default function ConversionPaths() {
           )}
         </div>
       )}
-    </div>
+      </div>
+    </DashboardPage>
   )
 }
