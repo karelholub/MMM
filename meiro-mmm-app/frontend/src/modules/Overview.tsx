@@ -22,7 +22,9 @@ import {
   InsightRow,
   KpiTileSkeleton,
   DataHealthCard,
+  ContextSummaryStrip,
 } from '../components/dashboard'
+import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 
 type PageKey =
   | 'overview'
@@ -252,6 +254,7 @@ interface JourneyReadinessResponse {
   summary: {
     primary_kpi_coverage: number
     taxonomy_unknown_share: number
+    journeys_loaded?: number
     freshness_hours?: number | null
     latest_event_replay?: {
       diagnostics?: {
@@ -337,6 +340,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
   } = useWorkspaceContext()
   const [funnelTab, setFunnelTab] = useState<'conversions' | 'revenue' | 'speed'>('conversions')
   const [assistantCollapsed, setAssistantCollapsed] = useState(true)
+  const [showWorkspaceSignals, setShowWorkspaceSignals] = useState(false)
 
   const dateRange = useMemo(() => {
     const dateFrom = globalDateFrom || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
@@ -490,6 +494,22 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
   const journeysReadiness = summary?.readiness
   const latestEventReplayDiagnostics = journeysReadiness?.details?.latest_event_replay?.diagnostics
   const overviewAttentionQueue = summary?.attention_queue ?? journeysReadiness?.recommended_actions ?? []
+  const overviewPeriodLabel =
+    summary?.current_period?.date_from && summary?.current_period?.date_to
+      ? `${summary.current_period.date_from} – ${summary.current_period.date_to}`
+      : 'Current workspace period'
+  const freshnessLabel =
+    freshness?.ingest_lag_minutes != null
+      ? `${Math.round(Number(freshness.ingest_lag_minutes || 0))} min lag`
+      : 'Freshness unavailable'
+  const readinessCoverageLabel =
+    journeysReadiness?.summary?.primary_kpi_coverage != null
+      ? `${(Number(journeysReadiness.summary.primary_kpi_coverage || 0) * 100).toFixed(1)}% KPI coverage`
+      : 'Coverage unavailable'
+  const journeysLoadedLabel =
+    journeysReadiness?.summary?.journeys_loaded != null
+      ? Number(journeysReadiness.summary.journeys_loaded).toLocaleString()
+      : '—'
 
   const handleOverviewAction = (action: RecommendedActionItem) => {
     navigateForRecommendedAction(action, { onNavigate, defaultPage: 'datasources' })
@@ -852,6 +872,62 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
           </SectionCard>
         ) : null}
 
+        <ContextSummaryStrip
+          items={[
+            { label: 'Source', value: 'Workspace summary + journey health' },
+            { label: 'Period', value: overviewPeriodLabel },
+            { label: 'Freshness', value: freshnessLabel },
+            { label: 'KPI coverage', value: readinessCoverageLabel },
+            { label: 'Journeys loaded', value: journeysLoadedLabel },
+          ]}
+        />
+
+        {(journeysReadiness || latestEventReplayDiagnostics) ? (
+          <CollapsiblePanel
+            title="Workspace Signals"
+            subtitle="Canonical readiness, KPI coverage, journeys freshness, and latest raw-event replay diagnostics."
+            open={showWorkspaceSignals}
+            onToggle={() => setShowWorkspaceSignals((current) => !current)}
+          >
+            <div style={{ display: 'grid', gap: t.space.lg }}>
+              {journeysReadiness ? (
+                <DecisionStatusCard
+                  title="Readiness"
+                  status={journeysReadiness.status}
+                  blockers={journeysReadiness.blockers}
+                  warnings={journeysReadiness.warnings.slice(0, 3)}
+                  compact
+                />
+              ) : null}
+              {latestEventReplayDiagnostics ? (
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: t.space.sm,
+                    textAlign: 'left',
+                    border: `1px solid ${t.color.borderLight}`,
+                    borderRadius: t.radius.md,
+                    padding: t.space.lg,
+                    background: t.color.bgSubtle,
+                  }}
+                >
+                  <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                    Latest raw-event replay diagnosis
+                  </div>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    Events {Number(latestEventReplayDiagnostics.events_loaded || 0).toLocaleString()} · reconstructed profiles {Number(latestEventReplayDiagnostics.profiles_reconstructed || 0).toLocaleString()} · touchpoints {Number(latestEventReplayDiagnostics.touchpoints_reconstructed || 0).toLocaleString()} · conversions {Number(latestEventReplayDiagnostics.conversions_reconstructed || 0).toLocaleString()} · attributable profiles {Number(latestEventReplayDiagnostics.attributable_profiles || 0).toLocaleString()} · persisted journeys {Number(latestEventReplayDiagnostics.journeys_persisted || 0).toLocaleString()}
+                  </div>
+                  {!!latestEventReplayDiagnostics.warnings?.length ? (
+                    <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>
+                      {latestEventReplayDiagnostics.warnings.join(' · ')}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          </CollapsiblePanel>
+        ) : null}
+
         {/* B) KPI Tiles row */}
         <div
           style={{
@@ -1044,20 +1120,6 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
           }
         >
         <div style={{ display: 'grid', gap: t.space.lg }}>
-          {journeysReadiness && (journeysReadiness.status === 'blocked' || journeysReadiness.warnings.length > 0) ? (
-            <SectionCard
-              title="Readiness"
-              subtitle="Canonical health signals from taxonomy, KPI coverage, and journeys freshness."
-            >
-              <DecisionStatusCard
-                title="Readiness"
-                status={journeysReadiness.status}
-                blockers={journeysReadiness.blockers}
-                warnings={journeysReadiness.warnings.slice(0, 3)}
-                compact
-              />
-            </SectionCard>
-          ) : null}
           <div
             style={{
               display: 'grid',

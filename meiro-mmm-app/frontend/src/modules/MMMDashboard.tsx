@@ -17,6 +17,8 @@ import {
 } from 'recharts'
 import { tokens } from '../theme/tokens'
 import { apiGetJson } from '../lib/apiClient'
+import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
+import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 
 interface MMMDashboardProps {
   runId: string
@@ -94,6 +96,8 @@ function channelDisplayName(
 
 export default function MMMDashboard({ runId, datasetId, runMetadata }: MMMDashboardProps) {
   const t = tokens
+  const [showTrustPanel, setShowTrustPanel] = useState(false)
+  const [showReconcilePanel, setShowReconcilePanel] = useState(false)
 
   const { data: taxonomy } = useQuery<{ channel_rules: { channel: string; name: string }[] }>({
     queryKey: ['taxonomy'],
@@ -184,6 +188,10 @@ export default function MMMDashboard({ runId, datasetId, runMetadata }: MMMDashb
   const weeks = dataset.length
   const channelsModeled = run?.config?.spend_channels?.length ?? 0
   const r2 = typeof run?.r2 === 'number' ? run.r2 : null
+  const datasetPeriodLabel =
+    datasetMetadata?.period_start && datasetMetadata?.period_end
+      ? `${datasetMetadata.period_start} – ${datasetMetadata.period_end}`
+      : 'Dataset period unavailable'
 
   const hasNegativeRoi = !!roi?.some((r) => r.roi < 0)
   const suspiciousFit = !!(r2 !== null && r2 > 0.98 && weeks > 0 && weeks < 26)
@@ -296,6 +304,19 @@ export default function MMMDashboard({ runId, datasetId, runMetadata }: MMMDashb
       <p style={{ margin: `${t.space.xs}px 0 ${t.space.md}px`, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
         MMM results tuned for decisions: model fit, channel impact, and caveats.
       </p>
+
+      <div style={{ marginBottom: t.space.md }}>
+        <ContextSummaryStrip
+          items={[
+            { label: 'Source', value: 'MMM run + dataset preview' },
+            { label: 'Dataset period', value: datasetPeriodLabel },
+            { label: 'KPI', value: getKpiDisplayName() },
+            { label: 'Total spend', value: formatCurrency(totalSpend) },
+            { label: 'Weeks', value: weeks.toLocaleString() },
+            { label: 'Confidence', value: confidenceLabel, valueColor: confidenceLevel === 'ok' ? t.color.success : t.color.warning },
+          ]}
+        />
+      </div>
 
       {/* Platform-style KPI tiles */}
       <div
@@ -508,109 +529,102 @@ export default function MMMDashboard({ runId, datasetId, runMetadata }: MMMDashb
         </div>
       </div>
 
-      {/* What changed / What to trust */}
-      <div
-        style={{
-          background: t.color.surface,
-          border: `1px solid ${t.color.borderLight}`,
-          borderRadius: t.radius.lg,
-          padding: t.space.lg,
-          marginBottom: t.space.xl,
-          boxShadow: t.shadowSm,
-          display: 'flex',
-          justifyContent: 'space-between',
-          gap: t.space.lg,
-          flexWrap: 'wrap',
-        }}
-      >
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <h3
-            style={{
-              margin: `0 0 ${t.space.xs}px`,
-              fontSize: t.font.sizeSm,
-              fontWeight: t.font.weightSemibold,
-              color: t.color.text,
-            }}
-          >
-            What changed / What to trust
-          </h3>
-          <ul style={{ margin: 0, paddingLeft: t.space.lg, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-            {weeks < 20 && <li>Short history – results may be noisy; prefer relative ranking over exact ROI.</li>}
-            {hasNegativeRoi && <li>Some channels have negative ROI – these are candidates to cut or re-evaluate.</li>}
-            {manyParamsFewPoints && (
-              <li>Many channels compared to weeks – consider grouping smaller channels together.</li>
-            )}
-            {confidenceReasons.length === 0 && weeks >= 20 && !hasNegativeRoi && !manyParamsFewPoints && (
-              <li>Model looks healthy; treat ROI and contribution as decision-grade for budget allocation.</li>
-            )}
-          </ul>
-        </div>
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: t.space.xs,
-            minWidth: 200,
-          }}
+      <div style={{ marginBottom: t.space.xl }}>
+        <CollapsiblePanel
+          title="Model Trust & Context"
+          subtitle="What changed, what to trust, and quick links into the supporting data."
+          open={showTrustPanel}
+          onToggle={() => setShowTrustPanel((value) => !value)}
         >
-          <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-            Quick links
-          </span>
-          <button
-            type="button"
-            onClick={() => {
-              if (!datasetId) return
-              window.open(`/api/datasets/${datasetId}?preview_only=false`, '_blank', 'noopener,noreferrer')
-            }}
+          <div
             style={{
-              padding: `${t.space.xs}px ${t.space.sm}px`,
-              fontSize: t.font.sizeXs,
-              color: t.color.accent,
-              background: 'transparent',
-              border: 'none',
-              textAlign: 'left',
-              cursor: datasetId ? 'pointer' : 'not-allowed',
+              display: 'flex',
+              justifyContent: 'space-between',
+              gap: t.space.lg,
+              flexWrap: 'wrap',
             }}
           >
-            View dataset
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              window.alert('Mapping summary will be available in a future version.')
-            }}
-            style={{
-              padding: `${t.space.xs}px ${t.space.sm}px`,
-              fontSize: t.font.sizeXs,
-              color: t.color.textSecondary,
-              background: 'transparent',
-              border: 'none',
-              textAlign: 'left',
-              cursor: 'pointer',
-            }}
-          >
-            View mapping
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              // MMMWizardShell can wire a dedicated handler via context or props later;
-              // for now this is a gentle hint.
-              window.dispatchEvent(new CustomEvent('mmm-open-dq'))
-            }}
-            style={{
-              padding: `${t.space.xs}px ${t.space.sm}px`,
-              fontSize: t.font.sizeXs,
-              color: t.color.textSecondary,
-              background: 'transparent',
-              border: 'none',
-              textAlign: 'left',
-              cursor: 'pointer',
-            }}
-          >
-            View data quality
-          </button>
-        </div>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <ul style={{ margin: 0, paddingLeft: t.space.lg, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                {weeks < 20 && <li>Short history – results may be noisy; prefer relative ranking over exact ROI.</li>}
+                {hasNegativeRoi && <li>Some channels have negative ROI – these are candidates to cut or re-evaluate.</li>}
+                {manyParamsFewPoints && (
+                  <li>Many channels compared to weeks – consider grouping smaller channels together.</li>
+                )}
+                {confidenceReasons.length === 0 && weeks >= 20 && !hasNegativeRoi && !manyParamsFewPoints && (
+                  <li>Model looks healthy; treat ROI and contribution as decision-grade for budget allocation.</li>
+                )}
+                {confidenceReasons.slice(0, 3).map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+            </div>
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: t.space.xs,
+                minWidth: 200,
+              }}
+            >
+              <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Quick links
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!datasetId) return
+                  window.open(`/api/datasets/${datasetId}?preview_only=false`, '_blank', 'noopener,noreferrer')
+                }}
+                style={{
+                  padding: `${t.space.xs}px ${t.space.sm}px`,
+                  fontSize: t.font.sizeXs,
+                  color: t.color.accent,
+                  background: 'transparent',
+                  border: 'none',
+                  textAlign: 'left',
+                  cursor: datasetId ? 'pointer' : 'not-allowed',
+                }}
+              >
+                View dataset
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  window.alert('Mapping summary will be available in a future version.')
+                }}
+                style={{
+                  padding: `${t.space.xs}px ${t.space.sm}px`,
+                  fontSize: t.font.sizeXs,
+                  color: t.color.textSecondary,
+                  background: 'transparent',
+                  border: 'none',
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                }}
+              >
+                View mapping
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  window.dispatchEvent(new CustomEvent('mmm-open-dq'))
+                }}
+                style={{
+                  padding: `${t.space.xs}px ${t.space.sm}px`,
+                  fontSize: t.font.sizeXs,
+                  color: t.color.textSecondary,
+                  background: 'transparent',
+                  border: 'none',
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                }}
+              >
+                View data quality
+              </button>
+            </div>
+          </div>
+        </CollapsiblePanel>
       </div>
 
       {/* Reconcile view: attributed vs MMM KPI (when KPI source is Attribution) */}
@@ -649,39 +663,44 @@ export default function MMMDashboard({ runId, datasetId, runMetadata }: MMMDashb
         }
         const largeDivergence = meanAbsPctDiff > 0.25
         return (
-          <div
-            key="reconcile"
-            style={{
-              background: t.color.surface,
-              border: `1px solid ${largeDivergence ? t.color.warning : t.color.borderLight}`,
-              borderRadius: t.radius.lg,
-              padding: t.space.lg,
-              marginBottom: t.space.xl,
-              boxShadow: t.shadowSm,
-            }}
+          <div key="reconcile" style={{ marginBottom: t.space.xl }}
           >
-            <h3 style={{ margin: `0 0 ${t.space.sm}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-              Reconcile: Attribution vs MMM
-            </h3>
-            <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.textSecondary, marginBottom: t.space.sm }}>
-              Compare total attributed conversions (weekly) vs MMM modeled KPI (weekly). Same period, same model ({runMetadata.attribution_model}).
-            </p>
-            <div style={{ display: 'flex', gap: t.space.xl, flexWrap: 'wrap', marginBottom: t.space.sm }}>
-              <span style={{ fontSize: t.font.sizeSm }}>Correlation: <strong style={{ fontVariantNumeric: 'tabular-nums' }}>{correlation.toFixed(3)}</strong></span>
-              <span style={{ fontSize: t.font.sizeSm }}>Mean absolute % difference: <strong style={{ fontVariantNumeric: 'tabular-nums' }}>{(meanAbsPctDiff * 100).toFixed(1)}%</strong></span>
-            </div>
-            {largeDivergence && (
-              <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.warning }}>
-                Large divergence detected. Check data quality and attribution setup.{' '}
-                <button
-                  type="button"
-                  onClick={() => window.dispatchEvent(new CustomEvent('mmm-open-dq'))}
-                  style={{ background: 'none', border: 'none', color: t.color.accent, cursor: 'pointer', textDecoration: 'underline', padding: 0, fontSize: 'inherit' }}
-                >
-                  Open Data Quality
-                </button>
-              </p>
-            )}
+            <CollapsiblePanel
+              title="Reconcile: Attribution vs MMM"
+              subtitle={`Compare weekly attributed conversions vs MMM modeled KPI for ${runMetadata.attribution_model}.`}
+              open={showReconcilePanel}
+              onToggle={() => setShowReconcilePanel((value) => !value)}
+            >
+              <div
+                style={{
+                  padding: t.space.sm,
+                  borderRadius: t.radius.sm,
+                  border: `1px solid ${largeDivergence ? t.color.warning : t.color.borderLight}`,
+                  background: t.color.surface,
+                }}
+              >
+                <div style={{ display: 'flex', gap: t.space.xl, flexWrap: 'wrap', marginBottom: t.space.sm }}>
+                  <span style={{ fontSize: t.font.sizeSm }}>Correlation: <strong style={{ fontVariantNumeric: 'tabular-nums' }}>{correlation.toFixed(3)}</strong></span>
+                  <span style={{ fontSize: t.font.sizeSm }}>Mean absolute % difference: <strong style={{ fontVariantNumeric: 'tabular-nums' }}>{(meanAbsPctDiff * 100).toFixed(1)}%</strong></span>
+                </div>
+                {largeDivergence ? (
+                  <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.warning }}>
+                    Large divergence detected. Check data quality and attribution setup.{' '}
+                    <button
+                      type="button"
+                      onClick={() => window.dispatchEvent(new CustomEvent('mmm-open-dq'))}
+                      style={{ background: 'none', border: 'none', color: t.color.accent, cursor: 'pointer', textDecoration: 'underline', padding: 0, fontSize: 'inherit' }}
+                    >
+                      Open Data Quality
+                    </button>
+                  </p>
+                ) : (
+                  <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    MMM KPI totals and attribution totals are broadly aligned for this period.
+                  </p>
+                )}
+              </div>
+            </CollapsiblePanel>
           </div>
         )
       })()}
