@@ -16,6 +16,7 @@ import { apiGetJson } from '../lib/apiClient'
 import { buildListQuery, type PaginatedResponse } from '../lib/apiSchemas'
 import { defaultRecentDateRange } from '../lib/dateRange'
 import { buildJourneyHypothesisHref } from '../lib/journeyLinks'
+import { usePersistentToggle } from '../hooks/usePersistentToggle'
 
 interface NextBestRec {
   channel: string
@@ -269,8 +270,8 @@ export default function ConversionPaths() {
   const [tryPathLevel, setTryPathLevel] = useState<'channel' | 'campaign'>('channel')
   const [tryPathResult, setTryPathResult] = useState<{ path_so_far: string; level: string; recommendations: NextBestRec[] } | null>(null)
   const [tryPathError, setTryPathError] = useState<string | null>(null)
-  const [showContext, setShowContext] = useState(false)
-  const [showDiagnostics, setShowDiagnostics] = useState(false)
+  const [showContext, setShowContext] = usePersistentToggle('conversion-paths:show-context', false)
+  const [showDiagnostics, setShowDiagnostics] = usePersistentToggle('conversion-paths:show-diagnostics', false)
 
   const [directMode, setDirectMode] = useState<'include' | 'exclude'>('include')
   const [pathScope, setPathScope] = useState<'converted' | 'all'>('converted')

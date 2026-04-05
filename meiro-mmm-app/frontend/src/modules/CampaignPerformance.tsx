@@ -13,6 +13,7 @@ import AdsActionsDrawer from '../components/ads/AdsActionsDrawer'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import { getAdsDeepLink, type AdsProviderKey } from '../connectors/adsManagerConnector'
+import { usePersistentToggle } from '../hooks/usePersistentToggle'
 
 interface CampaignPerformanceProps {
   model: string
@@ -351,7 +352,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
   const [channelFilter, setChannelFilter] = useState<string>('')
   const [campaignTargets, setCampaignTargets] = useState<Record<string, number>>({})
   const [selectedCampaign, setSelectedCampaign] = useState<string | null>(null)
-  const [showWhy, setShowWhy] = useState(false)
+  const [showWhy, setShowWhy] = usePersistentToggle('campaign-performance:show-explainability', false)
   const [conversionKey, setConversionKey] = useState<string | ''>('')
   const [directMode, setDirectMode] = useState<'include' | 'exclude'>('include')
   const [comparePrevious, setComparePrevious] = useState(initialTrendParams.compare)

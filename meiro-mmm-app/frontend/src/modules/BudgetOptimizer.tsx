@@ -6,6 +6,7 @@ import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import { navigateForRecommendedAction } from '../lib/recommendedActions'
+import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import {
   createAdsChangeRequestsFromBudgetRecommendation,
   type AdsProviderKey,
@@ -196,10 +197,10 @@ export default function BudgetOptimizer({
   const [isOptimizing, setIsOptimizing] = useState(false)
   const [whatIfResult, setWhatIfResult] = useState<WhatIfResult | null>(null)
   const [isWhatIfLoading, setIsWhatIfLoading] = useState(false)
-  const [showContextPanel, setShowContextPanel] = useState(false)
-  const [showEvidencePanel, setShowEvidencePanel] = useState(false)
-  const [showSavedPanel, setShowSavedPanel] = useState(false)
-  const [showRealizationPanel, setShowRealizationPanel] = useState(false)
+  const [showContextPanel, setShowContextPanel] = usePersistentToggle('budget-optimizer:show-context', false)
+  const [showEvidencePanel, setShowEvidencePanel] = usePersistentToggle('budget-optimizer:show-evidence', false)
+  const [showSavedPanel, setShowSavedPanel] = usePersistentToggle('budget-optimizer:show-saved', false)
+  const [showRealizationPanel, setShowRealizationPanel] = usePersistentToggle('budget-optimizer:show-realization', false)
 
   const totalBudgetMultiplier =
     totalBudgetMode === 'constant' ? 1.0 : 1.0 + totalBudgetChangePct / 100

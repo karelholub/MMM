@@ -25,6 +25,7 @@ import {
   ContextSummaryStrip,
 } from '../components/dashboard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
+import { usePersistentToggle } from '../hooks/usePersistentToggle'
 
 type PageKey =
   | 'overview'
@@ -340,7 +341,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
   } = useWorkspaceContext()
   const [funnelTab, setFunnelTab] = useState<'conversions' | 'revenue' | 'speed'>('conversions')
   const [assistantCollapsed, setAssistantCollapsed] = useState(true)
-  const [showWorkspaceSignals, setShowWorkspaceSignals] = useState(false)
+  const [showWorkspaceSignals, setShowWorkspaceSignals] = usePersistentToggle('overview:show-workspace-signals', false)
 
   const dateRange = useMemo(() => {
     const dateFrom = globalDateFrom || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)

@@ -19,6 +19,7 @@ import { tokens } from '../theme/tokens'
 import { apiGetJson } from '../lib/apiClient'
 import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
+import { usePersistentToggle } from '../hooks/usePersistentToggle'
 
 interface MMMDashboardProps {
   runId: string
@@ -96,8 +97,8 @@ function channelDisplayName(
 
 export default function MMMDashboard({ runId, datasetId, runMetadata }: MMMDashboardProps) {
   const t = tokens
-  const [showTrustPanel, setShowTrustPanel] = useState(false)
-  const [showReconcilePanel, setShowReconcilePanel] = useState(false)
+  const [showTrustPanel, setShowTrustPanel] = usePersistentToggle('mmm-dashboard:show-trust-panel', false)
+  const [showReconcilePanel, setShowReconcilePanel] = usePersistentToggle('mmm-dashboard:show-reconcile-panel', false)
 
   const { data: taxonomy } = useQuery<{ channel_rules: { channel: string; name: string }[] }>({
     queryKey: ['taxonomy'],

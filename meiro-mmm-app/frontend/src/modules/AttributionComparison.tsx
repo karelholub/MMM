@@ -7,6 +7,7 @@ import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import { apiGetJson } from '../lib/apiClient'
+import { usePersistentToggle } from '../hooks/usePersistentToggle'
 
 interface AttributionComparisonProps {
   selectedModel: string
@@ -162,8 +163,8 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
   const [showDeltaRow, setShowDeltaRow] = useState(false)
   const [directMode, setDirectMode] = useState<'include' | 'exclude_view'>('include')
   const [showMarkovDiagnostics, setShowMarkovDiagnostics] = useState(false)
-  const [showContextPanel, setShowContextPanel] = useState(false)
-  const [showReplayPanel, setShowReplayPanel] = useState(false)
+  const [showContextPanel, setShowContextPanel] = usePersistentToggle('attribution-comparison:show-context', false)
+  const [showReplayPanel, setShowReplayPanel] = usePersistentToggle('attribution-comparison:show-replay', false)
 
   const resultsQuery = useQuery<Record<string, ModelResult>>({
     queryKey: ['attribution-results'],

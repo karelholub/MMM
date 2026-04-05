@@ -6,6 +6,7 @@ import { apiGetJson, apiSendJson } from '../lib/apiClient'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
+import { usePersistentToggle } from '../hooks/usePersistentToggle'
 
 function objectPreview(value: Record<string, unknown> | null | undefined): string {
   if (!value || typeof value !== 'object') return '—'
@@ -440,11 +441,11 @@ export default function IncrementalityPage() {
     const parsed = raw ? Number(raw) : null
     return parsed != null && Number.isFinite(parsed) ? parsed : null
   })
-  const [showPowerCalc, setShowPowerCalc] = useState(false)
+  const [showPowerCalc, setShowPowerCalc] = usePersistentToggle('incrementality:show-power-calc', false)
   const [showTimeSeries, setShowTimeSeries] = useState(false)
   const [showAdvancedSetup, setShowAdvancedSetup] = useState(false)
-  const [showPlannerContext, setShowPlannerContext] = useState(false)
-  const [showExecutionSignals, setShowExecutionSignals] = useState(false)
+  const [showPlannerContext, setShowPlannerContext] = usePersistentToggle('incrementality:show-planner-context', false)
+  const [showExecutionSignals, setShowExecutionSignals] = usePersistentToggle('incrementality:show-execution-signals', false)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | 'draft' | 'running' | 'stopped'>('all')
   const [powerPlans, setPowerPlans] = useState<Record<number, PowerAnalysisResult>>({})

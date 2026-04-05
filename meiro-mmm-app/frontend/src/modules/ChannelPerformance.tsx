@@ -23,6 +23,7 @@ import { useWorkspaceContext } from '../components/WorkspaceContext'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn, SectionCard } from '../components/dashboard'
+import { usePersistentToggle } from '../hooks/usePersistentToggle'
 
 interface ChannelPerformanceProps {
   model: string
@@ -323,7 +324,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
 
   const [sortKey, setSortKey] = useState<SortKey>('attributed_value')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
-  const [showWhy, setShowWhy] = useState(false)
+  const [showWhy, setShowWhy] = usePersistentToggle('channel-performance:show-explainability', false)
 
   const [directMode, setDirectMode] = useState<'include' | 'exclude'>('include')
   const [comparePrevious, setComparePrevious] = useState(initialTrendParams.compare)

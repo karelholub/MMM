@@ -6,6 +6,7 @@ import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { apiGetJson } from '../lib/apiClient'
+import { usePersistentToggle } from '../hooks/usePersistentToggle'
 
 interface PathVariant {
   path: string
@@ -186,8 +187,8 @@ export default function PathArchetypes() {
   const [directMode, setDirectMode] = useState<'include' | 'exclude'>('include')
   const [comparePrevious, setComparePrevious] = useState(false)
   const [showQualityHelp, setShowQualityHelp] = useState(false)
-  const [showContext, setShowContext] = useState(false)
-  const [showQualityPanel, setShowQualityPanel] = useState(false)
+  const [showContext, setShowContext] = usePersistentToggle('path-archetypes:show-context', false)
+  const [showQualityPanel, setShowQualityPanel] = usePersistentToggle('path-archetypes:show-quality', false)
   const [channelFilter, setChannelFilter] = useState<string[]>([])
   const [minAvgLength, setMinAvgLength] = useState<number | ''>('')
   const [maxAvgLength, setMaxAvgLength] = useState<number | ''>('')
