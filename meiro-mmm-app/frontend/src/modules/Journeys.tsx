@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import DashboardPage from '../components/dashboard/DashboardPage'
 import SectionCard from '../components/dashboard/SectionCard'
@@ -849,6 +849,7 @@ export default function Journeys({
   const [sandboxHypothesisId, setSandboxHypothesisId] = useState<string | null>(() => readParams().get('hypothesis_id') || null)
   const [sandboxCandidateStep, setSandboxCandidateStep] = useState('')
   const [selectedJourneyExperimentId, setSelectedJourneyExperimentId] = useState<number | null>(() => readNumericUrlParam('experiment_id'))
+  const savedViewsSectionRef = useRef<HTMLDivElement | null>(null)
   const [hypothesisExperimentDraft, setHypothesisExperimentDraft] = useState<HypothesisExperimentDraft>(() => {
     const start = new Date()
     const end = new Date()
@@ -927,6 +928,40 @@ export default function Journeys({
   })
   const selectedDefinitionLifecycleStatus =
     definitionLifecycleQuery.data?.definition.lifecycle_status ?? (selectedDefinitionArchived ? 'archived' : 'active')
+
+  function openAlertsForDefinition(definitionId: string) {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    params.set('page', 'alerts')
+    params.set('alerts_tab', 'journey_alerts')
+    params.set('journey_alert_domain', 'journeys')
+    params.set('journey_definition_id', definitionId)
+    window.history.pushState({}, '', `/?${params.toString()}`)
+    window.dispatchEvent(new PopStateEvent('popstate'))
+  }
+
+  function openLifecycleDependency(target: 'saved_views' | 'funnels' | 'hypotheses' | 'experiments' | 'alerts' | 'journey_rows') {
+    switch (target) {
+      case 'saved_views':
+        savedViewsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        break
+      case 'funnels':
+        setActiveTab('funnels')
+        break
+      case 'hypotheses':
+        setActiveTab('hypotheses')
+        break
+      case 'experiments':
+        setActiveTab('experiments')
+        break
+      case 'alerts':
+        if (selectedDefinition?.id) openAlertsForDefinition(selectedDefinition.id)
+        break
+      case 'journey_rows':
+        setActiveTab('paths')
+        break
+    }
+  }
 
   const pathsQuery = useQuery<JourneyPathsResponse>({
     queryKey: [
@@ -2462,17 +2497,30 @@ export default function Journeys({
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: t.space.sm }}>
                       {[
-                        { label: 'Saved views', value: definitionLifecycleQuery.data.dependency_counts.saved_views },
-                        { label: 'Funnels', value: definitionLifecycleQuery.data.dependency_counts.funnels },
-                        { label: 'Hypotheses', value: definitionLifecycleQuery.data.dependency_counts.hypotheses },
-                        { label: 'Experiments', value: definitionLifecycleQuery.data.dependency_counts.experiments },
-                        { label: 'Alerts', value: definitionLifecycleQuery.data.dependency_counts.alerts },
-                        { label: 'Journey rows', value: definitionLifecycleQuery.data.output_counts.journey_instances },
+                        { label: 'Saved views', value: definitionLifecycleQuery.data.dependency_counts.saved_views, target: 'saved_views' as const, actionLabel: 'Open saved views' },
+                        { label: 'Funnels', value: definitionLifecycleQuery.data.dependency_counts.funnels, target: 'funnels' as const, actionLabel: 'Open funnels' },
+                        { label: 'Hypotheses', value: definitionLifecycleQuery.data.dependency_counts.hypotheses, target: 'hypotheses' as const, actionLabel: 'Open hypotheses' },
+                        { label: 'Experiments', value: definitionLifecycleQuery.data.dependency_counts.experiments, target: 'experiments' as const, actionLabel: 'Open experiments' },
+                        { label: 'Alerts', value: definitionLifecycleQuery.data.dependency_counts.alerts, target: 'alerts' as const, actionLabel: 'Open alerts' },
+                        { label: 'Journey rows', value: definitionLifecycleQuery.data.output_counts.journey_instances, target: 'journey_rows' as const, actionLabel: 'Open paths' },
                       ].map((item) => (
-                        <div key={item.label} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.surface }}>
+                        <button
+                          key={item.label}
+                          type="button"
+                          onClick={() => openLifecycleDependency(item.target)}
+                          style={{
+                            border: `1px solid ${t.color.borderLight}`,
+                            borderRadius: t.radius.sm,
+                            padding: t.space.sm,
+                            background: t.color.surface,
+                            textAlign: 'left',
+                            cursor: 'pointer',
+                          }}
+                        >
                           <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
                           <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>{item.value.toLocaleString()}</div>
-                        </div>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.accent, marginTop: 4 }}>{item.actionLabel}</div>
+                        </button>
                       ))}
                     </div>
                     <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
@@ -4171,7 +4219,8 @@ export default function Journeys({
           )}
         </SectionCard>
 
-        <SectionCard title="Saved views" subtitle="Save the current journey, tab, filters, and examples scope to your account.">
+        <div ref={savedViewsSectionRef}>
+          <SectionCard title="Saved views" subtitle="Save the current journey, tab, filters, and examples scope to your account.">
           <div style={{ display: 'grid', gap: t.space.md }}>
             <div style={{ display: 'flex', alignItems: 'end', justifyContent: 'space-between', gap: t.space.md, flexWrap: 'wrap' }}>
               <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, flex: '1 1 260px' }}>
@@ -4229,7 +4278,8 @@ export default function Journeys({
               </div>
             )}
           </div>
-        </SectionCard>
+          </SectionCard>
+        </div>
       </DashboardPage>
 
       {selectedPath && (

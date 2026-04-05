@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback } from 'react'
+import { useMemo, useState, useCallback, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { tokens as t } from '../theme/tokens'
 import { DashboardPage, SectionCard, DashboardTable } from '../components/dashboard'
@@ -44,6 +44,24 @@ interface DisplayAlertItem {
 }
 
 type TabId = 'alerts' | 'rules' | 'journey_alerts'
+
+function readSearchParams(): URLSearchParams {
+  if (typeof window === 'undefined') return new URLSearchParams()
+  return new URLSearchParams(window.location.search)
+}
+
+function isAlertsTab(value: string | null): value is TabId {
+  return value === 'alerts' || value === 'rules' || value === 'journey_alerts'
+}
+
+function readInitialAlertsTab(): TabId {
+  const requested = readSearchParams().get('alerts_tab')
+  return isAlertsTab(requested) ? requested : 'alerts'
+}
+
+function readInitialJourneyAlertDomain(): 'journeys' | 'funnels' {
+  return readSearchParams().get('journey_alert_domain') === 'funnels' ? 'funnels' : 'journeys'
+}
 
 const STATUS_OPTIONS = [
   { value: 'open', label: 'Open' },
@@ -93,7 +111,7 @@ function severityColor(severity: string): string {
 }
 
 export default function Alerts() {
-  const [tab, setTab] = useState<TabId>('alerts')
+  const [tab, setTab] = useState<TabId>(() => readInitialAlertsTab())
   const [statusFilter, setStatusFilter] = useState('open')
   const [severityFilter, setSeverityFilter] = useState('')
   const [typeFilter, setTypeFilter] = useState('')
@@ -101,7 +119,8 @@ export default function Alerts() {
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [detailAlertId, setDetailAlertId] = useState<number | null>(null)
-  const [journeyAlertDomain, setJourneyAlertDomain] = useState<'journeys' | 'funnels'>('journeys')
+  const [journeyAlertDomain, setJourneyAlertDomain] = useState<'journeys' | 'funnels'>(() => readInitialJourneyAlertDomain())
+  const [journeyDefinitionFilter, setJourneyDefinitionFilter] = useState<string>(() => readSearchParams().get('journey_definition_id') || '')
   const queryClient = useQueryClient()
 
   const alertsQuery = useQuery<{ items: AlertListItem[]; total: number; page: number; per_page: number }>({
@@ -186,6 +205,39 @@ export default function Alerts() {
     enabled: tab === 'alerts',
     staleTime: 15_000,
   })
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = readSearchParams()
+    params.set('alerts_tab', tab)
+    if (tab === 'journey_alerts') params.set('journey_alert_domain', journeyAlertDomain)
+    else params.delete('journey_alert_domain')
+    if (journeyDefinitionFilter) params.set('journey_definition_id', journeyDefinitionFilter)
+    else params.delete('journey_definition_id')
+    window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}${window.location.hash}`)
+  }, [journeyAlertDomain, journeyDefinitionFilter, tab])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onPopState = () => {
+      setTab(readInitialAlertsTab())
+      setJourneyAlertDomain(readInitialJourneyAlertDomain())
+      setJourneyDefinitionFilter(readSearchParams().get('journey_definition_id') || '')
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
+
+  const filteredJourneyAlertDefs = useMemo(() => {
+    const items = journeyAlertDefsQuery.data?.items ?? []
+    if (!journeyDefinitionFilter) return items
+    return items.filter((item) => String(item.scope?.journey_definition_id || '') === journeyDefinitionFilter)
+  }, [journeyAlertDefsQuery.data?.items, journeyDefinitionFilter])
+
+  const filteredJourneyAlertEvents = useMemo(() => {
+    const defsById = new Set(filteredJourneyAlertDefs.map((item) => item.id))
+    return (journeyAlertEventsQuery.data?.items ?? []).filter((item) => defsById.has(item.alert_definition_id))
+  }, [filteredJourneyAlertDefs, journeyAlertEventsQuery.data?.items])
 
   const filteredItems = useMemo<DisplayAlertItem[]>(() => {
     const nativeItems: DisplayAlertItem[] = (alertsQuery.data?.items ?? []).map((item) => ({ ...item }))
@@ -350,7 +402,7 @@ export default function Alerts() {
         }
         isEmpty={
           (tab === 'alerts' && filteredItems.length === 0) ||
-          (tab === 'journey_alerts' && (journeyAlertDefsQuery.data?.items ?? []).length === 0)
+          (tab === 'journey_alerts' && filteredJourneyAlertDefs.length === 0)
         }
         emptyState={
           <div
@@ -633,22 +685,46 @@ export default function Alerts() {
               title="Journeys/Funnels alerts"
               subtitle="Definitions and latest fired events from Journeys and Funnels."
               actions={
-                <select
-                  value={journeyAlertDomain}
-                  onChange={(e) => setJourneyAlertDomain(e.target.value as 'journeys' | 'funnels')}
-                  style={{
-                    padding: `${t.space.xs}px ${t.space.sm}px`,
-                    borderRadius: t.radius.sm,
-                    border: `1px solid ${t.color.border}`,
-                    background: t.color.surface,
-                    fontSize: t.font.sizeSm,
-                  }}
-                >
-                  <option value="journeys">Journeys</option>
-                  <option value="funnels">Funnels</option>
-                </select>
+                <div style={{ display: 'flex', alignItems: 'center', gap: t.space.sm, flexWrap: 'wrap' }}>
+                  {journeyDefinitionFilter ? (
+                    <button
+                      type="button"
+                      onClick={() => setJourneyDefinitionFilter('')}
+                      style={{
+                        padding: `${t.space.xs}px ${t.space.sm}px`,
+                        borderRadius: t.radius.sm,
+                        border: `1px solid ${t.color.border}`,
+                        background: t.color.bgSubtle,
+                        color: t.color.textSecondary,
+                        fontSize: t.font.sizeXs,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Clear journey filter
+                    </button>
+                  ) : null}
+                  <select
+                    value={journeyAlertDomain}
+                    onChange={(e) => setJourneyAlertDomain(e.target.value as 'journeys' | 'funnels')}
+                    style={{
+                      padding: `${t.space.xs}px ${t.space.sm}px`,
+                      borderRadius: t.radius.sm,
+                      border: `1px solid ${t.color.border}`,
+                      background: t.color.surface,
+                      fontSize: t.font.sizeSm,
+                    }}
+                  >
+                    <option value="journeys">Journeys</option>
+                    <option value="funnels">Funnels</option>
+                  </select>
+                </div>
               }
             >
+              {journeyDefinitionFilter ? (
+                <div style={{ marginBottom: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  Filtered to journey definition <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace' }}>{journeyDefinitionFilter}</span>.
+                </div>
+              ) : null}
               <DashboardTable>
                 <thead>
                   <tr>
@@ -661,8 +737,8 @@ export default function Alerts() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(journeyAlertDefsQuery.data?.items ?? []).map((def) => {
-                    const latest = (journeyAlertEventsQuery.data?.items ?? []).find((ev) => ev.alert_definition_id === def.id)
+                  {filteredJourneyAlertDefs.map((def) => {
+                    const latest = filteredJourneyAlertEvents.find((ev) => ev.alert_definition_id === def.id)
                     const scope = def.scope || {}
                     const scopeLabel =
                       (scope.path_hash as string | undefined) ||
@@ -680,10 +756,12 @@ export default function Alerts() {
                       </tr>
                     )
                   })}
-                  {(journeyAlertDefsQuery.data?.items ?? []).length === 0 && (
+                  {filteredJourneyAlertDefs.length === 0 && (
                     <tr>
                       <td colSpan={6} style={{ textAlign: 'center', color: t.color.textSecondary, padding: t.space.lg }}>
-                        No definitions yet. Create an alert from the Journeys page.
+                        {journeyDefinitionFilter
+                          ? 'No alerts reference this journey definition yet.'
+                          : 'No definitions yet. Create an alert from the Journeys page.'}
                       </td>
                     </tr>
                   )}
