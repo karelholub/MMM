@@ -731,6 +731,96 @@ def test_webhook_reprocess_uses_db_event_batches_when_json_archive_is_unavailabl
     assert payload["reprocessed_profiles"] == 1
 
 
+def test_webhook_reprocess_uses_full_file_event_archive_for_manual_all_replay(monkeypatch, tmp_path):
+    monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(meiro_config, "CONFIG_PATH", tmp_path / "meiro_config.json")
+    monkeypatch.setattr(meiro_config, "WEBHOOK_ARCHIVE_PATH", tmp_path / "meiro_webhook_archive.jsonl")
+    monkeypatch.setattr(meiro_config, "EVENT_ARCHIVE_PATH", tmp_path / "meiro_event_archive.jsonl")
+
+    _clear_meiro_raw_batches()
+    _clear_meiro_replay_runs()
+
+    meiro_config.append_event_archive_entry(
+        {
+            "received_at": "2026-03-28T09:00:00Z",
+            "parser_version": "v3",
+            "replace": False,
+            "events": [
+                {
+                    "event_payload": {
+                        "event_id": "evt-file-touch-1",
+                        "customer_id": "cust-file-1",
+                        "timestamp": "2026-03-28T09:00:00Z",
+                        "event_name": "page_view",
+                        "source": "google",
+                        "medium": "cpc",
+                    }
+                }
+            ],
+            "received_count": 1,
+        }
+    )
+    meiro_config.append_event_archive_entry(
+        {
+            "received_at": "2026-03-28T09:05:00Z",
+            "parser_version": "v3",
+            "replace": False,
+            "events": [
+                {
+                    "event_payload": {
+                        "event_id": "evt-file-conv-1",
+                        "customer_id": "cust-file-1",
+                        "timestamp": "2026-03-28T09:05:00Z",
+                        "event_name": "purchase",
+                        "conversion_id": "conv-file-1",
+                        "value": 12.0,
+                        "currency": "EUR",
+                    }
+                }
+            ],
+            "received_count": 1,
+        }
+    )
+
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/connectors/meiro/events",
+        json={
+            "events": [
+                {
+                    "event_id": "evt-db-status-1",
+                    "event_payload": {
+                        "event_id": "evt-db-status-1",
+                        "customer_id": "cust-db-only-1",
+                        "timestamp": "2026-03-28T10:00:00Z",
+                        "event_name": "page_view",
+                    },
+                }
+            ]
+        },
+    )
+    assert response.status_code == 200
+
+    expected_status = meiro_config.get_event_archive_status()
+
+    replay = client.post(
+        "/api/connectors/meiro/webhook/reprocess",
+        json={
+            "replay_mode": "all",
+            "archive_source": "events",
+            "persist_to_attribution": False,
+        },
+    )
+
+    assert replay.status_code == 200
+    payload = replay.json()
+    assert payload["archive_source"] == "events"
+    assert payload["replay_mode"] == "all"
+    assert payload["archive_entries_used"] == expected_status["entries"]
+    assert payload["event_reconstruction_diagnostics"]["events_loaded"] == expected_status["events_received"]
+
+
 def test_webhook_reprocess_persist_to_attribution_uses_replay_snapshot_without_profiles_file(monkeypatch, tmp_path):
     monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(meiro_config, "CONFIG_PATH", tmp_path / "meiro_config.json")

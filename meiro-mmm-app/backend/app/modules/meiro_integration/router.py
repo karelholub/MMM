@@ -693,6 +693,18 @@ def create_router(
             return items
         return query_event_archive_entries(limit=limit, since=since, until=until)
 
+    def _get_event_archive_entries_for_replay(
+        db: Any,
+        *,
+        limit: Optional[int] = 100,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        file_items = query_event_archive_entries(limit=limit, since=since, until=until)
+        if file_items:
+            return file_items
+        return _get_event_archive_entries(db, limit=limit, since=since, until=until)
+
     def _rebuild_profiles_from_profile_archive(
         db: Any,
         *,
@@ -851,14 +863,14 @@ def create_router(
                 return archive_entries, archived_profiles, True, replay_scope
         if replay_mode == "all":
             if use_event_archive:
-                archive_entries = _get_event_archive_entries(db, limit=None)
+                archive_entries = _get_event_archive_entries_for_replay(db, limit=None)
                 archived_profiles = _rebuild_profiles_from_event_archive(db, source_entries=archive_entries)
             else:
                 archive_entries = _get_profile_archive_entries(db, limit=None)
                 archived_profiles = _rebuild_profiles_from_profile_archive(db, limit=None)
         elif replay_mode == "date_range":
             if use_event_archive:
-                archive_entries = _get_event_archive_entries(db, limit=None, since=date_from, until=date_to)
+                archive_entries = _get_event_archive_entries_for_replay(db, limit=None, since=date_from, until=date_to)
                 archived_profiles = _rebuild_profiles_from_event_archive(
                     db,
                     source_entries=archive_entries,
@@ -875,7 +887,7 @@ def create_router(
                 )
         else:
             if use_event_archive:
-                archive_entries = _get_event_archive_entries(db, limit=archive_limit)
+                archive_entries = _get_event_archive_entries_for_replay(db, limit=archive_limit)
                 archived_profiles = _rebuild_profiles_from_event_archive(db, source_entries=archive_entries)
             else:
                 archive_entries = _get_profile_archive_entries(db, limit=archive_limit)
