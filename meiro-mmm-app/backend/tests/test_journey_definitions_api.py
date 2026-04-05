@@ -116,6 +116,65 @@ def test_journey_definitions_crud_and_archive_flow(client: TestClient):
     assert duplicate_resp.json()["id"] != definition_id
 
 
+def test_journey_definition_hard_delete_requires_archive_and_unused_state(client: TestClient):
+    headers = {"X-User-Role": "editor", "X-User-Id": "qa-editor"}
+    view_headers = {"X-User-Role": "viewer", "X-User-Id": "qa-viewer"}
+
+    create_resp = client.post(
+        "/api/journeys/definitions",
+        headers=headers,
+        json={
+            "name": "Disposable journey",
+            "description": "No dependencies",
+            "conversion_kpi_id": "purchase",
+            "lookback_window_days": 30,
+            "mode_default": "conversion_only",
+        },
+    )
+    assert create_resp.status_code == 200
+    definition_id = create_resp.json()["id"]
+
+    lifecycle_before = client.get(
+        f"/api/journeys/definitions/{definition_id}/lifecycle",
+        headers=view_headers,
+    )
+    assert lifecycle_before.status_code == 200
+    assert lifecycle_before.json()["allowed_actions"]["can_delete"] is False
+
+    delete_before_archive = client.post(
+        f"/api/journeys/definitions/{definition_id}/hard-delete",
+        headers=headers,
+    )
+    assert delete_before_archive.status_code == 409
+    assert "Archive" in delete_before_archive.json()["detail"]
+
+    archive_resp = client.post(
+        f"/api/journeys/definitions/{definition_id}/archive",
+        headers=headers,
+    )
+    assert archive_resp.status_code == 200
+
+    lifecycle_after_archive = client.get(
+        f"/api/journeys/definitions/{definition_id}/lifecycle",
+        headers=view_headers,
+    )
+    assert lifecycle_after_archive.status_code == 200
+    assert lifecycle_after_archive.json()["allowed_actions"]["can_delete"] is True
+
+    hard_delete_resp = client.post(
+        f"/api/journeys/definitions/{definition_id}/hard-delete",
+        headers=headers,
+    )
+    assert hard_delete_resp.status_code == 200
+    assert hard_delete_resp.json()["status"] == "deleted"
+
+    lifecycle_missing = client.get(
+        f"/api/journeys/definitions/{definition_id}/lifecycle",
+        headers=view_headers,
+    )
+    assert lifecycle_missing.status_code == 404
+
+
 def test_journey_definitions_list_search_and_sort(client: TestClient):
     headers = {"X-User-Role": "editor", "X-User-Id": "qa-editor"}
     view_headers = {"X-User-Role": "viewer", "X-User-Id": "qa-viewer"}

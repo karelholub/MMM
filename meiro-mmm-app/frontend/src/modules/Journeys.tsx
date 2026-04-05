@@ -1374,6 +1374,19 @@ export default function Journeys({
     },
   })
 
+  const hardDeleteDefinitionMutation = useMutation({
+    mutationFn: async (definitionId: string) => {
+      return apiSendJson<{ id: string; status: string }>(`/api/journeys/definitions/${definitionId}/hard-delete`, 'POST', undefined, {
+        fallbackMessage: 'Failed to delete journey definition permanently',
+      })
+    },
+    onSuccess: async (_, definitionId) => {
+      await queryClient.invalidateQueries({ queryKey: ['journey-definitions', 'journeys-page'] })
+      await queryClient.invalidateQueries({ queryKey: ['journey-definition-lifecycle'] })
+      if (selectedJourneyId === definitionId) setSelectedJourneyId('')
+    },
+  })
+
   const rebuildDefinitionMutation = useMutation({
     mutationFn: async (payload: { definitionId: string; reprocessDays?: number }) => {
       const query = new URLSearchParams()
@@ -2535,6 +2548,9 @@ export default function Journeys({
                         ))}
                       </div>
                     ) : null}
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                      Permanent delete unlocks only after archive, and only for definitions with no downstream dependencies or generated journey outputs.
+                    </div>
                     {canManageDefinitions ? (
                       <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
                         <button
@@ -2617,6 +2633,35 @@ export default function Journeys({
                             {restoreDefinitionMutation.isPending ? 'Restoring…' : 'Restore'}
                           </button>
                         )}
+                        {definitionLifecycleQuery.data.allowed_actions.can_delete ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const confirmed = window.confirm(
+                                `Delete "${selectedDefinition.name}" permanently? This cannot be undone.`,
+                              )
+                              if (!confirmed) return
+                              hardDeleteDefinitionMutation.mutate(selectedDefinition.id)
+                            }}
+                            disabled={hardDeleteDefinitionMutation.isPending}
+                            style={{
+                              border: `1px solid ${t.color.danger}`,
+                              background: t.color.dangerMuted,
+                              color: t.color.danger,
+                              borderRadius: t.radius.sm,
+                              fontSize: t.font.sizeSm,
+                              padding: '8px 12px',
+                              cursor: hardDeleteDefinitionMutation.isPending ? 'wait' : 'pointer',
+                            }}
+                          >
+                            {hardDeleteDefinitionMutation.isPending ? 'Deleting…' : 'Delete permanently'}
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {hardDeleteDefinitionMutation.isError ? (
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.danger }}>
+                        {(hardDeleteDefinitionMutation.error as Error).message}
                       </div>
                     ) : null}
                   </div>

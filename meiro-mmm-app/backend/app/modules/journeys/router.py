@@ -22,6 +22,7 @@ from app.services_journey_definitions import (
     duplicate_journey_definition,
     get_journey_definition,
     get_journey_definition_lifecycle,
+    hard_delete_journey_definition,
     list_journey_definitions,
     restore_journey_definition,
     serialize_journey_definition,
@@ -518,6 +519,21 @@ def create_router(
         except Exception as exc:
             logger.warning("Journey definition rebuild after duplicate failed: %s", exc, exc_info=True)
         return serialize_journey_definition(item)
+
+    @router.post("/api/journeys/definitions/{definition_id}/hard-delete")
+    def api_hard_delete_journey_definition(
+        definition_id: str,
+        db=Depends(get_db_dependency),
+        _ctx=Depends(require_permission_dependency("journeys.manage")),
+    ):
+        deleted, reason = hard_delete_journey_definition(db, definition_id)
+        if not deleted:
+            if reason == "not_found":
+                raise HTTPException(status_code=404, detail="Journey definition not found")
+            if reason == "archive_required":
+                raise HTTPException(status_code=409, detail="Archive the journey definition before deleting it permanently")
+            raise HTTPException(status_code=409, detail="Journey definition can only be deleted when it has no dependencies or generated outputs")
+        return {"id": definition_id, "status": "deleted"}
 
     @router.get("/api/journeys/definitions/{definition_id}/lifecycle")
     def api_get_journey_definition_lifecycle(

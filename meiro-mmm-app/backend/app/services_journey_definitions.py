@@ -213,6 +213,22 @@ def duplicate_journey_definition(
     )
 
 
+def hard_delete_journey_definition(db: Session, definition_id: str) -> tuple[bool, Optional[str]]:
+    item = db.get(JourneyDefinition, definition_id)
+    if not item:
+        return False, "not_found"
+    lifecycle = get_journey_definition_lifecycle(db, definition_id)
+    if not lifecycle:
+        return False, "not_found"
+    if not lifecycle["allowed_actions"]["can_delete"]:
+        if not bool(item.is_archived):
+            return False, "archive_required"
+        return False, "definition_in_use"
+    db.delete(item)
+    db.commit()
+    return True, None
+
+
 def get_journey_definition_lifecycle(db: Session, definition_id: str) -> Optional[dict]:
     item = db.get(JourneyDefinition, definition_id)
     if not item:
@@ -333,7 +349,7 @@ def get_journey_definition_lifecycle(db: Session, definition_id: str) -> Optiona
             "can_archive": not bool(item.is_archived),
             "can_restore": bool(item.is_archived),
             "can_duplicate": True,
-            "can_delete": not bool(item.is_archived) and dependency_total == 0 and output_total == 0,
+            "can_delete": bool(item.is_archived) and dependency_total == 0 and output_total == 0,
             "can_rebuild": not bool(item.is_archived),
         },
         "rebuild_state": {
