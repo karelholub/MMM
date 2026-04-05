@@ -359,6 +359,22 @@ export default function ConversionPaths() {
     enabled: !!selectedJourneyId,
   })
 
+  const preferredDefinitionQuery = useQuery<PathAnalysis>({
+    queryKey: ['path-analysis-preferred-definition', directMode, pathScope, filters.dateFrom, filters.dateTo],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        direct_mode: directMode,
+        path_scope: pathScope === 'all' ? 'all' : 'converted',
+        date_from: filters.dateFrom,
+        date_to: filters.dateTo,
+      })
+      return apiGetJson<PathAnalysis>(`/api/conversion-paths/analysis?${params.toString()}`, {
+        fallbackMessage: 'Failed to resolve preferred journey definition for conversion paths',
+      })
+    },
+    enabled: !selectedJourneyId,
+  })
+
   const dimensionsQuery = useQuery<JourneyFilterDimensionsResponse>({
     queryKey: ['journey-dimensions', 'conversion-paths', selectedJourneyId, filters.dateFrom, filters.dateTo, filters.channel, filters.campaign, filters.device, filters.geo],
     queryFn: async () => {
@@ -429,10 +445,15 @@ export default function ConversionPaths() {
     const defs = definitionsQuery.data?.items ?? []
     if (!defs.length) return
     if (!selectedJourneyId || !defs.some((item) => item.id === selectedJourneyId)) {
+      const preferredId = preferredDefinitionQuery.data?.journey_definition_id
+      if (preferredId && defs.some((item) => item.id === preferredId)) {
+        setSelectedJourneyId(preferredId)
+        return
+      }
       const preferred = defs.find((item) => !item.is_archived) ?? defs[0]
       setSelectedJourneyId(preferred.id)
     }
-  }, [definitionsQuery.data?.items, selectedJourneyId])
+  }, [definitionsQuery.data?.items, preferredDefinitionQuery.data?.journey_definition_id, selectedJourneyId])
 
   useEffect(() => {
     const dims = dimensionsQuery.data
@@ -797,9 +818,14 @@ export default function ConversionPaths() {
   const countMismatch = liveJourneyCount != null && data ? liveJourneyCount !== data.total_journeys : false
   const rangeMismatch =
     Boolean(journeys?.date_max && data?.date_to) && journeys?.date_max?.slice(0, 10) !== data?.date_to
-  const dashboardLoading = definitionsQuery.isLoading || (definitions.length > 0 && !selectedJourneyId) || (!!selectedJourneyId && pathsQuery.isLoading)
+  const dashboardLoading =
+    definitionsQuery.isLoading ||
+    (!selectedJourneyId && preferredDefinitionQuery.isLoading) ||
+    (definitions.length > 0 && !selectedJourneyId) ||
+    (!!selectedJourneyId && pathsQuery.isLoading)
   const dashboardError =
     (definitionsQuery.error as Error | undefined)?.message ||
+    (preferredDefinitionQuery.error as Error | undefined)?.message ||
     (pathsQuery.error as Error | undefined)?.message ||
     (dimensionsQuery.error as Error | undefined)?.message ||
     null
