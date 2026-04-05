@@ -336,6 +336,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
     loadSampleJourneys,
   } = useWorkspaceContext()
   const [funnelTab, setFunnelTab] = useState<'conversions' | 'revenue' | 'speed'>('conversions')
+  const [assistantCollapsed, setAssistantCollapsed] = useState(true)
 
   const dateRange = useMemo(() => {
     const dateFrom = globalDateFrom || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
@@ -802,11 +803,52 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
     >
       <div style={{ display: 'grid', gap: t.space.xl }}>
         {overviewAttentionQueue.length ? (
-          <SectionCard title="Workspace Assistant" subtitle="Ranked next steps across taxonomy, KPI, journeys, Meiro, and data sources.">
-            <WorkspaceAssistantPanel
-              actions={overviewAttentionQueue}
-              onActionClick={handleOverviewAction}
-            />
+          <SectionCard
+            title="Workspace Assistant"
+            subtitle={
+              assistantCollapsed
+                ? `Hidden by default. ${overviewAttentionQueue.length} ranked next ${overviewAttentionQueue.length === 1 ? 'step' : 'steps'} available.`
+                : 'Ranked next steps across taxonomy, KPI, journeys, Meiro, and data sources.'
+            }
+            actions={
+              <button
+                type="button"
+                onClick={() => setAssistantCollapsed((current) => !current)}
+                style={{
+                  padding: `${t.space.xs}px ${t.space.sm}px`,
+                  borderRadius: t.radius.sm,
+                  border: `1px solid ${t.color.border}`,
+                  background: assistantCollapsed ? t.color.surface : t.color.bg,
+                  fontSize: t.font.sizeXs,
+                  fontWeight: t.font.weightMedium,
+                  cursor: 'pointer',
+                }}
+              >
+                {assistantCollapsed ? 'Show assistant' : 'Hide assistant'}
+              </button>
+            }
+          >
+            {assistantCollapsed ? (
+              <div
+                style={{
+                  display: 'grid',
+                  gap: t.space.sm,
+                  padding: `${t.space.sm}px 0`,
+                }}
+              >
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  The assistant is still available, but collapsed so the KPI and performance sections stay primary.
+                </div>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+                  Top pending item: <strong>{overviewAttentionQueue[0]?.label ?? 'Recommended follow-up available'}</strong>
+                </div>
+              </div>
+            ) : (
+              <WorkspaceAssistantPanel
+                actions={overviewAttentionQueue}
+                onActionClick={handleOverviewAction}
+              />
+            )}
           </SectionCard>
         ) : null}
 
