@@ -37,6 +37,7 @@ interface JourneyDefinition {
   created_by?: string | null
   updated_by?: string | null
   archived_by?: string | null
+  created_at?: string | null
   archived_at?: string | null
   updated_at?: string | null
 }
@@ -607,6 +608,17 @@ function formatSeconds(v: number | null | undefined): string {
   const mins = v / 60
   if (mins < 60) return `${mins.toFixed(1)}m`
   return `${(mins / 60).toFixed(1)}h`
+}
+
+function formatLifecycleActor(value?: string | null): string {
+  const normalized = String(value || '').trim()
+  return normalized || 'Unknown'
+}
+
+function formatLifecycleTimestamp(value?: string | null): string {
+  if (!value) return '—'
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString()
 }
 
 function buildIncrementalityHref(experimentId: number): string {
@@ -2538,6 +2550,53 @@ export default function Journeys({
                     </div>
                     <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
                       Last rebuilt: {definitionLifecycleQuery.data.rebuild_state?.last_rebuilt_at ? new Date(definitionLifecycleQuery.data.rebuild_state.last_rebuilt_at).toLocaleString() : 'Never'}
+                    </div>
+                    <div
+                      style={{
+                        border: `1px solid ${t.color.borderLight}`,
+                        borderRadius: t.radius.sm,
+                        background: t.color.surface,
+                        padding: t.space.sm,
+                        display: 'grid',
+                        gap: 6,
+                      }}
+                    >
+                      <div style={{ fontSize: t.font.sizeXs, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                        Governance
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: t.space.sm }}>
+                        <div>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Created by</div>
+                          <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{formatLifecycleActor(definitionLifecycleQuery.data.definition.created_by)}</div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Created at</div>
+                          <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{formatLifecycleTimestamp(definitionLifecycleQuery.data.definition.created_at)}</div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Last changed by</div>
+                          <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{formatLifecycleActor(definitionLifecycleQuery.data.definition.updated_by)}</div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Last changed at</div>
+                          <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{formatLifecycleTimestamp(definitionLifecycleQuery.data.definition.updated_at)}</div>
+                        </div>
+                        {definitionLifecycleQuery.data.definition.archived_at || definitionLifecycleQuery.data.definition.archived_by ? (
+                          <>
+                            <div>
+                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Archived by</div>
+                              <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{formatLifecycleActor(definitionLifecycleQuery.data.definition.archived_by)}</div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Archived at</div>
+                              <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{formatLifecycleTimestamp(definitionLifecycleQuery.data.definition.archived_at)}</div>
+                            </div>
+                          </>
+                        ) : null}
+                      </div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                        Restore actions are reflected in the last-changed fields. Separate restore history is not tracked yet.
+                      </div>
                     </div>
                     {(definitionLifecycleQuery.data.warnings || []).length ? (
                       <div style={{ display: 'grid', gap: 4 }}>
