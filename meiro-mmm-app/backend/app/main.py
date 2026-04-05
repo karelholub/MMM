@@ -714,6 +714,8 @@ IMPORT_RUNS_FILE = DATA_DIR / "import_runs.json"
 LAST_IMPORT_RESULT_FILE = DATA_DIR / "last_import_result.json"
 JOURNEY_SOURCE_STATE_FILE = DATA_DIR / "journey_source_state.json"
 LATEST_UPLOAD_FILE = DATA_DIR / "journeys_upload_latest.json"
+EXPENSES_FILE = DATA_DIR / "expenses.json"
+EXPENSE_AUDIT_FILE = DATA_DIR / "expenses_audit.json"
 
 
 def _load_runs():
@@ -737,6 +739,142 @@ def _save_runs():
         RUNS_FILE.write_text(json.dumps(out, indent=0), encoding="utf-8")
     except Exception:
         pass
+
+
+def _build_default_expenses() -> Dict[str, ExpenseEntry]:
+    return {
+        "google_ads_2024-01": _with_converted_amount(
+            ExpenseEntry(
+                channel="google_ads",
+                cost_type="Media Spend",
+                amount=12500.00,
+                currency="USD",
+                reporting_currency=_default_reporting_currency(),
+                period="2024-01",
+                service_period_start="2024-01-01",
+                service_period_end="2024-01-31",
+                notes="Google Ads Jan 2024",
+                source_type="import",
+                source_name="google_ads",
+                actor_type="import",
+                created_at=_now_iso(),
+            )
+        ),
+        "meta_ads_2024-01": _with_converted_amount(
+            ExpenseEntry(
+                channel="meta_ads",
+                cost_type="Media Spend",
+                amount=8200.00,
+                currency="USD",
+                reporting_currency=_default_reporting_currency(),
+                period="2024-01",
+                service_period_start="2024-01-01",
+                service_period_end="2024-01-31",
+                notes="Meta Ads Jan 2024",
+                source_type="import",
+                source_name="meta_ads",
+                actor_type="import",
+                created_at=_now_iso(),
+            )
+        ),
+        "linkedin_ads_2024-01": _with_converted_amount(
+            ExpenseEntry(
+                channel="linkedin_ads",
+                cost_type="Media Spend",
+                amount=3500.00,
+                currency="USD",
+                reporting_currency=_default_reporting_currency(),
+                period="2024-01",
+                service_period_start="2024-01-01",
+                service_period_end="2024-01-31",
+                notes="LinkedIn Ads Jan 2024",
+                source_type="import",
+                source_name="linkedin_ads",
+                actor_type="import",
+                created_at=_now_iso(),
+            )
+        ),
+        "email_2024-01": _with_converted_amount(
+            ExpenseEntry(
+                channel="email",
+                cost_type="Tools/Software",
+                amount=450.00,
+                currency="USD",
+                reporting_currency=_default_reporting_currency(),
+                period="2024-01",
+                service_period_start="2024-01-01",
+                service_period_end="2024-01-31",
+                notes="Email platform cost Jan 2024",
+                source_type="manual",
+                source_name=None,
+                actor_type="manual",
+                created_at=_now_iso(),
+            )
+        ),
+        "whatsapp_2024-01": _with_converted_amount(
+            ExpenseEntry(
+                channel="whatsapp",
+                cost_type="Tools/Software",
+                amount=280.00,
+                currency="USD",
+                reporting_currency=_default_reporting_currency(),
+                period="2024-01",
+                service_period_start="2024-01-01",
+                service_period_end="2024-01-31",
+                notes="WhatsApp Business Jan 2024",
+                source_type="manual",
+                source_name=None,
+                actor_type="manual",
+                created_at=_now_iso(),
+            )
+        ),
+    }
+
+
+def _save_expense_state() -> None:
+    try:
+        payload = {
+            expense_id: _with_converted_amount(entry).model_dump()
+            for expense_id, entry in EXPENSES.items()
+        }
+        EXPENSES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        EXPENSES_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        EXPENSE_AUDIT_FILE.write_text(
+            json.dumps([event.model_dump() for event in EXPENSE_AUDIT_LOG], indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        logger.warning("Failed to persist expenses state", exc_info=True)
+
+
+def _load_expense_state() -> None:
+    global EXPENSES, EXPENSE_AUDIT_LOG
+    loaded_expenses: Dict[str, ExpenseEntry] = {}
+    loaded_audit: List[ExpenseChangeEvent] = []
+
+    if EXPENSES_FILE.exists():
+        try:
+            payload = json.loads(EXPENSES_FILE.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                for expense_id, raw in payload.items():
+                    if not isinstance(raw, dict):
+                        continue
+                    loaded_expenses[str(expense_id)] = _with_converted_amount(ExpenseEntry(**raw))
+        except Exception:
+            logger.warning("Failed to load persisted expenses; falling back to defaults", exc_info=True)
+            loaded_expenses = {}
+
+    if EXPENSE_AUDIT_FILE.exists():
+        try:
+            payload = json.loads(EXPENSE_AUDIT_FILE.read_text(encoding="utf-8"))
+            if isinstance(payload, list):
+                loaded_audit = [ExpenseChangeEvent(**row) for row in payload if isinstance(row, dict)]
+        except Exception:
+            logger.warning("Failed to load persisted expense audit log", exc_info=True)
+            loaded_audit = []
+
+    EXPENSES = loaded_expenses or _build_default_expenses()
+    EXPENSE_AUDIT_LOG = loaded_audit
 
 
 def _refresh_journey_aggregates_after_import(db, *, reprocess_days: Optional[int] = None) -> None:
@@ -1264,94 +1402,7 @@ def _with_converted_amount(entry: ExpenseEntry) -> ExpenseEntry:
     return entry
 
 
-# Load sample expenses
-EXPENSES = {
-    "google_ads_2024-01": _with_converted_amount(
-        ExpenseEntry(
-            channel="google_ads",
-            cost_type="Media Spend",
-            amount=12500.00,
-            currency="USD",
-            reporting_currency=_default_reporting_currency(),
-            period="2024-01",
-            service_period_start="2024-01-01",
-            service_period_end="2024-01-31",
-            notes="Google Ads Jan 2024",
-            source_type="import",
-            source_name="google_ads",
-            actor_type="import",
-            created_at=_now_iso(),
-        )
-    ),
-    "meta_ads_2024-01": _with_converted_amount(
-        ExpenseEntry(
-            channel="meta_ads",
-            cost_type="Media Spend",
-            amount=8200.00,
-            currency="USD",
-            reporting_currency=_default_reporting_currency(),
-            period="2024-01",
-            service_period_start="2024-01-01",
-            service_period_end="2024-01-31",
-            notes="Meta Ads Jan 2024",
-            source_type="import",
-            source_name="meta_ads",
-            actor_type="import",
-            created_at=_now_iso(),
-        )
-    ),
-    "linkedin_ads_2024-01": _with_converted_amount(
-        ExpenseEntry(
-            channel="linkedin_ads",
-            cost_type="Media Spend",
-            amount=3500.00,
-            currency="USD",
-            reporting_currency=_default_reporting_currency(),
-            period="2024-01",
-            service_period_start="2024-01-01",
-            service_period_end="2024-01-31",
-            notes="LinkedIn Ads Jan 2024",
-            source_type="import",
-            source_name="linkedin_ads",
-            actor_type="import",
-            created_at=_now_iso(),
-        )
-    ),
-    "email_2024-01": _with_converted_amount(
-        ExpenseEntry(
-            channel="email",
-            cost_type="Tools/Software",
-            amount=450.00,
-            currency="USD",
-            reporting_currency=_default_reporting_currency(),
-            period="2024-01",
-            service_period_start="2024-01-01",
-            service_period_end="2024-01-31",
-            notes="Email platform cost Jan 2024",
-            source_type="manual",
-            source_name=None,
-            actor_type="manual",
-            created_at=_now_iso(),
-        )
-    ),
-    "whatsapp_2024-01": _with_converted_amount(
-        ExpenseEntry(
-            channel="whatsapp",
-            cost_type="Tools/Software",
-            amount=280.00,
-            currency="USD",
-            reporting_currency=_default_reporting_currency(),
-            period="2024-01",
-            service_period_start="2024-01-01",
-            service_period_end="2024-01-31",
-            notes="WhatsApp Business Jan 2024",
-            source_type="manual",
-            source_name=None,
-            actor_type="manual",
-            created_at=_now_iso(),
-        )
-    ),
-}
+_load_expense_state()
 
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
@@ -1968,6 +2019,7 @@ def add_expense(entry: ExpenseEntry):
             note=change_note,
         )
     )
+    _save_expense_state()
     return {"id": expense_id, **entry.model_dump()}
 
 
@@ -1998,6 +2050,7 @@ def update_expense(expense_id: str, entry: ExpenseEntry):
             note=change_note,
         )
     )
+    _save_expense_state()
     return {"id": expense_id, **entry.model_dump()}
 
 
@@ -2028,6 +2081,7 @@ def delete_expense(expense_id: str, change_note: Optional[str] = Query(None)):
             note=change_note,
         )
     )
+    _save_expense_state()
     return {"id": expense_id, **entry.model_dump()}
 
 
@@ -2058,6 +2112,7 @@ def restore_expense(expense_id: str, change_note: Optional[str] = Query(None)):
             note=change_note,
         )
     )
+    _save_expense_state()
     return {"id": expense_id, **entry.model_dump()}
 
 
@@ -4300,7 +4355,7 @@ def connectors_status():
     return ads_connectors_service.connectors_status(data_dir=DATA_DIR)
 
 def fetch_meta(ad_account_id: str, since: str, until: str, avg_aov: float = 0.0, access_token: Optional[str] = None):
-    return ads_connectors_service.fetch_meta(
+    result = ads_connectors_service.fetch_meta(
         ad_account_id=ad_account_id,
         since=since,
         until=until,
@@ -4317,6 +4372,8 @@ def fetch_meta(ad_account_id: str, since: str, until: str, avg_aov: float = 0.0,
         now_iso_fn=_now_iso,
         import_sync_state_obj=IMPORT_SYNC_STATE,
     )
+    _save_expense_state()
+    return result
 
 def fetch_google(segments_date_from: str, segments_date_to: str):
     return ads_connectors_service.fetch_google(
@@ -4328,7 +4385,7 @@ def fetch_google(segments_date_from: str, segments_date_to: str):
     )
 
 def fetch_linkedin(since: str, until: str, access_token: Optional[str] = None):
-    return ads_connectors_service.fetch_linkedin(
+    result = ads_connectors_service.fetch_linkedin(
         since=since,
         until=until,
         access_token=access_token,
@@ -4343,6 +4400,8 @@ def fetch_linkedin(since: str, until: str, access_token: Optional[str] = None):
         now_iso_fn=_now_iso,
         import_sync_state_obj=IMPORT_SYNC_STATE,
     )
+    _save_expense_state()
+    return result
 
 def merge_ads():
     return ads_connectors_service.merge_ads(data_dir=DATA_DIR)
