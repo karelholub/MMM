@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { tokens } from '../theme/tokens'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
+import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import { navigateForRecommendedAction } from '../lib/recommendedActions'
 import {
@@ -194,6 +195,10 @@ export default function BudgetOptimizer({
   const [isOptimizing, setIsOptimizing] = useState(false)
   const [whatIfResult, setWhatIfResult] = useState<WhatIfResult | null>(null)
   const [isWhatIfLoading, setIsWhatIfLoading] = useState(false)
+  const [showContextPanel, setShowContextPanel] = useState(false)
+  const [showEvidencePanel, setShowEvidencePanel] = useState(false)
+  const [showSavedPanel, setShowSavedPanel] = useState(false)
+  const [showRealizationPanel, setShowRealizationPanel] = useState(false)
 
   const totalBudgetMultiplier =
     totalBudgetMode === 'constant' ? 1.0 : 1.0 + totalBudgetChangePct / 100
@@ -622,6 +627,69 @@ export default function BudgetOptimizer({
       <div
         style={{
           display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+          gap: t.space.md,
+          marginBottom: t.space.lg,
+        }}
+      >
+        {[
+          { label: 'Source', value: runId ? 'MMM model run + dataset preview' : 'Awaiting model run' },
+          { label: 'Observed rows', value: dataset.length.toLocaleString() },
+          { label: 'Channels', value: channelList.length.toLocaleString() },
+          { label: 'Baseline spend', value: formatCurrency(totalBaselineSpend) },
+          {
+            label: 'Modeled periods',
+            value: recommendationsQuery.data?.summary.periods != null
+              ? recommendationsQuery.data.summary.periods.toLocaleString()
+              : '—',
+          },
+        ].map((item) => (
+          <div
+            key={item.label}
+            style={{
+              background: t.color.surface,
+              border: `1px solid ${t.color.borderLight}`,
+              borderRadius: t.radius.md,
+              padding: t.space.md,
+              boxShadow: t.shadowSm,
+            }}
+          >
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>{item.label}</div>
+            <div style={{ marginTop: 4, fontSize: t.font.sizeSm, color: t.color.text }}>{item.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ marginBottom: t.space.xl }}>
+        <CollapsiblePanel
+          title="Model & Dataset Context"
+          subtitle="What data this optimizer uses and how much trust to place in range-bound recommendations."
+          open={showContextPanel}
+          onToggle={() => setShowContextPanel((value) => !value)}
+        >
+          <div style={{ display: 'grid', gap: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+            <div>
+              Recommendations are derived from the active MMM run and the linked dataset preview. Manual sliders scale each channel relative to observed baseline spend.
+            </div>
+            <div>
+              Dataset rows: <strong style={{ color: t.color.text }}>{dataset.length.toLocaleString()}</strong> · baseline spend{' '}
+              <strong style={{ color: t.color.text }}>{formatCurrency(totalBaselineSpend)}</strong> · weighted ROI{' '}
+              <strong style={{ color: t.color.text }}>{(recommendationsQuery.data?.summary.weighted_roi ?? 0).toFixed(2)}</strong>
+            </div>
+            <div>
+              Channels considered: <strong style={{ color: t.color.text }}>{channelList.length.toLocaleString()}</strong>
+              {' · '}modeled periods <strong style={{ color: t.color.text }}>{(recommendationsQuery.data?.summary.periods ?? 0).toLocaleString()}</strong>
+            </div>
+            <div>
+              Trust layer: recommendations are strongest inside the observed spend range. Extrapolation warnings appear when the scenario pushes outside those historical bounds.
+            </div>
+          </div>
+        </CollapsiblePanel>
+      </div>
+
+      <div
+        style={{
+          display: 'grid',
           gap: t.space.lg,
           marginBottom: t.space.xl,
           padding: t.space.lg,
@@ -882,17 +950,12 @@ export default function BudgetOptimizer({
             </div>
 
             <div style={{ display: 'grid', gap: t.space.md }}>
-              <div
-                style={{
-                  padding: t.space.lg,
-                  borderRadius: t.radius.md,
-                  border: `1px solid ${t.color.borderLight}`,
-                  background: t.color.surface,
-                }}
+              <CollapsiblePanel
+                title="Evidence"
+                subtitle="Why the current recommendation is being suggested."
+                open={showEvidencePanel}
+                onToggle={() => setShowEvidencePanel((value) => !value)}
               >
-                <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, marginBottom: t.space.sm }}>
-                  Evidence
-                </div>
                 <div style={{ display: 'grid', gap: t.space.sm }}>
                   {topRecommendation.evidence.map((item) => (
                     <div key={item} style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
@@ -904,19 +967,14 @@ export default function BudgetOptimizer({
                   Based on {recommendationsQuery.data?.summary.periods ?? 0} modeled periods across{' '}
                   {recommendationsQuery.data?.summary.channels_considered ?? 0} channels.
                 </div>
-              </div>
+              </CollapsiblePanel>
 
-              <div
-                style={{
-                  padding: t.space.lg,
-                  borderRadius: t.radius.md,
-                  border: `1px solid ${t.color.borderLight}`,
-                  background: t.color.surface,
-                }}
+              <CollapsiblePanel
+                title="Saved scenarios"
+                subtitle="Previously stored budget plans for this run."
+                open={showSavedPanel}
+                onToggle={() => setShowSavedPanel((value) => !value)}
               >
-                <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, marginBottom: t.space.sm }}>
-                  Saved scenarios
-                </div>
                 {savedScenariosQuery.data?.items?.length ? (
                   <div style={{ display: 'grid', gap: t.space.sm }}>
                     {savedScenariosQuery.data.items.slice(0, 3).map((scenario) => (
@@ -959,19 +1017,14 @@ export default function BudgetOptimizer({
                     Scenario saved.
                   </div>
                 ) : null}
-              </div>
+              </CollapsiblePanel>
 
-              <div
-                style={{
-                  padding: t.space.lg,
-                  borderRadius: t.radius.md,
-                  border: `1px solid ${t.color.borderLight}`,
-                  background: t.color.surface,
-                }}
+              <CollapsiblePanel
+                title="Rollout realization"
+                subtitle="Execution progress after recommendations are turned into change requests."
+                open={showRealizationPanel}
+                onToggle={() => setShowRealizationPanel((value) => !value)}
               >
-                <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, marginBottom: t.space.sm }}>
-                  Rollout realization
-                </div>
                 {realizationQuery.data?.items?.length ? (
                   <div style={{ display: 'grid', gap: t.space.sm }}>
                     {realizationQuery.data.items.slice(0, 3).map((item) => (
@@ -1011,7 +1064,7 @@ export default function BudgetOptimizer({
                     No rollout tracking yet. Create change requests from a saved recommendation to start tracking execution.
                   </div>
                 )}
-              </div>
+              </CollapsiblePanel>
             </div>
           </div>
         ) : (

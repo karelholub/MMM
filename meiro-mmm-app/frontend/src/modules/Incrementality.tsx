@@ -4,6 +4,7 @@ import { tokens as t } from '../theme/tokens'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
+import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 
 function objectPreview(value: Record<string, unknown> | null | undefined): string {
   if (!value || typeof value !== 'object') return '—'
@@ -441,6 +442,8 @@ export default function IncrementalityPage() {
   const [showPowerCalc, setShowPowerCalc] = useState(false)
   const [showTimeSeries, setShowTimeSeries] = useState(false)
   const [showAdvancedSetup, setShowAdvancedSetup] = useState(false)
+  const [showPlannerContext, setShowPlannerContext] = useState(false)
+  const [showExecutionSignals, setShowExecutionSignals] = useState(false)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | 'draft' | 'running' | 'stopped'>('all')
   const [powerPlans, setPowerPlans] = useState<Record<number, PowerAnalysisResult>>({})
@@ -868,6 +871,14 @@ export default function IncrementalityPage() {
     () => setupChannels.find((item) => item.channel === form.channel) ?? eligibleChannels[0] ?? null,
     [setupChannels, eligibleChannels, form.channel],
   )
+  const plannerPeriodLabel = formatDateRangeLabel(
+    globalDateFrom || setupContext?.date_from || null,
+    globalDateTo || setupContext?.date_to || null,
+  )
+  const plannerFreshnessLabel =
+    journeysSummary?.data_freshness_hours != null
+      ? `${Math.round(Number(journeysSummary.data_freshness_hours || 0))}h lag`
+      : 'Freshness unavailable'
 
   useEffect(() => {
     if (!setupContext) return
@@ -978,6 +989,65 @@ export default function IncrementalityPage() {
         >
           {showPowerCalc ? 'Hide' : 'Show'} power calculator
         </button>
+      </div>
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+          gap: tkn.space.md,
+          marginBottom: tkn.space.lg,
+        }}
+      >
+        {[
+          { label: 'Source', value: 'Observed journeys + KPI settings' },
+          { label: 'Planner period', value: plannerPeriodLabel },
+          { label: 'Observed channels', value: (setupContext?.summary.observed_channels ?? 0).toLocaleString() },
+          { label: 'KPIs', value: (setupContext?.kpis.length ?? 0).toLocaleString() },
+          { label: 'Freshness', value: plannerFreshnessLabel },
+        ].map((item) => (
+          <div
+            key={item.label}
+            style={{
+              background: tkn.color.surface,
+              border: `1px solid ${tkn.color.borderLight}`,
+              borderRadius: tkn.radius.md,
+              padding: tkn.space.md,
+              boxShadow: tkn.shadowSm,
+            }}
+          >
+            <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted, textTransform: 'uppercase' }}>{item.label}</div>
+            <div style={{ marginTop: 4, fontSize: tkn.font.sizeSm, color: tkn.color.text }}>{item.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ marginBottom: tkn.space.lg }}>
+        <CollapsiblePanel
+          title="Planner Context"
+          subtitle="Where the setup options come from and how the planner interprets the current workspace."
+          open={showPlannerContext}
+          onToggle={() => setShowPlannerContext((value) => !value)}
+        >
+          <div style={{ display: 'grid', gap: tkn.space.sm, fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+            <div>
+              Setup options are derived from observed journeys in the selected window and KPI definitions from Settings. Unsupported channels stay out of the planner by default.
+            </div>
+            <div>
+              Current planner scope: <strong style={{ color: tkn.color.text }}>{plannerPeriodLabel}</strong>
+              {' · '}journeys <strong style={{ color: tkn.color.text }}>{(setupContext?.summary.journeys ?? 0).toLocaleString()}</strong>
+              {' · '}converted <strong style={{ color: tkn.color.text }}>{(setupContext?.summary.converted_journeys ?? 0).toLocaleString()}</strong>
+            </div>
+            {!!setupContext?.warnings?.length && (
+              <div>{setupContext.warnings.join(' ')}</div>
+            )}
+            {selectedSetupChannel?.execution && (
+              <div>
+                Selected channel execution: <strong style={{ color: tkn.color.text }}>{executionSummaryLabel(selectedSetupChannel.execution)}</strong>
+              </div>
+            )}
+          </div>
+        </CollapsiblePanel>
       </div>
 
       {showPowerCalc && (
@@ -2103,76 +2173,87 @@ export default function IncrementalityPage() {
                     </span>
                   )}
                 </div>
-                {launchReadiness && (
-                  <div
-                    style={{
-                      marginTop: tkn.space.md,
-                      padding: tkn.space.sm,
-                      borderRadius: tkn.radius.sm,
-                      border: `1px solid ${
-                        launchReadiness.status === 'blocked'
-                          ? '#f0b2b2'
-                          : launchReadiness.status === 'manual_review'
-                          ? '#efd8a6'
-                          : tkn.color.borderLight
-                      }`,
-                      background:
-                        launchReadiness.status === 'blocked'
-                          ? '#fff3f3'
-                          : launchReadiness.status === 'manual_review'
-                          ? '#fff9ec'
-                          : tkn.color.surfaceMuted ?? tkn.color.surface,
-                    }}
-                  >
-                    <div style={{ fontSize: tkn.font.sizeSm, fontWeight: tkn.font.weightSemibold, color: tkn.color.text }}>
-                      Launch readiness: {launchReadinessLabel(launchReadiness.status)}
-                    </div>
-                    {launchReadiness.blockers.length > 0 && (
-                      <div style={{ marginTop: 4, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
-                        <strong style={{ color: tkn.color.text }}>Blockers:</strong> {launchReadiness.blockers.join(' • ')}
+                {(launchReadiness || healthQuery.data?.provenance) && (
+                  <div style={{ marginTop: tkn.space.md }}>
+                    <CollapsiblePanel
+                      title="Execution Signals"
+                      subtitle="Launch blockers, tracking gaps, and observed provenance for this experiment window."
+                      open={showExecutionSignals}
+                      onToggle={() => setShowExecutionSignals((value) => !value)}
+                    >
+                      <div style={{ display: 'grid', gap: tkn.space.md }}>
+                        {launchReadiness && (
+                          <div
+                            style={{
+                              padding: tkn.space.sm,
+                              borderRadius: tkn.radius.sm,
+                              border: `1px solid ${
+                                launchReadiness.status === 'blocked'
+                                  ? '#f0b2b2'
+                                  : launchReadiness.status === 'manual_review'
+                                  ? '#efd8a6'
+                                  : tkn.color.borderLight
+                              }`,
+                              background:
+                                launchReadiness.status === 'blocked'
+                                  ? '#fff3f3'
+                                  : launchReadiness.status === 'manual_review'
+                                  ? '#fff9ec'
+                                  : tkn.color.surfaceMuted ?? tkn.color.surface,
+                            }}
+                          >
+                            <div style={{ fontSize: tkn.font.sizeSm, fontWeight: tkn.font.weightSemibold, color: tkn.color.text }}>
+                              Launch readiness: {launchReadinessLabel(launchReadiness.status)}
+                            </div>
+                            {launchReadiness.blockers.length > 0 && (
+                              <div style={{ marginTop: 4, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                                <strong style={{ color: tkn.color.text }}>Blockers:</strong> {launchReadiness.blockers.join(' • ')}
+                              </div>
+                            )}
+                            {launchReadiness.warnings.length > 0 && (
+                              <div style={{ marginTop: 4, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                                <strong style={{ color: tkn.color.text }}>Warnings:</strong> {launchReadiness.warnings.join(' • ')}
+                              </div>
+                            )}
+                            {launchReadiness.tracking_gaps.length > 0 && (
+                              <div style={{ marginTop: 4, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                                <strong style={{ color: tkn.color.text }}>Tracking gaps:</strong> {launchReadiness.tracking_gaps.join(' • ')}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {healthQuery.data?.provenance && (
+                          <div
+                            style={{
+                              padding: tkn.space.sm,
+                              borderRadius: tkn.radius.sm,
+                              border: `1px solid ${tkn.color.borderLight}`,
+                              background: tkn.color.surfaceMuted ?? tkn.color.surface,
+                            }}
+                          >
+                            <div style={{ fontSize: tkn.font.sizeSm, fontWeight: tkn.font.weightSemibold, color: tkn.color.text }}>
+                              Observed channel provenance
+                            </div>
+                            <div style={{ marginTop: 4, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                              {healthQuery.data.provenance.touchpoints} touchpoints in the experiment window.
+                            </div>
+                            <div style={{ marginTop: 4, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                              {provenancePreview(healthQuery.data.provenance)}
+                            </div>
+                            {!!healthQuery.data.provenance.recent_examples.length && (
+                              <div style={{ marginTop: 6, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                                Latest observed touchpoints:{' '}
+                                {healthQuery.data.provenance.recent_examples
+                                  .map((row) =>
+                                    [row.medium || row.source || 'unknown', row.campaign].filter(Boolean).join(' / ')
+                                  )
+                                  .join(' • ')}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
-                    )}
-                    {launchReadiness.warnings.length > 0 && (
-                      <div style={{ marginTop: 4, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
-                        <strong style={{ color: tkn.color.text }}>Warnings:</strong> {launchReadiness.warnings.join(' • ')}
-                      </div>
-                    )}
-                    {launchReadiness.tracking_gaps.length > 0 && (
-                      <div style={{ marginTop: 4, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
-                        <strong style={{ color: tkn.color.text }}>Tracking gaps:</strong> {launchReadiness.tracking_gaps.join(' • ')}
-                      </div>
-                    )}
-                  </div>
-                )}
-                {healthQuery.data?.provenance && (
-                  <div
-                    style={{
-                      marginTop: tkn.space.md,
-                      padding: tkn.space.sm,
-                      borderRadius: tkn.radius.sm,
-                      border: `1px solid ${tkn.color.borderLight}`,
-                      background: tkn.color.surfaceMuted ?? tkn.color.surface,
-                    }}
-                  >
-                    <div style={{ fontSize: tkn.font.sizeSm, fontWeight: tkn.font.weightSemibold, color: tkn.color.text }}>
-                      Observed channel provenance
-                    </div>
-                    <div style={{ marginTop: 4, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
-                      {healthQuery.data.provenance.touchpoints} touchpoints in the experiment window.
-                    </div>
-                    <div style={{ marginTop: 4, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
-                      {provenancePreview(healthQuery.data.provenance)}
-                    </div>
-                    {!!healthQuery.data.provenance.recent_examples.length && (
-                      <div style={{ marginTop: 6, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
-                        Latest observed touchpoints:{' '}
-                        {healthQuery.data.provenance.recent_examples
-                          .map((row) =>
-                            [row.medium || row.source || 'unknown', row.campaign].filter(Boolean).join(' / ')
-                          )
-                          .join(' • ')}
-                      </div>
-                    )}
+                    </CollapsiblePanel>
                   </div>
                 )}
                 {detailQuery.data?.notes && (

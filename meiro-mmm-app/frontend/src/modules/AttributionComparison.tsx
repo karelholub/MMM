@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { tokens } from '../theme/tokens'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
+import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import { apiGetJson } from '../lib/apiClient'
 
@@ -160,6 +161,8 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
   const [showDeltaRow, setShowDeltaRow] = useState(false)
   const [directMode, setDirectMode] = useState<'include' | 'exclude_view'>('include')
   const [showMarkovDiagnostics, setShowMarkovDiagnostics] = useState(false)
+  const [showContextPanel, setShowContextPanel] = useState(false)
+  const [showReplayPanel, setShowReplayPanel] = useState(false)
 
   const resultsQuery = useQuery<Record<string, ModelResult>>({
     queryKey: ['attribution-results'],
@@ -179,6 +182,18 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
   const configVersion = configMeta?.config_version ?? null
   const readiness = journeysSummary?.readiness ?? null
   const latestEventReplayDiagnostics = readiness?.details?.latest_event_replay?.diagnostics
+  const periodLabel =
+    journeysSummary?.date_min && journeysSummary?.date_max
+      ? `${new Date(journeysSummary.date_min).toLocaleDateString()} – ${new Date(journeysSummary.date_max).toLocaleDateString()}`
+      : 'Current dataset (range not configured)'
+  const freshnessLabel =
+    journeysSummary?.data_freshness_hours != null
+      ? `${Math.round(Number(journeysSummary.data_freshness_hours || 0))}h lag`
+      : 'Freshness unavailable'
+  const coverageLabel =
+    readiness?.summary?.primary_kpi_coverage != null
+      ? `${(Number(readiness.summary.primary_kpi_coverage) * 100).toFixed(1)}% KPI coverage`
+      : 'Coverage unavailable'
 
   const baselineKey = useMemo(() => {
     if (models.includes(baselineModel)) return baselineModel
@@ -368,7 +383,37 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
         />
       ) : null}
 
-      {/* Measurement context header */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+          gap: t.space.md,
+          marginBottom: t.space.lg,
+        }}
+      >
+        {[
+          { label: 'Source', value: 'Live attribution results' },
+          { label: 'Period', value: periodLabel },
+          { label: 'Conversion', value: conversionKey ? `Conversion: ${conversionKey}` : 'Conversion: N/A' },
+          { label: 'Freshness', value: freshnessLabel },
+          { label: 'Coverage', value: coverageLabel },
+        ].map((item) => (
+          <div
+            key={item.label}
+            style={{
+              background: t.color.surface,
+              border: `1px solid ${t.color.borderLight}`,
+              borderRadius: t.radius.md,
+              padding: t.space.md,
+              boxShadow: t.shadowSm,
+            }}
+          >
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>{item.label}</div>
+            <div style={{ marginTop: 4, fontSize: t.font.sizeSm, color: t.color.text }}>{item.value}</div>
+          </div>
+        ))}
+      </div>
+
       <div
         style={{
           display: 'flex',
@@ -408,13 +453,7 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
           >
             Date range
           </span>
-          <span style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
-            {journeysSummary?.date_min && journeysSummary?.date_max
-              ? `${new Date(journeysSummary.date_min).toLocaleDateString()} – ${new Date(
-                  journeysSummary.date_max,
-                ).toLocaleDateString()}`
-              : 'Current dataset (range not configured)'}
-          </span>
+          <span style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{periodLabel}</span>
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -499,6 +538,80 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
             </div>
           )}
         </div>
+      </div>
+
+      <div style={{ display: 'grid', gap: t.space.lg, marginBottom: t.space.xl }}>
+        <CollapsiblePanel
+          title="Method & Context"
+          subtitle="Measurement windows, eligible touchpoints, and the current direct-traffic view filter."
+          open={showContextPanel}
+          onToggle={() => setShowContextPanel((value) => !value)}
+        >
+          <div style={{ display: 'grid', gap: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+            <div>
+              This page compares model outputs from the current attribution run. Direct handling is a view-only filter here and does not rerun attribution.
+            </div>
+            <div>
+              Current view: <strong style={{ color: t.color.text }}>{directMode === 'include' ? 'Include Direct' : 'Exclude Direct'}</strong>
+            </div>
+            <div>
+              Measurement windows:{' '}
+              <strong style={{ color: t.color.text }}>
+                {configMeta?.time_window
+                  ? `click ${configMeta.time_window.click_lookback_days ?? '—'}d · impression ${configMeta.time_window.impression_lookback_days ?? '—'}d · session ${configMeta.time_window.session_timeout_minutes ?? '—'}min`
+                  : 'not configured for this model'}
+              </strong>
+            </div>
+            <div>
+              Eligible touchpoints:{' '}
+              <strong style={{ color: t.color.text }}>
+                {configMeta?.eligible_touchpoints
+                  ? [
+                      configMeta.eligible_touchpoints.include_channels?.length
+                        ? `+${configMeta.eligible_touchpoints.include_channels.join(', ')}`
+                        : null,
+                      configMeta.eligible_touchpoints.exclude_channels?.length
+                        ? `excl. ${configMeta.eligible_touchpoints.exclude_channels.join(', ')}`
+                        : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ') || 'all observed channels'
+                  : 'not configured'}
+              </strong>
+            </div>
+          </div>
+        </CollapsiblePanel>
+
+        {(latestEventReplayDiagnostics || readiness) && (
+          <CollapsiblePanel
+            title="Replay & Reliability"
+            subtitle="Coverage, freshness, and latest raw-event replay diagnostics behind the current attribution outputs."
+            open={showReplayPanel}
+            onToggle={() => setShowReplayPanel((value) => !value)}
+          >
+            <div style={{ display: 'grid', gap: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              <div>
+                Current readiness: <strong style={{ color: t.color.text }}>{readiness?.status || 'unknown'}</strong>
+                {readiness?.warnings?.length ? ` · ${readiness.warnings.slice(0, 2).join(' · ')}` : ''}
+              </div>
+              <div>
+                KPI coverage <strong style={{ color: t.color.text }}>{coverageLabel}</strong> · Freshness{' '}
+                <strong style={{ color: t.color.text }}>{freshnessLabel}</strong>
+              </div>
+              {latestEventReplayDiagnostics ? (
+                <div>
+                  Latest replay: events <strong style={{ color: t.color.text }}>{Number(latestEventReplayDiagnostics.events_loaded || 0).toLocaleString()}</strong>
+                  {' · '}profiles <strong style={{ color: t.color.text }}>{Number(latestEventReplayDiagnostics.profiles_reconstructed || 0).toLocaleString()}</strong>
+                  {' · '}touchpoints <strong style={{ color: t.color.text }}>{Number(latestEventReplayDiagnostics.touchpoints_reconstructed || 0).toLocaleString()}</strong>
+                  {' · '}conversions <strong style={{ color: t.color.text }}>{Number(latestEventReplayDiagnostics.conversions_reconstructed || 0).toLocaleString()}</strong>
+                </div>
+              ) : null}
+              {!!latestEventReplayDiagnostics?.warnings?.length && (
+                <div style={{ color: t.color.warning }}>{latestEventReplayDiagnostics.warnings.join(' · ')}</div>
+              )}
+            </div>
+          </CollapsiblePanel>
+        )}
       </div>
 
       {/* Summary strip */}
