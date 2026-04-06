@@ -4770,7 +4770,7 @@ export default function Journeys({
                   <select
                     value={comparePathHash}
                     onChange={(e) => setComparePathHash(e.target.value)}
-                    style={{ minWidth: 260, padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, fontSize: t.font.sizeSm }}
+                    style={{ minWidth: 0, width: 'min(100%, 360px)', padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, fontSize: t.font.sizeSm }}
                   >
                     <option value="">Compare against another path…</option>
                     {compareCandidateOptions.map((row) => (

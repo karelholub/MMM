@@ -268,6 +268,13 @@ export default function PathArchetypes() {
 
   return (
     <div style={{ maxWidth: 1200, margin: '0 auto' }}>
+      <style>{`
+        @media (max-width: 1100px) {
+          .path-archetypes-split-layout {
+            grid-template-columns: minmax(0, 1fr) !important;
+          }
+        }
+      `}</style>
       <div
         style={{
           display: 'flex',
@@ -301,7 +308,7 @@ export default function PathArchetypes() {
             flexDirection: 'column',
             gap: tkn.space.xs,
             alignItems: 'flex-end',
-            minWidth: 260,
+            minWidth: 0,
           }}
         >
           {/* Measurement context bar (read-only period + conversion) */}
@@ -718,11 +725,13 @@ export default function PathArchetypes() {
         {data && clustersRaw.length > 0 && (
           <>
             <div
+              className="path-archetypes-split-layout"
               style={{
                 display: 'grid',
                 gridTemplateColumns: 'minmax(260px, 1.2fr) minmax(0, 2fr)',
                 gap: tkn.space.lg,
                 alignItems: 'start',
+                minWidth: 0,
               }}
             >
               {/* Archetype list */}
@@ -731,6 +740,7 @@ export default function PathArchetypes() {
                   border: `1px solid ${tkn.color.borderLight}`,
                   borderRadius: tkn.radius.lg,
                   overflow: 'hidden',
+                  minWidth: 0,
                 }}
               >
                 <div
@@ -874,6 +884,7 @@ export default function PathArchetypes() {
                     borderRadius: tkn.radius.lg,
                     padding: tkn.space.xl,
                     boxShadow: tkn.shadowSm,
+                    minWidth: 0,
                   }}
                 >
                   <div

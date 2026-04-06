@@ -1096,6 +1096,7 @@ export default function ConversionPaths() {
           gridTemplateColumns: '1fr 1fr',
           gap: t.space.xl,
           marginBottom: t.space.xl,
+          minWidth: 0,
         }}
       >
         <div
@@ -1105,6 +1106,7 @@ export default function ConversionPaths() {
             borderRadius: t.radius.lg,
             padding: t.space.xl,
             boxShadow: t.shadowSm,
+            minWidth: 0,
           }}
         >
           <h3 style={{ margin: `0 0 ${t.space.lg}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
@@ -1128,6 +1130,7 @@ export default function ConversionPaths() {
             borderRadius: t.radius.lg,
             padding: t.space.xl,
             boxShadow: t.shadowSm,
+            minWidth: 0,
           }}
         >
           <h3 style={{ margin: `0 0 ${t.space.lg}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
