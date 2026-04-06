@@ -2541,6 +2541,17 @@ export default function Journeys({
             .journeys-card-grid {
               grid-template-columns: minmax(0, 1fr) !important;
             }
+            .journeys-lifecycle-grid {
+              grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            }
+            .journeys-governance-grid {
+              grid-template-columns: minmax(0, 1fr) !important;
+            }
+          }
+          @media (max-width: 760px) {
+            .journeys-lifecycle-grid {
+              grid-template-columns: minmax(0, 1fr) !important;
+            }
           }
         `}</style>
         <SectionCard
@@ -2868,7 +2879,7 @@ export default function Journeys({
                     <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
                       Definition lifecycle
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: t.space.sm }}>
+                    <div className="journeys-lifecycle-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(180px, 100%), 1fr))', gap: t.space.sm, minWidth: 0 }}>
                       {[
                         { label: 'Saved views', value: definitionLifecycleQuery.data.dependency_counts.saved_views, target: 'saved_views' as const, actionLabel: 'Open saved views' },
                         { label: 'Funnels', value: definitionLifecycleQuery.data.dependency_counts.funnels, target: 'funnels' as const, actionLabel: 'Open funnels' },
@@ -2888,11 +2899,13 @@ export default function Journeys({
                             background: t.color.surface,
                             textAlign: 'left',
                             cursor: 'pointer',
+                            minWidth: 0,
+                            overflow: 'hidden',
                           }}
                         >
-                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, overflowWrap: 'anywhere' }}>{item.label}</div>
                           <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>{item.value.toLocaleString()}</div>
-                          <div style={{ fontSize: t.font.sizeXs, color: t.color.accent, marginTop: 4 }}>{item.actionLabel}</div>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.accent, marginTop: 4, overflowWrap: 'anywhere' }}>{item.actionLabel}</div>
                         </button>
                       ))}
                     </div>
@@ -2912,32 +2925,32 @@ export default function Journeys({
                       <div style={{ fontSize: t.font.sizeXs, fontWeight: t.font.weightSemibold, color: t.color.text }}>
                         Governance
                       </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: t.space.sm }}>
-                        <div>
+                      <div className="journeys-governance-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(180px, 100%), 1fr))', gap: t.space.sm, minWidth: 0 }}>
+                        <div style={{ minWidth: 0 }}>
                           <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Created by</div>
-                          <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{formatLifecycleActor(definitionLifecycleQuery.data.definition.created_by)}</div>
+                          <div style={{ fontSize: t.font.sizeSm, color: t.color.text, overflowWrap: 'anywhere' }}>{formatLifecycleActor(definitionLifecycleQuery.data.definition.created_by)}</div>
                         </div>
-                        <div>
+                        <div style={{ minWidth: 0 }}>
                           <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Created at</div>
-                          <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{formatLifecycleTimestamp(definitionLifecycleQuery.data.definition.created_at)}</div>
+                          <div style={{ fontSize: t.font.sizeSm, color: t.color.text, overflowWrap: 'anywhere' }}>{formatLifecycleTimestamp(definitionLifecycleQuery.data.definition.created_at)}</div>
                         </div>
-                        <div>
+                        <div style={{ minWidth: 0 }}>
                           <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Last changed by</div>
-                          <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{formatLifecycleActor(definitionLifecycleQuery.data.definition.updated_by)}</div>
+                          <div style={{ fontSize: t.font.sizeSm, color: t.color.text, overflowWrap: 'anywhere' }}>{formatLifecycleActor(definitionLifecycleQuery.data.definition.updated_by)}</div>
                         </div>
-                        <div>
+                        <div style={{ minWidth: 0 }}>
                           <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Last changed at</div>
-                          <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{formatLifecycleTimestamp(definitionLifecycleQuery.data.definition.updated_at)}</div>
+                          <div style={{ fontSize: t.font.sizeSm, color: t.color.text, overflowWrap: 'anywhere' }}>{formatLifecycleTimestamp(definitionLifecycleQuery.data.definition.updated_at)}</div>
                         </div>
                         {definitionLifecycleQuery.data.definition.archived_at || definitionLifecycleQuery.data.definition.archived_by ? (
                           <>
-                            <div>
+                            <div style={{ minWidth: 0 }}>
                               <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Archived by</div>
-                              <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{formatLifecycleActor(definitionLifecycleQuery.data.definition.archived_by)}</div>
+                              <div style={{ fontSize: t.font.sizeSm, color: t.color.text, overflowWrap: 'anywhere' }}>{formatLifecycleActor(definitionLifecycleQuery.data.definition.archived_by)}</div>
                             </div>
-                            <div>
+                            <div style={{ minWidth: 0 }}>
                               <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Archived at</div>
-                              <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{formatLifecycleTimestamp(definitionLifecycleQuery.data.definition.archived_at)}</div>
+                              <div style={{ fontSize: t.font.sizeSm, color: t.color.text, overflowWrap: 'anywhere' }}>{formatLifecycleTimestamp(definitionLifecycleQuery.data.definition.archived_at)}</div>
                             </div>
                           </>
                         ) : null}
@@ -2988,9 +3001,19 @@ export default function Journeys({
                                 {formatLifecycleTimestamp(entry.created_at)}
                               </div>
                               {entry.diff_json ? (
-                                <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-                                  {JSON.stringify(entry.diff_json)}
-                                </div>
+                                <pre
+                                  style={{
+                                    margin: 0,
+                                    fontSize: t.font.sizeXs,
+                                    color: t.color.textSecondary,
+                                    whiteSpace: 'pre-wrap',
+                                    overflowWrap: 'anywhere',
+                                    wordBreak: 'break-word',
+                                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                                  }}
+                                >
+                                  {JSON.stringify(entry.diff_json, null, 2)}
+                                </pre>
                               ) : null}
                             </div>
                           ))}
