@@ -12,6 +12,15 @@ interface ContextSummaryStripProps {
   minItemWidth?: number
 }
 
+function normalizeSummaryValue(label: string, value: ReactNode): ReactNode {
+  if (typeof value !== 'string') return value
+  if (!/period/i.test(label)) return value
+  const dateMatches = value.match(/\d{4}-\d{2}-\d{2}/g)
+  if (!dateMatches?.length) return value
+  if (dateMatches.length >= 2) return `${dateMatches[0]} – ${dateMatches[1]}`
+  return dateMatches[0]
+}
+
 export default function ContextSummaryStrip({
   items,
   minItemWidth = 180,
@@ -39,7 +48,7 @@ export default function ContextSummaryStrip({
             {item.label}
           </div>
           <div style={{ marginTop: 4, fontSize: t.font.sizeSm, color: item.valueColor ?? t.color.text }}>
-            {item.value}
+            {normalizeSummaryValue(item.label, item.value)}
           </div>
         </div>
       ))}
