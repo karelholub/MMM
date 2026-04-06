@@ -2538,6 +2538,9 @@ export default function Journeys({
             .journeys-metric-row {
               grid-template-columns: minmax(0, 1fr) !important;
             }
+            .journeys-card-grid {
+              grid-template-columns: minmax(0, 1fr) !important;
+            }
           }
         `}</style>
         <SectionCard
@@ -3277,7 +3280,7 @@ export default function Journeys({
           )}
 
           {!selectedDefinitionArchived && activeTab === 'hypotheses' && (
-            <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))' }}>
+            <div className="journeys-card-grid" style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'repeat(auto-fit, minmax(min(320px, 100%), 1fr))', minWidth: 0 }}>
               <SectionCard
                 title={editingHypothesisId ? 'Edit hypothesis' : 'New hypothesis'}
                 subtitle="Turn observed journey behavior into a structured experiment candidate."
@@ -3396,7 +3399,7 @@ export default function Journeys({
                     </label>
                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: t.space.md }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: t.space.md, minWidth: 0 }}>
                     <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
                       Trigger path hash
                       <input
@@ -3426,7 +3429,7 @@ export default function Journeys({
                     </label>
                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: t.space.md }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(180px, 100%), 1fr))', gap: t.space.md, minWidth: 0 }}>
                     <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
                       Channel group
                       <input
@@ -3544,7 +3547,7 @@ export default function Journeys({
                     <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>
                       Experiment linking
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: t.space.md }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(180px, 100%), 1fr))', gap: t.space.md, minWidth: 0 }}>
                       <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
                         Experiment start
                         <input

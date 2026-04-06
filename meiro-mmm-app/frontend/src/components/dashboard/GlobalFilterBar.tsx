@@ -29,7 +29,10 @@ interface GlobalFilterBarProps {
 }
 
 const FIELD_STYLE: CSSProperties = {
-  minWidth: 140,
+  minWidth: 0,
+  width: 'min(220px, 100%)',
+  maxWidth: '100%',
+  flex: '1 1 160px',
   padding: '6px 10px',
   borderRadius: t.radius.sm,
   border: `1px solid ${t.color.borderLight}`,
@@ -75,6 +78,7 @@ export default function GlobalFilterBar({
         flexWrap: 'wrap',
         gap: t.space.sm,
         alignItems: 'center',
+        minWidth: 0,
       }}
     >
       <input
