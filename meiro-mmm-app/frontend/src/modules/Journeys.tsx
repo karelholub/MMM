@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { ResponsiveContainer, Sankey, Tooltip } from 'recharts'
 import DashboardPage from '../components/dashboard/DashboardPage'
 import SectionCard from '../components/dashboard/SectionCard'
 import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn } from '../components/dashboard'
@@ -701,6 +702,43 @@ function pathChip(label: string) {
   )
 }
 
+function clampLabel(label: string, max = 24): string {
+  if (label.length <= max) return label
+  return `${label.slice(0, Math.max(0, max - 1))}…`
+}
+
+function FlowSankeyTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean
+  payload?: Array<{ payload?: { sourceLabel?: string; targetLabel?: string; value?: number } }>
+}) {
+  if (!active || !payload?.length) return null
+  const raw = payload[0]?.payload
+  if (!raw) return null
+  return (
+    <div
+      style={{
+        background: t.color.surface,
+        border: `1px solid ${t.color.border}`,
+        borderRadius: t.radius.sm,
+        padding: t.space.sm,
+        boxShadow: t.shadowSm,
+        display: 'grid',
+        gap: 4,
+      }}
+    >
+      <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>
+        {(raw.sourceLabel || 'Unknown')} → {(raw.targetLabel || 'Unknown')}
+      </div>
+      <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+        {Number(raw.value || 0).toLocaleString()} transitions
+      </div>
+    </div>
+  )
+}
+
 function creditOverlay(channels: ChannelCredit[], group?: string | null) {
   const filtered = channels.filter((c) => channelFitsGroup(c.channel, group))
   const top = (filtered.length ? filtered : channels).slice(0, 3)
@@ -887,6 +925,7 @@ export default function Journeys({
   const [flowMinCount, setFlowMinCount] = useState(5)
   const [flowMaxNodes, setFlowMaxNodes] = useState(20)
   const [flowMaxDepth, setFlowMaxDepth] = useState(5)
+  const [flowView, setFlowView] = useState<'ranked' | 'sankey'>('sankey')
   const [examplesPathHash, setExamplesPathHash] = useState('')
   const [examplesStepFilter, setExamplesStepFilter] = useState('')
   const [savedViewName, setSavedViewName] = useState('')
@@ -2007,6 +2046,49 @@ export default function Journeys({
     () => (transitionsQuery.data?.edges ?? []).slice(0, 12),
     [transitionsQuery.data?.edges],
   )
+  const flowSankeyData = useMemo(() => {
+    const allEdges = transitionsQuery.data?.edges ?? []
+    const allNodes = transitionsQuery.data?.nodes ?? []
+    if (!allEdges.length || !allNodes.length) return null
+
+    const topEdges = allEdges.slice(0, 18)
+    const nodeById = new Map(allNodes.map((node) => [node.id, node]))
+    const indexById = new Map<string, number>()
+    const nodes: Array<{ name: string; fullName: string }> = []
+
+    const ensureNode = (id: string) => {
+      const existing = indexById.get(id)
+      if (existing != null) return existing
+      const label = nodeById.get(id)?.label || id
+      const index = nodes.length
+      nodes.push({ name: clampLabel(label, 26), fullName: label })
+      indexById.set(id, index)
+      return index
+    }
+
+    const links = topEdges.map((edge) => {
+      const sourceIndex = ensureNode(edge.source)
+      const targetIndex = ensureNode(edge.target)
+      return {
+        source: sourceIndex,
+        target: targetIndex,
+        value: edge.value,
+        sourceLabel: nodeById.get(edge.source)?.label || edge.source,
+        targetLabel: nodeById.get(edge.target)?.label || edge.target,
+      }
+    })
+
+    const totalTransitions = allEdges.reduce((sum, edge) => sum + (edge.value || 0), 0)
+    const coveredTransitions = topEdges.reduce((sum, edge) => sum + (edge.value || 0), 0)
+
+    return {
+      nodes,
+      links,
+      totalTransitions,
+      coveredTransitions,
+      droppedEdges: Math.max(0, allEdges.length - topEdges.length),
+    }
+  }, [transitionsQuery.data?.edges, transitionsQuery.data?.nodes])
   const pathTableColumns: AnalyticsTableColumn<JourneyPathRow>[] = [
     {
       key: 'path_steps',
@@ -4533,6 +4615,32 @@ export default function Journeys({
                   Max depth
                   <input type="number" min={1} max={20} value={flowMaxDepth} onChange={(e) => setFlowMaxDepth(Math.max(1, Math.min(20, Number(e.target.value) || 1)))} style={{ width: 120, padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
                 </label>
+                <div style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                  View
+                  <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
+                    {[
+                      { key: 'sankey' as const, label: 'Sankey' },
+                      { key: 'ranked' as const, label: 'Ranked transitions' },
+                    ].map((option) => (
+                      <button
+                        key={option.key}
+                        type="button"
+                        onClick={() => setFlowView(option.key)}
+                        style={{
+                          border: `1px solid ${flowView === option.key ? t.color.accent : t.color.border}`,
+                          background: flowView === option.key ? t.color.accentMuted : t.color.surface,
+                          color: flowView === option.key ? t.color.accent : t.color.text,
+                          borderRadius: t.radius.sm,
+                          padding: '8px 10px',
+                          fontSize: t.font.sizeSm,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
 
               {transitionsQuery.isLoading && <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading flow transitions…</div>}
@@ -4554,33 +4662,76 @@ export default function Journeys({
                       ))}
                     </div>
                   </SectionCard>
-                  <SectionCard title="Top transitions" subtitle={`Dropped ${transitionsQuery.data.meta.dropped_edges || 0} low-volume edges`}>
-                    <div style={{ display: 'grid', gap: 10 }}>
-                      {flowTopEdges.map((edge) => {
-                        const maxValue = flowTopEdges[0]?.value || 1
-                        return (
-                          <button
-                            key={`${edge.source}-${edge.target}`}
-                            type="button"
-                            onClick={() => {
-                              setExamplesStepFilter(edge.target)
-                              setExamplesPathHash('')
-                              setActiveTab('examples')
-                            }}
-                            style={{ border: `1px solid ${t.color.borderLight}`, background: t.color.surface, borderRadius: t.radius.sm, padding: t.space.sm, textAlign: 'left', cursor: 'pointer' }}
-                          >
-                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, fontSize: t.font.sizeSm, color: t.color.text }}>
-                              <span>{edge.source} → {edge.target}</span>
-                              <span>{edge.value.toLocaleString()}</span>
+                  {flowView === 'sankey' ? (
+                    <SectionCard
+                      title="Flow Sankey"
+                      subtitle={
+                        flowSankeyData
+                          ? `Top ${flowSankeyData.links.length} transitions covering ${flowSankeyData.totalTransitions > 0 ? Math.round((flowSankeyData.coveredTransitions / flowSankeyData.totalTransitions) * 100) : 0}% of visible flow volume`
+                          : 'No Sankey data available'
+                      }
+                    >
+                      {flowSankeyData ? (
+                        <div style={{ display: 'grid', gap: t.space.sm }}>
+                          <div style={{ width: '100%', height: 420, minWidth: 0 }}>
+                            <ResponsiveContainer width="100%" height="100%">
+                              <Sankey
+                                data={{ nodes: flowSankeyData.nodes, links: flowSankeyData.links }}
+                                nodePadding={28}
+                                nodeWidth={14}
+                                iterations={32}
+                                margin={{ top: 12, right: 24, bottom: 12, left: 24 }}
+                                link={{ stroke: t.color.accent, strokeOpacity: 0.25 }}
+                                node={{ stroke: t.color.borderLight, fill: t.color.accent }}
+                              >
+                                <Tooltip content={<FlowSankeyTooltip />} />
+                              </Sankey>
+                            </ResponsiveContainer>
+                          </div>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                            Sankey view uses the strongest transition links in the current filter set and aggregates away the long tail for readability. Click a ranked transition view to jump into related examples.
+                          </div>
+                          {flowSankeyData.droppedEdges > 0 ? (
+                            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                              {flowSankeyData.droppedEdges.toLocaleString()} lower-volume links are excluded from the chart.
                             </div>
-                            <div style={{ marginTop: 6, height: 8, borderRadius: t.radius.full, background: t.color.bgSubtle, overflow: 'hidden' }}>
-                              <div style={{ width: `${Math.max(8, (edge.value / maxValue) * 100)}%`, height: '100%', background: t.color.accent }} />
-                            </div>
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </SectionCard>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                          No Sankey data available for the current transition filters.
+                        </div>
+                      )}
+                    </SectionCard>
+                  ) : (
+                    <SectionCard title="Top transitions" subtitle={`Dropped ${transitionsQuery.data.meta.dropped_edges || 0} low-volume edges`}>
+                      <div style={{ display: 'grid', gap: 10 }}>
+                        {flowTopEdges.map((edge) => {
+                          const maxValue = flowTopEdges[0]?.value || 1
+                          return (
+                            <button
+                              key={`${edge.source}-${edge.target}`}
+                              type="button"
+                              onClick={() => {
+                                setExamplesStepFilter(edge.target)
+                                setExamplesPathHash('')
+                                setActiveTab('examples')
+                              }}
+                              style={{ border: `1px solid ${t.color.borderLight}`, background: t.color.surface, borderRadius: t.radius.sm, padding: t.space.sm, textAlign: 'left', cursor: 'pointer' }}
+                            >
+                              <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, fontSize: t.font.sizeSm, color: t.color.text }}>
+                                <span>{edge.source} → {edge.target}</span>
+                                <span>{edge.value.toLocaleString()}</span>
+                              </div>
+                              <div style={{ marginTop: 6, height: 8, borderRadius: t.radius.full, background: t.color.bgSubtle, overflow: 'hidden' }}>
+                                <div style={{ width: `${Math.max(8, (edge.value / maxValue) * 100)}%`, height: '100%', background: t.color.accent }} />
+                              </div>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </SectionCard>
+                  )}
                 </div>
               )}
             </div>
