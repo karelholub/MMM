@@ -112,6 +112,21 @@ function formatDelta(delta: number | undefined | null, opts: { pct?: boolean; de
   return `${delta >= 0 ? '+' : ''}${delta.toFixed(decimals)}`
 }
 
+function medianOf(values: Array<number | null | undefined>): number | null {
+  const valid = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+  if (!valid.length) return null
+  const sorted = [...valid].sort((a, b) => a - b)
+  const middle = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle]
+}
+
+function describeLagPosition(selected: number | null | undefined, benchmark: number | null): string | null {
+  if (selected == null || benchmark == null || benchmark <= 0) return null
+  if (selected <= benchmark * 0.7) return 'This archetype converts materially faster than the typical archetype in the current view.'
+  if (selected >= benchmark * 1.5) return 'This archetype is meaningfully long-lag versus the current archetype set.'
+  return 'This archetype sits near the typical lag of the current archetype set.'
+}
+
 function exportArchetypesCSV(clusters: PathCluster[], meta: { period?: string; conversionKey?: string | null; diagnostics?: ArchetypesDiagnostics; directMode?: 'include' | 'exclude' }) {
   if (!clusters.length) return
   const lines: string[] = []
@@ -252,6 +267,18 @@ export default function PathArchetypes() {
   const stabilityPct = diagnostics?.stability_score_pct ?? null
   const stabilityLabel = diagnostics?.stability_label ?? null
   const convertedMismatch = journeys?.converted != null && data?.total_converted != null ? journeys.converted !== data.total_converted : false
+  const clusterLagBenchmark = useMemo(
+    () => medianOf(clusters.map((cluster) => cluster.time_to_conversion_median_days ?? cluster.avg_time_to_conversion_days)),
+    [clusters],
+  )
+  const selectedLagNote = useMemo(
+    () =>
+      describeLagPosition(
+        selected?.time_to_conversion_median_days ?? selected?.avg_time_to_conversion_days ?? null,
+        clusterLagBenchmark,
+      ),
+    [selected?.avg_time_to_conversion_days, selected?.time_to_conversion_median_days, clusterLagBenchmark],
+  )
 
   const isCompareAvailable = Boolean(comparePrevious && diagnostics?.compare_available)
 
@@ -1145,6 +1172,44 @@ export default function PathArchetypes() {
                           </div>
                         </div>
                       )}
+                      <div
+                        style={{
+                          borderRadius: tkn.radius.md,
+                          border: `1px solid ${tkn.color.borderLight}`,
+                          padding: tkn.space.md,
+                          gridColumn: '1 / -1',
+                          display: 'grid',
+                          gap: tkn.space.sm,
+                        }}
+                      >
+                        <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>
+                          Lag diagnosis
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: tkn.space.sm }}>
+                          <div>
+                            <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>Visible archetype median TTC</div>
+                            <div style={{ fontSize: tkn.font.sizeBase, fontWeight: tkn.font.weightSemibold, color: tkn.color.text }}>
+                              {clusterLagBenchmark != null ? `${clusterLagBenchmark.toFixed(1)}d` : '—'}
+                            </div>
+                          </div>
+                          <div>
+                            <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>Selected median TTC</div>
+                            <div style={{ fontSize: tkn.font.sizeBase, fontWeight: tkn.font.weightSemibold, color: tkn.color.text }}>
+                              {selected.time_to_conversion_median_days != null
+                                ? `${selected.time_to_conversion_median_days.toFixed(1)}d`
+                                : selected.avg_time_to_conversion_days != null
+                                  ? `${selected.avg_time_to_conversion_days.toFixed(1)}d`
+                                  : '—'}
+                            </div>
+                          </div>
+                        </div>
+                        <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                          {selectedLagNote || 'There is not enough comparable timing evidence to classify this archetype yet.'}
+                        </div>
+                        <div style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>
+                          Long-lag archetypes are usually the first to shift when attribution windows tighten, so compare them carefully against shorter-lag archetypes.
+                        </div>
+                      </div>
                       {isCompareAvailable && selected.compare && (
                         <div
                           style={{
@@ -1621,6 +1686,7 @@ export default function PathArchetypes() {
                             style={{
                               display: 'flex',
                               gap: tkn.space.md,
+                              flexWrap: 'wrap',
                               fontSize: tkn.font.sizeXs,
                               color: tkn.color.textSecondary,
                             }}
@@ -1646,6 +1712,14 @@ export default function PathArchetypes() {
                               </div>
                             )}
                           </div>
+                          {selectedPathForDrawer.avg_time_to_conversion_days != null ? (
+                            <div style={{ marginTop: tkn.space.sm, fontSize: tkn.font.sizeXs, color: tkn.color.textSecondary }}>
+                              {describeLagPosition(
+                                selectedPathForDrawer.avg_time_to_conversion_days,
+                                selected.time_to_conversion_median_days ?? selected.avg_time_to_conversion_days ?? null,
+                              ) || 'This variant can be compared against the archetype median lag shown in the overview tab.'}
+                            </div>
+                          ) : null}
                         </div>
                       )}
                     </div>
