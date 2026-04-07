@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { DashboardPage, ContextSummaryStrip, SectionCard } from '../components/dashboard'
+import { DashboardPage, ContextSummaryStrip, SectionCard, AnalysisShareActions } from '../components/dashboard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
@@ -287,6 +287,19 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
     <DashboardPage
       title="Attribution Roles"
       description="Who starts demand, who assists it, and who closes it."
+      actions={
+        <AnalysisShareActions
+          fileStem="attribution-roles"
+          summaryTitle="Attribution roles brief"
+          summaryLines={[
+            `Period: ${dateFrom} – ${dateTo}`,
+            `Scope: ${scope === 'channels' ? 'Channels' : 'Campaigns'}`,
+            `Metric: ${metric === 'conversions' ? 'Conversions' : 'Revenue'}`,
+            `Ranked by: ${ROLE_LABELS[focusRole]}`,
+            `Top ${ROLE_LABELS[focusRole].toLowerCase()}: ${topFocusedEntity ? `${topFocusedEntity.label} (${metric === 'conversions' ? formatNumber(readRoleValue(topFocusedEntity, focusRole, metric)) : formatCurrency(readRoleValue(topFocusedEntity, focusRole, metric))})` : 'No ranked entity in the current slice'}`,
+          ]}
+        />
+      }
       isLoading={isLoading}
       isError={isError}
       errorMessage={errorMessage}

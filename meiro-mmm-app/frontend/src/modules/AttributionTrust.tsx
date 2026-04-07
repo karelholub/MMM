@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { DashboardPage, ContextSummaryStrip, SectionCard } from '../components/dashboard'
+import { DashboardPage, ContextSummaryStrip, SectionCard, AnalysisShareActions } from '../components/dashboard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
@@ -336,6 +336,19 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
       description="One place to verify data source, freshness, exclusions, mapping quality, and count mismatches before acting on attribution outputs."
       actions={
         <>
+          <AnalysisShareActions
+            fileStem="attribution-trust"
+            summaryTitle="Attribution trust brief"
+            summaryLines={[
+              `Period: ${dateFrom} – ${dateTo}`,
+              `Journey source: ${formatSourceLabel(sourceStateQuery.data?.active_source)}`,
+              `Freshness: ${journeysSummary?.data_freshness_hours != null ? `${Math.round(Number(journeysSummary.data_freshness_hours))}h lag` : 'unknown'}`,
+              `KPI coverage: ${formatPercent(readiness?.summary?.primary_kpi_coverage)}`,
+              `Unknown taxonomy share: ${formatPercent(taxonomyUnknownQuery.data?.unknown_share)}`,
+              `Live vs materialized journeys: ${liveJourneys != null && materializedJourneys != null ? `${formatNumber(liveJourneys)} vs ${formatNumber(materializedJourneys)}` : 'unavailable'}`,
+              `Direct / unknown touch share: ${formatPercent(pathDiagnostics?.touchpoint_share)}`,
+            ]}
+          />
           <a href="/?page=comparison" style={actionButtonStyle}>
             Open model comparison
           </a>

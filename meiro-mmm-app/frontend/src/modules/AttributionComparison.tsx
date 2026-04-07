@@ -5,6 +5,7 @@ import { tokens } from '../theme/tokens'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
+import AnalysisShareActions from '../components/dashboard/AnalysisShareActions'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import { type LagInsightsResponse } from '../components/performance/LagInsightsPanel'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
@@ -682,6 +683,23 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
       <p style={{ margin: `${t.space.xs}px 0 ${t.space.xl}px`, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
         Compare how different attribution models distribute credit across channels.
       </p>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', margin: `-${t.space.lg} 0 ${t.space.lg}` }}>
+        <AnalysisShareActions
+          fileStem="attribution-model-comparison"
+          summaryTitle="Attribution comparison brief"
+          summaryLines={[
+            `Period: ${periodLabel}`,
+            `Selected model: ${MODEL_LABELS[selectedModel] || selectedModel}`,
+            `Baseline model: ${MODEL_LABELS[baselineModel] || baselineModel}`,
+            `Direct handling: ${directMode === 'include' ? 'Include Direct' : 'Exclude Direct'}`,
+            `Focus segment: ${selectedSegment ? selectedSegment.name : 'All visible channels'}`,
+            `Freshness: ${freshnessLabel}`,
+            `Coverage: ${coverageLabel}`,
+            `Sensitivity draft: ${currentSensitivitySummary}`,
+            `Sensitivity risk: ${summarizeSensitivityRisk(sensitivityQuery.data?.current)}`,
+          ]}
+        />
+      </div>
 
       {readiness && (readiness.status === 'blocked' || readiness.warnings.length > 0) ? (
         <DecisionStatusCard

@@ -23,6 +23,7 @@ import {
   KpiTileSkeleton,
   DataHealthCard,
   ContextSummaryStrip,
+  AnalysisShareActions,
 } from '../components/dashboard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
@@ -839,6 +840,19 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
 
   const headerActions = (
     <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+      <AnalysisShareActions
+        fileStem="cover-dashboard"
+        summaryTitle="Cover Dashboard brief"
+        summaryLines={[
+          `Period: ${overviewPeriodLabel}`,
+          `Focus: ${focusSegmentLabel}`,
+          `Freshness: ${freshnessLabel}`,
+          `KPI coverage: ${readinessCoverageLabel}`,
+          `Journeys loaded: ${journeysLoadedLabel}`,
+          `Lag posture: ${lagPostureLabel}`,
+          `Highlights: ${highlights.slice(0, 3).map((item) => item.message).join(' · ') || 'No major highlights in the current slice.'}`,
+        ]}
+      />
       {lastPage && lastPage !== 'overview' && (
         <button
           type="button"
