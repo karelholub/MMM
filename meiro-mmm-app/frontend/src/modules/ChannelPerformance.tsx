@@ -24,6 +24,7 @@ import DecisionStatusCard from '../components/DecisionStatusCard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn, SectionCard } from '../components/dashboard'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
+import LagInsightsPanel, { type LagInsightsResponse } from '../components/performance/LagInsightsPanel'
 
 interface ChannelPerformanceProps {
   model: string
@@ -325,6 +326,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
   const [sortKey, setSortKey] = useState<SortKey>('attributed_value')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [showWhy, setShowWhy] = usePersistentToggle('channel-performance:show-explainability', false)
+  const [showLagInsights, setShowLagInsights] = usePersistentToggle('channel-performance:show-lag-insights', false)
 
   const [directMode, setDirectMode] = useState<'include' | 'exclude'>('include')
   const [comparePrevious, setComparePrevious] = useState(initialTrendParams.compare)
@@ -408,6 +410,22 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
       if (configId) params.set('model_id', configId)
       return apiGetJson<ChannelSuggestionResponse>(`/api/performance/channel/suggestions?${params.toString()}`, {
         fallbackMessage: 'Failed to load channel suggestions',
+      })
+    },
+    enabled: !!trendDateRange.dateFrom && !!trendDateRange.dateTo,
+    refetchInterval: false,
+  })
+
+  const lagQuery = useQuery<LagInsightsResponse>({
+    queryKey: ['channel-lag-panel', trendDateRange.dateFrom, trendDateRange.dateTo, trendChannelsParam],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        date_from: trendDateRange.dateFrom,
+        date_to: trendDateRange.dateTo,
+      })
+      selectedTrendChannels.forEach((ch) => params.append('channels', ch))
+      return apiGetJson<LagInsightsResponse>(`/api/performance/channel/lag?${params.toString()}`, {
+        fallbackMessage: 'Failed to load channel lag analysis',
       })
     },
     enabled: !!trendDateRange.dateFrom && !!trendDateRange.dateTo,
@@ -1007,6 +1025,24 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
           onToggle={() => setShowWhy((v) => !v)}
         >
           <ExplainabilityPanel scope="channel" configId={configId ?? undefined} model={model} />
+        </CollapsiblePanel>
+      </div>
+
+      <div style={{ marginBottom: t.space.lg }}>
+        <CollapsiblePanel
+          title="Conversion Lag Analysis"
+          subtitle="How quickly each channel tends to convert after first touch and last touch."
+          open={showLagInsights}
+          onToggle={() => setShowLagInsights((value) => !value)}
+        >
+          <LagInsightsPanel
+            title="Channel lag analysis"
+            subtitle={`Selected period ${periodLabel}${selectedTrendChannels.length ? ` · filtered to ${selectedTrendChannels.join(', ')}` : ''}`}
+            data={lagQuery.data}
+            loading={lagQuery.isLoading}
+            error={lagQuery.isError ? (lagQuery.error as Error)?.message || 'Failed to load lag analysis' : null}
+            emptyLabel="No channel lag data is available for the selected period."
+          />
         </CollapsiblePanel>
       </div>
 

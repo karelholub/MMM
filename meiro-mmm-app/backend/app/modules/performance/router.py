@@ -16,6 +16,7 @@ from app.services_overview import (
     get_overview_summary,
     get_overview_trend_insights,
 )
+from app.services_performance_lag import build_scope_lag_summary
 from app.services_performance_diagnostics import build_scope_diagnostics
 from app.services_performance_helpers import _local_date_from_ts
 from app.services_performance_trends import (
@@ -510,6 +511,24 @@ def create_router(
             out["meta"]["conversion_key_resolution"] = conversion_key_resolution
         return out
 
+    @router.get("/api/performance/channel/lag")
+    def performance_channel_lag(
+        date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
+        date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
+        conversion_key: Optional[str] = Query(None, description="Optional conversion key filter"),
+        channels: Optional[List[str]] = Query(None, description="Optional channel filter list"),
+        db=Depends(get_db_dependency),
+        _ctx=Depends(require_permission_dependency("attribution.view")),
+    ):
+        return build_scope_lag_summary(
+            db,
+            scope_type="channel",
+            date_from=date_from,
+            date_to=date_to,
+            conversion_key=conversion_key,
+            channels=channels,
+        )
+
     @router.get("/api/performance/campaign/trend")
     def performance_campaign_trend(
         date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
@@ -578,6 +597,24 @@ def create_router(
         if conversion_key_resolution:
             out["meta"]["conversion_key_resolution"] = conversion_key_resolution
         return out
+
+    @router.get("/api/performance/campaign/lag")
+    def performance_campaign_lag(
+        date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
+        date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
+        conversion_key: Optional[str] = Query(None, description="Optional conversion key filter"),
+        channels: Optional[List[str]] = Query(None, description="Optional channel filter list"),
+        db=Depends(get_db_dependency),
+        _ctx=Depends(require_permission_dependency("attribution.view")),
+    ):
+        return build_scope_lag_summary(
+            db,
+            scope_type="campaign",
+            date_from=date_from,
+            date_to=date_to,
+            conversion_key=conversion_key,
+            channels=channels,
+        )
 
     @router.get("/api/performance/campaign/summary")
     def performance_campaign_summary(

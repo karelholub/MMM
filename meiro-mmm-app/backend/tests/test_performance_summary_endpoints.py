@@ -70,6 +70,34 @@ def test_campaign_summary_includes_conversion_key_meta_when_passed():
     assert body["meta"]["conversion_key"] == "purchase"
 
 
+def test_channel_lag_response_shape():
+    res = client.get(
+        "/api/performance/channel/lag",
+        params={"date_from": "2026-02-01", "date_to": "2026-02-14"},
+        headers=_admin_headers(),
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["scope_type"] == "channel"
+    assert "current_period" in body
+    assert "summary" in body
+    assert "items" in body
+
+
+def test_campaign_lag_response_shape():
+    res = client.get(
+        "/api/performance/campaign/lag",
+        params={"date_from": "2026-02-01", "date_to": "2026-02-14", "conversion_key": "purchase"},
+        headers=_admin_headers(),
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["scope_type"] == "campaign"
+    assert body["conversion_key"] == "purchase"
+    assert "summary" in body
+    assert "items" in body
+
+
 def test_campaign_suggestions_payload_keeps_promoted_policy():
     journeys = [
         {

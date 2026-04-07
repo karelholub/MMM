@@ -14,6 +14,7 @@ import DecisionStatusCard from '../components/DecisionStatusCard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import { getAdsDeepLink, type AdsProviderKey } from '../connectors/adsManagerConnector'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
+import LagInsightsPanel, { type LagInsightsResponse } from '../components/performance/LagInsightsPanel'
 
 interface CampaignPerformanceProps {
   model: string
@@ -353,6 +354,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
   const [campaignTargets, setCampaignTargets] = useState<Record<string, number>>({})
   const [selectedCampaign, setSelectedCampaign] = useState<string | null>(null)
   const [showWhy, setShowWhy] = usePersistentToggle('campaign-performance:show-explainability', false)
+  const [showLagInsights, setShowLagInsights] = usePersistentToggle('campaign-performance:show-lag-insights', false)
   const [conversionKey, setConversionKey] = useState<string | ''>('')
   const [directMode, setDirectMode] = useState<'include' | 'exclude'>('include')
   const [comparePrevious, setComparePrevious] = useState(initialTrendParams.compare)
@@ -443,6 +445,23 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       if (configId) params.set('model_id', configId)
       return apiGetJson<CampaignSuggestionResponse>(`/api/performance/campaign/suggestions?${params.toString()}`, {
         fallbackMessage: 'Failed to fetch campaign suggestions',
+      })
+    },
+    enabled: !!trendDateRange.dateFrom && !!trendDateRange.dateTo,
+    refetchInterval: false,
+  })
+
+  const lagQuery = useQuery<LagInsightsResponse>({
+    queryKey: ['campaign-lag-panel', trendDateRange.dateFrom, trendDateRange.dateTo, conversionKey || 'all', channelFilter || 'all'],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        date_from: trendDateRange.dateFrom,
+        date_to: trendDateRange.dateTo,
+      })
+      if (conversionKey) params.set('conversion_key', conversionKey)
+      if (channelFilter) params.append('channels', channelFilter)
+      return apiGetJson<LagInsightsResponse>(`/api/performance/campaign/lag?${params.toString()}`, {
+        fallbackMessage: 'Failed to load campaign lag analysis',
       })
     },
     enabled: !!trendDateRange.dateFrom && !!trendDateRange.dateTo,
@@ -1685,6 +1704,24 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
           onToggle={() => setShowWhy((v) => !v)}
         >
           <ExplainabilityPanel scope="campaign" configId={configId ?? undefined} model={model} />
+        </CollapsiblePanel>
+      </div>
+
+      <div style={{ marginBottom: t.space.lg }}>
+        <CollapsiblePanel
+          title="Conversion Lag Analysis"
+          subtitle="How quickly campaigns tend to convert after first touch and after the final touch."
+          open={showLagInsights}
+          onToggle={() => setShowLagInsights((value) => !value)}
+        >
+          <LagInsightsPanel
+            title="Campaign lag analysis"
+            subtitle={`Selected period ${trendDateRange.dateFrom} – ${trendDateRange.dateTo}${channelFilter ? ` · channel ${channelFilter}` : ''}${conversionKey ? ` · KPI ${conversionKey}` : ''}`}
+            data={lagQuery.data}
+            loading={lagQuery.isLoading}
+            error={lagQuery.isError ? (lagQuery.error as Error)?.message || 'Failed to load lag analysis' : null}
+            emptyLabel="No campaign lag data is available for the selected period."
+          />
         </CollapsiblePanel>
       </div>
 

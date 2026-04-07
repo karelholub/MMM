@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { tokens } from '../theme/tokens'
@@ -6,7 +6,7 @@ import { useWorkspaceContext } from '../components/WorkspaceContext'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import DecisionStatusCard from '../components/DecisionStatusCard'
-import { apiGetJson } from '../lib/apiClient'
+import { apiGetJson, apiSendJson } from '../lib/apiClient'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 
 interface AttributionComparisonProps {
@@ -91,6 +91,44 @@ interface ModelResult {
   diagnostics?: MarkovDiagnostics
 }
 
+interface AttributionSettingsDraft {
+  lookback_window_days: number
+  use_converted_flag: boolean
+  conversion_value_mode: string
+  min_journey_quality_score: number
+  min_conversion_value: number
+  time_decay_half_life_days: number
+  position_first_pct: number
+  position_last_pct: number
+  markov_min_paths: number
+}
+
+interface AttributionPreviewResult {
+  previewAvailable: boolean
+  totalJourneys: number
+  eligibleJourneys: number
+  windowImpactCount: number
+  windowDirection: string
+  qualityImpactCount: number
+  qualityDirection: string
+  useConvertedFlagImpact: number
+  useConvertedFlagDirection: string
+  reason?: string | null
+}
+
+interface SensitivityScenario {
+  id: string
+  label: string
+  note: string
+  settings: AttributionSettingsDraft
+  preview: AttributionPreviewResult
+}
+
+interface SensitivityWorkspaceData {
+  current: AttributionPreviewResult
+  scenarios: SensitivityScenario[]
+}
+
 const MODEL_LABELS: Record<string, string> = {
   last_touch: 'Last Touch',
   first_touch: 'First Touch',
@@ -165,6 +203,81 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
   const [showMarkovDiagnostics, setShowMarkovDiagnostics] = useState(false)
   const [showContextPanel, setShowContextPanel] = usePersistentToggle('attribution-comparison:show-context', false)
   const [showReplayPanel, setShowReplayPanel] = usePersistentToggle('attribution-comparison:show-replay', false)
+  const [showSensitivityPanel, setShowSensitivityPanel] = usePersistentToggle('attribution-comparison:show-sensitivity', false)
+  const [sensitivityDraft, setSensitivityDraft] = useState<AttributionSettingsDraft | null>(null)
+
+  const settingsQuery = useQuery<{ attribution: AttributionSettingsDraft }>({
+    queryKey: ['attribution-comparison-settings'],
+    queryFn: async () => apiGetJson<{ attribution: AttributionSettingsDraft }>('/api/settings', {
+      fallbackMessage: 'Failed to load attribution settings',
+    }),
+    refetchInterval: false,
+  })
+
+  useEffect(() => {
+    if (!sensitivityDraft && settingsQuery.data?.attribution) {
+      setSensitivityDraft(settingsQuery.data.attribution)
+    }
+  }, [settingsQuery.data, sensitivityDraft])
+
+  const sensitivityQuery = useQuery<SensitivityWorkspaceData>({
+    queryKey: ['attribution-sensitivity-preview', sensitivityDraft],
+    queryFn: async () => {
+      if (!sensitivityDraft) {
+        throw new Error('Attribution settings are unavailable')
+      }
+      const previewFor = async (settings: AttributionSettingsDraft) =>
+        apiSendJson<AttributionPreviewResult>('/api/attribution/preview', 'POST', { settings }, {
+          fallbackMessage: 'Failed to calculate attribution sensitivity preview',
+        })
+
+      const current = await previewFor(sensitivityDraft)
+      const scenarioDefinitions = [
+        {
+          id: 'tighter_window',
+          label: 'Tighter window',
+          note: 'Reduce click lookback by 7 days.',
+          settings: { ...sensitivityDraft, lookback_window_days: Math.max(1, sensitivityDraft.lookback_window_days - 7) },
+        },
+        {
+          id: 'looser_window',
+          label: 'Looser window',
+          note: 'Extend click lookback by 7 days.',
+          settings: { ...sensitivityDraft, lookback_window_days: sensitivityDraft.lookback_window_days + 7 },
+        },
+        {
+          id: 'stricter_quality',
+          label: 'Stricter quality floor',
+          note: 'Raise minimum journey quality by 20 points.',
+          settings: { ...sensitivityDraft, min_journey_quality_score: Math.min(100, sensitivityDraft.min_journey_quality_score + 20) },
+        },
+        {
+          id: 'toggle_converted',
+          label: sensitivityDraft.use_converted_flag ? 'Include non-converted journeys' : 'Restrict to converted journeys',
+          note: sensitivityDraft.use_converted_flag ? 'Preview impact of removing the converted-only filter.' : 'Preview impact of requiring converted journeys.',
+          settings: { ...sensitivityDraft, use_converted_flag: !sensitivityDraft.use_converted_flag },
+        },
+      ]
+
+      const seen = new Set<string>([JSON.stringify(sensitivityDraft)])
+      const scenarios: SensitivityScenario[] = []
+      for (const definition of scenarioDefinitions) {
+        const signature = JSON.stringify(definition.settings)
+        if (seen.has(signature)) continue
+        seen.add(signature)
+        scenarios.push({
+          id: definition.id,
+          label: definition.label,
+          note: definition.note,
+          settings: definition.settings,
+          preview: await previewFor(definition.settings),
+        })
+      }
+      return { current, scenarios }
+    },
+    enabled: !!sensitivityDraft,
+    refetchInterval: false,
+  })
 
   const resultsQuery = useQuery<Record<string, ModelResult>>({
     queryKey: ['attribution-results'],
@@ -595,6 +708,143 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
             </div>
           </CollapsiblePanel>
         )}
+
+        <CollapsiblePanel
+          title="Sensitivity & Window Impact"
+          subtitle="Preview how attribution eligibility changes when you tighten or loosen key measurement settings."
+          open={showSensitivityPanel}
+          onToggle={() => setShowSensitivityPanel((value) => !value)}
+        >
+          <div style={{ display: 'grid', gap: t.space.md }}>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))',
+                gap: t.space.md,
+              }}
+            >
+              <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                <span>Click lookback (days)</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={sensitivityDraft?.lookback_window_days ?? 30}
+                  onChange={(event) =>
+                    setSensitivityDraft((current) =>
+                      current
+                        ? { ...current, lookback_window_days: Math.max(1, Number(event.target.value || 1)) }
+                        : current,
+                    )
+                  }
+                  style={{
+                    fontSize: t.font.sizeSm,
+                    padding: '8px 10px',
+                    borderRadius: t.radius.sm,
+                    border: `1px solid ${t.color.borderLight}`,
+                    background: t.color.surface,
+                    color: t.color.text,
+                  }}
+                />
+              </label>
+              <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                <span>Minimum journey quality</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={sensitivityDraft?.min_journey_quality_score ?? 0}
+                  onChange={(event) =>
+                    setSensitivityDraft((current) =>
+                      current
+                        ? {
+                            ...current,
+                            min_journey_quality_score: Math.max(0, Math.min(100, Number(event.target.value || 0))),
+                          }
+                        : current,
+                    )
+                  }
+                  style={{
+                    fontSize: t.font.sizeSm,
+                    padding: '8px 10px',
+                    borderRadius: t.radius.sm,
+                    border: `1px solid ${t.color.borderLight}`,
+                    background: t.color.surface,
+                    color: t.color.text,
+                  }}
+                />
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                <input
+                  type="checkbox"
+                  checked={!!sensitivityDraft?.use_converted_flag}
+                  onChange={(event) =>
+                    setSensitivityDraft((current) =>
+                      current ? { ...current, use_converted_flag: event.target.checked } : current,
+                    )
+                  }
+                />
+                Converted journeys only
+              </label>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: t.space.md, flexWrap: 'wrap' }}>
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                This preview changes dataset eligibility and windowing only. It does not rerun model math or channel weights.
+              </div>
+              <button
+                type="button"
+                onClick={() => setSensitivityDraft(settingsQuery.data?.attribution ?? null)}
+                style={{
+                  border: `1px solid ${t.color.border}`,
+                  background: t.color.surface,
+                  color: t.color.text,
+                  borderRadius: t.radius.sm,
+                  padding: `${t.space.xs}px ${t.space.sm}px`,
+                  cursor: 'pointer',
+                  fontSize: t.font.sizeSm,
+                }}
+              >
+                Reset to workspace defaults
+              </button>
+            </div>
+            {sensitivityQuery.isError ? (
+              <DecisionStatusCard
+                title="Sensitivity Preview Unavailable"
+                status="warning"
+                warnings={[(sensitivityQuery.error as Error)?.message || 'Failed to calculate attribution preview']}
+              />
+            ) : (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(min(240px, 100%), 1fr))',
+                  gap: t.space.md,
+                }}
+              >
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.surface }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>Current draft</div>
+                  <div style={{ marginTop: t.space.xs, fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                    {Number(sensitivityQuery.data?.current.eligibleJourneys || 0).toLocaleString()} eligible journeys
+                  </div>
+                  <div style={{ marginTop: t.space.xs, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    Window impact {Number(sensitivityQuery.data?.current.windowImpactCount || 0).toLocaleString()} · Quality impact {Number(sensitivityQuery.data?.current.qualityImpactCount || 0).toLocaleString()} · Converted-flag impact {Number(sensitivityQuery.data?.current.useConvertedFlagImpact || 0).toLocaleString()}
+                  </div>
+                </div>
+                {(sensitivityQuery.data?.scenarios || []).map((scenario) => (
+                  <div key={scenario.id} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.surface }}>
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>{scenario.label}</div>
+                    <div style={{ marginTop: t.space.xs, fontSize: t.font.sizeBase, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                      {Number(scenario.preview.eligibleJourneys || 0).toLocaleString()} eligible journeys
+                    </div>
+                    <div style={{ marginTop: t.space.xs, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{scenario.note}</div>
+                    <div style={{ marginTop: t.space.xs, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                      Window {Number(scenario.preview.windowImpactCount || 0).toLocaleString()} · Quality {Number(scenario.preview.qualityImpactCount || 0).toLocaleString()} · Converted {Number(scenario.preview.useConvertedFlagImpact || 0).toLocaleString()}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </CollapsiblePanel>
       </div>
 
       {/* Summary strip */}
