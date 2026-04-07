@@ -190,6 +190,21 @@ function clampLabel(label: string, max = 24): string {
   return `${label.slice(0, Math.max(0, max - 1))}…`
 }
 
+function medianOf(values: Array<number | null | undefined>): number | null {
+  const valid = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+  if (!valid.length) return null
+  const sorted = [...valid].sort((a, b) => a - b)
+  const middle = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle]
+}
+
+function describeLagPosition(selected: number | null | undefined, benchmark: number | null): string | null {
+  if (selected == null || benchmark == null || benchmark <= 0) return null
+  if (selected <= benchmark * 0.7) return 'This path family converts materially faster than the typical visible path.'
+  if (selected >= benchmark * 1.5) return 'This path family is meaningfully long-lag versus the visible path set.'
+  return 'This path family sits near the typical lag of the visible path set.'
+}
+
 function SankeyFlowTooltip({
   active,
   payload,
@@ -583,6 +598,18 @@ export default function ConversionPaths() {
     const totalJourneys = family.reduce((sum, item) => sum + item.count, 0)
     return { nodes, links, totalJourneys, variants: Math.max(0, family.length - 1) }
   }, [selectedPath, selectedPathDetails])
+  const visiblePathLagMedian = useMemo(
+    () => medianOf(filteredAndSortedPaths.map((path) => path.avg_time_to_convert_days)),
+    [filteredAndSortedPaths],
+  )
+  const selectedPathLagNote = useMemo(
+    () =>
+      describeLagPosition(
+        selectedPathDetails?.summary.avg_time_to_convert_days ?? null,
+        visiblePathLagMedian,
+      ),
+    [selectedPathDetails?.summary.avg_time_to_convert_days, visiblePathLagMedian],
+  )
 
   const kpis = data
     ? [
@@ -1802,6 +1829,54 @@ export default function ConversionPaths() {
                         : 'N/A'}
                     </strong>{' '}
                     <span style={{ color: t.color.textSecondary }}>avg time to convert</span>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <h4
+                  style={{
+                    margin: '0 0 4px',
+                    fontSize: t.font.sizeXs,
+                    fontWeight: t.font.weightSemibold,
+                    color: t.color.textSecondary,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.04em',
+                  }}
+                >
+                  Lag diagnosis
+                </h4>
+                <div
+                  style={{
+                    border: `1px solid ${t.color.borderLight}`,
+                    borderRadius: t.radius.md,
+                    padding: t.space.sm,
+                    background: t.color.bg,
+                    display: 'grid',
+                    gap: t.space.sm,
+                  }}
+                >
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: t.space.sm }}>
+                    <div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Visible path median</div>
+                      <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                        {visiblePathLagMedian != null ? `${visiblePathLagMedian.toFixed(1)}d` : '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Selected path avg</div>
+                      <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                        {selectedPathDetails.summary.avg_time_to_convert_days != null
+                          ? `${selectedPathDetails.summary.avg_time_to_convert_days.toFixed(1)}d`
+                          : '—'}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    {selectedPathLagNote || 'There is not enough comparable timing data in this view to classify the selected path family.'}
+                  </div>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                    Longer-lag path families are usually the first to move when attribution windows are tightened.
                   </div>
                 </div>
               </div>

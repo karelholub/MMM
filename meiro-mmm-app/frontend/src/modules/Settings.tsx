@@ -1751,6 +1751,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
     >(null)
     const previewAbortRef = useRef<AbortController | null>(null)
     const attributionPrefillAppliedRef = useRef(false)
+    const [attributionPrefillSummary, setAttributionPrefillSummary] = useState<string | null>(null)
     const [attributionDependencyAcknowledged, setAttributionDependencyAcknowledged] = useState(false)
     const [attributionSaveGuardDecision, setAttributionSaveGuardDecision] =
       useState<AttributionDecisionSummary | null>(null)
@@ -3499,6 +3500,14 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         ...(quality != null ? { min_journey_quality_score: Math.max(0, Math.min(100, Number(quality) || prev.min_journey_quality_score)) } : {}),
         ...(converted != null ? { use_converted_flag: converted === '1' || converted === 'true' } : {}),
       }))
+      const summaryParts = [
+        lookback != null ? `lookback ${Math.max(1, Number(lookback) || 0)}d` : null,
+        quality != null ? `quality ≥${Math.max(0, Math.min(100, Number(quality) || 0))}` : null,
+        converted != null ? ((converted === '1' || converted === 'true') ? 'converted journeys only' : 'all journeys') : null,
+      ].filter((value): value is string => Boolean(value))
+      setAttributionPrefillSummary(
+        summaryParts.length ? `Imported from Attribution Comparison: ${summaryParts.join(' · ')}.` : 'Imported from Attribution Comparison.',
+      )
 
       params.delete('attr_lookback')
       params.delete('attr_quality')
@@ -5014,6 +5023,31 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
 
       return (
         <div style={{ display: 'grid', gap: t.space.xl }}>
+          {attributionPrefillSummary ? (
+            <div
+              style={{
+                border: `1px solid ${t.color.accent}`,
+                background: t.color.bgSubtle,
+                borderRadius: t.radius.md,
+                padding: t.space.md,
+                display: 'grid',
+                gap: t.space.xs,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: t.font.sizeSm,
+                  fontWeight: t.font.weightSemibold,
+                  color: t.color.text,
+                }}
+              >
+                Imported comparison draft
+              </div>
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                {attributionPrefillSummary} Review the readiness and preview below before saving these defaults.
+              </div>
+            </div>
+          ) : null}
           <div style={cardStyle}>
             <div style={{ display: 'grid', gap: t.space.xs }}>
               <h3

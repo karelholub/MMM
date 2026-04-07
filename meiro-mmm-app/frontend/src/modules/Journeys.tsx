@@ -833,6 +833,21 @@ function getHypothesisEvidenceSummary(item: JourneyHypothesisRecord): string | n
   return readResultString(item.result || {}, 'summary') || readResultString(item.result || {}, 'note')
 }
 
+function medianOf(values: Array<number | null | undefined>): number | null {
+  const valid = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+  if (!valid.length) return null
+  const sorted = [...valid].sort((a, b) => a - b)
+  const middle = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle]
+}
+
+function describeLagPosition(selected: number | null | undefined, benchmark: number | null): string | null {
+  if (selected == null || benchmark == null || benchmark <= 0) return null
+  if (selected <= benchmark * 0.7) return 'This path converts materially faster than the typical visible path.'
+  if (selected >= benchmark * 1.5) return 'This path is meaningfully long-lag versus the visible path set.'
+  return 'This path sits near the typical lag of the visible path set.'
+}
+
 function getHypothesisPromotion(item: JourneyHypothesisRecord): Record<string, unknown> {
   return readResultObject(item.result || {}, 'policy_promotion')
 }
@@ -1960,6 +1975,14 @@ export default function Journeys({
       return pathSortDir === 'asc' ? av - bv : bv - av
     })
   }, [pathSearch, pathSortBy, pathSortDir, pathsQuery.data?.items])
+  const visiblePathLagBenchmarks = useMemo(
+    () => ({
+      avg: medianOf(filteredPaths.map((row) => row.avg_time_to_convert_sec)),
+      p50: medianOf(filteredPaths.map((row) => row.p50_time_to_convert_sec)),
+      p90: medianOf(filteredPaths.map((row) => row.p90_time_to_convert_sec)),
+    }),
+    [filteredPaths],
+  )
 
   const submitCreate = () => {
     if (!draft.name.trim()) {
@@ -2038,6 +2061,15 @@ export default function Journeys({
     () => compareCandidateOptions.find((row) => row.path_hash === comparePathHash) || null,
     [compareCandidateOptions, comparePathHash],
   )
+  const selectedPathLagNotes = useMemo(() => {
+    if (!selectedPath) return []
+    const notes = [
+      describeLagPosition(selectedPath.avg_time_to_convert_sec, visiblePathLagBenchmarks.avg),
+      describeLagPosition(selectedPath.p50_time_to_convert_sec, visiblePathLagBenchmarks.p50),
+      describeLagPosition(selectedPath.p90_time_to_convert_sec, visiblePathLagBenchmarks.p90),
+    ].filter((value): value is string => Boolean(value))
+    return Array.from(new Set(notes))
+  }, [selectedPath, visiblePathLagBenchmarks])
   const savedViews = useMemo(
     () => (savedViewsQuery.data?.items ?? []).map((item) => normalizeSavedView(item)),
     [savedViewsQuery.data?.items],
@@ -4874,6 +4906,40 @@ export default function Journeys({
                 <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}><div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Avg time</div><div style={{ fontSize: t.font.sizeBase, fontWeight: t.font.weightSemibold }}>{formatSeconds(selectedPath.avg_time_to_convert_sec)}</div></div>
                 <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}><div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>P50 / P90</div><div style={{ fontSize: t.font.sizeBase, fontWeight: t.font.weightSemibold }}>{formatSeconds(selectedPath.p50_time_to_convert_sec)} / {formatSeconds(selectedPath.p90_time_to_convert_sec)}</div></div>
               </div>
+
+              <SectionCard title="Lag diagnosis" subtitle="Time-to-convert for this path against the visible path set.">
+                <div style={{ display: 'grid', gap: t.space.sm }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: t.space.sm }}>
+                    <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Visible median avg</div>
+                      <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>{formatSeconds(visiblePathLagBenchmarks.avg)}</div>
+                    </div>
+                    <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Visible median P50</div>
+                      <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>{formatSeconds(visiblePathLagBenchmarks.p50)}</div>
+                    </div>
+                    <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Visible median P90</div>
+                      <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>{formatSeconds(visiblePathLagBenchmarks.p90)}</div>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    {selectedPathLagNotes.length
+                      ? selectedPathLagNotes[0]
+                      : 'There is not enough comparable timing data in the current view to classify this path.'}
+                  </div>
+                  {selectedPathLagNotes.length > 1 && (
+                    <ul style={{ margin: 0, paddingLeft: t.space.lg, color: t.color.textSecondary, fontSize: t.font.sizeSm, display: 'grid', gap: 4 }}>
+                      {selectedPathLagNotes.slice(1).map((note) => (
+                        <li key={note}>{note}</li>
+                      ))}
+                    </ul>
+                  )}
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                    Long-lag paths are more sensitive to tighter attribution windows and converted-flag exclusions than short-lag paths.
+                  </div>
+                </div>
+              </SectionCard>
 
               <SectionCard
                 title="Credit split"
