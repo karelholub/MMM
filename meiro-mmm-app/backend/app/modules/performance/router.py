@@ -278,6 +278,7 @@ def create_router(
         workspace: Optional[str] = Query(None, description="Workspace filter"),
         account: Optional[str] = Query(None, description="Account filter"),
         model_id: Optional[str] = Query(None, description="Optional model config id (for metadata only)"),
+        channel_group: Optional[str] = Query(None, description="Optional saved-segment-compatible channel group filter"),
         db=Depends(get_db_dependency),
         _ctx=Depends(require_permission_dependency("attribution.view")),
     ):
@@ -290,6 +291,7 @@ def create_router(
             workspace=workspace,
             account=account,
             model_id=model_id,
+            channel_group=channel_group,
             expenses=expenses_obj,
             import_runs_get_last_successful=get_last_successful_run,
         )
@@ -302,6 +304,7 @@ def create_router(
         date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
         top_campaigns_n: int = Query(10, ge=1, le=50, description="Top N campaigns"),
         conversion_key: Optional[str] = Query(None, description="Filter by conversion key"),
+        channel_group: Optional[str] = Query(None, description="Optional saved-segment-compatible channel group filter"),
         db=Depends(get_db_dependency),
         _ctx=Depends(require_permission_dependency("attribution.view")),
     ):
@@ -312,6 +315,7 @@ def create_router(
             expenses=expenses_obj,
             top_campaigns_n=top_campaigns_n,
             conversion_key=conversion_key,
+            channel_group=channel_group,
         )
 
     @router.get("/api/overview/funnels")
@@ -320,6 +324,7 @@ def create_router(
         date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
         conversion_key: Optional[str] = Query(None, description="Optional conversion key filter"),
         limit: int = Query(5, ge=1, le=10, description="Rows per tab"),
+        channel_group: Optional[str] = Query(None, description="Optional saved-segment-compatible channel group filter"),
         db=Depends(get_db_dependency),
         _ctx=Depends(require_permission_dependency("attribution.view")),
     ):
@@ -329,6 +334,7 @@ def create_router(
             date_to=date_to,
             conversion_key=conversion_key,
             limit=limit,
+            channel_group=channel_group,
         )
 
     @router.get("/api/overview/trends")
@@ -336,6 +342,7 @@ def create_router(
         date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
         date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
         conversion_key: Optional[str] = Query(None, description="Optional conversion key filter"),
+        channel_group: Optional[str] = Query(None, description="Optional saved-segment-compatible channel group filter"),
         db=Depends(get_db_dependency),
         _ctx=Depends(require_permission_dependency("attribution.view")),
     ):
@@ -344,6 +351,7 @@ def create_router(
             date_from=date_from,
             date_to=date_to,
             conversion_key=conversion_key,
+            channel_group=channel_group,
         )
 
     @router.get("/api/performance/channel/trend")

@@ -7,7 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
-from app.models_config_dq import ChannelPerformanceDaily, ConversionPath, JourneyDefinition, JourneyDefinitionInstanceFact, JourneyPathDaily, SilverConversionFact
+from app.models_config_dq import ChannelPerformanceDaily, ConversionPath, JourneyDefinition, JourneyDefinitionInstanceFact, JourneyInstanceFact, JourneyPathDaily, SilverConversionFact
 from app.main import app
 from app import services_overview as overview
 from app.services_conversions import persist_journeys_as_conversion_paths
@@ -149,6 +149,93 @@ def test_overview_summary_optional_params():
     assert body.get("model_id") == "cfg-1"
 
 
+def test_overview_summary_channel_group_filters_metrics_and_expenses():
+    db = _unit_db_session()
+    try:
+        db.add_all(
+            [
+                JourneyInstanceFact(
+                    conversion_id="conv-paid",
+                    profile_id="p-paid",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2024, 2, 10, 10, 0),
+                    channel_group="paid",
+                    gross_conversions_total=1.0,
+                    net_conversions_total=1.0,
+                    gross_revenue_total=120.0,
+                    net_revenue_total=120.0,
+                ),
+                JourneyInstanceFact(
+                    conversion_id="conv-organic",
+                    profile_id="p-organic",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2024, 2, 10, 11, 0),
+                    channel_group="organic",
+                    gross_conversions_total=1.0,
+                    net_conversions_total=1.0,
+                    gross_revenue_total=300.0,
+                    net_revenue_total=300.0,
+                ),
+                ConversionPath(
+                    conversion_id="conv-paid",
+                    profile_id="p-paid",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2024, 2, 10, 10, 0),
+                    first_touch_ts=datetime(2024, 2, 10, 9, 0),
+                    last_touch_ts=datetime(2024, 2, 10, 9, 30),
+                    path_hash="hash-paid",
+                    length=2,
+                    path_json={
+                        "conversion_value": 120.0,
+                        "touchpoints": [
+                            {"channel": "paid", "timestamp": "2024-02-10T09:00:00Z"},
+                            {"channel": "direct", "timestamp": "2024-02-10T09:30:00Z"},
+                        ],
+                    },
+                ),
+                ConversionPath(
+                    conversion_id="conv-organic",
+                    profile_id="p-organic",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2024, 2, 10, 11, 0),
+                    first_touch_ts=datetime(2024, 2, 10, 8, 0),
+                    last_touch_ts=datetime(2024, 2, 10, 8, 15),
+                    path_hash="hash-organic",
+                    length=1,
+                    path_json={
+                        "conversion_value": 300.0,
+                        "touchpoints": [
+                            {"channel": "organic", "timestamp": "2024-02-10T08:00:00Z"},
+                        ],
+                    },
+                ),
+            ]
+        )
+        db.commit()
+
+        body = get_overview_summary(
+            db,
+            date_from="2024-02-10",
+            date_to="2024-02-10",
+            timezone="UTC",
+            channel_group="paid",
+            expenses=[
+                {"channel": "paid", "amount": 25.0, "service_period_start": "2024-02-10", "status": "active"},
+                {"channel": "organic", "amount": 90.0, "service_period_start": "2024-02-10", "status": "active"},
+            ],
+            import_runs_get_last_successful=lambda: None,
+        )
+
+        tiles = {tile["kpi_key"]: tile["value"] for tile in body["kpi_tiles"]}
+        assert body["channel_group"] == "paid"
+        assert tiles["spend"] == 25.0
+        assert tiles["visits"] == 2
+        assert tiles["conversions"] == 1
+        assert tiles["revenue"] == 120.0
+    finally:
+        db.close()
+
+
 def test_overview_summary_missing_dates_validation():
     """Summary requires date_from and date_to."""
     resp = client.get("/api/overview/summary", params={"date_from": "2024-01-01"}, headers=_admin_headers())
@@ -254,6 +341,183 @@ def test_overview_drivers_last_touch_count_uses_position_not_value_equality():
         )
         by_channel = {x["channel"]: x for x in out["by_channel"]}
         assert by_channel["email"]["conversions"] == 1
+    finally:
+        db.close()
+
+
+def test_overview_drivers_channel_group_filters_channels_and_campaigns():
+    db = _unit_db_session()
+    try:
+        db.add_all(
+            [
+                JourneyInstanceFact(
+                    conversion_id="conv-paid",
+                    profile_id="p-paid",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2024, 2, 10, 10, 0),
+                    channel_group="paid",
+                    campaign_id="Spring Paid",
+                    gross_conversions_total=1.0,
+                    net_conversions_total=1.0,
+                    gross_revenue_total=120.0,
+                    net_revenue_total=120.0,
+                ),
+                JourneyInstanceFact(
+                    conversion_id="conv-organic",
+                    profile_id="p-organic",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2024, 2, 10, 11, 0),
+                    channel_group="organic",
+                    campaign_id="SEO",
+                    gross_conversions_total=1.0,
+                    net_conversions_total=1.0,
+                    gross_revenue_total=300.0,
+                    net_revenue_total=300.0,
+                ),
+                ConversionPath(
+                    conversion_id="conv-paid",
+                    profile_id="p-paid",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2024, 2, 10, 10, 0),
+                    first_touch_ts=datetime(2024, 2, 10, 9, 0),
+                    last_touch_ts=datetime(2024, 2, 10, 9, 30),
+                    path_hash="hash-paid",
+                    length=1,
+                    path_json={"conversion_value": 120.0, "touchpoints": [{"channel": "paid", "campaign": "Spring Paid"}]},
+                ),
+                ConversionPath(
+                    conversion_id="conv-organic",
+                    profile_id="p-organic",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2024, 2, 10, 11, 0),
+                    first_touch_ts=datetime(2024, 2, 10, 8, 0),
+                    last_touch_ts=datetime(2024, 2, 10, 8, 15),
+                    path_hash="hash-organic",
+                    length=1,
+                    path_json={"conversion_value": 300.0, "touchpoints": [{"channel": "organic", "campaign": "SEO"}]},
+                ),
+            ]
+        )
+        db.commit()
+
+        out = get_overview_drivers(
+            db,
+            date_from="2024-02-10",
+            date_to="2024-02-10",
+            expenses=[
+                {"channel": "paid", "amount": 30.0, "service_period_start": "2024-02-10", "status": "active"},
+                {"channel": "organic", "amount": 90.0, "service_period_start": "2024-02-10", "status": "active"},
+            ],
+            top_campaigns_n=5,
+            conversion_key="purchase",
+            channel_group="paid",
+        )
+
+        assert out["channel_group"] == "paid"
+        assert [row["channel"] for row in out["by_channel"]] == ["paid"]
+        assert out["by_campaign"][0]["campaign"] == "Spring Paid"
+        assert out["by_campaign"][0]["revenue"] == 120.0
+    finally:
+        db.close()
+
+
+def test_overview_funnels_and_trends_channel_group_filter():
+    db = _unit_db_session()
+    try:
+        db.add_all(
+            [
+                JourneyInstanceFact(
+                    conversion_id="conv-paid-current",
+                    profile_id="p1",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2024, 2, 10, 10, 0),
+                    channel_group="paid",
+                    gross_conversions_total=1.0,
+                    net_conversions_total=1.0,
+                    gross_revenue_total=120.0,
+                    net_revenue_total=120.0,
+                ),
+                JourneyInstanceFact(
+                    conversion_id="conv-paid-prev",
+                    profile_id="p2",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2024, 2, 9, 10, 0),
+                    channel_group="paid",
+                    gross_conversions_total=1.0,
+                    net_conversions_total=1.0,
+                    gross_revenue_total=80.0,
+                    net_revenue_total=80.0,
+                ),
+                JourneyInstanceFact(
+                    conversion_id="conv-organic-current",
+                    profile_id="p3",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2024, 2, 10, 11, 0),
+                    channel_group="organic",
+                    gross_conversions_total=1.0,
+                    net_conversions_total=1.0,
+                    gross_revenue_total=250.0,
+                    net_revenue_total=250.0,
+                ),
+                ConversionPath(
+                    conversion_id="conv-paid-current",
+                    profile_id="p1",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2024, 2, 10, 10, 0),
+                    first_touch_ts=datetime(2024, 2, 8, 10, 0),
+                    last_touch_ts=datetime(2024, 2, 9, 9, 0),
+                    path_hash="path-paid-current",
+                    length=2,
+                    path_json={"conversion_value": 120.0, "touchpoints": [{"channel": "paid"}, {"channel": "direct"}]},
+                ),
+                ConversionPath(
+                    conversion_id="conv-paid-prev",
+                    profile_id="p2",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2024, 2, 9, 10, 0),
+                    first_touch_ts=datetime(2024, 2, 8, 9, 0),
+                    last_touch_ts=datetime(2024, 2, 8, 12, 0),
+                    path_hash="path-paid-prev",
+                    length=1,
+                    path_json={"conversion_value": 80.0, "touchpoints": [{"channel": "paid"}]},
+                ),
+                ConversionPath(
+                    conversion_id="conv-organic-current",
+                    profile_id="p3",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2024, 2, 10, 11, 0),
+                    first_touch_ts=datetime(2024, 2, 10, 8, 0),
+                    last_touch_ts=datetime(2024, 2, 10, 8, 30),
+                    path_hash="path-organic-current",
+                    length=1,
+                    path_json={"conversion_value": 250.0, "touchpoints": [{"channel": "organic"}]},
+                ),
+            ]
+        )
+        db.commit()
+
+        funnels = get_overview_funnels(
+            db,
+            date_from="2024-02-10",
+            date_to="2024-02-10",
+            conversion_key="purchase",
+            limit=5,
+            channel_group="paid",
+        )
+        trends = get_overview_trend_insights(
+            db,
+            date_from="2024-02-10",
+            date_to="2024-02-10",
+            conversion_key="purchase",
+            channel_group="paid",
+        )
+
+        assert funnels["summary"]["total_conversions"] == 1
+        assert funnels["tabs"]["conversions"][0]["path"] == "paid > direct"
+        assert trends["channel_group"] == "paid"
+        assert trends["decomposition"]["current"]["revenue"] == 120.0
+        assert trends["decomposition"]["previous"]["revenue"] == 80.0
+        assert "organic" not in {row["channel"] for row in trends["mix_shift"]}
     finally:
         db.close()
 

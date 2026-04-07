@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { tokens as t } from '../theme/tokens'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
@@ -26,6 +26,13 @@ import {
 } from '../components/dashboard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
+import {
+  isLocalAnalyticalSegment,
+  localSegmentCompatibleWithDimensions,
+  readLocalSegmentDefinition,
+  segmentOptionLabel,
+  type SegmentRegistryResponse,
+} from '../lib/segments'
 
 type PageKey =
   | 'overview'
@@ -350,6 +357,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
   const [funnelTab, setFunnelTab] = useState<'conversions' | 'revenue' | 'speed'>('conversions')
   const [assistantCollapsed, setAssistantCollapsed] = useState(true)
   const [showWorkspaceSignals, setShowWorkspaceSignals] = usePersistentToggle('overview:show-workspace-signals', false)
+  const [selectedSegmentId, setSelectedSegmentId] = useState('')
 
   const dateRange = useMemo(() => {
     const dateFrom = globalDateFrom || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
@@ -357,22 +365,70 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
     return { date_from: dateFrom, date_to: dateTo }
   }, [globalDateFrom, globalDateTo])
 
+  const segmentRegistryQuery = useQuery<SegmentRegistryResponse>({
+    queryKey: ['segment-registry', 'overview'],
+    queryFn: async () =>
+      apiGetJson<SegmentRegistryResponse>('/api/segments/registry', {
+        fallbackMessage: 'Failed to load segment registry',
+      }),
+    refetchInterval: false,
+  })
+
+  const localSegments = useMemo(
+    () => (segmentRegistryQuery.data?.items ?? []).filter(isLocalAnalyticalSegment),
+    [segmentRegistryQuery.data?.items],
+  )
+  const compatibleSegments = useMemo(
+    () => localSegments.filter((item) => localSegmentCompatibleWithDimensions(item, ['channel_group'])),
+    [localSegments],
+  )
+  const selectedSegment = useMemo(
+    () => compatibleSegments.find((item) => item.id === selectedSegmentId) ?? null,
+    [compatibleSegments, selectedSegmentId],
+  )
+  const selectedSegmentDefinition = useMemo(
+    () => readLocalSegmentDefinition(selectedSegment),
+    [selectedSegment],
+  )
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const segment = params.get('segment')
+    if (segment) setSelectedSegmentId(segment)
+  }, [])
+
+  useEffect(() => {
+    if (!selectedSegmentId) return
+    if (!segmentRegistryQuery.data) return
+    if (compatibleSegments.some((item) => item.id === selectedSegmentId)) return
+    setSelectedSegmentId('')
+  }, [compatibleSegments, selectedSegmentId, segmentRegistryQuery.data])
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    if (selectedSegmentId) params.set('segment', selectedSegmentId)
+    else params.delete('segment')
+    window.history.replaceState(null, '', `${window.location.pathname}?${params.toString()}`)
+  }, [selectedSegmentId])
+
   const summaryQuery = useQuery<OverviewSummaryResponse>({
-    queryKey: ['overview-summary', dateRange.date_from, dateRange.date_to],
+    queryKey: ['overview-summary', dateRange.date_from, dateRange.date_to, selectedSegmentDefinition.channel_group || 'all'],
     queryFn: async () => {
       return apiGetJson<OverviewSummaryResponse>(withQuery('/api/overview/summary', {
         date_from: dateRange.date_from,
         date_to: dateRange.date_to,
+        channel_group: selectedSegmentDefinition.channel_group,
       }), { fallbackMessage: 'Failed to load overview summary' })
     },
   })
 
   const driversQuery = useQuery<OverviewDriversResponse>({
-    queryKey: ['overview-drivers', dateRange.date_from, dateRange.date_to],
+    queryKey: ['overview-drivers', dateRange.date_from, dateRange.date_to, selectedSegmentDefinition.channel_group || 'all'],
     queryFn: async () => {
       return apiGetJson<OverviewDriversResponse>(withQuery('/api/overview/drivers', {
         date_from: dateRange.date_from,
         date_to: dateRange.date_to,
+        channel_group: selectedSegmentDefinition.channel_group,
       }), { fallbackMessage: 'Failed to load drivers' })
     },
   })
@@ -387,22 +443,24 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
   })
 
   const funnelsQuery = useQuery<OverviewFunnelsResponse>({
-    queryKey: ['overview-funnels', dateRange.date_from, dateRange.date_to],
+    queryKey: ['overview-funnels', dateRange.date_from, dateRange.date_to, selectedSegmentDefinition.channel_group || 'all'],
     queryFn: async () => {
       return apiGetJson<OverviewFunnelsResponse>(withQuery('/api/overview/funnels', {
         date_from: dateRange.date_from,
         date_to: dateRange.date_to,
         limit: 5,
+        channel_group: selectedSegmentDefinition.channel_group,
       }), { fallbackMessage: 'Failed to load top funnels' })
     },
   })
 
   const trendsQuery = useQuery<OverviewTrendsResponse>({
-    queryKey: ['overview-trends', dateRange.date_from, dateRange.date_to],
+    queryKey: ['overview-trends', dateRange.date_from, dateRange.date_to, selectedSegmentDefinition.channel_group || 'all'],
     queryFn: async () => {
       return apiGetJson<OverviewTrendsResponse>(withQuery('/api/overview/trends', {
         date_from: dateRange.date_from,
         date_to: dateRange.date_to,
+        channel_group: selectedSegmentDefinition.channel_group,
       }), { fallbackMessage: 'Failed to load trend insights' })
     },
   })
@@ -531,6 +589,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
         : funnelMedianLag <= 3
           ? `Typical (${funnelMedianLag.toFixed(1)}d median)`
           : `Long-lag (${funnelMedianLag.toFixed(1)}d median)`
+  const focusSegmentLabel = selectedSegment ? selectedSegment.name : 'All journeys'
 
   const handleOverviewAction = (action: RecommendedActionItem) => {
     navigateForRecommendedAction(action, { onNavigate, defaultPage: 'datasources' })
@@ -893,10 +952,75 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
           </SectionCard>
         ) : null}
 
+        <SectionCard
+          title="Analysis focus"
+          subtitle="This page currently supports saved local analytical segments that define only channel group, so the summary, drivers, funnels, and trends remain internally consistent."
+        >
+          <div
+            style={{
+              display: 'flex',
+              gap: t.space.md,
+              flexWrap: 'wrap',
+              alignItems: 'flex-end',
+            }}
+          >
+            <div style={{ display: 'grid', gap: 6, minWidth: 260, flex: '1 1 260px' }}>
+              <span style={{ fontSize: t.font.sizeXs, fontWeight: t.font.weightMedium, color: t.color.textSecondary }}>
+                Focus segment
+              </span>
+              <select
+                value={selectedSegmentId}
+                onChange={(event) => setSelectedSegmentId(event.target.value)}
+                style={{
+                  minWidth: 0,
+                  padding: `${t.space.sm}px ${t.space.md}px`,
+                  borderRadius: t.radius.sm,
+                  border: `1px solid ${t.color.border}`,
+                  background: t.color.surface,
+                  color: t.color.text,
+                  fontSize: t.font.sizeSm,
+                }}
+              >
+                <option value="">All journeys / no saved segment</option>
+                {compatibleSegments.map((segment) => (
+                  <option key={segment.id} value={segment.id}>
+                    {segmentOptionLabel(segment)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div style={{ display: 'grid', gap: 6, minWidth: 200, flex: '1 1 200px' }}>
+              <span style={{ fontSize: t.font.sizeXs, fontWeight: t.font.weightMedium, color: t.color.textSecondary }}>
+                Applied filter
+              </span>
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+                {selectedSegmentDefinition.channel_group
+                  ? `channel_group=${selectedSegmentDefinition.channel_group}`
+                  : 'No saved segment filter applied'}
+              </div>
+            </div>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+              <a
+                href="/?page=settings#settings/segments"
+                style={{
+                  alignSelf: 'center',
+                  color: t.color.accent,
+                  textDecoration: 'none',
+                  fontSize: t.font.sizeSm,
+                  fontWeight: t.font.weightMedium,
+                }}
+              >
+                Manage segments
+              </a>
+            </div>
+          </div>
+        </SectionCard>
+
         <ContextSummaryStrip
           items={[
             { label: 'Source', value: 'Workspace summary + journey health' },
             { label: 'Period', value: overviewPeriodLabel },
+            { label: 'Focus', value: focusSegmentLabel },
             { label: 'Freshness', value: freshnessLabel },
             { label: 'KPI coverage', value: readinessCoverageLabel },
             { label: 'Journeys loaded', value: journeysLoadedLabel },

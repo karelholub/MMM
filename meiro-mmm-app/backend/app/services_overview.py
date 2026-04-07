@@ -20,6 +20,7 @@ from .models_config_dq import (
     ChannelPerformanceDaily,
     ConversionPath,
     JourneyDefinition,
+    JourneyInstanceFact,
     JourneyPathDaily,
 )
 from .models_overview_alerts import AlertEvent, AlertRule
@@ -90,6 +91,7 @@ def _iter_conversion_path_rows(
     first_touch_from: Optional[datetime] = None,
     last_touch_to: Optional[datetime] = None,
     conversion_key: Optional[str] = None,
+    conversion_ids: Optional[List[str]] = None,
 ):
     q = db.query(
         ConversionPath.conversion_id,
@@ -109,6 +111,11 @@ def _iter_conversion_path_rows(
         q = q.filter(ConversionPath.last_touch_ts >= last_touch_to)
     if conversion_key:
         q = q.filter(ConversionPath.conversion_key == conversion_key)
+    if conversion_ids is not None:
+        normalized_ids = [str(value) for value in conversion_ids if str(value or "").strip()]
+        if not normalized_ids:
+            return
+        q = q.filter(ConversionPath.conversion_id.in_(normalized_ids))
     for row in q.order_by(ConversionPath.conversion_ts.desc()).yield_per(1000):
         yield SimpleNamespace(
             conversion_id=row[0],
@@ -126,13 +133,21 @@ def _iter_silver_conversion_rows(
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
     conversion_key: Optional[str] = None,
+    conversion_ids: Optional[List[str]] = None,
 ):
-    yield from iter_canonical_conversion_rows(
+    allowed_ids = set(str(value) for value in (conversion_ids or []) if str(value))
+    use_id_filter = conversion_ids is not None
+    if use_id_filter and not allowed_ids:
+        return
+    for row in iter_canonical_conversion_rows(
         db,
         date_from=date_from,
         date_to=date_to,
         conversion_key=conversion_key,
-    )
+    ):
+        if use_id_filter and str(getattr(row, "conversion_id", "") or "") not in allowed_ids:
+            continue
+        yield row
 
 
 def _iter_visit_rows(
@@ -142,6 +157,8 @@ def _iter_visit_rows(
     touchpoint_from: Optional[datetime] = None,
     touchpoint_to: Optional[datetime] = None,
 ):
+    if conversion_ids is not None and not [str(value) for value in conversion_ids if str(value or "").strip()]:
+        return
     yield from iter_touchpoint_visit_rows(
         db,
         conversion_ids=conversion_ids,
@@ -210,9 +227,12 @@ def _expense_by_channel(
     date_from: Optional[str],
     date_to: Optional[str],
     currency_filter: Optional[str],
+    allowed_channels: Optional[List[str]] = None,
 ) -> Dict[str, float]:
     """Aggregate expenses by channel. expenses: dict[id -> ExpenseEntry] or list of dicts."""
     by_ch: Dict[str, float] = {}
+    allowed = {str(value) for value in (allowed_channels or []) if str(value)}
+    use_allowed = bool(allowed)
     items = expenses.values() if isinstance(expenses, dict) else (expenses or [])
     for exp in items:
         entry = exp if isinstance(exp, dict) else getattr(exp, "__dict__", exp)
@@ -228,6 +248,8 @@ def _expense_by_channel(
             start = getattr(exp, "service_period_start", None)
         if status == "deleted" or not ch:
             continue
+        if use_allowed and str(ch) not in allowed:
+            continue
         if date_from and start and start < date_from:
             continue
         if date_to and start:
@@ -236,6 +258,27 @@ def _expense_by_channel(
                 continue
         by_ch[ch] = by_ch.get(ch, 0.0) + float(amount)
     return by_ch
+
+
+def _filtered_conversion_ids_for_channel_group(
+    db: Session,
+    *,
+    dt_from: datetime,
+    dt_to: datetime,
+    conversion_key: Optional[str],
+    channel_group: Optional[str],
+) -> Optional[List[str]]:
+    channel = str(channel_group or "").strip().lower()
+    if not channel:
+        return None
+    q = db.query(JourneyInstanceFact.conversion_id).filter(
+        JourneyInstanceFact.conversion_ts >= dt_from,
+        JourneyInstanceFact.conversion_ts <= dt_to,
+        JourneyInstanceFact.channel_group == channel,
+    )
+    if conversion_key:
+        q = q.filter(JourneyInstanceFact.conversion_key == conversion_key)
+    return [str(row[0]) for row in q.all() if str(row[0] or "")]
 
 
 def _to_utc_naive(dt: Optional[datetime]) -> Optional[datetime]:
@@ -304,12 +347,13 @@ def _conversions_and_revenue_from_paths(
     date_from: Optional[datetime],
     date_to: Optional[datetime],
     conversion_key: Optional[str],
+    conversion_ids: Optional[List[str]] = None,
 ) -> Tuple[int, float, List[Dict[str, Any]]]:
     """Returns (conversions_count, total_revenue, daily_series for sparkline)."""
-    aggregate = _conversions_and_revenue_from_channel_facts(db, date_from, date_to, conversion_key)
+    aggregate = None if conversion_ids else _conversions_and_revenue_from_channel_facts(db, date_from, date_to, conversion_key)
     if aggregate is not None:
         return aggregate
-    series_from_silver = _series_from_silver_conversion_facts(db, date_from, date_to, "daily", conversion_key)
+    series_from_silver = _series_from_silver_conversion_facts(db, date_from, date_to, "daily", conversion_key, conversion_ids=conversion_ids)
     if series_from_silver is not None:
         daily = [
             {"date": bucket, "conversions": int(round(value or 0.0)), "revenue": float(series_from_silver["revenue_map"].get(bucket, 0.0) or 0.0)}
@@ -328,6 +372,7 @@ def _conversions_and_revenue_from_paths(
         date_from=date_from,
         date_to=date_to,
         conversion_key=conversion_key,
+        conversion_ids=conversion_ids,
     ):
         if not _conversion_path_is_converted(r):
             continue
@@ -347,8 +392,9 @@ def _aggregate_outcomes_from_paths(
     date_from: datetime,
     date_to: datetime,
     conversion_key: Optional[str],
+    conversion_ids: Optional[List[str]] = None,
 ) -> Dict[str, float]:
-    silver = _aggregate_outcomes_from_silver_facts(db, date_from, date_to, conversion_key)
+    silver = _aggregate_outcomes_from_silver_facts(db, date_from, date_to, conversion_key, conversion_ids=conversion_ids)
     if silver is not None:
         return silver
     totals = _empty_outcomes()
@@ -357,6 +403,7 @@ def _aggregate_outcomes_from_paths(
         date_from=date_from,
         date_to=date_to,
         conversion_key=conversion_key,
+        conversion_ids=conversion_ids,
     ):
         if not _conversion_path_is_converted(row):
             continue
@@ -473,6 +520,7 @@ def _aggregate_outcomes_from_silver_facts(
     start: datetime,
     end: datetime,
     conversion_key: Optional[str] = None,
+    conversion_ids: Optional[List[str]] = None,
 ) -> Optional[Dict[str, float]]:
     totals = _empty_outcomes()
     seen = False
@@ -481,6 +529,7 @@ def _aggregate_outcomes_from_silver_facts(
         date_from=start,
         date_to=end,
         conversion_key=conversion_key,
+        conversion_ids=conversion_ids,
     ):
         seen = True
         totals["gross_conversions"] += row.gross_conversions_total
@@ -744,8 +793,9 @@ def _series_from_conversion_paths(
     end: datetime,
     grain: str,
     conversion_key: Optional[str] = None,
+    conversion_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    silver = _series_from_silver_conversion_facts(db, start, end, grain, conversion_key)
+    silver = _series_from_silver_conversion_facts(db, start, end, grain, conversion_key, conversion_ids=conversion_ids)
     if silver is not None:
         return silver
     dedupe_seen = set()
@@ -758,6 +808,7 @@ def _series_from_conversion_paths(
         date_from=start,
         date_to=end,
         conversion_key=conversion_key,
+        conversion_ids=conversion_ids,
     ):
         if not _conversion_path_is_converted(row):
             continue
@@ -782,6 +833,7 @@ def _series_from_silver_conversion_facts(
     end: datetime,
     grain: str,
     conversion_key: Optional[str] = None,
+    conversion_ids: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     conv_map: Dict[str, float] = {}
     rev_map: Dict[str, float] = {}
@@ -792,6 +844,7 @@ def _series_from_silver_conversion_facts(
         date_from=start,
         date_to=end,
         conversion_key=conversion_key,
+        conversion_ids=conversion_ids,
     ):
         conversion_count += 1
         total_revenue += row.gross_revenue_total
@@ -814,8 +867,9 @@ def _series_from_visits(
     start: datetime,
     end: datetime,
     grain: str,
+    conversion_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    silver = _series_from_silver_touchpoint_facts(db, start, end, grain)
+    silver = _series_from_silver_touchpoint_facts(db, start, end, grain, conversion_ids=conversion_ids)
     if silver is not None:
         return silver
     visit_map: Dict[str, float] = {}
@@ -824,6 +878,7 @@ def _series_from_visits(
         db,
         first_touch_from=end,
         last_touch_to=start,
+        conversion_ids=conversion_ids,
     ):
         for tp in conversion_path_touchpoints(row):
             ts = _as_datetime(tp.get("timestamp") or tp.get("ts"))
@@ -844,11 +899,13 @@ def _series_from_silver_touchpoint_facts(
     start: datetime,
     end: datetime,
     grain: str,
+    conversion_ids: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     visit_map: Dict[str, float] = {}
     observed_points = 0
     for row in _iter_visit_rows(
         db,
+        conversion_ids=conversion_ids,
         touchpoint_from=start,
         touchpoint_to=end,
     ):
@@ -872,9 +929,12 @@ def _series_from_expenses(
     start: datetime,
     end: datetime,
     grain: str,
+    allowed_channels: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     amount_map: Dict[str, float] = {}
     observed_points = 0
+    allowed = {str(value) for value in (allowed_channels or []) if str(value)}
+    use_allowed = bool(allowed)
     items = expenses.values() if isinstance(expenses, dict) else (expenses or [])
     for exp in items:
         entry = exp if isinstance(exp, dict) else getattr(exp, "__dict__", exp)
@@ -887,6 +947,9 @@ def _series_from_expenses(
             amount_raw = getattr(exp, "converted_amount", None) or getattr(exp, "amount", 0) or 0
             start_raw = getattr(exp, "service_period_start", None)
         if status == "deleted":
+            continue
+        channel = str(entry.get("channel") if isinstance(entry, dict) else getattr(exp, "channel", None) or "")
+        if use_allowed and channel not in allowed:
             continue
         ts = _as_datetime(start_raw)
         if ts is None or ts < start or ts > end:
@@ -1163,20 +1226,23 @@ def _campaign_rollups_from_daily_path_aggregates(
     prev_from: datetime,
     prev_to: datetime,
     conversion_key: Optional[str],
+    channel_group: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     definition_id = _single_active_overview_definition_id(db, conversion_key=conversion_key)
     if not definition_id:
         return None
 
-    rows = (
+    rows_query = (
         db.query(JourneyPathDaily)
         .filter(
             JourneyPathDaily.journey_definition_id == definition_id,
             JourneyPathDaily.date >= prev_from.date(),
             JourneyPathDaily.date <= dt_to.date(),
         )
-        .all()
     )
+    if channel_group:
+        rows_query = rows_query.filter(JourneyPathDaily.channel_group == channel_group)
+    rows = rows_query.all()
     if not rows:
         return None
 
@@ -1360,6 +1426,7 @@ def get_overview_summary(
     workspace: Optional[str] = None,
     account: Optional[str] = None,
     model_id: Optional[str] = None,
+    channel_group: Optional[str] = None,
     expenses: Any = None,
     import_runs_get_last_successful: Any = None,
 ) -> Dict[str, Any]:
@@ -1371,16 +1438,36 @@ def get_overview_summary(
     period_span = dt_to - dt_from
     prev_to = dt_from - timedelta(microseconds=1)
     prev_from = prev_to - period_span
+    use_channel_group_filter = bool(str(channel_group or "").strip())
+    current_conversion_ids = _filtered_conversion_ids_for_channel_group(
+        db,
+        dt_from=dt_from,
+        dt_to=dt_to,
+        conversion_key=None,
+        channel_group=channel_group,
+    )
+    previous_conversion_ids = _filtered_conversion_ids_for_channel_group(
+        db,
+        dt_from=prev_from,
+        dt_to=prev_to,
+        conversion_key=None,
+        channel_group=channel_group,
+    )
     grain = "hourly" if period_span <= timedelta(days=2) else "daily"
     bucket_keys_current = _bucket_keys_in_range(dt_from, dt_to, grain)
     bucket_keys_prev = _bucket_keys_in_range(prev_from, prev_to, grain)
     expected_points = len(bucket_keys_current)
 
-    fact_current = _series_from_channel_facts(db, dt_from, dt_to, grain)
-    fact_prev = _series_from_channel_facts(db, prev_from, prev_to, grain)
-    fact_current_outcomes = _aggregate_outcomes_from_channel_facts(db, dt_from, dt_to)
-    fact_prev_outcomes = _aggregate_outcomes_from_channel_facts(db, prev_from, prev_to)
-    if fact_current is not None and fact_prev is not None and fact_current_outcomes is not None and fact_prev_outcomes is not None:
+    fact_current = None if use_channel_group_filter else _series_from_channel_facts(db, dt_from, dt_to, grain)
+    fact_prev = None if use_channel_group_filter else _series_from_channel_facts(db, prev_from, prev_to, grain)
+    fact_current_outcomes = None if use_channel_group_filter else _aggregate_outcomes_from_channel_facts(db, dt_from, dt_to)
+    fact_prev_outcomes = None if use_channel_group_filter else _aggregate_outcomes_from_channel_facts(db, prev_from, prev_to)
+    if (
+        fact_current is not None
+        and fact_prev is not None
+        and fact_current_outcomes is not None
+        and fact_prev_outcomes is not None
+    ):
         current_paths = fact_current
         prev_paths = fact_prev
         current_outcomes = fact_current_outcomes
@@ -1388,7 +1475,7 @@ def get_overview_summary(
         current_visits = fact_current
         prev_visits = fact_prev
     else:
-        aggregate_definition_id = _single_active_overview_definition_id(db) if grain == "daily" else None
+        aggregate_definition_id = _single_active_overview_definition_id(db) if grain == "daily" and not use_channel_group_filter else None
         if aggregate_definition_id:
             current_paths = _series_from_daily_path_aggregates(
                 db,
@@ -1415,14 +1502,62 @@ def get_overview_summary(
                 end=prev_to,
             )
         else:
-            current_paths = _series_from_conversion_paths(db, dt_from, dt_to, grain)
-            prev_paths = _series_from_conversion_paths(db, prev_from, prev_to, grain)
-            current_outcomes = _aggregate_outcomes_from_paths(db, dt_from, dt_to, None)
-            prev_outcomes = _aggregate_outcomes_from_paths(db, prev_from, prev_to, None)
-        current_visits = _series_from_visits(db, dt_from, dt_to, grain)
-        prev_visits = _series_from_visits(db, prev_from, prev_to, grain)
-    current_expenses = _series_from_expenses(expenses or {}, dt_from, dt_to, grain)
-    prev_expenses = _series_from_expenses(expenses or {}, prev_from, prev_to, grain)
+            current_paths = _series_from_conversion_paths(
+                db,
+                dt_from,
+                dt_to,
+                grain,
+                conversion_ids=current_conversion_ids if use_channel_group_filter else None,
+            )
+            prev_paths = _series_from_conversion_paths(
+                db,
+                prev_from,
+                prev_to,
+                grain,
+                conversion_ids=previous_conversion_ids if use_channel_group_filter else None,
+            )
+            current_outcomes = _aggregate_outcomes_from_paths(
+                db,
+                dt_from,
+                dt_to,
+                None,
+                conversion_ids=current_conversion_ids if use_channel_group_filter else None,
+            )
+            prev_outcomes = _aggregate_outcomes_from_paths(
+                db,
+                prev_from,
+                prev_to,
+                None,
+                conversion_ids=previous_conversion_ids if use_channel_group_filter else None,
+            )
+        current_visits = _series_from_visits(
+            db,
+            dt_from,
+            dt_to,
+            grain,
+            conversion_ids=current_conversion_ids if use_channel_group_filter else None,
+        )
+        prev_visits = _series_from_visits(
+            db,
+            prev_from,
+            prev_to,
+            grain,
+            conversion_ids=previous_conversion_ids if use_channel_group_filter else None,
+        )
+    current_expenses = _series_from_expenses(
+        expenses or {},
+        dt_from,
+        dt_to,
+        grain,
+        allowed_channels=[channel_group] if use_channel_group_filter else None,
+    )
+    prev_expenses = _series_from_expenses(
+        expenses or {},
+        prev_from,
+        prev_to,
+        grain,
+        allowed_channels=[channel_group] if use_channel_group_filter else None,
+    )
 
     total_spend = current_expenses["total"]
     prev_spend = prev_expenses["total"]
@@ -1667,6 +1802,7 @@ def get_overview_summary(
         "current_period": current_period,
         "previous_period": previous_period,
         "model_id": model_id,
+        "channel_group": channel_group,
         "date_from": date_from,
         "date_to": date_to,
         "timezone": timezone,
@@ -1685,6 +1821,7 @@ def get_overview_drivers(
     expenses: Any = None,
     top_campaigns_n: int = 10,
     conversion_key: Optional[str] = None,
+    channel_group: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Top drivers: by_channel (spend, conversions, revenue, delta), by_campaign (top N), biggest_movers.
@@ -1697,6 +1834,21 @@ def get_overview_drivers(
     period_span = dt_to - dt_from
     prev_to = dt_from - timedelta(microseconds=1)
     prev_from = prev_to - period_span
+    use_channel_group_filter = bool(str(channel_group or "").strip())
+    current_conversion_ids = _filtered_conversion_ids_for_channel_group(
+        db,
+        dt_from=dt_from,
+        dt_to=dt_to,
+        conversion_key=conversion_key,
+        channel_group=channel_group,
+    )
+    previous_conversion_ids = _filtered_conversion_ids_for_channel_group(
+        db,
+        dt_from=prev_from,
+        dt_to=prev_to,
+        conversion_key=conversion_key,
+        channel_group=channel_group,
+    )
     aggregate_campaign_rollups = _campaign_rollups_from_daily_path_aggregates(
         db,
         dt_from=dt_from,
@@ -1704,18 +1856,31 @@ def get_overview_drivers(
         prev_from=prev_from,
         prev_to=prev_to,
         conversion_key=conversion_key,
+        channel_group=channel_group,
     )
 
-    expense_by_channel = _expense_by_channel(expenses or {}, date_from, date_to, None)
-    prev_expense = _expense_by_channel(expenses or {}, prev_from.strftime("%Y-%m-%d"), prev_to.strftime("%Y-%m-%d"), None)
+    expense_by_channel = _expense_by_channel(
+        expenses or {},
+        date_from,
+        date_to,
+        None,
+        allowed_channels=[channel_group] if use_channel_group_filter else None,
+    )
+    prev_expense = _expense_by_channel(
+        expenses or {},
+        prev_from.strftime("%Y-%m-%d"),
+        prev_to.strftime("%Y-%m-%d"),
+        None,
+        allowed_channels=[channel_group] if use_channel_group_filter else None,
+    )
 
-    fact_current_channel_rollups = _aggregate_channel_metrics_from_facts(
+    fact_current_channel_rollups = None if use_channel_group_filter else _aggregate_channel_metrics_from_facts(
         db,
         dt_from=dt_from,
         dt_to=dt_to,
         conversion_key=conversion_key,
     )
-    fact_prev_channel_rollups = _aggregate_channel_metrics_from_facts(
+    fact_prev_channel_rollups = None if use_channel_group_filter else _aggregate_channel_metrics_from_facts(
         db,
         dt_from=prev_from,
         dt_to=prev_to,
@@ -1726,34 +1891,40 @@ def get_overview_drivers(
         dt_from=dt_from,
         dt_to=dt_to,
         conversion_key=conversion_key,
+        conversion_ids=current_conversion_ids if use_channel_group_filter else None,
     )
     silver_prev_channel_rollups = None if fact_prev_channel_rollups is not None else _channel_driver_rollups_from_silver_facts(
         db,
         dt_from=prev_from,
         dt_to=prev_to,
         conversion_key=conversion_key,
+        conversion_ids=previous_conversion_ids if use_channel_group_filter else None,
     )
     silver_current_channel_visits = None if fact_current_channel_rollups is not None else _channel_visits_from_silver_touchpoints(
         db,
         dt_from=dt_from,
         dt_to=dt_to,
+        conversion_ids=current_conversion_ids if use_channel_group_filter else None,
     )
     silver_prev_channel_visits = None if fact_prev_channel_rollups is not None else _channel_visits_from_silver_touchpoints(
         db,
         dt_from=prev_from,
         dt_to=prev_to,
+        conversion_ids=previous_conversion_ids if use_channel_group_filter else None,
     )
     silver_current_campaign_rollups = None if aggregate_campaign_rollups is not None else _campaign_driver_rollups_from_silver_facts(
         db,
         dt_from=dt_from,
         dt_to=dt_to,
         conversion_key=conversion_key,
+        conversion_ids=current_conversion_ids if use_channel_group_filter else None,
     )
     silver_prev_campaign_rollups = None if aggregate_campaign_rollups is not None else _campaign_driver_rollups_from_silver_facts(
         db,
         dt_from=prev_from,
         dt_to=prev_to,
         conversion_key=conversion_key,
+        conversion_ids=previous_conversion_ids if use_channel_group_filter else None,
     )
 
     # Aggregate by channel from paths (revenue/conversions)
@@ -1774,6 +1945,7 @@ def get_overview_drivers(
             date_from=dt_from,
             date_to=dt_to,
             conversion_key=conversion_key,
+            conversion_ids=current_conversion_ids if use_channel_group_filter else None,
         ):
             if not _conversion_path_is_converted(r):
                 continue
@@ -1807,6 +1979,7 @@ def get_overview_drivers(
             date_from=prev_from,
             date_to=prev_to,
             conversion_key=conversion_key,
+            conversion_ids=previous_conversion_ids if use_channel_group_filter else None,
         ):
             if not _conversion_path_is_converted(r):
                 continue
@@ -1857,6 +2030,7 @@ def get_overview_drivers(
             db,
             first_touch_from=dt_to,
             last_touch_to=dt_from,
+            conversion_ids=current_conversion_ids if use_channel_group_filter else None,
         ):
             for tp in conversion_path_touchpoints(r):
                 ts = _parse_dt(tp.get("timestamp") or tp.get("ts"))
@@ -1869,6 +2043,7 @@ def get_overview_drivers(
             db,
             first_touch_from=prev_to,
             last_touch_to=prev_from,
+            conversion_ids=previous_conversion_ids if use_channel_group_filter else None,
         ):
             for tp in conversion_path_touchpoints(r):
                 ts = _parse_dt(tp.get("timestamp") or tp.get("ts"))
@@ -1940,6 +2115,7 @@ def get_overview_drivers(
         "by_channel": by_channel,
         "by_campaign": by_campaign,
         "biggest_movers": biggest_movers,
+        "channel_group": channel_group,
         "date_from": date_from,
         "date_to": date_to,
     }
@@ -1957,8 +2133,9 @@ def _aggregate_channel_metrics(
     dt_from: datetime,
     dt_to: datetime,
     conversion_key: Optional[str] = None,
+    conversion_ids: Optional[List[str]] = None,
 ) -> Dict[str, Dict[str, float]]:
-    fact_rollups = _aggregate_channel_metrics_from_facts(
+    fact_rollups = None if conversion_ids is not None else _aggregate_channel_metrics_from_facts(
         db,
         dt_from=dt_from,
         dt_to=dt_to,
@@ -1971,6 +2148,7 @@ def _aggregate_channel_metrics(
         dt_from=dt_from,
         dt_to=dt_to,
         conversion_key=conversion_key,
+        conversion_ids=conversion_ids,
     )
     if silver_rollups is not None:
         return silver_rollups
@@ -1983,6 +2161,7 @@ def _aggregate_channel_metrics(
         date_from=query_from,
         date_to=query_to,
         conversion_key=conversion_key,
+        conversion_ids=conversion_ids,
     ):
         touchpoints = conversion_path_touchpoints(row)
         value = conversion_path_revenue_value(row, dedupe_seen=dedupe_seen)
@@ -2002,8 +2181,9 @@ def _aggregate_daily_channel_revenue(
     dt_from: datetime,
     dt_to: datetime,
     conversion_key: Optional[str] = None,
+    conversion_ids: Optional[List[str]] = None,
 ) -> Dict[str, Dict[str, float]]:
-    fact_rollups = _aggregate_daily_channel_revenue_from_facts(
+    fact_rollups = None if conversion_ids is not None else _aggregate_daily_channel_revenue_from_facts(
         db,
         dt_from=dt_from,
         dt_to=dt_to,
@@ -2016,6 +2196,7 @@ def _aggregate_daily_channel_revenue(
         dt_from=dt_from,
         dt_to=dt_to,
         conversion_key=conversion_key,
+        conversion_ids=conversion_ids,
     )
     if silver_rollups is not None:
         return silver_rollups
@@ -2028,6 +2209,7 @@ def _aggregate_daily_channel_revenue(
         date_from=query_from,
         date_to=query_to,
         conversion_key=conversion_key,
+        conversion_ids=conversion_ids,
     ):
         if not _conversion_path_is_converted(row):
             continue
@@ -2050,6 +2232,7 @@ def _aggregate_channel_metrics_from_silver_facts(
     dt_from: datetime,
     dt_to: datetime,
     conversion_key: Optional[str] = None,
+    conversion_ids: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Dict[str, float]]]:
     conversions = list(
         _iter_silver_conversion_rows(
@@ -2057,6 +2240,7 @@ def _aggregate_channel_metrics_from_silver_facts(
             date_from=dt_from,
             date_to=dt_to,
             conversion_key=conversion_key,
+            conversion_ids=conversion_ids,
         )
     )
     if not conversions:
@@ -2086,7 +2270,7 @@ def _aggregate_channel_metrics_from_silver_facts(
         entry = metrics.setdefault(last_channel, {"visits": 0.0, "conversions": 0.0, "revenue": 0.0})
         entry["conversions"] += 1.0
         entry["revenue"] += float(revenue_by_conversion.get(conversion_id, 0.0) or 0.0)
-    return metrics
+    return metrics or None
 
 
 def _channel_driver_rollups_from_silver_facts(
@@ -2095,6 +2279,7 @@ def _channel_driver_rollups_from_silver_facts(
     dt_from: datetime,
     dt_to: datetime,
     conversion_key: Optional[str] = None,
+    conversion_ids: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     conversions = list(
         _iter_silver_conversion_rows(
@@ -2102,6 +2287,7 @@ def _channel_driver_rollups_from_silver_facts(
             date_from=dt_from,
             date_to=dt_to,
             conversion_key=conversion_key,
+            conversion_ids=conversion_ids,
         )
     )
     if not conversions:
@@ -2132,6 +2318,8 @@ def _channel_driver_rollups_from_silver_facts(
                 conversions_by_channel[channel] = conversions_by_channel.get(channel, 0) + 1
             metric = outcomes.setdefault(channel, _empty_outcomes())
             _merge_silver_outcomes(metric, row)
+    if not revenue and not conversions_by_channel and not outcomes:
+        return None
     return {
         "revenue": revenue,
         "conversions": conversions_by_channel,
@@ -2144,11 +2332,13 @@ def _channel_visits_from_silver_touchpoints(
     *,
     dt_from: datetime,
     dt_to: datetime,
+    conversion_ids: Optional[List[str]] = None,
 ) -> Optional[Dict[str, int]]:
     visits: Dict[str, int] = {}
     seen = False
     for row in _iter_visit_rows(
         db,
+        conversion_ids=conversion_ids,
         touchpoint_from=dt_from,
         touchpoint_to=dt_to,
     ):
@@ -2164,6 +2354,7 @@ def _campaign_driver_rollups_from_silver_facts(
     dt_from: datetime,
     dt_to: datetime,
     conversion_key: Optional[str] = None,
+    conversion_ids: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     conversions = list(
         _iter_silver_conversion_rows(
@@ -2171,6 +2362,7 @@ def _campaign_driver_rollups_from_silver_facts(
             date_from=dt_from,
             date_to=dt_to,
             conversion_key=conversion_key,
+            conversion_ids=conversion_ids,
         )
     )
     if not conversions:
@@ -2198,6 +2390,8 @@ def _campaign_driver_rollups_from_silver_facts(
         conversions_by_campaign[campaign] = conversions_by_campaign.get(campaign, 0) + 1
         metric = outcomes.setdefault(campaign, _empty_outcomes())
         _merge_silver_outcomes(metric, row)
+    if not revenue and not conversions_by_campaign and not outcomes:
+        return None
     return {
         "revenue": revenue,
         "conversions": conversions_by_campaign,
@@ -2211,6 +2405,7 @@ def _aggregate_daily_channel_revenue_from_silver_facts(
     dt_from: datetime,
     dt_to: datetime,
     conversion_key: Optional[str] = None,
+    conversion_ids: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Dict[str, float]]]:
     conversions = list(
         _iter_silver_conversion_rows(
@@ -2218,6 +2413,7 @@ def _aggregate_daily_channel_revenue_from_silver_facts(
             date_from=dt_from,
             date_to=dt_to,
             conversion_key=conversion_key,
+            conversion_ids=conversion_ids,
         )
     )
     if not conversions:
@@ -2252,14 +2448,42 @@ def get_overview_trend_insights(
     date_from: str,
     date_to: str,
     conversion_key: Optional[str] = None,
+    channel_group: Optional[str] = None,
 ) -> Dict[str, Any]:
     dt_from, dt_to = _normalize_period_bounds(date_from, date_to)
     period_span = dt_to - dt_from
     prev_to = dt_from - timedelta(microseconds=1)
     prev_from = prev_to - period_span
+    use_channel_group_filter = bool(str(channel_group or "").strip())
+    current_conversion_ids = _filtered_conversion_ids_for_channel_group(
+        db,
+        dt_from=dt_from,
+        dt_to=dt_to,
+        conversion_key=conversion_key,
+        channel_group=channel_group,
+    )
+    previous_conversion_ids = _filtered_conversion_ids_for_channel_group(
+        db,
+        dt_from=prev_from,
+        dt_to=prev_to,
+        conversion_key=conversion_key,
+        channel_group=channel_group,
+    )
 
-    current = _aggregate_channel_metrics(db, dt_from=dt_from, dt_to=dt_to, conversion_key=conversion_key)
-    previous = _aggregate_channel_metrics(db, dt_from=prev_from, dt_to=prev_to, conversion_key=conversion_key)
+    current = _aggregate_channel_metrics(
+        db,
+        dt_from=dt_from,
+        dt_to=dt_to,
+        conversion_key=conversion_key,
+        conversion_ids=current_conversion_ids if use_channel_group_filter else None,
+    )
+    previous = _aggregate_channel_metrics(
+        db,
+        dt_from=prev_from,
+        dt_to=prev_to,
+        conversion_key=conversion_key,
+        conversion_ids=previous_conversion_ids if use_channel_group_filter else None,
+    )
 
     curr_visits = sum(item["visits"] for item in current.values())
     prev_visits = sum(item["visits"] for item in previous.values())
@@ -2306,7 +2530,20 @@ def get_overview_trend_insights(
     momentum_current_from = dt_to - timedelta(days=momentum_window_days - 1)
     momentum_prev_to = momentum_current_from - timedelta(microseconds=1)
     momentum_prev_from = momentum_prev_to - timedelta(days=momentum_window_days - 1)
-    daily_revenue = _aggregate_daily_channel_revenue(db, dt_from=momentum_prev_from, dt_to=dt_to, conversion_key=conversion_key)
+    momentum_conversion_ids = _filtered_conversion_ids_for_channel_group(
+        db,
+        dt_from=momentum_prev_from,
+        dt_to=dt_to,
+        conversion_key=conversion_key,
+        channel_group=channel_group,
+    )
+    daily_revenue = _aggregate_daily_channel_revenue(
+        db,
+        dt_from=momentum_prev_from,
+        dt_to=dt_to,
+        conversion_key=conversion_key,
+        conversion_ids=momentum_conversion_ids if use_channel_group_filter else None,
+    )
     spark_days = [(dt_to.date() - timedelta(days=idx)).isoformat() for idx in range(momentum_window_days * 2 - 1, -1, -1)]
     momentum_rows: List[Dict[str, Any]] = []
     for channel, series in daily_revenue.items():
@@ -2378,6 +2615,7 @@ def get_overview_trend_insights(
             "falling": falling,
         },
         "mix_shift": mix_shift,
+        "channel_group": channel_group,
     }
 
 
@@ -2388,9 +2626,18 @@ def get_overview_funnels(
     date_to: str,
     conversion_key: Optional[str] = None,
     limit: int = 5,
+    channel_group: Optional[str] = None,
 ) -> Dict[str, Any]:
     dt_from, dt_to = _normalize_period_bounds(date_from, date_to)
-    aggregate_result = _overview_funnels_from_daily_aggregates(
+    use_channel_group_filter = bool(str(channel_group or "").strip())
+    current_conversion_ids = _filtered_conversion_ids_for_channel_group(
+        db,
+        dt_from=dt_from,
+        dt_to=dt_to,
+        conversion_key=conversion_key,
+        channel_group=channel_group,
+    )
+    aggregate_result = None if use_channel_group_filter else _overview_funnels_from_daily_aggregates(
         db,
         dt_from=dt_from,
         dt_to=dt_to,
@@ -2411,6 +2658,7 @@ def get_overview_funnels(
         date_from=dt_from,
         date_to=dt_to,
         conversion_key=conversion_key,
+        conversion_ids=current_conversion_ids if use_channel_group_filter else None,
     ):
         if not _conversion_path_is_converted(row):
             continue
@@ -2487,6 +2735,7 @@ def get_overview_funnels(
     return {
         "date_from": date_from,
         "date_to": date_to,
+        "channel_group": channel_group,
         "summary": {
             "total_conversions": total_conversions,
             "net_conversions": round(outcomes["net_conversions"], 2),
