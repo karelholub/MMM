@@ -494,6 +494,22 @@ export default function ConversionPaths() {
     },
     enabled: !!selectedJourneyId,
   })
+  const baselinePathsQuery = useQuery<PathAnalysis>({
+    queryKey: ['path-analysis-baseline', selectedJourneyId, directMode, pathScope, filters.dateFrom, filters.dateTo],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        direct_mode: directMode,
+        path_scope: pathScope === 'all' ? 'all' : 'converted',
+        definition_id: selectedJourneyId,
+        date_from: filters.dateFrom,
+        date_to: filters.dateTo,
+      })
+      return apiGetJson<PathAnalysis>(`/api/conversion-paths/analysis?${params.toString()}`, {
+        fallbackMessage: 'Failed to load conversion path workspace baseline',
+      })
+    },
+    enabled: !!selectedJourneyId && filters.segment !== 'all',
+  })
 
   const anomaliesQuery = useQuery<{ anomalies: PathAnomaly[] }>({
     queryKey: ['path-anomalies'],
@@ -701,6 +717,23 @@ export default function ConversionPaths() {
         { label: 'Path Length Range', value: `${data.path_length_distribution.min} – ${data.path_length_distribution.max}`, def: METRIC_DEFINITIONS['Path Length Range'] },
       ]
     : []
+  const segmentComparison = useMemo(() => {
+    if (filters.segment === 'all' || !data || !baselinePathsQuery.data) return null
+    const focusedTopShare = data.common_paths?.[0]?.share ?? null
+    const baselineTopShare = baselinePathsQuery.data.common_paths?.[0]?.share ?? null
+    return {
+      journeySharePct:
+        baselinePathsQuery.data.total_journeys > 0
+          ? (data.total_journeys / baselinePathsQuery.data.total_journeys) * 100
+          : null,
+      focusedTopShare,
+      baselineTopShare,
+      focusedAvgLength: data.avg_path_length,
+      baselineAvgLength: baselinePathsQuery.data.avg_path_length,
+      focusedAvgLag: data.avg_time_to_conversion_days,
+      baselineAvgLag: baselinePathsQuery.data.avg_time_to_conversion_days,
+    }
+  }, [baselinePathsQuery.data, data, filters.segment])
 
   const periodLabel =
     filters.dateFrom && filters.dateTo
@@ -1133,6 +1166,38 @@ export default function ConversionPaths() {
             ) : null}
           </div>
         </SectionCard>
+        {segmentComparison ? (
+          <ContextSummaryStrip
+            minItemWidth={220}
+            items={[
+              {
+                label: 'Focused journey share',
+                value:
+                  segmentComparison.journeySharePct != null
+                    ? `${segmentComparison.journeySharePct.toFixed(1)}% of workspace`
+                    : '—',
+              },
+              {
+                label: 'Top-path concentration',
+                value:
+                  segmentComparison.focusedTopShare != null
+                    ? `${(segmentComparison.focusedTopShare * 100).toFixed(1)}% vs ${segmentComparison.baselineTopShare != null ? `${(segmentComparison.baselineTopShare * 100).toFixed(1)}%` : '—'} baseline`
+                    : '—',
+              },
+              {
+                label: 'Avg path length',
+                value: `${segmentComparison.focusedAvgLength.toFixed(1)} vs ${segmentComparison.baselineAvgLength.toFixed(1)} baseline`,
+              },
+              {
+                label: 'Avg time to convert',
+                value:
+                  segmentComparison.focusedAvgLag != null
+                    ? `${segmentComparison.focusedAvgLag.toFixed(1)}d vs ${segmentComparison.baselineAvgLag != null ? `${segmentComparison.baselineAvgLag.toFixed(1)}d` : '—'}`
+                    : '—',
+              },
+            ]}
+          />
+        ) : null}
 
         <CollapsiblePanel
           title="Method & Context"

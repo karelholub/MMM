@@ -287,6 +287,20 @@ export default function PathArchetypes() {
       })
     },
   })
+  const baselineArchetypesQuery = useQuery<ArchetypesResponse>({
+    queryKey: ['path-archetypes-baseline', kMode, kFixed, directMode, comparePrevious],
+    queryFn: async () => {
+      const params = new URLSearchParams()
+      params.set('k_mode', kMode)
+      if (kMode === 'fixed') params.set('k', String(kFixed))
+      params.set('direct_mode', directMode)
+      if (comparePrevious) params.set('compare_previous', 'true')
+      return apiGetJson<ArchetypesResponse>(`/api/paths/archetypes?${params.toString()}`, {
+        fallbackMessage: 'Failed to load workspace archetype baseline',
+      })
+    },
+    enabled: !!selectedSegmentId,
+  })
 
   const data = archetypesQuery.data
   const clustersRaw = data?.clusters ?? []
@@ -343,6 +357,35 @@ export default function PathArchetypes() {
       ),
     [selected?.avg_time_to_conversion_days, selected?.time_to_conversion_median_days, clusterLagBenchmark],
   )
+  const segmentComparison = useMemo(() => {
+    if (!selectedSegment || !data || !baselineArchetypesQuery.data) return null
+    const focusedTopShare = clustersRaw[0]?.share ?? null
+    const baselineTopShare = baselineArchetypesQuery.data.clusters[0]?.share ?? null
+    const focusedMedianLength = medianOf(clustersRaw.map((cluster) => cluster.length_median ?? cluster.avg_length))
+    const baselineMedianLength = medianOf(
+      baselineArchetypesQuery.data.clusters.map((cluster) => cluster.length_median ?? cluster.avg_length),
+    )
+    const focusedMedianLag = medianOf(
+      clustersRaw.map((cluster) => cluster.time_to_conversion_median_days ?? cluster.avg_time_to_conversion_days),
+    )
+    const baselineMedianLag = medianOf(
+      baselineArchetypesQuery.data.clusters.map(
+        (cluster) => cluster.time_to_conversion_median_days ?? cluster.avg_time_to_conversion_days,
+      ),
+    )
+    return {
+      convertedSharePct:
+        baselineArchetypesQuery.data.total_converted > 0
+          ? (data.total_converted / baselineArchetypesQuery.data.total_converted) * 100
+          : null,
+      focusedTopShare,
+      baselineTopShare,
+      focusedMedianLength,
+      baselineMedianLength,
+      focusedMedianLag,
+      baselineMedianLag,
+    }
+  }, [baselineArchetypesQuery.data, clustersRaw, data, selectedSegment])
 
   const isCompareAvailable = Boolean(comparePrevious && diagnostics?.compare_available)
 
@@ -681,6 +724,43 @@ export default function PathArchetypes() {
           ]}
         />
       </div>
+      {segmentComparison ? (
+        <div style={{ marginBottom: tkn.space.lg }}>
+          <ContextSummaryStrip
+            minItemWidth={220}
+            items={[
+              {
+                label: 'Focused converted share',
+                value:
+                  segmentComparison.convertedSharePct != null
+                    ? `${segmentComparison.convertedSharePct.toFixed(1)}% of workspace`
+                    : '—',
+              },
+              {
+                label: 'Lead archetype share',
+                value:
+                  segmentComparison.focusedTopShare != null
+                    ? `${(segmentComparison.focusedTopShare * 100).toFixed(1)}% vs ${segmentComparison.baselineTopShare != null ? `${(segmentComparison.baselineTopShare * 100).toFixed(1)}%` : '—'} baseline`
+                    : '—',
+              },
+              {
+                label: 'Median archetype length',
+                value:
+                  segmentComparison.focusedMedianLength != null
+                    ? `${segmentComparison.focusedMedianLength.toFixed(1)} vs ${segmentComparison.baselineMedianLength != null ? segmentComparison.baselineMedianLength.toFixed(1) : '—'} baseline`
+                    : '—',
+              },
+              {
+                label: 'Median lag',
+                value:
+                  segmentComparison.focusedMedianLag != null
+                    ? `${segmentComparison.focusedMedianLag.toFixed(1)}d vs ${segmentComparison.baselineMedianLag != null ? `${segmentComparison.baselineMedianLag.toFixed(1)}d` : '—'}`
+                    : '—',
+              },
+            ]}
+          />
+        </div>
+      ) : null}
 
       {convertedMismatch ? (
         <div
