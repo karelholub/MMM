@@ -935,6 +935,12 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
               This page compares model outputs from the current attribution run. Direct handling is a view-only filter here and does not rerun attribution.
             </div>
             <div>
+              Need a full reliability view?{' '}
+              <a href="/?page=trust" style={{ color: t.color.accent, textDecoration: 'none' }}>
+                Open Attribution Trust
+              </a>
+            </div>
+            <div>
               Current view: <strong style={{ color: t.color.text }}>{directMode === 'include' ? 'Include Direct' : 'Exclude Direct'}</strong>
             </div>
             <div>
@@ -976,6 +982,9 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
               <div>
                 Current readiness: <strong style={{ color: t.color.text }}>{readiness?.status || 'unknown'}</strong>
                 {readiness?.warnings?.length ? ` · ${readiness.warnings.slice(0, 2).join(' · ')}` : ''}
+              </div>
+              <div>
+                Open the unified trust workspace when you need mapping coverage, taxonomy unknown share, direct-path diagnostics, and live-vs-materialized reconciliation in one place.
               </div>
               <div>
                 KPI coverage <strong style={{ color: t.color.text }}>{coverageLabel}</strong> · Freshness{' '}

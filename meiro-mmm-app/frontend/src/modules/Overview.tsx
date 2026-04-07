@@ -39,6 +39,7 @@ type PageKey =
   | 'alerts'
   | 'dashboard'
   | 'roles'
+  | 'trust'
   | 'comparison'
   | 'paths'
   | 'campaigns'
@@ -1241,6 +1242,22 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
               }}
             >
               Open Attribution Comparison
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigate('trust')}
+              style={{
+                padding: `${t.space.sm}px ${t.space.md}px`,
+                borderRadius: t.radius.sm,
+                border: `1px solid ${t.color.border}`,
+                background: t.color.surface,
+                color: t.color.text,
+                fontSize: t.font.sizeSm,
+                fontWeight: t.font.weightMedium,
+                cursor: 'pointer',
+              }}
+            >
+              Open Attribution Trust
             </button>
             <button
               type="button"

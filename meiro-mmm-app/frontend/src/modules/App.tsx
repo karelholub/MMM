@@ -32,6 +32,7 @@ const Overview = lazy(() => import('./Overview'))
 const AlertsPage = lazy(() => import('./Alerts'))
 const ChannelPerformance = lazy(() => import('./ChannelPerformance'))
 const AttributionRoles = lazy(() => import('./AttributionRoles'))
+const AttributionTrust = lazy(() => import('./AttributionTrust'))
 const AttributionComparison = lazy(() => import('./AttributionComparison'))
 const ConversionPaths = lazy(() => import('./ConversionPaths'))
 const ExpenseManager = lazy(() => import('./ExpenseManager'))
@@ -664,6 +665,12 @@ export default function App() {
               )}
               {page === 'roles' && (
                 <AttributionRoles
+                  model={selectedModel}
+                  configId={selectedConfigId}
+                />
+              )}
+              {page === 'trust' && (
+                <AttributionTrust
                   model={selectedModel}
                   configId={selectedConfigId}
                 />

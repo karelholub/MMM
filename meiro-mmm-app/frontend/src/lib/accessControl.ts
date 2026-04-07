@@ -3,6 +3,7 @@ export type AppPageKey =
   | 'alerts'
   | 'dashboard'
   | 'roles'
+  | 'trust'
   | 'comparison'
   | 'paths'
   | 'campaigns'

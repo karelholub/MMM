@@ -6,6 +6,7 @@ export type AppPage =
   | 'alerts'
   | 'dashboard'
   | 'roles'
+  | 'trust'
   | 'comparison'
   | 'paths'
   | 'campaigns'
@@ -43,6 +44,7 @@ export const NAV_ITEMS: NavItem[] = [
   { key: 'alerts', label: 'Alerts', section: 'Data & Ops', icon: 'AL', breadcrumb: 'Data & Ops / Alerts' },
   { key: 'dashboard', label: 'Channel performance', section: 'Attribution', icon: 'CH', breadcrumb: 'Attribution / Channel performance' },
   { key: 'roles', label: 'Attribution roles', section: 'Attribution', icon: 'AR', breadcrumb: 'Attribution / Attribution roles' },
+  { key: 'trust', label: 'Attribution trust', section: 'Attribution', icon: 'AT', breadcrumb: 'Attribution / Trust & reconciliation' },
   { key: 'campaigns', label: 'Campaign performance', section: 'Attribution', icon: 'CA', breadcrumb: 'Attribution / Campaign performance' },
   { key: 'comparison', label: 'Attribution models', section: 'Attribution', icon: 'AM', breadcrumb: 'Attribution / Attribution models' },
   { key: 'paths', label: 'Conversion paths', section: 'Journeys', icon: 'JP', breadcrumb: 'Journeys / Conversion paths' },
@@ -123,7 +125,7 @@ function renderNavIcon(page: AppPage, active: boolean) {
       </svg>
     )
   }
-  if (page === 'dashboard' || page === 'campaigns' || page === 'comparison' || page === 'roles') {
+  if (page === 'dashboard' || page === 'campaigns' || page === 'comparison' || page === 'roles' || page === 'trust') {
     return (
       <svg {...common}>
         <path d="M3 13V9M8 13V6M13 13V3" />
