@@ -542,7 +542,19 @@ MEIRO_AUTO_REPLAY_RUNNER: Dict[str, Any] = {}
 MEIRO_AUTO_REPLAY_THREAD: Optional[threading.Thread] = None
 MEIRO_AUTO_REPLAY_STOP = threading.Event()
 
-SESSION_COOKIE_SECURE = (os.getenv("SESSION_COOKIE_SECURE", "1").strip() != "0")
+def _default_session_cookie_secure() -> bool:
+    configured = os.getenv("SESSION_COOKIE_SECURE")
+    if configured is not None:
+        return configured.strip() != "0"
+    frontend_url = (os.getenv("FRONTEND_URL", "").strip().lower())
+    base_url = (os.getenv("BASE_URL", "").strip().lower())
+    local_markers = ("localhost", "127.0.0.1", "0.0.0.0")
+    if any(marker in frontend_url for marker in local_markers) or any(marker in base_url for marker in local_markers):
+        return False
+    return False if os.getenv("ENV", "").strip().lower() in {"dev", "development", "local"} else True
+
+
+SESSION_COOKIE_SECURE = _default_session_cookie_secure()
 SESSION_COOKIE_SAMESITE = (os.getenv("SESSION_COOKIE_SAMESITE", "lax").strip().lower() or "lax")
 SESSION_COOKIE_MAX_AGE = max(3600, int(os.getenv("SESSION_COOKIE_MAX_AGE_SECONDS", str(60 * 60 * 24 * 7))))
 CSRF_EXEMPT_PATHS = {
