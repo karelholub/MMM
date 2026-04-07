@@ -1,0 +1,528 @@
+import { useMemo, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { DashboardPage, ContextSummaryStrip, SectionCard } from '../components/dashboard'
+import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
+import { usePersistentToggle } from '../hooks/usePersistentToggle'
+import { useWorkspaceContext } from '../components/WorkspaceContext'
+import { apiGetJson } from '../lib/apiClient'
+import { tokens as t } from '../theme/tokens'
+
+interface AttributionRolesProps {
+  model: string
+  configId?: string | null
+}
+
+interface RoleDiagnostics {
+  first_touch_conversions?: number
+  last_touch_conversions?: number
+  assist_conversions?: number
+  first_touch_revenue?: number
+  last_touch_revenue?: number
+  assist_revenue?: number
+}
+
+interface ChannelSummaryItem {
+  channel: string
+  current: { spend: number; visits: number; conversions: number; revenue: number }
+  diagnostics?: { roles?: RoleDiagnostics }
+}
+
+interface ChannelSummaryResponse {
+  current_period: { date_from: string; date_to: string; grain?: string }
+  items: ChannelSummaryItem[]
+  config?: {
+    conversion_key?: string | null
+    config_version?: number | null
+  } | null
+}
+
+interface CampaignSummaryItem {
+  campaign_id: string
+  campaign_name?: string | null
+  channel: string
+  current: { spend: number; visits: number; conversions: number; revenue: number }
+  diagnostics?: { roles?: RoleDiagnostics }
+}
+
+interface CampaignSummaryResponse {
+  current_period: { date_from: string; date_to: string; grain?: string }
+  items: CampaignSummaryItem[]
+  config?: {
+    conversion_key?: string | null
+    config_version?: number | null
+  } | null
+}
+
+type ScopeKey = 'channels' | 'campaigns'
+type MetricKey = 'conversions' | 'revenue'
+type RoleKey = 'first' | 'assist' | 'last'
+
+type RoleEntity = {
+  id: string
+  label: string
+  secondaryLabel: string
+  firstConversions: number
+  assistConversions: number
+  lastConversions: number
+  firstRevenue: number
+  assistRevenue: number
+  lastRevenue: number
+  visits: number
+  conversions: number
+  revenue: number
+  spend: number
+}
+
+const ROLE_LABELS: Record<RoleKey, string> = {
+  first: 'Introducer',
+  assist: 'Assister',
+  last: 'Closer',
+}
+
+const ROLE_COLORS: Record<RoleKey, string> = {
+  first: '#2563eb',
+  assist: '#7c3aed',
+  last: '#059669',
+}
+
+function formatCurrency(value: number): string {
+  if (!Number.isFinite(value)) return '$0'
+  if (Math.abs(value) >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`
+  if (Math.abs(value) >= 1_000) return `$${(value / 1_000).toFixed(1)}K`
+  return `$${value.toFixed(0)}`
+}
+
+function formatNumber(value: number): string {
+  if (!Number.isFinite(value)) return '0'
+  return value.toLocaleString(undefined, { maximumFractionDigits: 0 })
+}
+
+function formatPercent(value: number | null | undefined, digits = 1): string {
+  if (value == null || !Number.isFinite(value)) return '—'
+  return `${(value * 100).toFixed(digits)}%`
+}
+
+function readRoleValue(item: RoleEntity, role: RoleKey, metric: MetricKey): number {
+  if (metric === 'conversions') {
+    if (role === 'first') return item.firstConversions
+    if (role === 'assist') return item.assistConversions
+    return item.lastConversions
+  }
+  if (role === 'first') return item.firstRevenue
+  if (role === 'assist') return item.assistRevenue
+  return item.lastRevenue
+}
+
+function dominantRole(item: RoleEntity, metric: MetricKey): RoleKey {
+  const values: Array<{ role: RoleKey; value: number }> = [
+    { role: 'first', value: readRoleValue(item, 'first', metric) },
+    { role: 'assist', value: readRoleValue(item, 'assist', metric) },
+    { role: 'last', value: readRoleValue(item, 'last', metric) },
+  ]
+  values.sort((a, b) => b.value - a.value)
+  return values[0]?.role ?? 'assist'
+}
+
+function roleDescriptor(role: RoleKey): string {
+  if (role === 'first') return 'good at starting demand'
+  if (role === 'assist') return 'good at keeping journeys alive'
+  return 'good at converting demand'
+}
+
+export default function AttributionRoles({ model, configId }: AttributionRolesProps) {
+  const { globalDateFrom, globalDateTo, journeysSummary } = useWorkspaceContext()
+  const [scope, setScope] = useState<ScopeKey>('channels')
+  const [metric, setMetric] = useState<MetricKey>('conversions')
+  const [focusRole, setFocusRole] = useState<RoleKey>('assist')
+  const [showMethod, setShowMethod] = usePersistentToggle('attribution-roles:show-method', false)
+  const [showTable, setShowTable] = usePersistentToggle('attribution-roles:show-table', true)
+
+  const dateTo = globalDateTo || new Date().toISOString().slice(0, 10)
+  const dateFrom =
+    globalDateFrom ||
+    new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+
+  const channelSummaryQuery = useQuery<ChannelSummaryResponse>({
+    queryKey: ['attribution-roles', 'channels', dateFrom, dateTo],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        date_from: dateFrom,
+        date_to: dateTo,
+        timezone: 'UTC',
+        compare: '0',
+      })
+      return apiGetJson<ChannelSummaryResponse>(`/api/performance/channel/summary?${params.toString()}`, {
+        fallbackMessage: 'Failed to load channel role summary',
+      })
+    },
+    enabled: !!dateFrom && !!dateTo,
+  })
+
+  const campaignSummaryQuery = useQuery<CampaignSummaryResponse>({
+    queryKey: ['attribution-roles', 'campaigns', dateFrom, dateTo],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        date_from: dateFrom,
+        date_to: dateTo,
+        timezone: 'UTC',
+        compare: '0',
+      })
+      return apiGetJson<CampaignSummaryResponse>(`/api/performance/campaign/summary?${params.toString()}`, {
+        fallbackMessage: 'Failed to load campaign role summary',
+      })
+    },
+    enabled: !!dateFrom && !!dateTo,
+  })
+
+  const channelEntities = useMemo<RoleEntity[]>(() => {
+    return (channelSummaryQuery.data?.items ?? []).map((item) => {
+      const roles = item.diagnostics?.roles || {}
+      return {
+        id: item.channel,
+        label: item.channel,
+        secondaryLabel: 'Channel',
+        firstConversions: roles.first_touch_conversions || 0,
+        assistConversions: roles.assist_conversions || 0,
+        lastConversions: roles.last_touch_conversions || 0,
+        firstRevenue: roles.first_touch_revenue || 0,
+        assistRevenue: roles.assist_revenue || 0,
+        lastRevenue: roles.last_touch_revenue || 0,
+        visits: item.current.visits || 0,
+        conversions: item.current.conversions || 0,
+        revenue: item.current.revenue || 0,
+        spend: item.current.spend || 0,
+      }
+    })
+  }, [channelSummaryQuery.data?.items])
+
+  const campaignEntities = useMemo<RoleEntity[]>(() => {
+    return (campaignSummaryQuery.data?.items ?? []).map((item) => {
+      const roles = item.diagnostics?.roles || {}
+      const label = item.campaign_name || item.campaign_id || 'Unknown campaign'
+      return {
+        id: item.campaign_id,
+        label,
+        secondaryLabel: item.channel,
+        firstConversions: roles.first_touch_conversions || 0,
+        assistConversions: roles.assist_conversions || 0,
+        lastConversions: roles.last_touch_conversions || 0,
+        firstRevenue: roles.first_touch_revenue || 0,
+        assistRevenue: roles.assist_revenue || 0,
+        lastRevenue: roles.last_touch_revenue || 0,
+        visits: item.current.visits || 0,
+        conversions: item.current.conversions || 0,
+        revenue: item.current.revenue || 0,
+        spend: item.current.spend || 0,
+      }
+    })
+  }, [campaignSummaryQuery.data?.items])
+
+  const entities = scope === 'channels' ? channelEntities : campaignEntities
+  const activeQuery = scope === 'channels' ? channelSummaryQuery : campaignSummaryQuery
+  const conversionKey =
+    channelSummaryQuery.data?.config?.conversion_key ||
+    campaignSummaryQuery.data?.config?.conversion_key ||
+    journeysSummary?.primary_kpi_label ||
+    'Primary KPI'
+
+  const roleTotals = useMemo(() => {
+    return {
+      first: entities.reduce((sum, item) => sum + readRoleValue(item, 'first', metric), 0),
+      assist: entities.reduce((sum, item) => sum + readRoleValue(item, 'assist', metric), 0),
+      last: entities.reduce((sum, item) => sum + readRoleValue(item, 'last', metric), 0),
+    }
+  }, [entities, metric])
+
+  const totalRoleValue = roleTotals.first + roleTotals.assist + roleTotals.last
+  const totalObservedConversions = entities.reduce((sum, item) => sum + item.conversions, 0)
+  const totalObservedRevenue = entities.reduce((sum, item) => sum + item.revenue, 0)
+
+  const topByRole = useMemo(() => {
+    const pick = (role: RoleKey) =>
+      [...entities]
+        .sort((a, b) => readRoleValue(b, role, metric) - readRoleValue(a, role, metric))
+        .slice(0, 5)
+    return {
+      first: pick('first'),
+      assist: pick('assist'),
+      last: pick('last'),
+    }
+  }, [entities, metric])
+
+  const rankedEntities = useMemo(() => {
+    return [...entities]
+      .sort((a, b) => readRoleValue(b, focusRole, metric) - readRoleValue(a, focusRole, metric))
+      .slice(0, 12)
+  }, [entities, focusRole, metric])
+
+  const concentration = useMemo(() => {
+    const build = (role: RoleKey) => {
+      const top3 = topByRole[role].slice(0, 3).reduce((sum, item) => sum + readRoleValue(item, role, metric), 0)
+      const total = roleTotals[role]
+      return total > 0 ? top3 / total : null
+    }
+    return {
+      first: build('first'),
+      assist: build('assist'),
+      last: build('last'),
+    }
+  }, [metric, roleTotals, topByRole])
+
+  const topFocusedEntity = rankedEntities[0] ?? null
+  const summaryItems = [
+    { label: 'Period', value: `${dateFrom} – ${dateTo}` },
+    { label: 'Scope', value: scope === 'channels' ? 'Channels' : 'Campaigns' },
+    { label: 'Role metric', value: metric === 'conversions' ? 'Conversions' : 'Revenue' },
+    { label: 'KPI', value: String(conversionKey || 'Primary KPI') },
+    { label: 'Model context', value: model.replace(/_/g, ' ') },
+    { label: 'Journeys loaded', value: journeysSummary?.count?.toLocaleString() ?? '—' },
+  ]
+
+  const isLoading = activeQuery.isLoading
+  const isError = activeQuery.isError
+  const errorMessage = (activeQuery.error as Error | undefined)?.message || null
+
+  return (
+    <DashboardPage
+      title="Attribution Roles"
+      description="Who starts demand, who assists it, and who closes it."
+      isLoading={isLoading}
+      isError={isError}
+      errorMessage={errorMessage}
+      isEmpty={!isLoading && !isError && entities.length === 0}
+      filters={
+        <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', alignItems: 'center' }}>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+            Scope
+            <select
+              value={scope}
+              onChange={(e) => setScope(e.target.value as ScopeKey)}
+              style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+            >
+              <option value="channels">Channels</option>
+              <option value="campaigns">Campaigns</option>
+            </select>
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+            Metric
+            <select
+              value={metric}
+              onChange={(e) => setMetric(e.target.value as MetricKey)}
+              style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+            >
+              <option value="conversions">Conversions</option>
+              <option value="revenue">Revenue</option>
+            </select>
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+            Ranked by
+            <select
+              value={focusRole}
+              onChange={(e) => setFocusRole(e.target.value as RoleKey)}
+              style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+            >
+              <option value="first">Introducer</option>
+              <option value="assist">Assister</option>
+              <option value="last">Closer</option>
+            </select>
+          </label>
+        </div>
+      }
+    >
+      <div style={{ display: 'grid', gap: t.space.xl }}>
+        <ContextSummaryStrip items={summaryItems} minItemWidth={180} />
+
+        <CollapsiblePanel
+          title="How to read roles"
+          subtitle="Role metrics describe where an entity appears in converting paths, not how much selected-model credit it gets."
+          open={showMethod}
+          onToggle={() => setShowMethod((v) => !v)}
+        >
+          <div style={{ display: 'grid', gap: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+            <div><strong style={{ color: t.color.text }}>Introducer</strong>: earliest demand creator in the path.</div>
+            <div><strong style={{ color: t.color.text }}>Assister</strong>: middle-path influence that keeps journeys moving.</div>
+            <div><strong style={{ color: t.color.text }}>Closer</strong>: final demand capture before conversion.</div>
+            <div>
+              These metrics come from observed journey positions and can be read alongside, not instead of, your selected attribution model.
+            </div>
+          </div>
+        </CollapsiblePanel>
+
+        <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
+          {([
+            { role: 'first', label: 'Introducer volume', total: roleTotals.first, concentration: concentration.first },
+            { role: 'assist', label: 'Assister volume', total: roleTotals.assist, concentration: concentration.assist },
+            { role: 'last', label: 'Closer volume', total: roleTotals.last, concentration: concentration.last },
+          ] as Array<{ role: RoleKey; label: string; total: number; concentration: number | null }>).map((item) => (
+            <SectionCard
+              key={item.role}
+              title={item.label}
+              subtitle={item.concentration != null ? `Top 3 hold ${formatPercent(item.concentration)} of ${ROLE_LABELS[item.role].toLowerCase()} ${metric}.` : 'No observed role volume.'}
+            >
+              <div style={{ display: 'grid', gap: 6 }}>
+                <div style={{ fontSize: t.font.sizeXl, fontWeight: t.font.weightSemibold, color: ROLE_COLORS[item.role] }}>
+                  {metric === 'conversions' ? formatNumber(item.total) : formatCurrency(item.total)}
+                </div>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  {totalRoleValue > 0 ? `${formatPercent(item.total / totalRoleValue)} of role-accounted ${metric}` : 'No role-accounted volume in range'}
+                </div>
+              </div>
+            </SectionCard>
+          ))}
+          <SectionCard
+            title="Observed base"
+            subtitle="Raw observed outcomes in the selected scope and period."
+          >
+            <div style={{ display: 'grid', gap: 6 }}>
+              <div style={{ fontSize: t.font.sizeXl, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                {metric === 'conversions' ? formatNumber(totalObservedConversions) : formatCurrency(totalObservedRevenue)}
+              </div>
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                {metric === 'conversions'
+                  ? `${formatCurrency(totalObservedRevenue)} observed revenue across ${entities.length.toLocaleString()} ${scope}`
+                  : `${formatNumber(totalObservedConversions)} observed conversions across ${entities.length.toLocaleString()} ${scope}`}
+              </div>
+            </div>
+          </SectionCard>
+        </div>
+
+        <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
+          {(['first', 'assist', 'last'] as RoleKey[]).map((role) => (
+            <SectionCard
+              key={role}
+              title={`Top ${ROLE_LABELS[role]}s`}
+              subtitle={`Highest ${ROLE_LABELS[role].toLowerCase()} ${metric} in the current ${scope} view.`}
+            >
+              <div style={{ display: 'grid', gap: t.space.sm }}>
+                {topByRole[role].map((item) => {
+                  const value = readRoleValue(item, role, metric)
+                  const total = roleTotals[role]
+                  return (
+                    <div key={`${role}-${item.id}`} style={{ display: 'grid', gap: 4 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>{item.label}</div>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.secondaryLabel}</div>
+                        </div>
+                        <div style={{ fontSize: t.font.sizeSm, color: ROLE_COLORS[role], fontWeight: t.font.weightSemibold }}>
+                          {metric === 'conversions' ? formatNumber(value) : formatCurrency(value)}
+                        </div>
+                      </div>
+                      <div style={{ width: '100%', height: 6, background: t.color.bg, borderRadius: 999, overflow: 'hidden' }}>
+                        <div
+                          style={{
+                            width: `${total > 0 ? Math.max(2, (value / total) * 100) : 0}%`,
+                            height: '100%',
+                            background: ROLE_COLORS[role],
+                            borderRadius: 999,
+                          }}
+                        />
+                      </div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                        {total > 0 ? `${formatPercent(value / total)} of visible ${ROLE_LABELS[role].toLowerCase()} ${metric}` : 'No visible role volume'}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </SectionCard>
+          ))}
+        </div>
+
+        <SectionCard
+          title={`${scope === 'channels' ? 'Channel' : 'Campaign'} role mix`}
+          subtitle={`${topFocusedEntity ? `${topFocusedEntity.label} currently leads the ${ROLE_LABELS[focusRole].toLowerCase()} view and is ${roleDescriptor(dominantRole(topFocusedEntity, metric))}.` : 'Role mix is based on the top visible entities in the selected scope.'}`}
+        >
+          <div style={{ display: 'grid', gap: t.space.md }}>
+            <div style={{ width: '100%', height: 420 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={rankedEntities.map((item) => ({
+                    label: item.label,
+                    introducer: metric === 'conversions' ? item.firstConversions : item.firstRevenue,
+                    assister: metric === 'conversions' ? item.assistConversions : item.assistRevenue,
+                    closer: metric === 'conversions' ? item.lastConversions : item.lastRevenue,
+                  }))}
+                  layout="vertical"
+                  margin={{ top: 8, right: 24, bottom: 8, left: 24 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
+                  <XAxis
+                    type="number"
+                    stroke={t.color.textMuted}
+                    tickFormatter={(value) => (metric === 'conversions' ? formatNumber(Number(value)) : formatCurrency(Number(value)))}
+                  />
+                  <YAxis type="category" dataKey="label" width={160} stroke={t.color.textMuted} tick={{ fontSize: 12 }} />
+                  <Tooltip
+                    formatter={(value: number, name: string) => [
+                      metric === 'conversions' ? formatNumber(value) : formatCurrency(value),
+                      name,
+                    ]}
+                  />
+                  <Legend />
+                  <Bar dataKey="introducer" stackId="roles" fill={ROLE_COLORS.first} name="Introducer" radius={[4, 0, 0, 4]} />
+                  <Bar dataKey="assister" stackId="roles" fill={ROLE_COLORS.assist} name="Assister" />
+                  <Bar dataKey="closer" stackId="roles" fill={ROLE_COLORS.last} name="Closer" radius={[0, 4, 4, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+              Stacked bars show where each {scope === 'channels' ? 'channel' : 'campaign'} mostly contributes in converting journeys. A balanced entity spans roles; a skewed entity specializes in one role.
+            </div>
+          </div>
+        </SectionCard>
+
+        <CollapsiblePanel
+          title={`All ${scope}`}
+          subtitle="Detailed role mix for the visible entities."
+          open={showTable}
+          onToggle={() => setShowTable((v) => !v)}
+        >
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: t.font.sizeSm }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${t.color.border}` }}>
+                  <th style={{ textAlign: 'left', padding: `${t.space.sm}px 0` }}>{scope === 'channels' ? 'Channel' : 'Campaign'}</th>
+                  <th style={{ textAlign: 'right', padding: `${t.space.sm}px 0` }}>Introducer</th>
+                  <th style={{ textAlign: 'right', padding: `${t.space.sm}px 0` }}>Assister</th>
+                  <th style={{ textAlign: 'right', padding: `${t.space.sm}px 0` }}>Closer</th>
+                  <th style={{ textAlign: 'right', padding: `${t.space.sm}px 0` }}>Dominant role</th>
+                  <th style={{ textAlign: 'right', padding: `${t.space.sm}px 0` }}>Observed total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rankedEntities.map((item) => {
+                  const dominant = dominantRole(item, metric)
+                  return (
+                    <tr key={item.id} style={{ borderBottom: `1px solid ${t.color.borderLight}` }}>
+                      <td style={{ padding: `${t.space.sm}px 0` }}>
+                        <div style={{ fontWeight: t.font.weightMedium, color: t.color.text }}>{item.label}</div>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.secondaryLabel}</div>
+                      </td>
+                      <td style={{ padding: `${t.space.sm}px 0`, textAlign: 'right' }}>
+                        {metric === 'conversions' ? formatNumber(item.firstConversions) : formatCurrency(item.firstRevenue)}
+                      </td>
+                      <td style={{ padding: `${t.space.sm}px 0`, textAlign: 'right' }}>
+                        {metric === 'conversions' ? formatNumber(item.assistConversions) : formatCurrency(item.assistRevenue)}
+                      </td>
+                      <td style={{ padding: `${t.space.sm}px 0`, textAlign: 'right' }}>
+                        {metric === 'conversions' ? formatNumber(item.lastConversions) : formatCurrency(item.lastRevenue)}
+                      </td>
+                      <td style={{ padding: `${t.space.sm}px 0`, textAlign: 'right', color: ROLE_COLORS[dominant], fontWeight: t.font.weightSemibold }}>
+                        {ROLE_LABELS[dominant]}
+                      </td>
+                      <td style={{ padding: `${t.space.sm}px 0`, textAlign: 'right' }}>
+                        {metric === 'conversions' ? formatNumber(item.conversions) : formatCurrency(item.revenue)}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </CollapsiblePanel>
+      </div>
+    </DashboardPage>
+  )
+}

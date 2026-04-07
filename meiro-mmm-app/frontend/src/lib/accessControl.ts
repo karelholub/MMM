@@ -2,6 +2,7 @@ export type AppPageKey =
   | 'overview'
   | 'alerts'
   | 'dashboard'
+  | 'roles'
   | 'comparison'
   | 'paths'
   | 'campaigns'

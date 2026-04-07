@@ -38,6 +38,7 @@ type PageKey =
   | 'overview'
   | 'alerts'
   | 'dashboard'
+  | 'roles'
   | 'comparison'
   | 'paths'
   | 'campaigns'
