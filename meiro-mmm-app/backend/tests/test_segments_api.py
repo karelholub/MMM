@@ -8,7 +8,7 @@ from sqlalchemy.pool import StaticPool
 from app.db import Base, get_db
 from app.main import app
 from app.connectors import meiro_cdp
-from app.models_config_dq import JourneyDefinitionInstanceFact
+from app.models_config_dq import JourneyDefinitionInstanceFact, MeiroEventProfileState, MeiroProfileFact
 
 
 @pytest.fixture
@@ -171,3 +171,55 @@ def test_segment_context_uses_observed_workspace_values(client: TestClient):
     assert {item["value"] for item in payload["campaigns"]} == {"brand_search", "promo_april"}
     assert {item["value"] for item in payload["devices"]} == {"mobile", "desktop"}
     assert {item["value"] for item in payload["countries"]} == {"cz", "de"}
+
+
+def test_segment_registry_includes_webhook_derived_meiro_segments(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(meiro_cdp, "is_connected", lambda: False)
+
+    db_gen = app.dependency_overrides[get_db]()
+    db = next(db_gen)
+    try:
+        db.add(
+            MeiroProfileFact(
+                profile_id="cust-profile-1",
+                profile_json={
+                    "customer_id": "cust-profile-1",
+                    "attributes": {
+                        "segments": [
+                            {"id": "vip", "name": "VIP buyers"},
+                        ]
+                    },
+                },
+            )
+        )
+        db.add(
+            MeiroEventProfileState(
+                profile_id="cust-profile-2",
+                profile_json={
+                    "customer_id": "cust-profile-2",
+                    "segments": [
+                        {"id": "vip", "name": "VIP buyers"},
+                        {"id": "long_lag", "name": "Long-lag converters"},
+                    ],
+                },
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
+
+    response = client.get("/api/segments/registry", headers={"X-User-Role": "viewer", "X-User-Id": "qa-viewer"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"]["meiro_pipes"] == 2
+    vip = next(item for item in payload["items"] if item["id"] == "meiro:vip")
+    assert vip["name"] == "VIP buyers"
+    assert vip["size"] == 2
+    assert vip["definition"]["derived_from"] == "webhook_payload"
+    assert set(vip["definition"]["ingestion_sources"]) == {"profiles_webhook", "raw_events_replay"}
+    long_lag = next(item for item in payload["items"] if item["id"] == "meiro:long_lag")
+    assert long_lag["size"] == 1

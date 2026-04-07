@@ -343,12 +343,15 @@ def rebuild_profiles_from_meiro_events(
                 "customer_id": customer_id,
                 "converted": False,
                 "conversion_value": 0.0,
+                "segments": [],
                 "touchpoints": [],
                 "conversions": [],
                 "_event_count": 0,
             },
         )
         journey["_event_count"] += 1
+        for segment in _extract_segment_memberships(event):
+            _append_segment_membership(journey, segment)
         name_token = _event_name_token(event)
         interaction_type = _normalize_interaction_type(
             _first_present(event.get("interaction_type"), event.get("event_type"), event.get("type")),
@@ -441,6 +444,94 @@ def rebuild_profiles_from_meiro_events(
             key=lambda item: str(item.get("timestamp") or item.get("ts") or ""),
         )
     return profiles
+
+
+def _normalize_segment_membership(raw: Any) -> Optional[Dict[str, str]]:
+    if raw in (None, "", []):
+        return None
+    if isinstance(raw, dict):
+        segment_id = (
+            raw.get("id")
+            or raw.get("segment_id")
+            or raw.get("key")
+            or raw.get("slug")
+            or raw.get("uuid")
+        )
+        name = raw.get("name") or raw.get("segment_name") or raw.get("title") or raw.get("label")
+        if segment_id in (None, "", []) and name in (None, "", []):
+            return None
+        resolved_id = str(segment_id or name).strip()
+        resolved_name = str(name or segment_id).strip()
+        if not resolved_id or not resolved_name:
+            return None
+        return {"id": resolved_id, "name": resolved_name}
+    if isinstance(raw, (str, int, float)):
+        value = str(raw).strip()
+        if not value:
+            return None
+        return {"id": value, "name": value}
+    return None
+
+
+def _append_segment_membership(profile: Dict[str, Any], membership: Dict[str, str]) -> None:
+    existing = profile.setdefault("segments", [])
+    if not isinstance(existing, list):
+        existing = []
+        profile["segments"] = existing
+    key = str(membership.get("id") or membership.get("name") or "").strip()
+    if not key:
+        return
+    for item in existing:
+        if not isinstance(item, dict):
+            continue
+        item_key = str(item.get("id") or item.get("name") or "").strip()
+        if item_key == key:
+            if not item.get("name") and membership.get("name"):
+                item["name"] = membership.get("name")
+            return
+    existing.append({"id": membership["id"], "name": membership["name"]})
+
+
+def _extract_segment_memberships(record: Any) -> List[Dict[str, str]]:
+    memberships: List[Dict[str, str]] = []
+
+    def _capture(raw: Any) -> None:
+        if isinstance(raw, list):
+            for item in raw:
+                _capture(item)
+            return
+        normalized = _normalize_segment_membership(raw)
+        if normalized is None:
+            return
+        key = normalized["id"]
+        if any(item["id"] == key for item in memberships):
+            return
+        memberships.append(normalized)
+
+    def _inspect(container: Any) -> None:
+        if not isinstance(container, dict):
+            return
+        if container.get("segments") not in (None, "", []):
+            _capture(container.get("segments"))
+        if container.get("segment") not in (None, "", []):
+            _capture(container.get("segment"))
+        segment_id = container.get("segment_id")
+        segment_name = container.get("segment_name") or container.get("segment_label")
+        if segment_id not in (None, "", []) or segment_name not in (None, "", []):
+            _capture({"id": segment_id or segment_name, "name": segment_name or segment_id})
+
+    if not isinstance(record, dict):
+        return memberships
+    _inspect(record)
+    for key in ("attributes", "profile_attributes", "traits", "properties"):
+        _inspect(record.get(key))
+    for key in ("customer", "profile", "user", "person"):
+        nested = record.get(key)
+        _inspect(nested)
+        if isinstance(nested, dict):
+            for nested_key in ("attributes", "profile_attributes", "traits", "properties"):
+                _inspect(nested.get(nested_key))
+    return memberships
 
 
 def _derive_conversion_status(conversion: Dict[str, Any]) -> str:

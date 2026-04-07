@@ -444,6 +444,7 @@ def test_events_webhook_updates_event_profile_state_incrementally(monkeypatch, t
                         "source": "google",
                         "medium": "cpc",
                         "campaign": "brand",
+                        "segments": [{"id": "vip", "name": "VIP buyers"}],
                     },
                 }
             ]
@@ -477,6 +478,7 @@ def test_events_webhook_updates_event_profile_state_incrementally(monkeypatch, t
         state = db.query(MeiroEventProfileState).filter(MeiroEventProfileState.profile_id == "cust-state-1").one()
         assert len(state.profile_json["touchpoints"]) == 1
         assert len(state.profile_json["conversions"]) == 1
+        assert state.profile_json["segments"] == [{"id": "vip", "name": "VIP buyers"}]
         assert state.latest_event_batch_db_id is not None
     finally:
         db.close()

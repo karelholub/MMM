@@ -56,6 +56,21 @@ def _merge_profile(existing: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[s
         conversions.values(),
         key=lambda item: str(item.get("timestamp") or item.get("ts") or ""),
     )
+    segments: Dict[str, Dict[str, Any]] = {}
+    for item in (existing.get("segments") or []):
+        if isinstance(item, dict):
+            key = str(item.get("id") or item.get("name") or "").strip()
+            if key:
+                segments[key] = {"id": str(item.get("id") or key), "name": str(item.get("name") or key)}
+    for item in (incoming.get("segments") or []):
+        if isinstance(item, dict):
+            key = str(item.get("id") or item.get("name") or "").strip()
+            if key:
+                current = segments.get(key) or {"id": str(item.get("id") or key), "name": str(item.get("name") or key)}
+                if not current.get("name") and item.get("name"):
+                    current["name"] = str(item.get("name"))
+                segments[key] = current
+    merged["segments"] = list(segments.values())
     merged["_event_count"] = int(existing.get("_event_count") or 0) + int(incoming.get("_event_count") or 0)
     return merged
 
@@ -127,4 +142,3 @@ def list_meiro_event_profile_state(
     if limit is not None:
         query = query.limit(max(1, min(50000, int(limit))))
     return [dict(row.profile_json or {}) for row in query.all()]
-
