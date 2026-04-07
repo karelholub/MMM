@@ -212,6 +212,7 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
   const [showReplayPanel, setShowReplayPanel] = usePersistentToggle('attribution-comparison:show-replay', false)
   const [showSensitivityPanel, setShowSensitivityPanel] = usePersistentToggle('attribution-comparison:show-sensitivity', false)
   const [sensitivityDraft, setSensitivityDraft] = useState<AttributionSettingsDraft | null>(null)
+  const [sharedScenarioSummary, setSharedScenarioSummary] = useState<string | null>(null)
   const [savedSensitivityScenarios, setSavedSensitivityScenarios] = useState<SavedSensitivityScenario[]>(() => {
     if (typeof window === 'undefined') return []
     try {
@@ -236,6 +237,33 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
       setSensitivityDraft(settingsQuery.data.attribution)
     }
   }, [settingsQuery.data, sensitivityDraft])
+
+  useEffect(() => {
+    if (!settingsQuery.data?.attribution) return
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const lookback = params.get('sens_lookback')
+    const quality = params.get('sens_quality')
+    const converted = params.get('sens_converted')
+    if (lookback == null && quality == null && converted == null) return
+
+    setShowSensitivityPanel(true)
+    setSensitivityDraft((prev) => {
+      const base = prev ?? settingsQuery.data.attribution
+      return {
+        ...base,
+        ...(lookback != null ? { lookback_window_days: Math.max(1, Number(lookback) || base.lookback_window_days) } : {}),
+        ...(quality != null ? { min_journey_quality_score: Math.max(0, Math.min(100, Number(quality) || base.min_journey_quality_score)) } : {}),
+        ...(converted != null ? { use_converted_flag: converted === '1' || converted === 'true' } : {}),
+      }
+    })
+    const summaryParts = [
+      lookback != null ? `lookback ${Math.max(1, Number(lookback) || 0)}d` : null,
+      quality != null ? `quality ≥${Math.max(0, Math.min(100, Number(quality) || 0))}` : null,
+      converted != null ? ((converted === '1' || converted === 'true') ? 'converted journeys only' : 'all journeys') : null,
+    ].filter((value): value is string => Boolean(value))
+    setSharedScenarioSummary(summaryParts.length ? `Shared scenario loaded: ${summaryParts.join(' · ')}.` : 'Shared scenario loaded.')
+  }, [settingsQuery.data, setShowSensitivityPanel])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -313,6 +341,15 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
       sensitivityDraft.use_converted_flag ? 'Converted only' : 'All journeys',
     ].join(' · ')
   }, [sensitivityDraft])
+
+  const buildSensitivityHref = (settings: AttributionSettingsDraft | null): string => {
+    const params = new URLSearchParams(window.location.search)
+    params.set('sens_lookback', String(settings?.lookback_window_days ?? settingsQuery.data?.attribution.lookback_window_days ?? 30))
+    params.set('sens_quality', String(settings?.min_journey_quality_score ?? settingsQuery.data?.attribution.min_journey_quality_score ?? 0))
+    params.set('sens_converted', settings?.use_converted_flag ? '1' : '0')
+    params.set('page', 'analytics_attribution')
+    return `/?${params.toString()}`
+  }
 
   const resultsQuery = useQuery<Record<string, ModelResult>>({
     queryKey: ['attribution-results'],
@@ -751,6 +788,20 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
           onToggle={() => setShowSensitivityPanel((value) => !value)}
         >
           <div style={{ display: 'grid', gap: t.space.md }}>
+            {sharedScenarioSummary ? (
+              <div
+                style={{
+                  border: `1px solid ${t.color.accent}`,
+                  background: t.color.accentMuted,
+                  color: t.color.text,
+                  borderRadius: t.radius.md,
+                  padding: t.space.md,
+                  fontSize: t.font.sizeSm,
+                }}
+              >
+                {sharedScenarioSummary}
+              </div>
+            ) : null}
             <div
               style={{
                 display: 'grid',
@@ -887,6 +938,29 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
                 >
                   Open attribution settings
                 </a>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (typeof window === 'undefined') return
+                    const href = buildSensitivityHref(sensitivityDraft)
+                    try {
+                      await window.navigator.clipboard.writeText(window.location.origin + href)
+                    } catch {
+                      window.prompt('Copy sensitivity scenario link', window.location.origin + href)
+                    }
+                  }}
+                  style={{
+                    border: `1px solid ${t.color.border}`,
+                    background: t.color.surface,
+                    color: t.color.text,
+                    borderRadius: t.radius.sm,
+                    padding: `${t.space.xs}px ${t.space.sm}px`,
+                    cursor: 'pointer',
+                    fontSize: t.font.sizeSm,
+                  }}
+                >
+                  Copy scenario link
+                </button>
               </div>
             </div>
             <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
@@ -977,6 +1051,29 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
                           }}
                         >
                           Apply
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (typeof window === 'undefined') return
+                            const href = buildSensitivityHref(scenario.settings)
+                            try {
+                              await window.navigator.clipboard.writeText(window.location.origin + href)
+                            } catch {
+                              window.prompt('Copy sensitivity scenario link', window.location.origin + href)
+                            }
+                          }}
+                          style={{
+                            border: `1px solid ${t.color.border}`,
+                            background: t.color.surface,
+                            color: t.color.textSecondary,
+                            borderRadius: t.radius.sm,
+                            padding: `${t.space.xs}px ${t.space.sm}px`,
+                            cursor: 'pointer',
+                            fontSize: t.font.sizeXs,
+                          }}
+                        >
+                          Copy link
                         </button>
                         <button
                           type="button"
