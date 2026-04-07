@@ -15,6 +15,7 @@ import { usePermissions } from '../hooks/usePermissions'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
 import ProtectedPage from '../components/ProtectedPage'
 import LoginPage from '../components/LoginPage'
+import AppErrorBoundary from '../components/AppErrorBoundary'
 import {
   canAccessPage as canAccessAppPage,
   canManageJourneyDefinitions,
@@ -641,8 +642,9 @@ export default function App() {
             </div>
 
             <Suspense fallback={PAGE_FALLBACK}>
-              <ProtectedPage blocked={showNoAccess} reason={blockedReason}>
-                <>
+              <AppErrorBoundary areaLabel={NAV_ITEMS.find((n) => n.key === page)?.label ?? page}>
+                <ProtectedPage blocked={showNoAccess} reason={blockedReason}>
+                  <>
               {page === 'overview' && (
                 <Overview
                   lastPage={lastPage === 'analytics_journeys' ? 'overview' : lastPage}
@@ -712,8 +714,9 @@ export default function App() {
                   onStartOver={handleMmmStartOver}
                 />
               )}
-                </>
-              </ProtectedPage>
+                  </>
+                </ProtectedPage>
+              </AppErrorBoundary>
             </Suspense>
           </div>
         </main>
