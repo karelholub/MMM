@@ -1276,6 +1276,22 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
             </button>
             <button
               type="button"
+              onClick={() => onNavigate('roles')}
+              style={{
+                padding: `${t.space.sm}px ${t.space.md}px`,
+                borderRadius: t.radius.sm,
+                border: `1px solid ${t.color.border}`,
+                background: t.color.surface,
+                color: t.color.text,
+                fontSize: t.font.sizeSm,
+                fontWeight: t.font.weightMedium,
+                cursor: 'pointer',
+              }}
+            >
+              Open Attribution Roles
+            </button>
+            <button
+              type="button"
               onClick={() => onNavigate('incrementality')}
               style={{
                 padding: `${t.space.sm}px ${t.space.md}px`,

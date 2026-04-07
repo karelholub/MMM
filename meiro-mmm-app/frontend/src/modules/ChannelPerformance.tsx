@@ -1488,9 +1488,28 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
             boxShadow: t.shadowSm,
           }}
         >
-          <h3 style={{ margin: `0 0 ${t.space.md}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-            Attribution Role Split
-          </h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'start', flexWrap: 'wrap', marginBottom: t.space.md }}>
+            <div style={{ display: 'grid', gap: 4 }}>
+              <h3 style={{ margin: 0, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                Attribution Role Split
+              </h3>
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                Use the dedicated Attribution Roles page for deeper introducer / assister / closer analysis.
+              </div>
+            </div>
+            <a
+              href="/?page=roles"
+              style={{
+                alignSelf: 'center',
+                color: t.color.accent,
+                textDecoration: 'none',
+                fontSize: t.font.sizeSm,
+                fontWeight: t.font.weightMedium,
+              }}
+            >
+              Open roles workspace
+            </a>
+          </div>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: t.font.sizeSm }}>
               <thead>
