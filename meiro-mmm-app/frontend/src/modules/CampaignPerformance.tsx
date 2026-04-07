@@ -268,6 +268,11 @@ function formatCurrency(val: number): string {
   return `$${val.toFixed(0)}`
 }
 
+function formatPercent(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return '—'
+  return `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`
+}
+
 function truncateLabel(value: string, max = 26): string {
   if (!value) return '—'
   return value.length > max ? `${value.slice(0, Math.max(0, max - 1))}…` : value
@@ -581,6 +586,23 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       return matchSearch && matchChannel
     })
   }, [campaigns, search, channelFilter, directMode, selectedSegmentDefinition.channel_group, selectedSegmentDefinition.campaign_id])
+  const workspaceCampaigns = useMemo(
+    () =>
+      campaigns.filter((campaign) => {
+        if (directMode === 'exclude' && campaign.channel === 'direct') return false
+        return true
+      }),
+    [campaigns, directMode],
+  )
+  const focusedSegmentCampaigns = useMemo(
+    () =>
+      workspaceCampaigns.filter((campaign) => {
+        if (selectedSegmentDefinition.channel_group && campaign.channel !== selectedSegmentDefinition.channel_group) return false
+        if (selectedSegmentDefinition.campaign_id && campaign.campaign !== selectedSegmentDefinition.campaign_id) return false
+        return true
+      }),
+    [selectedSegmentDefinition.campaign_id, selectedSegmentDefinition.channel_group, workspaceCampaigns],
+  )
 
   const channelsList = useMemo(() => Array.from(new Set(campaigns.map((c) => c.channel))).sort(), [campaigns])
   const latestEventReplayDiagnostics = summaryQuery.data?.readiness?.details?.latest_event_replay?.diagnostics
@@ -849,6 +871,68 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
     { label: 'Net Revenue', value: formatCurrency(Number(summaryOutcomesCurrent.net_revenue || 0)), def: 'Revenue after refunds, cancellations, and invalidation.' },
     { label: 'Net Conversions', value: Number(summaryOutcomesCurrent.net_conversions || 0).toLocaleString(), def: 'Conversions remaining valid after post-conversion adjustments.' },
   ]
+  const focusedSegmentSummary = useMemo(() => {
+    if (!selectedSegment || !focusedSegmentCampaigns.length) return null
+    const spend = focusedSegmentCampaigns.reduce((sum, row) => sum + row.spend, 0)
+    const visits = focusedSegmentCampaigns.reduce((sum, row) => sum + row.visits, 0)
+    const conversions = focusedSegmentCampaigns.reduce((sum, row) => sum + row.attributed_conversions, 0)
+    const revenue = focusedSegmentCampaigns.reduce((sum, row) => sum + row.attributed_value, 0)
+    const cvr = visits > 0 ? conversions / visits : 0
+    const roas = spend > 0 ? revenue / spend : 0
+    const revenuePerVisit = visits > 0 ? revenue / visits : 0
+    const spendShare = totalSpend > 0 ? (spend / totalSpend) * 100 : null
+    const visitShare = totalVisits > 0 ? (visits / totalVisits) * 100 : null
+    const conversionShare = totalConversions > 0 ? (conversions / totalConversions) * 100 : null
+    const revenueShare = totalValue > 0 ? (revenue / totalValue) * 100 : null
+    const focusedLagItems = (lagQuery.data?.items ?? []).filter((item) => {
+      if (selectedSegmentDefinition.channel_group && item.channel !== selectedSegmentDefinition.channel_group) return false
+      if (selectedSegmentDefinition.campaign_id && item.campaign !== selectedSegmentDefinition.campaign_id) return false
+      return true
+    })
+    const focusedLagCandidates = focusedLagItems
+      .map((item) => item.p50_days_from_first_touch)
+      .filter((value): value is number => value != null && Number.isFinite(value))
+    const focusedMedianLag =
+      focusedLagCandidates.length > 0
+        ? focusedLagCandidates.reduce((sum, value) => sum + value, 0) / focusedLagCandidates.length
+        : null
+    const workspaceMedianLag = lagQuery.data?.summary?.median_days_from_first_touch ?? null
+    return {
+      spend,
+      visits,
+      conversions,
+      revenue,
+      cvr,
+      roas,
+      revenuePerVisit,
+      spendShare,
+      visitShare,
+      conversionShare,
+      revenueShare,
+      cvrDeltaPct: totalCVR > 0 ? ((cvr - totalCVR) / totalCVR) * 100 : null,
+      roasDeltaPct: totalROAS > 0 ? ((roas - totalROAS) / totalROAS) * 100 : null,
+      revenuePerVisitDeltaPct: totalRevenuePerVisit > 0 ? ((revenuePerVisit - totalRevenuePerVisit) / totalRevenuePerVisit) * 100 : null,
+      focusedMedianLag,
+      workspaceMedianLag,
+      lagDeltaDays:
+        focusedMedianLag != null && workspaceMedianLag != null ? focusedMedianLag - workspaceMedianLag : null,
+      itemCount: focusedSegmentCampaigns.length,
+    }
+  }, [
+    focusedSegmentCampaigns,
+    lagQuery.data?.items,
+    lagQuery.data?.summary?.median_days_from_first_touch,
+    selectedSegment,
+    selectedSegmentDefinition.campaign_id,
+    selectedSegmentDefinition.channel_group,
+    totalCVR,
+    totalConversions,
+    totalROAS,
+    totalRevenuePerVisit,
+    totalSpend,
+    totalValue,
+    totalVisits,
+  ])
   const coverage = summaryQuery.data?.mapping_coverage
   const roleRows = [...sortedCampaigns]
     .sort((a, b) => b.last_touch_revenue + b.assist_revenue + b.first_touch_revenue - (a.last_touch_revenue + a.assist_revenue + a.first_touch_revenue))
@@ -1301,6 +1385,78 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
           Why?
         </button>
       </div>
+
+      {focusedSegmentSummary ? (
+        <div style={{ marginBottom: t.space.xl }}>
+        <SectionCard
+          title={`Segment vs workspace baseline: ${selectedSegment?.name ?? 'Saved segment'}`}
+          subtitle={`Focused on ${focusedSegmentSummary.itemCount.toLocaleString()} campaign${focusedSegmentSummary.itemCount === 1 ? '' : 's'} from the selected saved slice.`}
+          overflow="visible"
+        >
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+              gap: t.space.md,
+            }}
+          >
+            {[
+              {
+                label: 'Revenue share',
+                value: focusedSegmentSummary.revenueShare != null ? `${focusedSegmentSummary.revenueShare.toFixed(1)}%` : '—',
+                note: `${formatCurrency(focusedSegmentSummary.revenue)} of ${formatCurrency(totalValue)}`,
+              },
+              {
+                label: 'Conversion share',
+                value: focusedSegmentSummary.conversionShare != null ? `${focusedSegmentSummary.conversionShare.toFixed(1)}%` : '—',
+                note: `${focusedSegmentSummary.conversions.toLocaleString()} of ${totalConversions.toLocaleString()}`,
+              },
+              {
+                label: 'Spend share',
+                value: focusedSegmentSummary.spendShare != null ? `${focusedSegmentSummary.spendShare.toFixed(1)}%` : '—',
+                note: `${formatCurrency(focusedSegmentSummary.spend)} of ${formatCurrency(totalSpend)}`,
+              },
+              {
+                label: 'ROAS vs workspace',
+                value: focusedSegmentSummary.roas.toFixed(2),
+                note: `${formatPercent(focusedSegmentSummary.roasDeltaPct)} vs ${totalROAS.toFixed(2)} overall`,
+              },
+              {
+                label: 'CVR vs workspace',
+                value: `${(focusedSegmentSummary.cvr * 100).toFixed(2)}%`,
+                note: `${formatPercent(focusedSegmentSummary.cvrDeltaPct)} vs ${(totalCVR * 100).toFixed(2)}% overall`,
+              },
+              {
+                label: 'Median lag vs workspace',
+                value:
+                  focusedSegmentSummary.focusedMedianLag != null
+                    ? `${focusedSegmentSummary.focusedMedianLag.toFixed(1)}d`
+                    : '—',
+                note:
+                  focusedSegmentSummary.workspaceMedianLag != null
+                    ? `${focusedSegmentSummary.lagDeltaDays != null && focusedSegmentSummary.lagDeltaDays >= 0 ? '+' : ''}${focusedSegmentSummary.lagDeltaDays?.toFixed(1) ?? '0.0'}d vs ${focusedSegmentSummary.workspaceMedianLag.toFixed(1)}d overall`
+                    : 'Lag baseline unavailable',
+              },
+            ].map((item) => (
+              <div
+                key={item.label}
+                style={{
+                  border: `1px solid ${t.color.borderLight}`,
+                  borderRadius: t.radius.md,
+                  padding: t.space.md,
+                  background: t.color.surface,
+                  minWidth: 0,
+                }}
+              >
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{item.label}</div>
+                <div style={{ marginTop: t.space.xs, fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>{item.value}</div>
+                <div style={{ marginTop: t.space.xs, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>{item.note}</div>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
+        </div>
+      ) : null}
 
       {summaryQuery.data?.readiness && (summaryQuery.data.readiness.status === 'blocked' || summaryQuery.data.readiness.warnings.length > 0) ? (
         <DecisionStatusCard
