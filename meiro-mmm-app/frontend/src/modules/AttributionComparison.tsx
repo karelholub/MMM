@@ -6,6 +6,7 @@ import { useWorkspaceContext } from '../components/WorkspaceContext'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import DecisionStatusCard from '../components/DecisionStatusCard'
+import { type LagInsightsResponse } from '../components/performance/LagInsightsPanel'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 
@@ -343,6 +344,19 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
     enabled: !!sensitivityDraft,
     refetchInterval: false,
   })
+  const channelLagQuery = useQuery<LagInsightsResponse>({
+    queryKey: ['attribution-comparison-channel-lag', journeysSummary?.date_min, journeysSummary?.date_max],
+    queryFn: async () => {
+      const params = new URLSearchParams()
+      if (journeysSummary?.date_min) params.set('date_from', journeysSummary.date_min.slice(0, 10))
+      if (journeysSummary?.date_max) params.set('date_to', journeysSummary.date_max.slice(0, 10))
+      return apiGetJson<LagInsightsResponse>(`/api/performance/channel/lag?${params.toString()}`, {
+        fallbackMessage: 'Failed to load channel lag analysis',
+      })
+    },
+    enabled: Boolean(journeysSummary?.date_min && journeysSummary?.date_max),
+    refetchInterval: false,
+  })
 
   const currentSensitivitySummary = useMemo(() => {
     if (!sensitivityDraft) return 'No draft loaded'
@@ -352,6 +366,17 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
       sensitivityDraft.use_converted_flag ? 'Converted only' : 'All journeys',
     ].join(' · ')
   }, [sensitivityDraft])
+  const topExposedChannels = useMemo(
+    () =>
+      [...(channelLagQuery.data?.items ?? [])]
+        .sort((a, b) => {
+          const aShare = a.conversions > 0 ? a.lag_buckets.over_7d / a.conversions : 0
+          const bShare = b.conversions > 0 ? b.lag_buckets.over_7d / b.conversions : 0
+          return bShare - aShare
+        })
+        .slice(0, 4),
+    [channelLagQuery.data?.items],
+  )
 
   const buildSensitivityHref = (settings: AttributionSettingsDraft | null): string => {
     const params = new URLSearchParams(window.location.search)
@@ -1016,6 +1041,61 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
                 ))}
               </div>
             )}
+            <div style={{ display: 'grid', gap: t.space.sm }}>
+              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                Channels most exposed to tighter windows
+              </div>
+              {channelLagQuery.isLoading ? (
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading channel lag exposure…</div>
+              ) : channelLagQuery.isError ? (
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>
+                  {(channelLagQuery.error as Error)?.message || 'Failed to load channel lag exposure.'}
+                </div>
+              ) : !topExposedChannels.length ? (
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  No channel lag evidence is available for the current period.
+                </div>
+              ) : (
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))',
+                    gap: t.space.md,
+                  }}
+                >
+                  {topExposedChannels.map((item) => {
+                    const over7dShare = item.conversions > 0 ? item.lag_buckets.over_7d / item.conversions : 0
+                    return (
+                      <div
+                        key={item.key}
+                        style={{
+                          border: `1px solid ${t.color.borderLight}`,
+                          borderRadius: t.radius.md,
+                          padding: t.space.md,
+                          background: t.color.surface,
+                          display: 'grid',
+                          gap: t.space.xs,
+                        }}
+                      >
+                        <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                          {item.label}
+                        </div>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                          P50 first-touch lag {item.p50_days_from_first_touch != null ? `${item.p50_days_from_first_touch.toFixed(1)}d` : '—'} · Over 7d {(over7dShare * 100).toFixed(1)}%
+                        </div>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                          {over7dShare >= 0.5
+                            ? 'This channel has a heavy long-lag tail and should be reviewed before tightening lookback windows.'
+                            : over7dShare >= 0.25
+                              ? 'This channel has a moderate long-lag tail and may shift under shorter windows.'
+                              : 'This channel is less exposed than the other visible channels.'}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
             {!!savedSensitivityScenarios.length && (
               <div style={{ display: 'grid', gap: t.space.sm }}>
                 <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
