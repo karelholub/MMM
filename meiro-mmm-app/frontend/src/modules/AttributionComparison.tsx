@@ -129,6 +129,13 @@ interface SensitivityWorkspaceData {
   scenarios: SensitivityScenario[]
 }
 
+interface SavedSensitivityScenario {
+  id: string
+  label: string
+  saved_at: string
+  settings: AttributionSettingsDraft
+}
+
 const MODEL_LABELS: Record<string, string> = {
   last_touch: 'Last Touch',
   first_touch: 'First Touch',
@@ -205,6 +212,16 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
   const [showReplayPanel, setShowReplayPanel] = usePersistentToggle('attribution-comparison:show-replay', false)
   const [showSensitivityPanel, setShowSensitivityPanel] = usePersistentToggle('attribution-comparison:show-sensitivity', false)
   const [sensitivityDraft, setSensitivityDraft] = useState<AttributionSettingsDraft | null>(null)
+  const [savedSensitivityScenarios, setSavedSensitivityScenarios] = useState<SavedSensitivityScenario[]>(() => {
+    if (typeof window === 'undefined') return []
+    try {
+      const raw = window.localStorage.getItem('attribution-comparison:saved-scenarios')
+      const parsed = raw ? JSON.parse(raw) : []
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  })
 
   const settingsQuery = useQuery<{ attribution: AttributionSettingsDraft }>({
     queryKey: ['attribution-comparison-settings'],
@@ -219,6 +236,15 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
       setSensitivityDraft(settingsQuery.data.attribution)
     }
   }, [settingsQuery.data, sensitivityDraft])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      window.localStorage.setItem('attribution-comparison:saved-scenarios', JSON.stringify(savedSensitivityScenarios))
+    } catch {
+      // ignore persistence failures
+    }
+  }, [savedSensitivityScenarios])
 
   const sensitivityQuery = useQuery<SensitivityWorkspaceData>({
     queryKey: ['attribution-sensitivity-preview', sensitivityDraft],
@@ -278,6 +304,15 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
     enabled: !!sensitivityDraft,
     refetchInterval: false,
   })
+
+  const currentSensitivitySummary = useMemo(() => {
+    if (!sensitivityDraft) return 'No draft loaded'
+    return [
+      `Lookback ${sensitivityDraft.lookback_window_days}d`,
+      `Quality ≥${sensitivityDraft.min_journey_quality_score}`,
+      sensitivityDraft.use_converted_flag ? 'Converted only' : 'All journeys',
+    ].join(' · ')
+  }, [sensitivityDraft])
 
   const resultsQuery = useQuery<Record<string, ModelResult>>({
     queryKey: ['attribution-results'],
@@ -790,21 +825,72 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
               <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
                 This preview changes dataset eligibility and windowing only. It does not rerun model math or channel weights.
               </div>
-              <button
-                type="button"
-                onClick={() => setSensitivityDraft(settingsQuery.data?.attribution ?? null)}
-                style={{
-                  border: `1px solid ${t.color.border}`,
-                  background: t.color.surface,
-                  color: t.color.text,
-                  borderRadius: t.radius.sm,
-                  padding: `${t.space.xs}px ${t.space.sm}px`,
-                  cursor: 'pointer',
-                  fontSize: t.font.sizeSm,
-                }}
-              >
-                Reset to workspace defaults
-              </button>
+              <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!sensitivityDraft) return
+                    const nextIndex = savedSensitivityScenarios.length + 1
+                    const timestamp = new Date().toISOString()
+                    setSavedSensitivityScenarios((current) => [
+                      {
+                        id: `scenario-${timestamp}`,
+                        label: `Scenario ${nextIndex}`,
+                        saved_at: timestamp,
+                        settings: sensitivityDraft,
+                      },
+                      ...current,
+                    ].slice(0, 6))
+                  }}
+                  style={{
+                    border: `1px solid ${t.color.accent}`,
+                    background: t.color.accentMuted,
+                    color: t.color.accent,
+                    borderRadius: t.radius.sm,
+                    padding: `${t.space.xs}px ${t.space.sm}px`,
+                    cursor: 'pointer',
+                    fontSize: t.font.sizeSm,
+                  }}
+                >
+                  Save scenario
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSensitivityDraft(settingsQuery.data?.attribution ?? null)}
+                  style={{
+                    border: `1px solid ${t.color.border}`,
+                    background: t.color.surface,
+                    color: t.color.text,
+                    borderRadius: t.radius.sm,
+                    padding: `${t.space.xs}px ${t.space.sm}px`,
+                    cursor: 'pointer',
+                    fontSize: t.font.sizeSm,
+                  }}
+                >
+                  Reset to workspace defaults
+                </button>
+                <a
+                  href={
+                    sensitivityDraft
+                      ? `/?page=settings&attr_lookback=${encodeURIComponent(String(sensitivityDraft.lookback_window_days))}&attr_quality=${encodeURIComponent(String(sensitivityDraft.min_journey_quality_score))}&attr_converted=${sensitivityDraft.use_converted_flag ? '1' : '0'}#settings/attribution`
+                      : '/?page=settings#settings/attribution'
+                  }
+                  style={{
+                    border: `1px solid ${t.color.border}`,
+                    background: t.color.surface,
+                    color: t.color.text,
+                    borderRadius: t.radius.sm,
+                    padding: `${t.space.xs}px ${t.space.sm}px`,
+                    textDecoration: 'none',
+                    fontSize: t.font.sizeSm,
+                  }}
+                >
+                  Open attribution settings
+                </a>
+              </div>
+            </div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Current draft: <strong style={{ color: t.color.text }}>{currentSensitivitySummary}</strong>
             </div>
             {sensitivityQuery.isError ? (
               <DecisionStatusCard
@@ -841,6 +927,78 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+            {!!savedSensitivityScenarios.length && (
+              <div style={{ display: 'grid', gap: t.space.sm }}>
+                <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                  Saved scenarios
+                </div>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))',
+                    gap: t.space.md,
+                  }}
+                >
+                  {savedSensitivityScenarios.map((scenario) => (
+                    <div
+                      key={scenario.id}
+                      style={{
+                        border: `1px solid ${t.color.borderLight}`,
+                        borderRadius: t.radius.md,
+                        padding: t.space.md,
+                        background: t.color.surface,
+                        display: 'grid',
+                        gap: t.space.xs,
+                      }}
+                    >
+                      <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                        {scenario.label}
+                      </div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                        {new Date(scenario.saved_at).toLocaleString()}
+                      </div>
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                        Lookback {scenario.settings.lookback_window_days}d · Quality ≥{scenario.settings.min_journey_quality_score} · {scenario.settings.use_converted_flag ? 'Converted only' : 'All journeys'}
+                      </div>
+                      <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          onClick={() => setSensitivityDraft(scenario.settings)}
+                          style={{
+                            border: `1px solid ${t.color.accent}`,
+                            background: t.color.accentMuted,
+                            color: t.color.accent,
+                            borderRadius: t.radius.sm,
+                            padding: `${t.space.xs}px ${t.space.sm}px`,
+                            cursor: 'pointer',
+                            fontSize: t.font.sizeXs,
+                          }}
+                        >
+                          Apply
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSavedSensitivityScenarios((current) => current.filter((item) => item.id !== scenario.id))
+                          }
+                          style={{
+                            border: `1px solid ${t.color.border}`,
+                            background: t.color.surface,
+                            color: t.color.textSecondary,
+                            borderRadius: t.radius.sm,
+                            padding: `${t.space.xs}px ${t.space.sm}px`,
+                            cursor: 'pointer',
+                            fontSize: t.font.sizeXs,
+                          }}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>

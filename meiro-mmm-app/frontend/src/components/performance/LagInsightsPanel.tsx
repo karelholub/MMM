@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from 'react'
 import { tokens as t } from '../../theme/tokens'
 
 export interface LagInsightItem {
@@ -79,6 +80,40 @@ export default function LagInsightsPanel({
   const topSlow = [...data.items]
     .sort((a, b) => (b.p50_days_from_first_touch || 0) - (a.p50_days_from_first_touch || 0))
     .slice(0, 8)
+  const [selectedKey, setSelectedKey] = useState<string>(topSlow[0]?.key || '')
+
+  useEffect(() => {
+    if (!topSlow.length) {
+      setSelectedKey('')
+      return
+    }
+    if (!topSlow.some((item) => item.key === selectedKey)) {
+      setSelectedKey(topSlow[0].key)
+    }
+  }, [selectedKey, topSlow])
+
+  const selectedItem = useMemo(
+    () => topSlow.find((item) => item.key === selectedKey) || topSlow[0] || null,
+    [selectedKey, topSlow],
+  )
+  const selectedTotal = selectedItem ? Math.max(1, selectedItem.conversions) : 1
+  const roleTotal = selectedItem
+    ? Math.max(
+        1,
+        selectedItem.role_mix.first_touch_conversions +
+          selectedItem.role_mix.assist_conversions +
+          selectedItem.role_mix.last_touch_conversions,
+      )
+    : 1
+
+  function shareBar(value: number, total: number, color: string) {
+    return {
+      height: 10,
+      width: `${Math.max(6, Math.round((value / Math.max(1, total)) * 100))}%`,
+      borderRadius: 999,
+      background: color,
+    }
+  }
 
   return (
     <div style={{ display: 'grid', gap: t.space.md }}>
@@ -112,6 +147,76 @@ export default function LagInsightsPanel({
       <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
         {title} shows how long conversions take after the first observed touch and after the last touch. Longer-lag scopes are more sensitive to shorter attribution windows.
       </div>
+      {selectedItem && (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))',
+            gap: t.space.md,
+            padding: t.space.md,
+            border: `1px solid ${t.color.borderLight}`,
+            borderRadius: t.radius.md,
+            background: t.color.surface,
+          }}
+        >
+          <div style={{ display: 'grid', gap: t.space.xs }}>
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>Selected scope</div>
+            <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>{selectedItem.label}</div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              {selectedItem.conversions.toLocaleString()} conversions · {(selectedItem.share_of_conversions * 100).toFixed(1)}% of selected-period volume
+            </div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Median first-touch lag {formatDays(selectedItem.p50_days_from_first_touch)} · P90 {formatDays(selectedItem.p90_days_from_first_touch)}
+            </div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Median last-touch gap {formatDays(selectedItem.p50_days_from_last_touch)}
+            </div>
+          </div>
+          <div style={{ display: 'grid', gap: t.space.sm }}>
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>Lag bucket mix</div>
+            <div style={{ display: 'grid', gap: 6 }}>
+              <div style={{ display: 'grid', gap: 4 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: t.font.sizeXs, color: t.color.textSecondary }}><span>Within 1 day</span><span>{selectedItem.lag_buckets.within_1d.toLocaleString()}</span></div>
+                <div style={{ background: t.color.bg, borderRadius: 999, padding: 2 }}><div style={shareBar(selectedItem.lag_buckets.within_1d, selectedTotal, t.color.success)} /></div>
+              </div>
+              <div style={{ display: 'grid', gap: 4 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: t.font.sizeXs, color: t.color.textSecondary }}><span>1–3 days</span><span>{selectedItem.lag_buckets.days_1_to_3.toLocaleString()}</span></div>
+                <div style={{ background: t.color.bg, borderRadius: 999, padding: 2 }}><div style={shareBar(selectedItem.lag_buckets.days_1_to_3, selectedTotal, t.color.accent)} /></div>
+              </div>
+              <div style={{ display: 'grid', gap: 4 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: t.font.sizeXs, color: t.color.textSecondary }}><span>3–7 days</span><span>{selectedItem.lag_buckets.days_3_to_7.toLocaleString()}</span></div>
+                <div style={{ background: t.color.bg, borderRadius: 999, padding: 2 }}><div style={shareBar(selectedItem.lag_buckets.days_3_to_7, selectedTotal, '#d97706')} /></div>
+              </div>
+              <div style={{ display: 'grid', gap: 4 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: t.font.sizeXs, color: t.color.textSecondary }}><span>Over 7 days</span><span>{selectedItem.lag_buckets.over_7d.toLocaleString()}</span></div>
+                <div style={{ background: t.color.bg, borderRadius: 999, padding: 2 }}><div style={shareBar(selectedItem.lag_buckets.over_7d, selectedTotal, t.color.warning)} /></div>
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'grid', gap: t.space.sm }}>
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>Role mix</div>
+            <div style={{ display: 'grid', gap: 6 }}>
+              <div style={{ display: 'grid', gap: 4 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: t.font.sizeXs, color: t.color.textSecondary }}><span>First touch</span><span>{selectedItem.role_mix.first_touch_conversions.toLocaleString()}</span></div>
+                <div style={{ background: t.color.bg, borderRadius: 999, padding: 2 }}><div style={shareBar(selectedItem.role_mix.first_touch_conversions, roleTotal, '#2563eb')} /></div>
+              </div>
+              <div style={{ display: 'grid', gap: 4 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: t.font.sizeXs, color: t.color.textSecondary }}><span>Assist</span><span>{selectedItem.role_mix.assist_conversions.toLocaleString()}</span></div>
+                <div style={{ background: t.color.bg, borderRadius: 999, padding: 2 }}><div style={shareBar(selectedItem.role_mix.assist_conversions, roleTotal, '#7c3aed')} /></div>
+              </div>
+              <div style={{ display: 'grid', gap: 4 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: t.font.sizeXs, color: t.color.textSecondary }}><span>Last touch</span><span>{selectedItem.role_mix.last_touch_conversions.toLocaleString()}</span></div>
+                <div style={{ background: t.color.bg, borderRadius: 999, padding: 2 }}><div style={shareBar(selectedItem.role_mix.last_touch_conversions, roleTotal, '#059669')} /></div>
+              </div>
+            </div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              {selectedItem.lag_buckets.over_7d > selectedItem.lag_buckets.within_1d
+                ? 'This scope has a heavier long-lag tail than short-lag conversions, so tighter windows will materially suppress it.'
+                : 'This scope converts relatively quickly, so it is less sensitive to moderate lookback tightening.'}
+            </div>
+          </div>
+        </div>
+      )}
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
           <thead>
@@ -136,7 +241,14 @@ export default function LagInsightsPanel({
           </thead>
           <tbody>
             {topSlow.map((item) => (
-              <tr key={item.key}>
+              <tr
+                key={item.key}
+                onClick={() => setSelectedKey(item.key)}
+                style={{
+                  cursor: 'pointer',
+                  background: item.key === selectedKey ? t.color.bg : 'transparent',
+                }}
+              >
                 <td style={{ padding: `${t.space.sm}px`, borderBottom: `1px solid ${t.color.borderLight}` }}>
                   <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>{item.label}</div>
                   {!!item.channel && item.channel !== item.label && (

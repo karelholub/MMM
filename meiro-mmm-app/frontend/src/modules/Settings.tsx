@@ -1750,6 +1750,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       string | null
     >(null)
     const previewAbortRef = useRef<AbortController | null>(null)
+    const attributionPrefillAppliedRef = useRef(false)
     const [attributionDependencyAcknowledged, setAttributionDependencyAcknowledged] = useState(false)
     const [attributionSaveGuardDecision, setAttributionSaveGuardDecision] =
       useState<AttributionDecisionSummary | null>(null)
@@ -3479,6 +3480,33 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         }
       }
     }, [settingsQuery.data, settingsBaseline])
+
+    useEffect(() => {
+      if (attributionPrefillAppliedRef.current) return
+      if (!settingsQuery.data) return
+      if (typeof window === 'undefined') return
+      const params = new URLSearchParams(window.location.search)
+      const lookback = params.get('attr_lookback')
+      const quality = params.get('attr_quality')
+      const converted = params.get('attr_converted')
+      if (lookback == null && quality == null && converted == null) return
+
+      attributionPrefillAppliedRef.current = true
+      setActiveSection('attribution')
+      setAttributionDraft((prev) => ({
+        ...prev,
+        ...(lookback != null ? { lookback_window_days: Math.max(1, Number(lookback) || prev.lookback_window_days) } : {}),
+        ...(quality != null ? { min_journey_quality_score: Math.max(0, Math.min(100, Number(quality) || prev.min_journey_quality_score)) } : {}),
+        ...(converted != null ? { use_converted_flag: converted === '1' || converted === 'true' } : {}),
+      }))
+
+      params.delete('attr_lookback')
+      params.delete('attr_quality')
+      params.delete('attr_converted')
+      const nextSearch = params.toString()
+      const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash || '#settings/attribution'}`
+      window.history.replaceState({}, '', nextUrl)
+    }, [settingsQuery.data])
 
     useEffect(() => {
       const ch = notificationChannelsQuery.data
