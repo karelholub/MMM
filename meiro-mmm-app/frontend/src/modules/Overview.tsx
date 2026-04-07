@@ -939,6 +939,22 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
           <div style={{ marginTop: t.space.md, display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
             <button
               type="button"
+              onClick={() => onNavigate('comparison')}
+              style={{
+                padding: `${t.space.sm}px ${t.space.md}px`,
+                borderRadius: t.radius.sm,
+                border: `1px solid ${t.color.border}`,
+                background: t.color.surface,
+                color: t.color.text,
+                fontSize: t.font.sizeSm,
+                fontWeight: t.font.weightMedium,
+                cursor: 'pointer',
+              }}
+            >
+              Open Attribution Comparison
+            </button>
+            <button
+              type="button"
               onClick={() => onNavigate('paths')}
               style={{
                 padding: `${t.space.sm}px ${t.space.md}px`,
@@ -968,6 +984,22 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
               }}
             >
               Open Campaign Performance
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigate('incrementality')}
+              style={{
+                padding: `${t.space.sm}px ${t.space.md}px`,
+                borderRadius: t.radius.sm,
+                border: `1px solid ${t.color.border}`,
+                background: t.color.surface,
+                color: t.color.text,
+                fontSize: t.font.sizeSm,
+                fontWeight: t.font.weightMedium,
+                cursor: 'pointer',
+              }}
+            >
+              Open Incrementality
             </button>
           </div>
         </SectionCard>

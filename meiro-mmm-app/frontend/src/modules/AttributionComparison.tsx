@@ -915,6 +915,20 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
                 This preview changes dataset eligibility and windowing only. It does not rerun model math or channel weights.
               </div>
               <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+                <a
+                  href="/?page=campaigns"
+                  style={{
+                    border: `1px solid ${t.color.border}`,
+                    background: t.color.surface,
+                    color: t.color.text,
+                    borderRadius: t.radius.sm,
+                    padding: `${t.space.xs}px ${t.space.sm}px`,
+                    textDecoration: 'none',
+                    fontSize: t.font.sizeSm,
+                  }}
+                >
+                  Open campaign lag view
+                </a>
                 <button
                   type="button"
                   onClick={() => {
