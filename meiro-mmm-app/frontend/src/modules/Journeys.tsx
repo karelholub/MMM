@@ -19,6 +19,7 @@ import {
   clearSegmentReferenceMetadata,
   hasLocalSegmentCriteria,
   isLocalAnalyticalSegment,
+  readLocalSegmentDefinition,
   readSelectedSegmentRegistryId,
   segmentOptionLabel,
   type SegmentRegistryItem,
@@ -639,6 +640,28 @@ function formatPercent(v: number): string {
   return `${(v * 100).toFixed(1)}%`
 }
 
+function formatPercentDetailed(v: number, digits = 2): string {
+  if (!Number.isFinite(v)) return '0.00%'
+  return `${(v * 100).toFixed(digits)}%`
+}
+
+function ratio(part: number | null | undefined, total: number | null | undefined): number | null {
+  if (part == null || total == null) return null
+  if (!Number.isFinite(part) || !Number.isFinite(total) || total <= 0) return null
+  return part / total
+}
+
+function formatSignedPercentPoints(v: number | null | undefined, digits = 1): string {
+  if (v == null || !Number.isFinite(v)) return '—'
+  const points = v * 100
+  return `${points >= 0 ? '+' : ''}${points.toFixed(digits)} pp`
+}
+
+function formatSignedNumber(v: number | null | undefined, digits = 1, suffix = ''): string {
+  if (v == null || !Number.isFinite(v)) return '—'
+  return `${v >= 0 ? '+' : ''}${v.toFixed(digits)}${suffix}`
+}
+
 function experimentStatusLabel(status: string): string {
   const normalized = String(status || '').trim().toLowerCase()
   if (!normalized) return 'Unknown'
@@ -655,6 +678,10 @@ function formatSeconds(v: number | null | undefined): string {
 
 function dimensionLabel(value: string, count: number): string {
   return `${value} (${count.toLocaleString()})`
+}
+
+function sumTransitionFlow(response: JourneyTransitionsResponse | undefined): number {
+  return (response?.edges ?? []).reduce((sum, edge) => sum + (edge.value || 0), 0)
 }
 
 function formatLifecycleActor(value?: string | null): string {
@@ -1109,6 +1136,46 @@ export default function Journeys({
     () => allSegmentRegistryItems.filter(isLocalAnalyticalSegment),
     [allSegmentRegistryItems],
   )
+  const selectedLocalSegment = useMemo(
+    () => localAnalyticalSegments.find((item) => item.id === filters.segment) ?? null,
+    [filters.segment, localAnalyticalSegments],
+  )
+  const hasFocusedLocalSegment = Boolean(selectedLocalSegment)
+  const selectedHypothesisSegmentId = readSelectedSegmentRegistryId(hypothesisDraft.segment)
+  const selectedHypothesisSegmentItem = useMemo(
+    () => allSegmentRegistryItems.find((item) => item.id === selectedHypothesisSegmentId) ?? null,
+    [allSegmentRegistryItems, selectedHypothesisSegmentId],
+  )
+  const selectedHypothesisLocalSegment = useMemo(
+    () => (selectedHypothesisSegmentItem && isLocalAnalyticalSegment(selectedHypothesisSegmentItem) ? selectedHypothesisSegmentItem : null),
+    [selectedHypothesisSegmentItem],
+  )
+  const selectedHypothesisOperationalSegment = useMemo(
+    () => (selectedHypothesisSegmentItem && !isLocalAnalyticalSegment(selectedHypothesisSegmentItem) ? selectedHypothesisSegmentItem : null),
+    [selectedHypothesisSegmentItem],
+  )
+  const needsWorkspaceJourneyBaseline = hasFocusedLocalSegment || (activeTab === 'hypotheses' && !!selectedHypothesisLocalSegment)
+
+  const buildJourneyScopeParams = (
+    scope: Partial<Pick<GlobalFiltersState, 'channel' | 'campaign' | 'device' | 'geo'>> = {},
+    extras: Record<string, string> = {},
+  ) => {
+    const params = new URLSearchParams({
+      date_from: filters.dateFrom,
+      date_to: filters.dateTo,
+      mode,
+      ...extras,
+    })
+    const channel = scope.channel ?? filters.channel
+    const campaign = scope.campaign ?? filters.campaign
+    const device = scope.device ?? filters.device
+    const geo = scope.geo ?? filters.geo
+    if (channel !== 'all') params.set('channel_group', channel)
+    if (campaign !== 'all') params.set('campaign_id', campaign)
+    if (device !== 'all') params.set('device', device)
+    if (geo !== 'all') params.set('country', geo)
+    return params
+  }
 
   function openAlertsForDefinition(definitionId: string) {
     if (typeof window === 'undefined') return
@@ -1422,7 +1489,62 @@ export default function Journeys({
         fallbackMessage: 'Failed to load journey insights',
       })
     },
-    enabled: !!selectedJourneyId && activeTab === 'insights' && !definitionWorkspaceReadOnly,
+    enabled:
+      !!selectedJourneyId &&
+      (activeTab === 'insights' || (activeTab === 'flow' && hasFocusedLocalSegment)) &&
+      !definitionWorkspaceReadOnly,
+  })
+
+  const baselineInsightsQuery = useQuery<JourneyInsightsResponse>({
+    queryKey: ['journey-insights-baseline', selectedJourneyId, filters.dateFrom, filters.dateTo, mode],
+    queryFn: async () => {
+      const params = buildJourneyScopeParams({
+        channel: 'all',
+        campaign: 'all',
+        device: 'all',
+        geo: 'all',
+      })
+      return apiGetJson<JourneyInsightsResponse>(`/api/journeys/${selectedJourneyId}/insights?${params.toString()}`, {
+        fallbackMessage: 'Failed to load workspace journey baseline',
+      })
+    },
+    enabled:
+      !!selectedJourneyId &&
+      needsWorkspaceJourneyBaseline &&
+      (activeTab === 'insights' || activeTab === 'flow' || activeTab === 'hypotheses') &&
+      !definitionWorkspaceReadOnly,
+  })
+
+  const baselineTransitionsQuery = useQuery<JourneyTransitionsResponse>({
+    queryKey: [
+      'journey-transitions-baseline',
+      selectedJourneyId,
+      filters.dateFrom,
+      filters.dateTo,
+      mode,
+      flowMinCount,
+      flowMaxNodes,
+      flowMaxDepth,
+    ],
+    queryFn: async () => {
+      const params = buildJourneyScopeParams(
+        {
+          channel: 'all',
+          campaign: 'all',
+          device: 'all',
+          geo: 'all',
+        },
+        {
+          min_count: String(flowMinCount),
+          max_nodes: String(flowMaxNodes),
+          max_depth: String(flowMaxDepth),
+        },
+      )
+      return apiGetJson<JourneyTransitionsResponse>(`/api/journeys/${selectedJourneyId}/transitions?${params.toString()}`, {
+        fallbackMessage: 'Failed to load workspace flow baseline',
+      })
+    },
+    enabled: !!selectedJourneyId && hasFocusedLocalSegment && activeTab === 'flow' && !definitionWorkspaceReadOnly,
   })
 
   const hypothesesQuery = useQuery<JourneyHypothesesResponse>({
@@ -1435,6 +1557,30 @@ export default function Journeys({
       })
     },
     enabled: !!selectedJourneyId && (activeTab === 'hypotheses' || activeTab === 'insights' || activeTab === 'policy' || activeTab === 'experiments') && !definitionWorkspaceReadOnly,
+  })
+
+  const hypothesisSegmentInsightsQuery = useQuery<JourneyInsightsResponse>({
+    queryKey: [
+      'journey-hypothesis-segment-insights',
+      selectedJourneyId,
+      selectedHypothesisLocalSegment?.id ?? '',
+      filters.dateFrom,
+      filters.dateTo,
+      mode,
+    ],
+    queryFn: async () => {
+      const definition = readLocalSegmentDefinition(selectedHypothesisLocalSegment)
+      const params = buildJourneyScopeParams({
+        channel: definition.channel_group || 'all',
+        campaign: definition.campaign_id || 'all',
+        device: definition.device || 'all',
+        geo: definition.country || 'all',
+      })
+      return apiGetJson<JourneyInsightsResponse>(`/api/journeys/${selectedJourneyId}/insights?${params.toString()}`, {
+        fallbackMessage: 'Failed to load hypothesis segment evidence',
+      })
+    },
+    enabled: !!selectedJourneyId && !!selectedHypothesisLocalSegment && activeTab === 'hypotheses' && !definitionWorkspaceReadOnly,
   })
 
   const linkedExperimentSourceIds = useMemo(
@@ -2228,6 +2374,112 @@ export default function Journeys({
       droppedEdges: Math.max(0, allEdges.length - topEdges.length),
     }
   }, [transitionsQuery.data?.edges, transitionsQuery.data?.nodes])
+  const currentInsightsSummary = insightsQuery.data?.summary ?? null
+  const workspaceInsightsSummary = baselineInsightsQuery.data?.summary ?? null
+  const insightsSegmentComparison = useMemo(() => {
+    if (!selectedLocalSegment || !currentInsightsSummary || !workspaceInsightsSummary) return null
+    return {
+      shares: [
+        {
+          label: 'Journey share',
+          value: ratio(currentInsightsSummary.journeys, workspaceInsightsSummary.journeys),
+          note: `${currentInsightsSummary.journeys.toLocaleString()} of ${workspaceInsightsSummary.journeys.toLocaleString()} visible journeys`,
+        },
+        {
+          label: 'Conversion share',
+          value: ratio(currentInsightsSummary.conversions, workspaceInsightsSummary.conversions),
+          note: `${currentInsightsSummary.conversions.toLocaleString()} of ${workspaceInsightsSummary.conversions.toLocaleString()} visible conversions`,
+        },
+        {
+          label: 'Path coverage share',
+          value: ratio(currentInsightsSummary.paths_considered, workspaceInsightsSummary.paths_considered),
+          note: `${currentInsightsSummary.paths_considered.toLocaleString()} of ${workspaceInsightsSummary.paths_considered.toLocaleString()} visible paths`,
+        },
+      ],
+      rates: [
+        {
+          label: 'Baseline CVR vs workspace',
+          value: formatPercentDetailed(currentInsightsSummary.baseline_conversion_rate),
+          note: `${formatSignedPercentPoints(
+            currentInsightsSummary.baseline_conversion_rate - workspaceInsightsSummary.baseline_conversion_rate,
+          )} vs ${formatPercentDetailed(workspaceInsightsSummary.baseline_conversion_rate)} overall`,
+        },
+      ],
+    }
+  }, [currentInsightsSummary, selectedLocalSegment, workspaceInsightsSummary])
+  const currentFlowStats = useMemo(
+    () => ({
+      totalTransitions: sumTransitionFlow(transitionsQuery.data),
+      nodeCount: transitionsQuery.data?.nodes.length ?? 0,
+      edgeCount: transitionsQuery.data?.edges.length ?? 0,
+      topEdgeShare:
+        transitionsQuery.data?.edges?.length && sumTransitionFlow(transitionsQuery.data) > 0
+          ? (transitionsQuery.data.edges[0]?.value ?? 0) / sumTransitionFlow(transitionsQuery.data)
+          : null,
+    }),
+    [transitionsQuery.data],
+  )
+  const workspaceFlowStats = useMemo(
+    () => ({
+      totalTransitions: sumTransitionFlow(baselineTransitionsQuery.data),
+      nodeCount: baselineTransitionsQuery.data?.nodes.length ?? 0,
+      edgeCount: baselineTransitionsQuery.data?.edges.length ?? 0,
+      topEdgeShare:
+        baselineTransitionsQuery.data?.edges?.length && sumTransitionFlow(baselineTransitionsQuery.data) > 0
+          ? (baselineTransitionsQuery.data.edges[0]?.value ?? 0) / sumTransitionFlow(baselineTransitionsQuery.data)
+          : null,
+    }),
+    [baselineTransitionsQuery.data],
+  )
+  const flowSegmentComparison = useMemo(() => {
+    if (!selectedLocalSegment || !workspaceInsightsSummary || !currentInsightsSummary || !baselineTransitionsQuery.data || !transitionsQuery.data) {
+      return null
+    }
+    return {
+      shares: [
+        {
+          label: 'Journey share',
+          value: ratio(currentInsightsSummary.journeys, workspaceInsightsSummary.journeys),
+          note: `${currentInsightsSummary.journeys.toLocaleString()} of ${workspaceInsightsSummary.journeys.toLocaleString()} visible journeys`,
+        },
+        {
+          label: 'Visible flow share',
+          value: ratio(currentFlowStats.totalTransitions, workspaceFlowStats.totalTransitions),
+          note: `${currentFlowStats.totalTransitions.toLocaleString()} of ${workspaceFlowStats.totalTransitions.toLocaleString()} visible transition volume`,
+        },
+        {
+          label: 'Node breadth share',
+          value: ratio(currentFlowStats.nodeCount, workspaceFlowStats.nodeCount),
+          note: `${currentFlowStats.nodeCount.toLocaleString()} of ${workspaceFlowStats.nodeCount.toLocaleString()} visible nodes`,
+        },
+      ],
+      rates: [
+        {
+          label: 'Top-link concentration',
+          value:
+            currentFlowStats.topEdgeShare != null ? formatPercentDetailed(currentFlowStats.topEdgeShare) : '—',
+          note:
+            workspaceFlowStats.topEdgeShare != null
+              ? `${formatSignedPercentPoints((currentFlowStats.topEdgeShare ?? 0) - workspaceFlowStats.topEdgeShare)} vs ${formatPercentDetailed(workspaceFlowStats.topEdgeShare)} overall`
+              : 'Workspace flow baseline unavailable',
+        },
+      ],
+    }
+  }, [
+    baselineTransitionsQuery.data,
+    currentFlowStats.edgeCount,
+    currentFlowStats.nodeCount,
+    currentFlowStats.topEdgeShare,
+    currentFlowStats.totalTransitions,
+    currentInsightsSummary,
+    selectedLocalSegment,
+    transitionsQuery.data,
+    workspaceFlowStats.edgeCount,
+    workspaceFlowStats.nodeCount,
+    workspaceFlowStats.topEdgeShare,
+    workspaceFlowStats.totalTransitions,
+    workspaceInsightsSummary,
+  ])
   const pathTableColumns: AnalyticsTableColumn<JourneyPathRow>[] = [
     {
       key: 'path_steps',
@@ -2323,6 +2575,51 @@ export default function Journeys({
     () => policyRecommendations.filter((item) => item.recommendation === 'promote' || item.recommendation === 'promoted').slice(0, 4),
     [policyRecommendations],
   )
+  const hypothesisSegmentComparison = useMemo(() => {
+    const focusedSummary = hypothesisSegmentInsightsQuery.data?.summary ?? null
+    if (!selectedHypothesisLocalSegment || !focusedSummary || !workspaceInsightsSummary) return null
+    return {
+      shares: [
+        {
+          label: 'Journey share',
+          value: ratio(focusedSummary.journeys, workspaceInsightsSummary.journeys),
+          note: `${focusedSummary.journeys.toLocaleString()} of ${workspaceInsightsSummary.journeys.toLocaleString()} visible journeys`,
+        },
+        {
+          label: 'Conversion share',
+          value: ratio(focusedSummary.conversions, workspaceInsightsSummary.conversions),
+          note: `${focusedSummary.conversions.toLocaleString()} of ${workspaceInsightsSummary.conversions.toLocaleString()} visible conversions`,
+        },
+      ],
+      rates: [
+        {
+          label: 'Observed CVR vs workspace',
+          value: formatPercentDetailed(focusedSummary.baseline_conversion_rate),
+          note: `${formatSignedPercentPoints(
+            focusedSummary.baseline_conversion_rate - workspaceInsightsSummary.baseline_conversion_rate,
+          )} vs ${formatPercentDetailed(workspaceInsightsSummary.baseline_conversion_rate)} overall`,
+        },
+        {
+          label: 'Draft support vs observed',
+          value: hypothesisDraft.support_count ? hypothesisDraft.support_count.toLocaleString() : '—',
+          note:
+            hypothesisDraft.support_count > 0
+              ? `${formatSignedNumber(hypothesisDraft.support_count - focusedSummary.journeys, 0)} vs ${focusedSummary.journeys.toLocaleString()} observed journeys`
+              : `${focusedSummary.journeys.toLocaleString()} observed journeys in this analytical slice`,
+        },
+        {
+          label: 'Draft baseline vs observed',
+          value: hypothesisDraft.baseline_rate != null ? formatPercentDetailed(hypothesisDraft.baseline_rate) : '—',
+          note:
+            hypothesisDraft.baseline_rate != null
+              ? `${formatSignedPercentPoints(hypothesisDraft.baseline_rate - focusedSummary.baseline_conversion_rate)} vs ${formatPercentDetailed(
+                  focusedSummary.baseline_conversion_rate,
+                )} observed`
+              : `${formatPercentDetailed(focusedSummary.baseline_conversion_rate)} observed baseline CVR`,
+        },
+      ],
+    }
+  }, [hypothesisDraft.baseline_rate, hypothesisDraft.support_count, hypothesisSegmentInsightsQuery.data?.summary, selectedHypothesisLocalSegment, workspaceInsightsSummary])
 
   const renderHypothesisLearningCard = (item: JourneyHypothesisRecord, compact = false) => {
     const stage = getHypothesisLearningStage(item)
@@ -2751,8 +3048,6 @@ export default function Journeys({
       is_enabled: true,
     })
   }
-
-  const selectedHypothesisSegmentId = readSelectedSegmentRegistryId(hypothesisDraft.segment)
   const currentFilterSegmentDefinition = activeLocalSegmentDefinitionFromFilters(filters)
   const canSaveCurrentFilterSegment = hasLocalSegmentCriteria(currentFilterSegmentDefinition)
   const defaultFilterSegmentName = buildLocalSegmentDefaultName(currentFilterSegmentDefinition)
@@ -3425,6 +3720,62 @@ export default function Journeys({
                 </div>
               </div>
 
+              {selectedLocalSegment ? (
+                baselineInsightsQuery.isLoading ? (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    Loading workspace baseline for {selectedLocalSegment.name}…
+                  </div>
+                ) : insightsSegmentComparison ? (
+                  <SectionCard
+                    title={`Segment vs workspace baseline: ${selectedLocalSegment.name}`}
+                    subtitle="This saved analytical segment narrows the current journey discovery view. Use the baseline below to judge whether this slice is structurally different from the full workspace."
+                  >
+                    <div style={{ display: 'grid', gap: t.space.lg }}>
+                      <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
+                        {insightsSegmentComparison.shares.map((item) => (
+                          <div
+                            key={item.label}
+                            style={{
+                              border: `1px solid ${t.color.borderLight}`,
+                              borderRadius: t.radius.md,
+                              padding: t.space.md,
+                              background: t.color.bgSubtle,
+                              display: 'grid',
+                              gap: 4,
+                            }}
+                          >
+                            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                            <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                              {item.value != null ? formatPercent(item.value) : '—'}
+                            </div>
+                            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{item.note}</div>
+                          </div>
+                        ))}
+                        {insightsSegmentComparison.rates.map((item) => (
+                          <div
+                            key={item.label}
+                            style={{
+                              border: `1px solid ${t.color.borderLight}`,
+                              borderRadius: t.radius.md,
+                              padding: t.space.md,
+                              background: t.color.surface,
+                              display: 'grid',
+                              gap: 4,
+                            }}
+                          >
+                            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                            <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                              {item.value}
+                            </div>
+                            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{item.note}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </SectionCard>
+                ) : null
+              ) : null}
+
               {insightsQuery.isLoading && <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading journey insights…</div>}
               {insightsQuery.isError && <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{(insightsQuery.error as Error).message}</div>}
               {!insightsQuery.isLoading && !insightsQuery.isError && !insightItems.length && (
@@ -3804,6 +4155,84 @@ export default function Journeys({
                       </span>
                     </label>
                   </div>
+
+                  {selectedHypothesisLocalSegment ? (
+                    hypothesisSegmentInsightsQuery.isLoading || baselineInsightsQuery.isLoading ? (
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                        Loading analytical segment evidence for {selectedHypothesisLocalSegment.name}…
+                      </div>
+                    ) : hypothesisSegmentComparison ? (
+                      <SectionCard
+                        title={`Analytical segment evidence: ${selectedHypothesisLocalSegment.name}`}
+                        subtitle="This compares the saved local analytical segment on the draft against the unfiltered workspace for the same journey definition and date window."
+                      >
+                        <div style={{ display: 'grid', gap: t.space.md }}>
+                          <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
+                            {hypothesisSegmentComparison.shares.map((item) => (
+                              <div
+                                key={item.label}
+                                style={{
+                                  border: `1px solid ${t.color.borderLight}`,
+                                  borderRadius: t.radius.md,
+                                  padding: t.space.md,
+                                  background: t.color.bgSubtle,
+                                  display: 'grid',
+                                  gap: 4,
+                                }}
+                              >
+                                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                                <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                                  {item.value != null ? formatPercent(item.value) : '—'}
+                                </div>
+                                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{item.note}</div>
+                              </div>
+                            ))}
+                            {hypothesisSegmentComparison.rates.map((item) => (
+                              <div
+                                key={item.label}
+                                style={{
+                                  border: `1px solid ${t.color.borderLight}`,
+                                  borderRadius: t.radius.md,
+                                  padding: t.space.md,
+                                  background: t.color.surface,
+                                  display: 'grid',
+                                  gap: 4,
+                                }}
+                              >
+                                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                                <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                                  {item.value}
+                                </div>
+                                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{item.note}</div>
+                              </div>
+                            ))}
+                          </div>
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                            Local analytical segments define the observed slice behind the hypothesis. Meiro Pipes segments remain operational audience references and are not used for page-level scoring here.
+                          </div>
+                        </div>
+                      </SectionCard>
+                    ) : null
+                  ) : selectedHypothesisOperationalSegment ? (
+                    <SectionCard
+                      title={`Operational audience reference: ${selectedHypothesisOperationalSegment.name}`}
+                      subtitle="This saved Meiro Pipes segment is stored with the hypothesis as an activation or experiment audience. It does not change the observed journey slice shown on this page."
+                    >
+                      <div style={{ display: 'grid', gap: t.space.xs, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                        <div>Source: {selectedHypothesisOperationalSegment.source_label || 'Meiro Pipes'}</div>
+                        <div>
+                          Audience size: {selectedHypothesisOperationalSegment.size != null ? selectedHypothesisOperationalSegment.size.toLocaleString() : 'Unknown'}
+                        </div>
+                        <div>
+                          Use this when the hypothesis targets an operational audience, not when you want to compare analytical journey behavior.
+                        </div>
+                      </div>
+                    </SectionCard>
+                  ) : selectedLocalSegment ? (
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                      The current page is already focused on the saved analytical segment <strong style={{ color: t.color.text }}>{selectedLocalSegment.name}</strong>. Save or select a draft-level analytical segment above if this hypothesis should use a different slice.
+                    </div>
+                  ) : null}
 
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(180px, 100%), 1fr))', gap: t.space.md, minWidth: 0 }}>
                     <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
@@ -4913,6 +5342,65 @@ export default function Journeys({
                   </div>
                 </div>
               </div>
+
+              {selectedLocalSegment ? (
+                baselineTransitionsQuery.isLoading || baselineInsightsQuery.isLoading ? (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    Loading workspace flow baseline for {selectedLocalSegment.name}…
+                  </div>
+                ) : flowSegmentComparison ? (
+                  <SectionCard
+                    title={`Segment vs workspace flow: ${selectedLocalSegment.name}`}
+                    subtitle="This shows how the current analytical slice changes journey breadth and transition concentration relative to the full workspace."
+                  >
+                    <div style={{ display: 'grid', gap: t.space.lg }}>
+                      <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
+                        {flowSegmentComparison.shares.map((item) => (
+                          <div
+                            key={item.label}
+                            style={{
+                              border: `1px solid ${t.color.borderLight}`,
+                              borderRadius: t.radius.md,
+                              padding: t.space.md,
+                              background: t.color.bgSubtle,
+                              display: 'grid',
+                              gap: 4,
+                            }}
+                          >
+                            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                            <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                              {item.value != null ? formatPercent(item.value) : '—'}
+                            </div>
+                            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{item.note}</div>
+                          </div>
+                        ))}
+                        {flowSegmentComparison.rates.map((item) => (
+                          <div
+                            key={item.label}
+                            style={{
+                              border: `1px solid ${t.color.borderLight}`,
+                              borderRadius: t.radius.md,
+                              padding: t.space.md,
+                              background: t.color.surface,
+                              display: 'grid',
+                              gap: 4,
+                            }}
+                          >
+                            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                            <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                              {item.value}
+                            </div>
+                            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{item.note}</div>
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                        Use this to judge whether the selected analytical audience is simply smaller than the workspace, or structurally more concentrated around a few steps and transitions.
+                      </div>
+                    </div>
+                  </SectionCard>
+                ) : null
+              ) : null}
 
               {transitionsQuery.isLoading && <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading flow transitions…</div>}
               {transitionsQuery.isError && <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{(transitionsQuery.error as Error).message}</div>}
