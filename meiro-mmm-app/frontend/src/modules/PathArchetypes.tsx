@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { tokens as t } from '../theme/tokens'
 import DecisionStatusCard from '../components/DecisionStatusCard'
@@ -7,6 +7,13 @@ import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { apiGetJson } from '../lib/apiClient'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
+import {
+  isLocalAnalyticalSegment,
+  localSegmentCompatibleWithDimensions,
+  readLocalSegmentDefinition,
+  segmentOptionLabel,
+  type SegmentRegistryResponse,
+} from '../lib/segments'
 
 interface PathVariant {
   path: string
@@ -204,20 +211,77 @@ export default function PathArchetypes() {
   const [showQualityHelp, setShowQualityHelp] = useState(false)
   const [showContext, setShowContext] = usePersistentToggle('path-archetypes:show-context', false)
   const [showQualityPanel, setShowQualityPanel] = usePersistentToggle('path-archetypes:show-quality', false)
+  const [selectedSegmentId, setSelectedSegmentId] = useState('')
   const [channelFilter, setChannelFilter] = useState<string[]>([])
   const [minAvgLength, setMinAvgLength] = useState<number | ''>('')
   const [maxAvgLength, setMaxAvgLength] = useState<number | ''>('')
   const [detailTab, setDetailTab] = useState<'overview' | 'composition' | 'transitions' | 'variants' | 'actions'>('overview')
   const [selectedPathForDrawer, setSelectedPathForDrawer] = useState<PathVariant | null>(null)
 
+  const segmentRegistryQuery = useQuery<SegmentRegistryResponse>({
+    queryKey: ['segment-registry', 'path-archetypes'],
+    queryFn: async () =>
+      apiGetJson<SegmentRegistryResponse>('/api/segments/registry', {
+        fallbackMessage: 'Failed to load segment registry',
+      }),
+    refetchInterval: false,
+  })
+
+  const localSegments = useMemo(
+    () => (segmentRegistryQuery.data?.items ?? []).filter(isLocalAnalyticalSegment),
+    [segmentRegistryQuery.data?.items],
+  )
+  const compatibleSegments = useMemo(
+    () =>
+      localSegments.filter((item) =>
+        localSegmentCompatibleWithDimensions(item, ['channel_group', 'campaign_id', 'device', 'country']),
+      ),
+    [localSegments],
+  )
+  const selectedSegment = useMemo(
+    () => compatibleSegments.find((item) => item.id === selectedSegmentId) ?? null,
+    [compatibleSegments, selectedSegmentId],
+  )
+  const selectedSegmentDefinition = useMemo(
+    () => readLocalSegmentDefinition(selectedSegment),
+    [selectedSegment],
+  )
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const segment = params.get('segment')
+    if (segment) setSelectedSegmentId(segment)
+  }, [])
+
+  useEffect(() => {
+    if (!selectedSegmentId) return
+    if (!segmentRegistryQuery.data) return
+    if (compatibleSegments.some((item) => item.id === selectedSegmentId)) return
+    setSelectedSegmentId('')
+  }, [compatibleSegments, selectedSegmentId, segmentRegistryQuery.data])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    if (selectedSegmentId) params.set('segment', selectedSegmentId)
+    else params.delete('segment')
+    const next = `${window.location.pathname}?${params.toString()}${window.location.hash || ''}`
+    window.history.replaceState({}, '', next)
+  }, [selectedSegmentId])
+
   const archetypesQuery = useQuery<ArchetypesResponse>({
-    queryKey: ['path-archetypes', kMode, kFixed, directMode, comparePrevious],
+    queryKey: ['path-archetypes', kMode, kFixed, directMode, comparePrevious, selectedSegmentId],
     queryFn: async () => {
       const params = new URLSearchParams()
       params.set('k_mode', kMode)
       if (kMode === 'fixed') params.set('k', String(kFixed))
       params.set('direct_mode', directMode)
       if (comparePrevious) params.set('compare_previous', 'true')
+      if (selectedSegmentDefinition.channel_group) params.set('channel_group', selectedSegmentDefinition.channel_group)
+      if (selectedSegmentDefinition.campaign_id) params.set('campaign_id', selectedSegmentDefinition.campaign_id)
+      if (selectedSegmentDefinition.device) params.set('device', selectedSegmentDefinition.device)
+      if (selectedSegmentDefinition.country) params.set('country', selectedSegmentDefinition.country)
       return apiGetJson<ArchetypesResponse>(`/api/paths/archetypes?${params.toString()}`, {
         fallbackMessage: 'Failed to load path archetypes',
       })
@@ -389,6 +453,29 @@ export default function PathArchetypes() {
                 <option value="fixed">Fixed K</option>
               </select>
             </label>
+            <label style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+              Focus segment
+              <select
+                value={selectedSegmentId}
+                onChange={(e) => setSelectedSegmentId(e.target.value)}
+                style={{
+                  marginLeft: 8,
+                  padding: `${tkn.space.xs}px ${tkn.space.sm}px`,
+                  fontSize: tkn.font.sizeSm,
+                  border: `1px solid ${tkn.color.border}`,
+                  borderRadius: tkn.radius.sm,
+                  background: '#ffffff',
+                  maxWidth: 260,
+                }}
+              >
+                <option value="">All journeys / no saved segment</option>
+                {compatibleSegments.map((segment) => (
+                  <option key={segment.id} value={segment.id}>
+                    {segmentOptionLabel(segment)}
+                  </option>
+                ))}
+              </select>
+            </label>
             {kMode === 'fixed' && (
               <label style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
                 K
@@ -477,6 +564,16 @@ export default function PathArchetypes() {
             >
               Export CSV
             </button>
+            <a
+              href="/?page=settings#settings/segments"
+              style={{
+                color: tkn.color.accent,
+                textDecoration: 'none',
+                fontSize: tkn.font.sizeXs,
+              }}
+            >
+              Manage segments
+            </a>
           </div>
 
           {/* Lightweight filters – view filters only */}
@@ -576,6 +673,7 @@ export default function PathArchetypes() {
             { label: 'Source', value: 'Live attribution journeys' },
             { label: 'Period', value: periodLabel },
             { label: 'Conversion KPI', value: conversionLabel },
+            { label: 'Focus segment', value: selectedSegment ? selectedSegment.name : 'All journeys' },
             {
               label: 'Converted journeys used',
               value: data?.total_converted != null ? data.total_converted.toLocaleString() : '—',
@@ -611,6 +709,11 @@ export default function PathArchetypes() {
             <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
               Archetypes cluster live attribution journeys by path similarity. Direct handling and compare-to-previous are view filters on this page.
             </div>
+            {selectedSegment ? (
+              <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                Focus segment <strong style={{ color: tkn.color.text }}>{selectedSegment.name}</strong> filters the underlying live journeys before clustering using its saved analytical dimensions.
+              </div>
+            ) : null}
             <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
               Current settings: direct handling <strong style={{ color: tkn.color.text }}>{directMode}</strong> · clustering mode{' '}
               <strong style={{ color: tkn.color.text }}>{kMode === 'fixed' ? `fixed K=${kFixed}` : 'auto'}</strong>

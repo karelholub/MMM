@@ -82,6 +82,35 @@ def create_router(
         threshold = int(getattr(settings.attribution, "min_journey_quality_score", 0) or 0)
         return filter_journeys_by_quality(journeys, threshold)
 
+    def _apply_journey_dimension_filters(
+        journeys: List[Dict[str, Any]],
+        *,
+        channel_group: Optional[str] = None,
+        campaign_id: Optional[str] = None,
+        device: Optional[str] = None,
+        country: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        filtered: List[Dict[str, Any]] = []
+        channel_norm = str(channel_group or "").strip().lower()
+        campaign_norm = str(campaign_id or "").strip()
+        device_norm = str(device or "").strip().lower()
+        country_norm = str(country or "").strip().lower()
+
+        for journey in journeys or []:
+            if device_norm and str(journey.get("device") or "").strip().lower() != device_norm:
+                continue
+            if country_norm and str(journey.get("country") or "").strip().lower() != country_norm:
+                continue
+            touchpoints = journey.get("touchpoints") or []
+            if channel_norm:
+                if not any(str(tp.get("channel") or "").strip().lower() == channel_norm for tp in touchpoints if isinstance(tp, dict)):
+                    continue
+            if campaign_norm:
+                if not any(str(tp.get("campaign") or "").strip() == campaign_norm for tp in touchpoints if isinstance(tp, dict)):
+                    continue
+            filtered.append(journey)
+        return filtered
+
     def _build_consistency_payload(db: Any, journeys: List[Dict[str, Any]]) -> tuple[Dict[str, Any] | None, List[str]]:
         try:
             from app.services_journey_readiness import build_journey_readiness
@@ -965,6 +994,10 @@ def create_router(
         k_min: int = 3,
         k_max: int = 10,
         direct_mode: str = "include",
+        channel_group: Optional[str] = Query(None),
+        campaign_id: Optional[str] = Query(None),
+        device: Optional[str] = Query(None),
+        country: Optional[str] = Query(None),
         compare_previous: bool = False,
         recompute: bool = False,
         db=Depends(get_db_dependency),
@@ -977,6 +1010,13 @@ def create_router(
         direct_mode_normalized = (direct_mode or "include").lower()
         if direct_mode_normalized not in ("include", "exclude"):
             direct_mode_normalized = "include"
+        journeys_for_analysis = _apply_journey_dimension_filters(
+            journeys_for_analysis,
+            channel_group=channel_group,
+            campaign_id=campaign_id,
+            device=device,
+            country=country,
+        )
         if direct_mode_normalized == "exclude":
             filtered_journeys = []
             for journey in journeys_for_analysis:
@@ -996,6 +1036,10 @@ def create_router(
             int(k_min),
             int(k_max),
             direct_mode_normalized,
+            str(channel_group or ""),
+            str(campaign_id or ""),
+            str(device or ""),
+            str(country or ""),
             bool(compare_previous),
             len(journeys_for_analysis),
         )
@@ -1013,7 +1057,13 @@ def create_router(
             enable_compare_previous=bool(compare_previous),
         )
         result.setdefault("diagnostics", {})
-        result["diagnostics"]["view_filters"] = {"direct_mode": direct_mode_normalized}
+        result["diagnostics"]["view_filters"] = {
+            "direct_mode": direct_mode_normalized,
+            "channel_group": channel_group,
+            "campaign_id": campaign_id,
+            "device": device,
+            "country": country,
+        }
         path_archetypes_cache_obj[cache_key] = result
         return result
 
