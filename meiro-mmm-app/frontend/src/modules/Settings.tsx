@@ -25,12 +25,21 @@ import TaxonomyPreviewPanel from '../features/taxonomy/TaxonomyPreviewPanel'
 import { AnalyticsToolbar } from '../components/dashboard'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import type { RecommendedActionItem } from '../components/RecommendedActionsList'
+import SegmentEditorDialog from '../components/segments/SegmentEditorDialog'
 import { usePermissions } from '../hooks/usePermissions'
 import { navigateForRecommendedAction } from '../lib/recommendedActions'
 import { ApiError, apiGetJson, apiSendJson } from '../lib/apiClient'
+import {
+  isLocalAnalyticalSegment,
+  segmentOptionLabel,
+  type SegmentContextResponse,
+  type SegmentRegistryItem,
+  type SegmentRegistryResponse,
+} from '../lib/segments'
 
 export type SectionKey =
   | 'attribution'
+  | 'segments'
   | 'kpi'
   | 'taxonomy'
   | 'measurement-models'
@@ -50,6 +59,7 @@ interface SectionMeta {
 
 const SECTION_ORDER: SectionKey[] = [
   'attribution',
+  'segments',
   'kpi',
   'taxonomy',
   'measurement-models',
@@ -68,6 +78,12 @@ const SECTION_META: Record<SectionKey, SectionMeta> = {
     description:
       'Control default lookback, decay, and weighting applied across attribution models.',
     icon: 'AT',
+  },
+  segments: {
+    title: 'Segments',
+    description:
+      'Manage reusable analytical segments and review operational segments synced from Meiro Pipes.',
+    icon: 'SG',
   },
   kpi: {
     title: 'KPI & conversions',
@@ -1250,6 +1266,11 @@ interface PendingSectionChange {
   target: SectionKey
 }
 
+interface SegmentEditorState {
+  mode: 'create' | 'edit'
+  item: SegmentRegistryItem | null
+}
+
 const badgeStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
@@ -1288,6 +1309,9 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
     const [lastSavedAt, setLastSavedAt] = useState<
       Partial<Record<SectionKey, string>>
     >({})
+    const [showArchivedSegments, setShowArchivedSegments] = useState(false)
+    const [segmentEditorState, setSegmentEditorState] = useState<SegmentEditorState | null>(null)
+    const [segmentError, setSegmentError] = useState<string | null>(null)
 
     const [notificationsChannelsBaseline, setNotificationsChannelsBaseline] =
       useState<NotificationChannelRow[]>([])
@@ -1303,6 +1327,22 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
     const settingsQuery = useQuery<Settings>({
       queryKey: ['settings'],
       queryFn: async () => apiGetJson<Settings>('/api/settings', { fallbackMessage: 'Failed to load settings' }),
+    })
+    const segmentRegistryQuery = useQuery<SegmentRegistryResponse>({
+      queryKey: ['segment-registry', 'settings', showArchivedSegments ? 'with-archived' : 'active-only'],
+      queryFn: async () =>
+        apiGetJson<SegmentRegistryResponse>(`/api/segments/registry${showArchivedSegments ? '?include_archived=true' : ''}`, {
+          fallbackMessage: 'Failed to load segment registry',
+        }),
+      enabled: activeSection === 'segments',
+    })
+    const segmentContextQuery = useQuery<SegmentContextResponse>({
+      queryKey: ['segment-context', 'settings'],
+      queryFn: async () =>
+        apiGetJson<SegmentContextResponse>('/api/segments/context', {
+          fallbackMessage: 'Failed to load segment context',
+        }),
+      enabled: activeSection === 'segments',
     })
     const taxonomyQuery = useQuery<Taxonomy>({
       queryKey: ['taxonomy'],
@@ -1332,6 +1372,52 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
           fallbackMessage: 'Failed to load promoted journey policies',
         }),
       enabled: activeSection === 'nba',
+    })
+    const createSegmentMutation = useMutation({
+      mutationFn: async (payload: { name: string; description: string; definition: Record<string, string> }) =>
+        apiSendJson<SegmentRegistryItem>('/api/segments/local', 'POST', payload, {
+          fallbackMessage: 'Failed to create analytical segment',
+        }),
+      onSuccess: async () => {
+        setSegmentEditorState(null)
+        setSegmentError(null)
+        await queryClient.invalidateQueries({ queryKey: ['segment-registry'] })
+      },
+      onError: (err) => setSegmentError((err as Error).message || 'Failed to create analytical segment'),
+    })
+    const updateSegmentMutation = useMutation({
+      mutationFn: async (payload: { id: string; name: string; description: string; definition: Record<string, string> }) =>
+        apiSendJson<SegmentRegistryItem>(`/api/segments/local/${payload.id}`, 'PUT', {
+          name: payload.name,
+          description: payload.description,
+          definition: payload.definition,
+        }, {
+          fallbackMessage: 'Failed to update analytical segment',
+        }),
+      onSuccess: async () => {
+        setSegmentEditorState(null)
+        setSegmentError(null)
+        await queryClient.invalidateQueries({ queryKey: ['segment-registry'] })
+      },
+      onError: (err) => setSegmentError((err as Error).message || 'Failed to update analytical segment'),
+    })
+    const archiveSegmentMutation = useMutation({
+      mutationFn: async (segmentId: string) =>
+        apiSendJson<SegmentRegistryItem>(`/api/segments/local/${segmentId}/archive`, 'POST', undefined, {
+          fallbackMessage: 'Failed to archive analytical segment',
+        }),
+      onSuccess: async () => {
+        await queryClient.invalidateQueries({ queryKey: ['segment-registry'] })
+      },
+    })
+    const restoreSegmentMutation = useMutation({
+      mutationFn: async (segmentId: string) =>
+        apiSendJson<SegmentRegistryItem>(`/api/segments/local/${segmentId}/restore`, 'POST', undefined, {
+          fallbackMessage: 'Failed to restore analytical segment',
+        }),
+      onSuccess: async () => {
+        await queryClient.invalidateQueries({ queryKey: ['segment-registry'] })
+      },
     })
     const taxonomyCoverageQuery = useQuery<TaxonomyCoverageResponse>({
       queryKey: ['taxonomy', 'coverage'],
@@ -1375,6 +1461,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         currentFlags.audit_log_enabled
       return SECTION_ORDER.filter((section) => {
         if (section === 'mmm') return currentFlags.mmm_enabled
+        if (section === 'segments') return canManageSettings
         if (section === 'journeys') return canManageSettings
         if (section === 'access-control-users') return canUsers
         if (section === 'access-control-roles') return canRoles
@@ -10507,10 +10594,236 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       )
     }
 
+    const renderSegments = () => {
+      const localSegments = (segmentRegistryQuery.data?.items ?? []).filter(isLocalAnalyticalSegment)
+      const meiroSegments = (segmentRegistryQuery.data?.items ?? []).filter((item) => !isLocalAnalyticalSegment(item))
+      const cardStyle: CSSProperties = {
+        border: `1px solid ${t.color.borderLight}`,
+        borderRadius: t.radius.lg,
+        background: t.color.surface,
+        boxShadow: t.shadowXs,
+        padding: t.space.lg,
+        display: 'grid',
+        gap: t.space.md,
+      }
+      const chipStyle = (tone: 'accent' | 'muted' | 'warning' = 'muted'): CSSProperties => ({
+        display: 'inline-flex',
+        alignItems: 'center',
+        padding: '2px 8px',
+        borderRadius: 999,
+        fontSize: t.font.sizeXs,
+        fontWeight: t.font.weightMedium,
+        border:
+          tone === 'accent'
+            ? `1px solid ${t.color.accent}`
+            : tone === 'warning'
+            ? `1px solid ${t.color.warning}`
+            : `1px solid ${t.color.borderLight}`,
+        background:
+          tone === 'accent'
+            ? t.color.accentMuted
+            : tone === 'warning'
+            ? t.color.warningMuted
+            : t.color.bg,
+        color:
+          tone === 'accent'
+            ? t.color.accent
+            : tone === 'warning'
+            ? t.color.warning
+            : t.color.textSecondary,
+      })
+
+      return (
+        <div style={{ display: 'grid', gap: t.space.lg }}>
+          <div style={cardStyle}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.md, flexWrap: 'wrap', alignItems: 'center' }}>
+              <div style={{ display: 'grid', gap: 4 }}>
+                <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                  Shared segment registry
+                </div>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  Local analytical segments are analysis-ready slices. Meiro Pipes segments are operational audiences synced into the same registry.
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  <input type="checkbox" checked={showArchivedSegments} onChange={(e) => setShowArchivedSegments(e.target.checked)} />
+                  Show archived
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSegmentError(null)
+                    setSegmentEditorState({ mode: 'create', item: null })
+                  }}
+                  style={{
+                    border: `1px solid ${t.color.accent}`,
+                    background: t.color.accent,
+                    color: t.color.surface,
+                    borderRadius: t.radius.sm,
+                    padding: '8px 12px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Create analytical segment
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(180px, 100%), 1fr))', gap: t.space.sm }}>
+              <div style={{ ...cardStyle, padding: t.space.md, boxShadow: 'none' }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Local analytical</div>
+                <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                  {segmentRegistryQuery.data?.summary.local_analytical?.toLocaleString() ?? '—'}
+                </div>
+              </div>
+              <div style={{ ...cardStyle, padding: t.space.md, boxShadow: 'none' }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Meiro Pipes</div>
+                <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                  {segmentRegistryQuery.data?.summary.meiro_pipes?.toLocaleString() ?? '—'}
+                </div>
+              </div>
+              <div style={{ ...cardStyle, padding: t.space.md, boxShadow: 'none' }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Analysis-ready</div>
+                <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                  {segmentRegistryQuery.data?.summary.analysis_ready?.toLocaleString() ?? '—'}
+                </div>
+              </div>
+              <div style={{ ...cardStyle, padding: t.space.md, boxShadow: 'none' }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Observed rows</div>
+                <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                  {segmentContextQuery.data?.summary.journey_rows?.toLocaleString() ?? '—'}
+                </div>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                  {segmentContextQuery.data?.summary.date_from && segmentContextQuery.data?.summary.date_to
+                    ? `${segmentContextQuery.data.summary.date_from} – ${segmentContextQuery.data.summary.date_to}`
+                    : 'No observed journey rows yet'}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style={cardStyle}>
+            <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+              Local analytical segments
+            </div>
+            <div style={{ display: 'grid', gap: t.space.sm }}>
+              {localSegments.map((item) => (
+                <div
+                  key={item.id}
+                  style={{
+                    border: `1px solid ${t.color.borderLight}`,
+                    borderRadius: t.radius.md,
+                    padding: t.space.md,
+                    display: 'grid',
+                    gap: t.space.sm,
+                    background: t.color.surface,
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.md, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <div style={{ display: 'grid', gap: 4 }}>
+                      <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap', alignItems: 'center' }}>
+                        <strong style={{ color: t.color.text }}>{item.name}</strong>
+                        <span style={chipStyle('accent')}>Analysis-ready</span>
+                        {item.status === 'archived' ? <span style={chipStyle('warning')}>Archived</span> : null}
+                      </div>
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                        {item.description?.trim() || 'No description'}
+                      </div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                        {item.criteria_label || 'No criteria'}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSegmentError(null)
+                          setSegmentEditorState({ mode: 'edit', item })
+                        }}
+                        style={{ border: `1px solid ${t.color.border}`, background: 'transparent', borderRadius: t.radius.sm, padding: '8px 12px', cursor: 'pointer' }}
+                      >
+                        Edit
+                      </button>
+                      {item.status === 'archived' ? (
+                        <button
+                          type="button"
+                          onClick={() => restoreSegmentMutation.mutate(item.id)}
+                          style={{ border: `1px solid ${t.color.accent}`, background: 'transparent', color: t.color.accent, borderRadius: t.radius.sm, padding: '8px 12px', cursor: 'pointer' }}
+                        >
+                          Restore
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => archiveSegmentMutation.mutate(item.id)}
+                          style={{ border: `1px solid ${t.color.warning}`, background: 'transparent', color: t.color.warning, borderRadius: t.radius.sm, padding: '8px 12px', cursor: 'pointer' }}
+                        >
+                          Archive
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {localSegments.length === 0 ? (
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  No local analytical segments yet. Create one here, or save the current slice directly from Journeys or Conversion Paths.
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          <div style={cardStyle}>
+            <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+              Meiro Pipes operational segments
+            </div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              These are imported references from Meiro Pipes. They can be attached to hypotheses and experiments, but they are not used as analysis filters unless you create a local analytical segment.
+            </div>
+            <div style={{ display: 'grid', gap: t.space.sm }}>
+              {meiroSegments.map((item) => (
+                <div
+                  key={item.id}
+                  style={{
+                    border: `1px solid ${t.color.borderLight}`,
+                    borderRadius: t.radius.md,
+                    padding: t.space.md,
+                    display: 'grid',
+                    gap: t.space.xs,
+                    background: t.color.surface,
+                  }}
+                >
+                  <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <strong style={{ color: t.color.text }}>{item.name}</strong>
+                    <span style={chipStyle('muted')}>Operational audience</span>
+                    {item.size != null ? <span style={chipStyle('muted')}>{item.size.toLocaleString()} profiles</span> : null}
+                  </div>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    {item.description?.trim() || 'Synced from Meiro Pipes'}
+                  </div>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                    {item.criteria_label || segmentOptionLabel(item)}
+                  </div>
+                </div>
+              ))}
+              {meiroSegments.length === 0 ? (
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  No Meiro Pipes segments are currently available in the registry.
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )
+    }
+
     const renderSectionBody = () => {
       switch (activeSection) {
         case 'attribution':
           return renderAttribution()
+        case 'segments':
+          return renderSegments()
         case 'nba':
           return renderNba()
         case 'mmm':
@@ -12233,6 +12546,26 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
             </div>
           </div>
         )}
+        <SegmentEditorDialog
+          open={!!segmentEditorState}
+          mode={segmentEditorState?.mode ?? 'create'}
+          item={segmentEditorState?.item ?? null}
+          context={segmentContextQuery.data ?? null}
+          error={segmentError}
+          submitting={createSegmentMutation.isPending || updateSegmentMutation.isPending}
+          onClose={() => {
+            setSegmentEditorState(null)
+            setSegmentError(null)
+          }}
+          onSubmit={(payload) => {
+            setSegmentError(null)
+            if (segmentEditorState?.mode === 'edit' && segmentEditorState.item) {
+              updateSegmentMutation.mutate({ id: segmentEditorState.item.id, ...payload })
+            } else {
+              createSegmentMutation.mutate(payload)
+            }
+          }}
+        />
       </>
     )
   },

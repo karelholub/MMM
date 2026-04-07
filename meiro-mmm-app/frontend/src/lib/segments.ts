@@ -27,6 +27,23 @@ export interface SegmentRegistryResponse {
   }
 }
 
+export interface SegmentContextDimensionValue {
+  value: string
+  count: number
+}
+
+export interface SegmentContextResponse {
+  summary: {
+    journey_rows: number
+    date_from?: string | null
+    date_to?: string | null
+  }
+  channels: SegmentContextDimensionValue[]
+  campaigns: SegmentContextDimensionValue[]
+  devices: SegmentContextDimensionValue[]
+  countries: SegmentContextDimensionValue[]
+}
+
 export interface SegmentFilterState {
   channel: string
   campaign: string

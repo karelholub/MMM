@@ -1004,6 +1004,20 @@ export default function ConversionPaths() {
             showSegment
           />
           <div style={{ display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: t.space.sm }}>
+            <a
+              href="/?page=settings#settings/segments"
+              style={{
+                border: `1px solid ${t.color.border}`,
+                background: 'transparent',
+                borderRadius: t.radius.sm,
+                padding: '8px 12px',
+                textDecoration: 'none',
+                color: t.color.text,
+                fontSize: t.font.sizeSm,
+              }}
+            >
+              Manage segments
+            </a>
             <button
               type="button"
               disabled={!canSaveCurrentFilterSegment}

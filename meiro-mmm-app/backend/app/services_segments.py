@@ -4,10 +4,11 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.connectors import meiro_cdp
-from app.models_config_dq import LocalAnalyticalSegment
+from app.models_config_dq import JourneyDefinitionInstanceFact, LocalAnalyticalSegment
 
 
 ALLOWED_LOCAL_SEGMENT_KEYS = {"channel_group", "campaign_id", "device", "country"}
@@ -205,4 +206,39 @@ def list_segment_registry(
             "analysis_ready": sum(1 for item in local_segments if item.get("supports_analysis")),
             "activation_ready": sum(1 for item in meiro_segments if item.get("supports_activation")),
         },
+    }
+
+
+def _top_segment_dimension_values(db: Session, column: Any, *, limit: int = 100) -> List[Dict[str, Any]]:
+    rows = (
+        db.query(column, func.count(JourneyDefinitionInstanceFact.id).label("count"))
+        .filter(column.isnot(None))
+        .filter(column != "")
+        .group_by(column)
+        .order_by(func.count(JourneyDefinitionInstanceFact.id).desc(), column.asc())
+        .limit(max(1, min(limit, 500)))
+        .all()
+    )
+    return [{"value": str(value), "count": int(count or 0)} for value, count in rows if str(value or "").strip()]
+
+
+def build_segment_context(db: Session) -> Dict[str, Any]:
+    total_rows = db.query(func.count(JourneyDefinitionInstanceFact.id)).scalar() or 0
+    date_from, date_to = (
+        db.query(
+            func.min(JourneyDefinitionInstanceFact.date),
+            func.max(JourneyDefinitionInstanceFact.date),
+        ).first()
+        or (None, None)
+    )
+    return {
+        "summary": {
+            "journey_rows": int(total_rows),
+            "date_from": date_from.isoformat() if date_from else None,
+            "date_to": date_to.isoformat() if date_to else None,
+        },
+        "channels": _top_segment_dimension_values(db, JourneyDefinitionInstanceFact.channel_group),
+        "campaigns": _top_segment_dimension_values(db, JourneyDefinitionInstanceFact.campaign_id),
+        "devices": _top_segment_dimension_values(db, JourneyDefinitionInstanceFact.device),
+        "countries": _top_segment_dimension_values(db, JourneyDefinitionInstanceFact.country),
     }

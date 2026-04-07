@@ -1581,6 +1581,11 @@ export default function IncrementalityPage() {
                 <span style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>
                   Local analytical segments stay analysis-ready. Meiro Pipes segments are stored as operational audience references for execution and hypothesis alignment.
                 </span>
+                <span style={{ fontSize: tkn.font.sizeXs }}>
+                  <a href="/?page=settings#settings/segments" style={{ color: tkn.color.accent, textDecoration: 'none' }}>
+                    Manage segments
+                  </a>
+                </span>
               </label>
               {selectedSegment && (
                 <div

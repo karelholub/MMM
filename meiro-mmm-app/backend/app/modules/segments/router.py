@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.modules.segments.schemas import LocalSegmentPayload
 from app.services_segments import (
+    build_segment_context,
     create_local_segment,
     list_local_segments,
     list_segment_registry,
@@ -44,6 +45,13 @@ def create_router(
                 include_archived=include_archived,
             )
         }
+
+    @router.get("/api/segments/context")
+    def api_segment_context(
+        db=Depends(get_db_dependency),
+        _ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        return build_segment_context(db)
 
     @router.post("/api/segments/local")
     def api_create_local_segment(
