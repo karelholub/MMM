@@ -297,6 +297,14 @@ interface JourneyOverviewAlertRow {
   triggered_at: string | null
 }
 
+function medianOf(values: Array<number | null | undefined>): number | null {
+  const valid = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+  if (!valid.length) return null
+  const sorted = [...valid].sort((a, b) => a - b)
+  const middle = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle]
+}
+
 interface RecentAlertRow {
   id: string
   source: 'legacy' | 'journey_funnel'
@@ -490,6 +498,10 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
   const funnelSummary = funnelsQuery.data?.summary
   const funnelRows = funnelsQuery.data?.tabs?.[funnelTab] ?? []
   const selectedFunnel = funnelRows[0] ?? null
+  const funnelMedianLag = useMemo(
+    () => medianOf(funnelRows.map((row) => row.median_days_to_convert)),
+    [funnelRows],
+  )
   const freshness = summary?.freshness
   const trendInsights = trendsQuery.data
   const journeysReadiness = summary?.readiness
@@ -511,6 +523,14 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
     journeysReadiness?.summary?.journeys_loaded != null
       ? Number(journeysReadiness.summary.journeys_loaded).toLocaleString()
       : '—'
+  const lagPostureLabel =
+    funnelMedianLag == null
+      ? 'Lag unavailable'
+      : funnelMedianLag <= 1
+        ? `Short-lag (${funnelMedianLag.toFixed(1)}d median)`
+        : funnelMedianLag <= 3
+          ? `Typical (${funnelMedianLag.toFixed(1)}d median)`
+          : `Long-lag (${funnelMedianLag.toFixed(1)}d median)`
 
   const handleOverviewAction = (action: RecommendedActionItem) => {
     navigateForRecommendedAction(action, { onNavigate, defaultPage: 'datasources' })
@@ -880,8 +900,77 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
             { label: 'Freshness', value: freshnessLabel },
             { label: 'KPI coverage', value: readinessCoverageLabel },
             { label: 'Journeys loaded', value: journeysLoadedLabel },
+            { label: 'Lag posture', value: lagPostureLabel },
           ]}
         />
+
+        <SectionCard
+          title="Conversion lag signal"
+          subtitle="How quickly the current top paths tend to convert, and how exposed they are to tighter attribution windows."
+        >
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: t.space.md }}>
+            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bgSubtle }}>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Median lag across top paths</div>
+              <div style={{ marginTop: t.space.xs, fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                {funnelMedianLag != null ? `${funnelMedianLag.toFixed(1)}d` : '—'}
+              </div>
+            </div>
+            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bgSubtle }}>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Fastest highlighted path</div>
+              <div style={{ marginTop: t.space.xs, fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                {funnelRows.length
+                  ? `${Math.min(...funnelRows.map((row) => row.median_days_to_convert ?? Number.POSITIVE_INFINITY)).toFixed(1)}d`
+                  : '—'}
+              </div>
+            </div>
+            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bgSubtle }}>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Window-sensitivity read</div>
+              <div style={{ marginTop: t.space.xs, fontSize: t.font.sizeSm, color: t.color.text }}>
+                {funnelMedianLag == null
+                  ? 'Not enough timing data in the current top paths.'
+                  : funnelMedianLag > 3
+                    ? 'This period leans long-lag. Tightening attribution windows will likely suppress more paths than usual.'
+                    : funnelMedianLag > 1
+                      ? 'This period looks mixed. Review channel and path lag before changing windows.'
+                      : 'This period leans short-lag. Attribution windows are less likely to materially distort the top paths.'}
+              </div>
+            </div>
+          </div>
+          <div style={{ marginTop: t.space.md, display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={() => onNavigate('paths')}
+              style={{
+                padding: `${t.space.sm}px ${t.space.md}px`,
+                borderRadius: t.radius.sm,
+                border: `1px solid ${t.color.accent}`,
+                background: t.color.accentMuted,
+                color: t.color.accent,
+                fontSize: t.font.sizeSm,
+                fontWeight: t.font.weightSemibold,
+                cursor: 'pointer',
+              }}
+            >
+              Open Conversion Paths
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigate('campaigns')}
+              style={{
+                padding: `${t.space.sm}px ${t.space.md}px`,
+                borderRadius: t.radius.sm,
+                border: `1px solid ${t.color.border}`,
+                background: t.color.surface,
+                color: t.color.text,
+                fontSize: t.font.sizeSm,
+                fontWeight: t.font.weightMedium,
+                cursor: 'pointer',
+              }}
+            >
+              Open Campaign Performance
+            </button>
+          </div>
+        </SectionCard>
 
         {(journeysReadiness || latestEventReplayDiagnostics) ? (
           <CollapsiblePanel

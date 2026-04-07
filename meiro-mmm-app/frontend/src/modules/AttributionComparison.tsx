@@ -199,6 +199,17 @@ function exportComparisonCSV(
   URL.revokeObjectURL(url)
 }
 
+function summarizeSensitivityRisk(preview?: AttributionPreviewResult | null): string {
+  if (!preview || !preview.previewAvailable) return 'Draft not previewed'
+  const totalImpact =
+    Number(preview.windowImpactCount || 0) +
+    Number(preview.qualityImpactCount || 0) +
+    Number(preview.useConvertedFlagImpact || 0)
+  if (totalImpact === 0) return 'Low eligibility change'
+  if (totalImpact < 50) return `${totalImpact.toLocaleString()} journeys affected`
+  return `High sensitivity · ${totalImpact.toLocaleString()} journeys affected`
+}
+
 export default function AttributionComparison({ selectedModel, onSelectModel }: AttributionComparisonProps) {
   const { journeysSummary } = useWorkspaceContext()
   const [sortBy, setSortBy] = useState<'channel' | string>('channel')
@@ -578,6 +589,8 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
             { label: 'Conversion', value: conversionKey ? `Conversion: ${conversionKey}` : 'Conversion: N/A' },
             { label: 'Freshness', value: freshnessLabel },
             { label: 'Coverage', value: coverageLabel },
+            { label: 'Sensitivity draft', value: currentSensitivitySummary },
+            { label: 'Sensitivity risk', value: summarizeSensitivityRisk(sensitivityQuery.data?.current) },
           ]}
         />
       </div>
