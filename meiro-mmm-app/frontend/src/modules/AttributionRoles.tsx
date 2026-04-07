@@ -6,6 +6,13 @@ import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { apiGetJson } from '../lib/apiClient'
+import {
+  localSegmentCompatibleWithDimensions,
+  readLocalSegmentDefinition,
+  segmentOptionLabel,
+  type SegmentRegistryItem,
+  type SegmentRegistryResponse,
+} from '../lib/segments'
 import { tokens as t } from '../theme/tokens'
 
 interface AttributionRolesProps {
@@ -135,6 +142,7 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
   const [scope, setScope] = useState<ScopeKey>('channels')
   const [metric, setMetric] = useState<MetricKey>('conversions')
   const [focusRole, setFocusRole] = useState<RoleKey>('assist')
+  const [selectedSegmentId, setSelectedSegmentId] = useState('')
   const [showMethod, setShowMethod] = usePersistentToggle('attribution-roles:show-method', false)
   const [showTable, setShowTable] = usePersistentToggle('attribution-roles:show-table', true)
 
@@ -173,6 +181,14 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
       })
     },
     enabled: !!dateFrom && !!dateTo,
+  })
+
+  const segmentRegistryQuery = useQuery<SegmentRegistryResponse>({
+    queryKey: ['attribution-roles', 'segments'],
+    queryFn: async () =>
+      apiGetJson<SegmentRegistryResponse>('/api/segments/registry', {
+        fallbackMessage: 'Failed to load segment registry',
+      }),
   })
 
   const channelEntities = useMemo<RoleEntity[]>(() => {
@@ -218,7 +234,39 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
     })
   }, [campaignSummaryQuery.data?.items])
 
+  const localSegments = useMemo(
+    () => (segmentRegistryQuery.data?.items ?? []).filter((item) => item.source === 'local_analytical'),
+    [segmentRegistryQuery.data?.items],
+  )
+  const compatibleSegments = useMemo(
+    () =>
+      localSegments.filter((item) =>
+        localSegmentCompatibleWithDimensions(item, scope === 'channels' ? ['channel_group'] : ['channel_group', 'campaign_id']),
+      ),
+    [localSegments, scope],
+  )
+  const selectedSegment = useMemo<SegmentRegistryItem | null>(
+    () => compatibleSegments.find((item) => item.id === selectedSegmentId) ?? null,
+    [compatibleSegments, selectedSegmentId],
+  )
+  const selectedSegmentDefinition = useMemo(
+    () => readLocalSegmentDefinition(selectedSegment),
+    [selectedSegment],
+  )
+
   const entities = scope === 'channels' ? channelEntities : campaignEntities
+  const visibleEntities = useMemo(() => {
+    if (!selectedSegment) return entities
+    return entities.filter((item) => {
+      if (scope === 'channels') {
+        if (selectedSegmentDefinition.channel_group && item.id !== selectedSegmentDefinition.channel_group) return false
+        return true
+      }
+      if (selectedSegmentDefinition.channel_group && item.secondaryLabel !== selectedSegmentDefinition.channel_group) return false
+      if (selectedSegmentDefinition.campaign_id && item.id !== selectedSegmentDefinition.campaign_id) return false
+      return true
+    })
+  }, [entities, scope, selectedSegment, selectedSegmentDefinition])
   const activeQuery = scope === 'channels' ? channelSummaryQuery : campaignSummaryQuery
   const conversionKey =
     channelSummaryQuery.data?.config?.conversion_key ||
@@ -228,19 +276,19 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
 
   const roleTotals = useMemo(() => {
     return {
-      first: entities.reduce((sum, item) => sum + readRoleValue(item, 'first', metric), 0),
-      assist: entities.reduce((sum, item) => sum + readRoleValue(item, 'assist', metric), 0),
-      last: entities.reduce((sum, item) => sum + readRoleValue(item, 'last', metric), 0),
+      first: visibleEntities.reduce((sum, item) => sum + readRoleValue(item, 'first', metric), 0),
+      assist: visibleEntities.reduce((sum, item) => sum + readRoleValue(item, 'assist', metric), 0),
+      last: visibleEntities.reduce((sum, item) => sum + readRoleValue(item, 'last', metric), 0),
     }
-  }, [entities, metric])
+  }, [visibleEntities, metric])
 
   const totalRoleValue = roleTotals.first + roleTotals.assist + roleTotals.last
-  const totalObservedConversions = entities.reduce((sum, item) => sum + item.conversions, 0)
-  const totalObservedRevenue = entities.reduce((sum, item) => sum + item.revenue, 0)
+  const totalObservedConversions = visibleEntities.reduce((sum, item) => sum + item.conversions, 0)
+  const totalObservedRevenue = visibleEntities.reduce((sum, item) => sum + item.revenue, 0)
 
   const topByRole = useMemo(() => {
     const pick = (role: RoleKey) =>
-      [...entities]
+      [...visibleEntities]
         .sort((a, b) => readRoleValue(b, role, metric) - readRoleValue(a, role, metric))
         .slice(0, 5)
     return {
@@ -248,13 +296,13 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
       assist: pick('assist'),
       last: pick('last'),
     }
-  }, [entities, metric])
+  }, [visibleEntities, metric])
 
   const rankedEntities = useMemo(() => {
-    return [...entities]
+    return [...visibleEntities]
       .sort((a, b) => readRoleValue(b, focusRole, metric) - readRoleValue(a, focusRole, metric))
       .slice(0, 12)
-  }, [entities, focusRole, metric])
+  }, [visibleEntities, focusRole, metric])
 
   const concentration = useMemo(() => {
     const build = (role: RoleKey) => {
@@ -270,12 +318,62 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
   }, [metric, roleTotals, topByRole])
 
   const topFocusedEntity = rankedEntities[0] ?? null
+  const baselineRoleTotals = useMemo(
+    () => ({
+      first: entities.reduce((sum, item) => sum + readRoleValue(item, 'first', metric), 0),
+      assist: entities.reduce((sum, item) => sum + readRoleValue(item, 'assist', metric), 0),
+      last: entities.reduce((sum, item) => sum + readRoleValue(item, 'last', metric), 0),
+    }),
+    [entities, metric],
+  )
+  const focusedRoleTotal = roleTotals.first + roleTotals.assist + roleTotals.last
+  const baselineRoleTotal = baselineRoleTotals.first + baselineRoleTotals.assist + baselineRoleTotals.last
+  const segmentComparison = useMemo(() => {
+    if (!selectedSegment || focusedRoleTotal <= 0 || baselineRoleTotal <= 0) return null
+    const focusedMetricTotal = metric === 'conversions' ? totalObservedConversions : totalObservedRevenue
+    const baselineMetricTotal =
+      metric === 'conversions'
+        ? entities.reduce((sum, item) => sum + item.conversions, 0)
+        : entities.reduce((sum, item) => sum + item.revenue, 0)
+    return {
+      shares: [
+        { label: 'Role-volume share', value: focusedRoleTotal / baselineRoleTotal },
+        {
+          label: metric === 'conversions' ? 'Conversion share' : 'Revenue share',
+          value: baselineMetricTotal > 0 ? focusedMetricTotal / baselineMetricTotal : null,
+        },
+        { label: 'Entity coverage share', value: entities.length > 0 ? visibleEntities.length / entities.length : null },
+      ],
+      roles: (['first', 'assist', 'last'] as RoleKey[]).map((role) => {
+        const focusedShare = focusedRoleTotal > 0 ? roleTotals[role] / focusedRoleTotal : null
+        const baselineShare = baselineRoleTotal > 0 ? baselineRoleTotals[role] / baselineRoleTotal : null
+        return {
+          label: ROLE_LABELS[role],
+          focused: focusedShare,
+          baseline: baselineShare,
+          delta: focusedShare != null && baselineShare != null ? focusedShare - baselineShare : null,
+        }
+      }),
+    }
+  }, [
+    baselineRoleTotal,
+    baselineRoleTotals,
+    entities,
+    focusedRoleTotal,
+    metric,
+    roleTotals,
+    selectedSegment,
+    totalObservedConversions,
+    totalObservedRevenue,
+    visibleEntities.length,
+  ])
   const summaryItems = [
     { label: 'Period', value: `${dateFrom} – ${dateTo}` },
     { label: 'Scope', value: scope === 'channels' ? 'Channels' : 'Campaigns' },
     { label: 'Role metric', value: metric === 'conversions' ? 'Conversions' : 'Revenue' },
     { label: 'KPI', value: String(conversionKey || 'Primary KPI') },
     { label: 'Model context', value: model.replace(/_/g, ' ') },
+    { label: 'Focus segment', value: selectedSegment?.name || 'Workspace baseline' },
     { label: 'Journeys loaded', value: journeysSummary?.count?.toLocaleString() ?? '—' },
   ]
 
@@ -296,6 +394,7 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
             `Scope: ${scope === 'channels' ? 'Channels' : 'Campaigns'}`,
             `Metric: ${metric === 'conversions' ? 'Conversions' : 'Revenue'}`,
             `Ranked by: ${ROLE_LABELS[focusRole]}`,
+            `Focus segment: ${selectedSegment?.name || 'Workspace baseline'}`,
             `Top ${ROLE_LABELS[focusRole].toLowerCase()}: ${topFocusedEntity ? `${topFocusedEntity.label} (${metric === 'conversions' ? formatNumber(readRoleValue(topFocusedEntity, focusRole, metric)) : formatCurrency(readRoleValue(topFocusedEntity, focusRole, metric))})` : 'No ranked entity in the current slice'}`,
           ]}
         />
@@ -340,11 +439,102 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
               <option value="last">Closer</option>
             </select>
           </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+            Focus segment
+            <select
+              value={selectedSegmentId}
+              onChange={(e) => setSelectedSegmentId(e.target.value)}
+              style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, minWidth: 240 }}
+            >
+              <option value="">Workspace baseline</option>
+              {compatibleSegments.map((segment) => (
+                <option key={segment.id} value={segment.id}>
+                  {segmentOptionLabel(segment)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <a href="/?page=settings#settings/segments" style={{ color: t.color.accent, textDecoration: 'none', fontSize: t.font.sizeSm }}>
+            Manage segments
+          </a>
         </div>
       }
     >
       <div style={{ display: 'grid', gap: t.space.xl }}>
         <ContextSummaryStrip items={summaryItems} minItemWidth={180} />
+
+        {segmentComparison ? (
+          <SectionCard
+            title="Segment vs workspace baseline"
+            subtitle="How the selected audience changes role mix and contribution concentration relative to the full visible workspace."
+          >
+            <div style={{ display: 'grid', gap: t.space.lg }}>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(min(180px, 100%), 1fr))',
+                  gap: t.space.md,
+                }}
+              >
+                {segmentComparison.shares.map((item) => (
+                  <div
+                    key={item.label}
+                    style={{
+                      border: `1px solid ${t.color.borderLight}`,
+                      borderRadius: t.radius.md,
+                      padding: t.space.md,
+                      background: t.color.bgSubtle,
+                    }}
+                  >
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                    <div style={{ marginTop: t.space.xs, fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                      {formatPercent(item.value)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))',
+                  gap: t.space.md,
+                }}
+              >
+                {segmentComparison.roles.map((item) => {
+                  const positive = (item.delta ?? 0) >= 0
+                  return (
+                    <div
+                      key={item.label}
+                      style={{
+                        border: `1px solid ${t.color.borderLight}`,
+                        borderRadius: t.radius.md,
+                        padding: t.space.md,
+                        background: t.color.surface,
+                        display: 'grid',
+                        gap: t.space.xs,
+                      }}
+                    >
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{item.label}</div>
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                        Segment <strong style={{ color: t.color.text }}>{formatPercent(item.focused)}</strong> · workspace{' '}
+                        <strong style={{ color: t.color.text }}>{formatPercent(item.baseline)}</strong>
+                      </div>
+                      <div
+                        style={{
+                          fontSize: t.font.sizeSm,
+                          fontWeight: t.font.weightSemibold,
+                          color: positive ? t.color.success : t.color.danger,
+                        }}
+                      >
+                        Δ {item.delta == null ? '—' : `${positive ? '+' : ''}${(item.delta * 100).toFixed(1)}pp`}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </SectionCard>
+        ) : null}
 
         <CollapsiblePanel
           title="How to read roles"
