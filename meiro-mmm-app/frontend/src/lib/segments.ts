@@ -86,6 +86,21 @@ export function readLocalSegmentDefinition(item: SegmentRegistryItem | null | un
   }
 }
 
+export function localSegmentDefinedKeys(item: SegmentRegistryItem | null | undefined): string[] {
+  const definition = readLocalSegmentDefinition(item)
+  return Object.entries(definition)
+    .filter(([, value]) => Boolean(value))
+    .map(([key]) => key)
+}
+
+export function localSegmentCompatibleWithDimensions(
+  item: SegmentRegistryItem | null | undefined,
+  supportedKeys: string[],
+): boolean {
+  const keys = localSegmentDefinedKeys(item)
+  return keys.length > 0 && keys.every((key) => supportedKeys.includes(key))
+}
+
 export function applyLocalSegmentToFilterState<T extends SegmentFilterState>(
   filters: T,
   item: SegmentRegistryItem | null | undefined,

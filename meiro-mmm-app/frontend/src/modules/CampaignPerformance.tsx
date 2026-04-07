@@ -16,6 +16,13 @@ import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import { getAdsDeepLink, type AdsProviderKey } from '../connectors/adsManagerConnector'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import LagInsightsPanel, { type LagInsightsResponse } from '../components/performance/LagInsightsPanel'
+import {
+  isLocalAnalyticalSegment,
+  localSegmentCompatibleWithDimensions,
+  readLocalSegmentDefinition,
+  segmentOptionLabel,
+  type SegmentRegistryResponse,
+} from '../lib/segments'
 
 interface CampaignPerformanceProps {
   model: string
@@ -352,6 +359,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [search, setSearch] = useState('')
   const [channelFilter, setChannelFilter] = useState<string>('')
+  const [selectedSegmentId, setSelectedSegmentId] = useState('')
   const [campaignTargets, setCampaignTargets] = useState<Record<string, number>>({})
   const [selectedCampaign, setSelectedCampaign] = useState<string | null>(null)
   const [showWhy, setShowWhy] = usePersistentToggle('campaign-performance:show-explainability', false)
@@ -469,6 +477,14 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
     refetchInterval: false,
   })
 
+  const segmentRegistryQuery = useQuery<SegmentRegistryResponse>({
+    queryKey: ['segment-registry', 'campaign-performance'],
+    queryFn: async () =>
+      apiGetJson<SegmentRegistryResponse>('/api/segments/registry', {
+        fallbackMessage: 'Failed to load segment registry',
+      }),
+  })
+
   const campaigns = useMemo(() => {
     const items = summaryQuery.data?.items ?? []
     if (!items.length) return []
@@ -528,6 +544,22 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       } as CampaignData
     })
   }, [summaryQuery.data?.items, suggestionsQuery.data?.items])
+  const localSegments = useMemo(
+    () => (segmentRegistryQuery.data?.items ?? []).filter(isLocalAnalyticalSegment),
+    [segmentRegistryQuery.data?.items],
+  )
+  const compatibleSegments = useMemo(
+    () => localSegments.filter((item) => localSegmentCompatibleWithDimensions(item, ['channel_group', 'campaign_id'])),
+    [localSegments],
+  )
+  const selectedSegment = useMemo(
+    () => compatibleSegments.find((item) => item.id === selectedSegmentId) ?? null,
+    [compatibleSegments, selectedSegmentId],
+  )
+  const selectedSegmentDefinition = useMemo(
+    () => readLocalSegmentDefinition(selectedSegment),
+    [selectedSegment],
+  )
   const loading = summaryQuery.isLoading
 
   const filteredCampaigns = useMemo(() => {
@@ -535,6 +567,8 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
     const q = search.trim().toLowerCase()
     const byChannel = channelFilter.trim()
     return campaigns.filter((c) => {
+      if (selectedSegmentDefinition.channel_group && c.channel !== selectedSegmentDefinition.channel_group) return false
+      if (selectedSegmentDefinition.campaign_id && c.campaign !== selectedSegmentDefinition.campaign_id) return false
       if (directMode === 'exclude' && c.channel === 'direct') {
         return false
       }
@@ -546,10 +580,16 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       const matchChannel = !byChannel || c.channel === byChannel
       return matchSearch && matchChannel
     })
-  }, [campaigns, search, channelFilter, directMode])
+  }, [campaigns, search, channelFilter, directMode, selectedSegmentDefinition.channel_group, selectedSegmentDefinition.campaign_id])
 
   const channelsList = useMemo(() => Array.from(new Set(campaigns.map((c) => c.channel))).sort(), [campaigns])
   const latestEventReplayDiagnostics = summaryQuery.data?.readiness?.details?.latest_event_replay?.diagnostics
+
+  useEffect(() => {
+    if (!selectedSegmentId) return
+    if (compatibleSegments.some((item) => item.id === selectedSegmentId)) return
+    setSelectedSegmentId('')
+  }, [compatibleSegments, selectedSegmentId])
 
   const sortedCampaigns = useMemo(() => {
     if (!filteredCampaigns.length) return []
@@ -1760,6 +1800,25 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
           filters={
             <>
               <select
+                value={selectedSegmentId}
+                onChange={(e) => setSelectedSegmentId(e.target.value)}
+                style={{
+                  padding: `${t.space.sm}px ${t.space.md}px`,
+                  fontSize: t.font.sizeSm,
+                  border: `1px solid ${t.color.border}`,
+                  borderRadius: t.radius.sm,
+                  color: t.color.text,
+                  background: t.color.surface,
+                }}
+              >
+                <option value="">All campaigns / no saved segment</option>
+                {compatibleSegments.map((segment) => (
+                  <option key={segment.id} value={segment.id}>
+                    {segmentOptionLabel(segment)}
+                  </option>
+                ))}
+              </select>
+              <select
                 value={channelFilter}
                 onChange={(e) => setChannelFilter(e.target.value)}
                 style={{
@@ -1779,7 +1838,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
               {(search || channelFilter) && (
                 <button
                   type="button"
-                  onClick={() => { setSearch(''); setChannelFilter('') }}
+                  onClick={() => { setSearch(''); setChannelFilter(''); setSelectedSegmentId('') }}
                   style={{
                     padding: `${t.space.sm}px ${t.space.md}px`,
                     fontSize: t.font.sizeSm,
@@ -1793,6 +1852,12 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
                   Clear filters
                 </button>
               )}
+              <a
+                href="/?page=settings#settings/segments"
+                style={{ fontSize: t.font.sizeSm, color: t.color.accent, textDecoration: 'none' }}
+              >
+                Manage segments
+              </a>
             </>
           }
           summary={`Showing ${filteredCampaigns.length} of ${campaigns.length} campaigns`}

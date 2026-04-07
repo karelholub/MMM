@@ -26,6 +26,13 @@ import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn, SectionCard } from '../components/dashboard'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import LagInsightsPanel, { type LagInsightsResponse } from '../components/performance/LagInsightsPanel'
+import {
+  isLocalAnalyticalSegment,
+  localSegmentCompatibleWithDimensions,
+  readLocalSegmentDefinition,
+  segmentOptionLabel,
+  type SegmentRegistryResponse,
+} from '../lib/segments'
 
 interface ChannelPerformanceProps {
   model: string
@@ -336,6 +343,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
   const [chartSortBy, setChartSortBy] = useState<'spend' | 'visits' | 'attributed_value' | 'roas'>('attributed_value')
   const [channelSearch, setChannelSearch] = useState('')
   const [onlyLowConfidence, setOnlyLowConfidence] = useState(false)
+  const [selectedSegmentId, setSelectedSegmentId] = useState('')
   const [selectedTrendChannels, setSelectedTrendChannels] = useState<string[]>([])
 
   const explainabilityQuery = useQuery<ExplainabilitySummaryLite>({
@@ -433,6 +441,14 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     refetchInterval: false,
   })
 
+  const segmentRegistryQuery = useQuery<SegmentRegistryResponse>({
+    queryKey: ['segment-registry', 'channel-performance'],
+    queryFn: async () =>
+      apiGetJson<SegmentRegistryResponse>('/api/segments/registry', {
+        fallbackMessage: 'Failed to load segment registry',
+      }),
+  })
+
   const loading = summaryQuery.isLoading
 
   const channelRows = useMemo(() => {
@@ -483,10 +499,28 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     })
   }, [summaryQuery.data?.items, suggestionsQuery.data?.items])
 
+  const localSegments = useMemo(
+    () => (segmentRegistryQuery.data?.items ?? []).filter(isLocalAnalyticalSegment),
+    [segmentRegistryQuery.data?.items],
+  )
+  const compatibleSegments = useMemo(
+    () => localSegments.filter((item) => localSegmentCompatibleWithDimensions(item, ['channel_group'])),
+    [localSegments],
+  )
+  const selectedSegment = useMemo(
+    () => compatibleSegments.find((item) => item.id === selectedSegmentId) ?? null,
+    [compatibleSegments, selectedSegmentId],
+  )
+  const selectedSegmentDefinition = useMemo(
+    () => readLocalSegmentDefinition(selectedSegment),
+    [selectedSegment],
+  )
+
   const sortedChannels = useMemo(() => {
     if (!channelRows.length) return []
     const q = channelSearch.trim().toLowerCase()
     const base = channelRows.filter((ch) => {
+      if (selectedSegmentDefinition.channel_group && ch.channel !== selectedSegmentDefinition.channel_group) return false
       if (directMode === 'exclude' && ch.channel === 'direct') return false
       if (onlyLowConfidence && (!ch.confidence || ch.confidence.score >= 70)) return false
       if (!q) return true
@@ -499,11 +533,16 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
       const cmp = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb))
       return sortDir === 'asc' ? cmp : -cmp
     })
-  }, [channelRows, sortKey, sortDir, directMode, channelSearch, onlyLowConfidence])
+  }, [channelRows, sortKey, sortDir, directMode, channelSearch, onlyLowConfidence, selectedSegmentDefinition.channel_group])
 
   const filteredForCharts = useMemo(
-    () => channelRows.filter((ch) => (directMode === 'exclude' && ch.channel === 'direct' ? false : true)),
-    [channelRows, directMode],
+    () =>
+      channelRows.filter((ch) => {
+        if (selectedSegmentDefinition.channel_group && ch.channel !== selectedSegmentDefinition.channel_group) return false
+        if (directMode === 'exclude' && ch.channel === 'direct') return false
+        return true
+      }),
+    [channelRows, directMode, selectedSegmentDefinition.channel_group],
   )
   const latestEventReplay = summaryQuery.data?.readiness?.details?.latest_event_replay
   const latestEventReplayDiagnostics = latestEventReplay?.diagnostics
@@ -523,6 +562,12 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
       return next.length ? next : Array.from(available)
     })
   }, [filteredForCharts])
+
+  useEffect(() => {
+    if (!selectedSegmentId) return
+    if (compatibleSegments.some((item) => item.id === selectedSegmentId)) return
+    setSelectedSegmentId('')
+  }, [compatibleSegments, selectedSegmentId])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -1616,24 +1661,51 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
               onSearchChange={setChannelSearch}
               searchPlaceholder="Search channels…"
               filters={
-                <label
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    cursor: 'pointer',
-                    fontSize: t.font.sizeSm,
-                    color: t.color.textSecondary,
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={onlyLowConfidence}
-                    onChange={(event) => setOnlyLowConfidence(event.target.checked)}
-                    style={{ margin: 0 }}
-                  />
-                  Show only low confidence (Conf. &lt; 70)
-                </label>
+                <>
+                  <select
+                    value={selectedSegmentId}
+                    onChange={(event) => setSelectedSegmentId(event.target.value)}
+                    style={{
+                      padding: `${t.space.sm}px ${t.space.md}px`,
+                      fontSize: t.font.sizeSm,
+                      border: `1px solid ${t.color.border}`,
+                      borderRadius: t.radius.sm,
+                      color: t.color.text,
+                      background: t.color.surface,
+                    }}
+                  >
+                    <option value="">All channels / no saved segment</option>
+                    {compatibleSegments.map((segment) => (
+                      <option key={segment.id} value={segment.id}>
+                        {segmentOptionLabel(segment)}
+                      </option>
+                    ))}
+                  </select>
+                  <label
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      cursor: 'pointer',
+                      fontSize: t.font.sizeSm,
+                      color: t.color.textSecondary,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={onlyLowConfidence}
+                      onChange={(event) => setOnlyLowConfidence(event.target.checked)}
+                      style={{ margin: 0 }}
+                    />
+                    Show only low confidence (Conf. &lt; 70)
+                  </label>
+                  <a
+                    href="/?page=settings#settings/segments"
+                    style={{ fontSize: t.font.sizeSm, color: t.color.accent, textDecoration: 'none' }}
+                  >
+                    Manage segments
+                  </a>
+                </>
               }
             />
           }
