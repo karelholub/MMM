@@ -337,6 +337,11 @@ function formatKpiValue(kpiKey: string, value: number): string {
   return value.toLocaleString()
 }
 
+function formatPercent(value: number | null | undefined, digits = 1): string {
+  if (value == null || !Number.isFinite(value)) return '—'
+  return `${(value * 100).toFixed(digits)}%`
+}
+
 function daysInPeriod(fromIso?: string, toIso?: string): number {
   if (!fromIso || !toIso) return 0
   const from = new Date(fromIso)
@@ -421,6 +426,16 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
       }), { fallbackMessage: 'Failed to load overview summary' })
     },
   })
+  const baselineSummaryQuery = useQuery<OverviewSummaryResponse>({
+    queryKey: ['overview-summary', dateRange.date_from, dateRange.date_to, 'all'],
+    queryFn: async () => {
+      return apiGetJson<OverviewSummaryResponse>(withQuery('/api/overview/summary', {
+        date_from: dateRange.date_from,
+        date_to: dateRange.date_to,
+      }), { fallbackMessage: 'Failed to load workspace overview baseline' })
+    },
+    enabled: Boolean(selectedSegmentDefinition.channel_group),
+  })
 
   const driversQuery = useQuery<OverviewDriversResponse>({
     queryKey: ['overview-drivers', dateRange.date_from, dateRange.date_to, selectedSegmentDefinition.channel_group || 'all'],
@@ -452,6 +467,17 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
         channel_group: selectedSegmentDefinition.channel_group,
       }), { fallbackMessage: 'Failed to load top funnels' })
     },
+  })
+  const baselineFunnelsQuery = useQuery<OverviewFunnelsResponse>({
+    queryKey: ['overview-funnels', dateRange.date_from, dateRange.date_to, 'all'],
+    queryFn: async () => {
+      return apiGetJson<OverviewFunnelsResponse>(withQuery('/api/overview/funnels', {
+        date_from: dateRange.date_from,
+        date_to: dateRange.date_to,
+        limit: 5,
+      }), { fallbackMessage: 'Failed to load workspace funnel baseline' })
+    },
+    enabled: Boolean(selectedSegmentDefinition.channel_group),
   })
 
   const trendsQuery = useQuery<OverviewTrendsResponse>({
@@ -555,10 +581,16 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
   const byCampaign = drivers?.by_campaign ?? []
   const funnelSummary = funnelsQuery.data?.summary
   const funnelRows = funnelsQuery.data?.tabs?.[funnelTab] ?? []
+  const baselineSummary = baselineSummaryQuery.data
+  const baselineFunnels = baselineFunnelsQuery.data
   const selectedFunnel = funnelRows[0] ?? null
   const funnelMedianLag = useMemo(
     () => medianOf(funnelRows.map((row) => row.median_days_to_convert)),
     [funnelRows],
+  )
+  const baselineMedianLag = useMemo(
+    () => medianOf((baselineFunnels?.tabs?.[funnelTab] ?? []).map((row) => row.median_days_to_convert)),
+    [baselineFunnels?.tabs, funnelTab],
   )
   const freshness = summary?.freshness
   const trendInsights = trendsQuery.data
@@ -590,6 +622,59 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
           ? `Typical (${funnelMedianLag.toFixed(1)}d median)`
           : `Long-lag (${funnelMedianLag.toFixed(1)}d median)`
   const focusSegmentLabel = selectedSegment ? selectedSegment.name : 'All journeys'
+  const selectedTileMap = useMemo(
+    () => Object.fromEntries(kpiTiles.map((tile) => [tile.kpi_key, tile])) as Record<string, KpiTileResponse>,
+    [kpiTiles],
+  )
+  const baselineTileMap = useMemo(
+    () => Object.fromEntries((baselineSummary?.kpi_tiles ?? []).map((tile) => [tile.kpi_key, tile])) as Record<string, KpiTileResponse>,
+    [baselineSummary?.kpi_tiles],
+  )
+  const segmentComparison = useMemo(() => {
+    if (!selectedSegmentDefinition.channel_group || !baselineSummary) return null
+    const readValue = (key: string) => Number(selectedTileMap[key]?.value ?? 0)
+    const readBaseline = (key: string) => Number(baselineTileMap[key]?.value ?? 0)
+    const segmentSpend = readValue('spend')
+    const segmentVisits = readValue('visits')
+    const segmentConversions = readValue('conversions')
+    const segmentRevenue = readValue('revenue')
+    const workspaceSpend = readBaseline('spend')
+    const workspaceVisits = readBaseline('visits')
+    const workspaceConversions = readBaseline('conversions')
+    const workspaceRevenue = readBaseline('revenue')
+    const segmentCvr = segmentVisits > 0 ? segmentConversions / segmentVisits : null
+    const workspaceCvr = workspaceVisits > 0 ? workspaceConversions / workspaceVisits : null
+    const segmentRevenuePerVisit = segmentVisits > 0 ? segmentRevenue / segmentVisits : null
+    const workspaceRevenuePerVisit = workspaceVisits > 0 ? workspaceRevenue / workspaceVisits : null
+    const segmentRevenuePerConversion = segmentConversions > 0 ? segmentRevenue / segmentConversions : null
+    const workspaceRevenuePerConversion = workspaceConversions > 0 ? workspaceRevenue / workspaceConversions : null
+    const topPathShare = Number(funnelSummary?.top_paths_conversion_share ?? 0)
+    const workspaceTopPathShare = Number(baselineFunnels?.summary?.top_paths_conversion_share ?? 0)
+    return {
+      shares: [
+        { label: 'Spend share', value: workspaceSpend > 0 ? segmentSpend / workspaceSpend : null },
+        { label: 'Visit share', value: workspaceVisits > 0 ? segmentVisits / workspaceVisits : null },
+        { label: 'Conversion share', value: workspaceConversions > 0 ? segmentConversions / workspaceConversions : null },
+        { label: 'Revenue share', value: workspaceRevenue > 0 ? segmentRevenue / workspaceRevenue : null },
+      ],
+      rates: [
+        { label: 'CVR', segment: segmentCvr, baseline: workspaceCvr, delta: segmentCvr != null && workspaceCvr != null ? segmentCvr - workspaceCvr : null, percent: true },
+        { label: 'Revenue / visit', segment: segmentRevenuePerVisit, baseline: workspaceRevenuePerVisit, delta: segmentRevenuePerVisit != null && workspaceRevenuePerVisit != null ? segmentRevenuePerVisit - workspaceRevenuePerVisit : null, percent: false },
+        { label: 'Revenue / conversion', segment: segmentRevenuePerConversion, baseline: workspaceRevenuePerConversion, delta: segmentRevenuePerConversion != null && workspaceRevenuePerConversion != null ? segmentRevenuePerConversion - workspaceRevenuePerConversion : null, percent: false },
+        { label: 'Median lag', segment: funnelMedianLag, baseline: baselineMedianLag, delta: funnelMedianLag != null && baselineMedianLag != null ? funnelMedianLag - baselineMedianLag : null, percent: false, suffix: 'd' },
+        { label: 'Top-path concentration', segment: topPathShare, baseline: workspaceTopPathShare, delta: topPathShare - workspaceTopPathShare, percent: true },
+      ],
+    }
+  }, [
+    selectedSegmentDefinition.channel_group,
+    baselineSummary,
+    baselineFunnels?.summary?.top_paths_conversion_share,
+    baselineMedianLag,
+    baselineTileMap,
+    funnelMedianLag,
+    funnelSummary?.top_paths_conversion_share,
+    selectedTileMap,
+  ])
 
   const handleOverviewAction = (action: RecommendedActionItem) => {
     navigateForRecommendedAction(action, { onNavigate, defaultPage: 'datasources' })
@@ -1015,6 +1100,85 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
             </div>
           </div>
         </SectionCard>
+
+        {segmentComparison ? (
+          <SectionCard
+            title="Segment vs workspace baseline"
+            subtitle={`How ${selectedSegment?.name || 'this focus segment'} compares with the unfiltered workspace for the same period.`}
+          >
+            <div style={{ display: 'grid', gap: t.space.lg }}>
+              <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
+                {segmentComparison.shares.map((item) => (
+                  <div
+                    key={item.label}
+                    style={{
+                      border: `1px solid ${t.color.borderLight}`,
+                      borderRadius: t.radius.md,
+                      padding: t.space.md,
+                      background: t.color.bgSubtle,
+                      display: 'grid',
+                      gap: 4,
+                    }}
+                  >
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                    <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                      {formatPercent(item.value, 1)}
+                    </div>
+                    <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                      Portion of workspace total captured by the current focus segment
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+                {segmentComparison.rates.map((item) => {
+                  const deltaPositive = (item.delta ?? 0) >= 0
+                  const renderValue = (value: number | null, usePercent: boolean, suffix?: string) => {
+                    if (value == null || !Number.isFinite(value)) return '—'
+                    if (usePercent) return formatPercent(value, 2)
+                    if (suffix === 'd') return `${value.toFixed(1)}d`
+                    return formatCurrency(value)
+                  }
+                  const renderDelta = () => {
+                    if (item.delta == null || !Number.isFinite(item.delta)) return '—'
+                    if (item.percent) return `${deltaPositive ? '+' : ''}${(item.delta * 100).toFixed(2)} pp`
+                    if (item.suffix === 'd') return `${deltaPositive ? '+' : ''}${item.delta.toFixed(1)}d`
+                    return `${deltaPositive ? '+' : ''}${formatCurrency(item.delta)}`
+                  }
+                  return (
+                    <div
+                      key={item.label}
+                      style={{
+                        border: `1px solid ${t.color.borderLight}`,
+                        borderRadius: t.radius.md,
+                        padding: t.space.md,
+                        background: t.color.surface,
+                        display: 'grid',
+                        gap: 6,
+                      }}
+                    >
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                        Segment <strong style={{ color: t.color.text }}>{renderValue(item.segment, item.percent, item.suffix)}</strong> · workspace{' '}
+                        <strong style={{ color: t.color.text }}>{renderValue(item.baseline, item.percent, item.suffix)}</strong>
+                      </div>
+                      <div
+                        style={{
+                          fontSize: t.font.sizeSm,
+                          fontWeight: t.font.weightSemibold,
+                          color: deltaPositive ? t.color.success : t.color.danger,
+                        }}
+                      >
+                        Δ {renderDelta()}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </SectionCard>
+        ) : null}
 
         <ContextSummaryStrip
           items={[
