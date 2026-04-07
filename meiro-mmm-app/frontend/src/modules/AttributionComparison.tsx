@@ -9,6 +9,13 @@ import DecisionStatusCard from '../components/DecisionStatusCard'
 import { type LagInsightsResponse } from '../components/performance/LagInsightsPanel'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
+import {
+  isLocalAnalyticalSegment,
+  localSegmentCompatibleWithDimensions,
+  readLocalSegmentDefinition,
+  segmentOptionLabel,
+  type SegmentRegistryResponse,
+} from '../lib/segments'
 
 interface AttributionComparisonProps {
   selectedModel: string
@@ -223,6 +230,7 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
   const [showContextPanel, setShowContextPanel] = usePersistentToggle('attribution-comparison:show-context', false)
   const [showReplayPanel, setShowReplayPanel] = usePersistentToggle('attribution-comparison:show-replay', false)
   const [showSensitivityPanel, setShowSensitivityPanel] = usePersistentToggle('attribution-comparison:show-sensitivity', false)
+  const [selectedSegmentId, setSelectedSegmentId] = useState('')
   const [sensitivityDraft, setSensitivityDraft] = useState<AttributionSettingsDraft | null>(null)
   const [sharedScenarioSummary, setSharedScenarioSummary] = useState<string | null>(null)
   const [savedSensitivityScenarios, setSavedSensitivityScenarios] = useState<SavedSensitivityScenario[]>(() => {
@@ -249,6 +257,13 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
       setSensitivityDraft(settingsQuery.data.attribution)
     }
   }, [settingsQuery.data, sensitivityDraft])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const segment = params.get('segment')
+    if (segment) setSelectedSegmentId(segment)
+  }, [])
 
   useEffect(() => {
     if (!settingsQuery.data?.attribution) return
@@ -285,6 +300,15 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
       // ignore persistence failures
     }
   }, [savedSensitivityScenarios])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    if (selectedSegmentId) params.set('segment', selectedSegmentId)
+    else params.delete('segment')
+    const next = `${window.location.pathname}?${params.toString()}${window.location.hash || ''}`
+    window.history.replaceState({}, '', next)
+  }, [selectedSegmentId])
 
   const sensitivityQuery = useQuery<SensitivityWorkspaceData>({
     queryKey: ['attribution-sensitivity-preview', sensitivityDraft],
@@ -357,6 +381,38 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
     enabled: Boolean(journeysSummary?.date_min && journeysSummary?.date_max),
     refetchInterval: false,
   })
+  const segmentRegistryQuery = useQuery<SegmentRegistryResponse>({
+    queryKey: ['segment-registry', 'attribution-comparison'],
+    queryFn: async () =>
+      apiGetJson<SegmentRegistryResponse>('/api/segments/registry', {
+        fallbackMessage: 'Failed to load segment registry',
+      }),
+    refetchInterval: false,
+  })
+
+  const localSegments = useMemo(
+    () => (segmentRegistryQuery.data?.items ?? []).filter(isLocalAnalyticalSegment),
+    [segmentRegistryQuery.data?.items],
+  )
+  const compatibleSegments = useMemo(
+    () => localSegments.filter((item) => localSegmentCompatibleWithDimensions(item, ['channel_group'])),
+    [localSegments],
+  )
+  const selectedSegment = useMemo(
+    () => compatibleSegments.find((item) => item.id === selectedSegmentId) ?? null,
+    [compatibleSegments, selectedSegmentId],
+  )
+  const selectedSegmentDefinition = useMemo(
+    () => readLocalSegmentDefinition(selectedSegment),
+    [selectedSegment],
+  )
+
+  useEffect(() => {
+    if (!selectedSegmentId) return
+    if (!segmentRegistryQuery.data) return
+    if (compatibleSegments.some((item) => item.id === selectedSegmentId)) return
+    setSelectedSegmentId('')
+  }, [compatibleSegments, selectedSegmentId, segmentRegistryQuery.data])
 
   const currentSensitivitySummary = useMemo(() => {
     if (!sensitivityDraft) return 'No draft loaded'
@@ -369,13 +425,17 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
   const topExposedChannels = useMemo(
     () =>
       [...(channelLagQuery.data?.items ?? [])]
+        .filter((item) => {
+          if (selectedSegmentDefinition.channel_group && item.key !== selectedSegmentDefinition.channel_group) return false
+          return true
+        })
         .sort((a, b) => {
           const aShare = a.conversions > 0 ? a.lag_buckets.over_7d / a.conversions : 0
           const bShare = b.conversions > 0 ? b.lag_buckets.over_7d / b.conversions : 0
           return bShare - aShare
         })
         .slice(0, 4),
-    [channelLagQuery.data?.items],
+    [channelLagQuery.data?.items, selectedSegmentDefinition.channel_group],
   )
 
   const buildSensitivityHref = (settings: AttributionSettingsDraft | null): string => {
@@ -384,6 +444,8 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
     params.set('sens_quality', String(settings?.min_journey_quality_score ?? settingsQuery.data?.attribution.min_journey_quality_score ?? 0))
     params.set('sens_converted', settings?.use_converted_flag ? '1' : '0')
     params.set('page', 'analytics_attribution')
+    if (selectedSegmentId) params.set('segment', selectedSegmentId)
+    else params.delete('segment')
     return `/?${params.toString()}`
   }
 
@@ -430,6 +492,7 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
     if (r?.channels) {
       for (const ch of r.channels) {
         if (directMode === 'exclude_view' && ch.channel.toLowerCase() === 'direct') continue
+        if (selectedSegmentDefinition.channel_group && ch.channel !== selectedSegmentDefinition.channel_group) continue
         allChannels.add(ch.channel)
       }
     }
@@ -614,6 +677,7 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
             { label: 'Conversion', value: conversionKey ? `Conversion: ${conversionKey}` : 'Conversion: N/A' },
             { label: 'Freshness', value: freshnessLabel },
             { label: 'Coverage', value: coverageLabel },
+            { label: 'Focus segment', value: selectedSegment ? selectedSegment.name : 'All visible channels' },
             { label: 'Sensitivity draft', value: currentSensitivitySummary },
             { label: 'Sensitivity risk', value: summarizeSensitivityRisk(sensitivityQuery.data?.current) },
           ]}
@@ -711,6 +775,37 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
           </div>
         </div>
 
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 220 }}>
+          <span
+            style={{
+              fontSize: t.font.sizeXs,
+              fontWeight: t.font.weightMedium,
+              color: t.color.textSecondary,
+            }}
+          >
+            Focus segment
+          </span>
+          <select
+            value={selectedSegmentId}
+            onChange={(e) => setSelectedSegmentId(e.target.value)}
+            style={{
+              padding: `${t.space.xs}px ${t.space.sm}px`,
+              fontSize: t.font.sizeXs,
+              borderRadius: t.radius.sm,
+              border: `1px solid ${t.color.border}`,
+              background: t.color.surface,
+              color: t.color.text,
+            }}
+          >
+            <option value="">All visible channels / no saved segment</option>
+            {compatibleSegments.map((segment) => (
+              <option key={segment.id} value={segment.id}>
+                {segmentOptionLabel(segment)}
+              </option>
+            ))}
+          </select>
+        </div>
+
         <div
           style={{
             marginLeft: 'auto',
@@ -743,6 +838,17 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
                 .join(' · ')}
             </div>
           )}
+          <div style={{ marginTop: 6 }}>
+            Focus:{' '}
+            <strong style={{ color: t.color.text }}>
+              {selectedSegment ? `${selectedSegment.name} (channel-group compatible)` : 'all visible channels'}
+            </strong>
+          </div>
+          <div style={{ marginTop: 6 }}>
+            <a href="/?page=settings#settings/segments" style={{ color: t.color.accent, textDecoration: 'none' }}>
+              Manage segments
+            </a>
+          </div>
         </div>
       </div>
 
@@ -911,8 +1017,15 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
               </label>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: t.space.md, flexWrap: 'wrap' }}>
-              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                This preview changes dataset eligibility and windowing only. It does not rerun model math or channel weights.
+              <div style={{ display: 'grid', gap: 4 }}>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  This preview changes dataset eligibility and windowing only. It does not rerun model math or channel weights.
+                </div>
+                {selectedSegment ? (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    Focus segment <strong style={{ color: t.color.text }}>{selectedSegment.name}</strong> limits the visible channel comparison and lag exposure only. Attribution totals remain workspace-wide.
+                  </div>
+                ) : null}
               </div>
               <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
                 <a
