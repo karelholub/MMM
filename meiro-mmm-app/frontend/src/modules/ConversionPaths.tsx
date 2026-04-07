@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Sankey } from 'recharts'
 import { tokens } from '../theme/tokens'
 import DashboardPage from '../components/dashboard/DashboardPage'
 import SectionCard from '../components/dashboard/SectionCard'
@@ -183,6 +183,43 @@ function formatLifecycleTimestamp(value?: string | null): string {
   if (!value) return '—'
   const parsed = new Date(value)
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString()
+}
+
+function clampLabel(label: string, max = 24): string {
+  if (label.length <= max) return label
+  return `${label.slice(0, Math.max(0, max - 1))}…`
+}
+
+function SankeyFlowTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean
+  payload?: Array<{ payload?: { sourceLabel?: string; targetLabel?: string; value?: number } }>
+}) {
+  if (!active || !payload?.length) return null
+  const raw = payload[0]?.payload
+  if (!raw) return null
+  return (
+    <div
+      style={{
+        background: tokens.color.surface,
+        border: `1px solid ${tokens.color.border}`,
+        borderRadius: tokens.radius.sm,
+        padding: tokens.space.sm,
+        boxShadow: tokens.shadowSm,
+        display: 'grid',
+        gap: 4,
+      }}
+    >
+      <div style={{ fontSize: tokens.font.sizeSm, color: tokens.color.text, fontWeight: tokens.font.weightMedium }}>
+        {(raw.sourceLabel || 'Unknown')} → {(raw.targetLabel || 'Unknown')}
+      </div>
+      <div style={{ fontSize: tokens.font.sizeXs, color: tokens.color.textSecondary }}>
+        {Number(raw.value || 0).toLocaleString()} journeys
+      </div>
+    </div>
+  )
 }
 
 function buildJourneyPathsHref(journeyDefinitionId?: string | null): string | null {
@@ -504,6 +541,48 @@ export default function ConversionPaths() {
       return pathSortDir === 'asc' ? cmp : -cmp
     })
   }, [enrichedPaths, pathSort, pathSortDir, minPathCount, minPathLength, maxPathLength, channelFilter])
+  const selectedPathFlowData = useMemo(() => {
+    if (!selectedPath || !selectedPathDetails) return null
+    const family = [
+      { path: selectedPath, count: selectedPathDetails.summary.count },
+      ...(selectedPathDetails.variants ?? []).map((variant) => ({ path: variant.path, count: variant.count })),
+    ]
+      .filter((item) => item.count > 0)
+      .slice(0, 10)
+    if (!family.length) return null
+
+    const nodeIndex = new Map<string, number>()
+    const nodes: Array<{ name: string; fullName: string }> = []
+    const linkMap = new Map<string, { source: number; target: number; value: number; sourceLabel: string; targetLabel: string }>()
+
+    const ensureNode = (label: string) => {
+      const existing = nodeIndex.get(label)
+      if (existing != null) return existing
+      const index = nodes.length
+      nodes.push({ name: clampLabel(label, 22), fullName: label })
+      nodeIndex.set(label, index)
+      return index
+    }
+
+    family.forEach((item) => {
+      const steps = item.path.split(' > ').map((step) => step.trim()).filter(Boolean)
+      for (let index = 0; index < steps.length - 1; index += 1) {
+        const sourceLabel = steps[index]
+        const targetLabel = steps[index + 1]
+        const source = ensureNode(sourceLabel)
+        const target = ensureNode(targetLabel)
+        const key = `${sourceLabel}__${targetLabel}`
+        const current = linkMap.get(key) || { source, target, value: 0, sourceLabel, targetLabel }
+        current.value += item.count
+        linkMap.set(key, current)
+      }
+    })
+
+    const links = [...linkMap.values()].sort((a, b) => b.value - a.value)
+    if (!links.length) return null
+    const totalJourneys = family.reduce((sum, item) => sum + item.count, 0)
+    return { nodes, links, totalJourneys, variants: Math.max(0, family.length - 1) }
+  }, [selectedPath, selectedPathDetails])
 
   const kpis = data
     ? [
@@ -1726,6 +1805,56 @@ export default function ConversionPaths() {
                   </div>
                 </div>
               </div>
+
+              {selectedPathFlowData ? (
+                <div>
+                  <h4
+                    style={{
+                      margin: '0 0 6px',
+                      fontSize: t.font.sizeXs,
+                      fontWeight: t.font.weightSemibold,
+                      color: t.color.textSecondary,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.04em',
+                    }}
+                  >
+                    Path family flow
+                  </h4>
+                  <div
+                    style={{
+                      border: `1px solid ${t.color.borderLight}`,
+                      borderRadius: t.radius.md,
+                      padding: t.space.sm,
+                      background: t.color.bg,
+                      display: 'grid',
+                      gap: t.space.sm,
+                    }}
+                  >
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                      Sankey view of this selected path plus {selectedPathFlowData.variants.toLocaleString()} similar variants, covering{' '}
+                      <strong style={{ color: t.color.text }}>{selectedPathFlowData.totalJourneys.toLocaleString()}</strong> journeys.
+                    </div>
+                    <div style={{ width: '100%', height: 260, minWidth: 0 }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <Sankey
+                          data={{ nodes: selectedPathFlowData.nodes, links: selectedPathFlowData.links }}
+                          nodePadding={22}
+                          nodeWidth={12}
+                          iterations={28}
+                          margin={{ top: 8, right: 16, bottom: 8, left: 16 }}
+                          link={{ stroke: t.color.accent, strokeOpacity: 0.28 }}
+                          node={{ stroke: t.color.borderLight, fill: t.color.accent }}
+                        >
+                          <Tooltip content={<SankeyFlowTooltip />} />
+                        </Sankey>
+                      </ResponsiveContainer>
+                    </div>
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                      Use this to spot dominant splits and where similar path variants diverge before conversion.
+                    </div>
+                  </div>
+                </div>
+              ) : null}
 
               {/* Step breakdown */}
               {selectedPathDetails.step_breakdown?.length > 0 && (
