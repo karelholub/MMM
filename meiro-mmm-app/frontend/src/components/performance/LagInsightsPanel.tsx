@@ -57,6 +57,7 @@ interface LagInsightsPanelProps {
   loading?: boolean
   error?: string | null
   emptyLabel?: string
+  selectedActions?: (item: LagInsightItem) => Array<{ label: string; href: string }>
 }
 
 export default function LagInsightsPanel({
@@ -66,6 +67,7 @@ export default function LagInsightsPanel({
   loading = false,
   error = null,
   emptyLabel = 'No lag data available for this period.',
+  selectedActions,
 }: LagInsightsPanelProps) {
   if (loading) {
     return <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading lag analysis…</div>
@@ -95,6 +97,10 @@ export default function LagInsightsPanel({
   const selectedItem = useMemo(
     () => topSlow.find((item) => item.key === selectedKey) || topSlow[0] || null,
     [selectedKey, topSlow],
+  )
+  const selectedActionLinks = useMemo(
+    () => (selectedItem && selectedActions ? selectedActions(selectedItem).filter((item) => item.href) : []),
+    [selectedActions, selectedItem],
   )
   const selectedTotal = selectedItem ? Math.max(1, selectedItem.conversions) : 1
   const roleTotal = selectedItem
@@ -214,6 +220,27 @@ export default function LagInsightsPanel({
                 ? 'This scope has a heavier long-lag tail than short-lag conversions, so tighter windows will materially suppress it.'
                 : 'This scope converts relatively quickly, so it is less sensitive to moderate lookback tightening.'}
             </div>
+            {!!selectedActionLinks.length && (
+              <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
+                {selectedActionLinks.map((action) => (
+                  <a
+                    key={action.label}
+                    href={action.href}
+                    style={{
+                      border: `1px solid ${t.color.border}`,
+                      background: t.color.surface,
+                      color: t.color.text,
+                      borderRadius: t.radius.sm,
+                      padding: `${t.space.xs}px ${t.space.sm}px`,
+                      textDecoration: 'none',
+                      fontSize: t.font.sizeXs,
+                    }}
+                  >
+                    {action.label}
+                  </a>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

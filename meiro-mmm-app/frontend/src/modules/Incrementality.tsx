@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { tokens as t } from '../theme/tokens'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
@@ -446,6 +446,8 @@ export default function IncrementalityPage() {
   const [showAdvancedSetup, setShowAdvancedSetup] = useState(false)
   const [showPlannerContext, setShowPlannerContext] = usePersistentToggle('incrementality:show-planner-context', false)
   const [showExecutionSignals, setShowExecutionSignals] = usePersistentToggle('incrementality:show-execution-signals', false)
+  const plannerPrefillAppliedRef = useRef(false)
+  const [plannerPrefillSummary, setPlannerPrefillSummary] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | 'draft' | 'running' | 'stopped'>('all')
   const [powerPlans, setPowerPlans] = useState<Record<number, PowerAnalysisResult>>({})
@@ -920,6 +922,53 @@ export default function IncrementalityPage() {
   }, [setupContext, eligibleChannels, globalDateFrom, globalDateTo])
 
   useEffect(() => {
+    if (plannerPrefillAppliedRef.current) return
+    if (!setupContext) return
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const plannerChannel = params.get('planner_channel')
+    const plannerConversionKey = params.get('planner_conversion_key')
+    const plannerStart = params.get('planner_start')
+    const plannerEnd = params.get('planner_end')
+    const plannerName = params.get('planner_name')
+    const plannerNotes = params.get('planner_notes')
+    if (
+      plannerChannel == null &&
+      plannerConversionKey == null &&
+      plannerStart == null &&
+      plannerEnd == null &&
+      plannerName == null &&
+      plannerNotes == null
+    ) {
+      return
+    }
+    plannerPrefillAppliedRef.current = true
+    setForm((prev) => ({
+      ...prev,
+      ...(plannerChannel != null ? { channel: plannerChannel } : {}),
+      ...(plannerConversionKey != null ? { conversion_key: plannerConversionKey } : {}),
+      ...(plannerStart != null ? { start_at: plannerStart } : {}),
+      ...(plannerEnd != null ? { end_at: plannerEnd } : {}),
+      ...(plannerName != null ? { name: plannerName } : {}),
+      ...(plannerNotes != null ? { notes: plannerNotes } : {}),
+    }))
+    const summaryParts = [
+      plannerChannel ? `channel ${plannerChannel}` : null,
+      plannerConversionKey ? `KPI ${plannerConversionKey}` : null,
+      plannerStart && plannerEnd ? `${plannerStart} – ${plannerEnd}` : null,
+    ].filter((value): value is string => Boolean(value))
+    setPlannerPrefillSummary(
+      summaryParts.length ? `Imported from lag analysis: ${summaryParts.join(' · ')}.` : 'Imported from lag analysis.',
+    )
+
+    ;['planner_channel', 'planner_conversion_key', 'planner_start', 'planner_end', 'planner_name', 'planner_notes'].forEach((key) =>
+      params.delete(key),
+    )
+    const next = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}${window.location.hash}`
+    window.history.replaceState({}, '', next)
+  }, [setupContext, plannerPrefillAppliedRef])
+
+  useEffect(() => {
     if (!setupContext) return
     setPowerForm((prev) => {
       const nextBaseline = selectedSetupChannel?.baseline_conversion_rate ?? prev.baseline_rate
@@ -1004,6 +1053,22 @@ export default function IncrementalityPage() {
           ]}
         />
       </div>
+
+      {plannerPrefillSummary ? (
+        <div
+          style={{
+            marginBottom: tkn.space.lg,
+            border: `1px solid ${tkn.color.accent}`,
+            background: tkn.color.accentMuted,
+            borderRadius: tkn.radius.md,
+            padding: tkn.space.md,
+            fontSize: tkn.font.sizeSm,
+            color: tkn.color.text,
+          }}
+        >
+          {plannerPrefillSummary} Review the planner recommendation and execution readiness before launching.
+        </div>
+      ) : null}
 
       <div style={{ marginBottom: tkn.space.lg }}>
         <CollapsiblePanel

@@ -8,6 +8,7 @@ import TrendPanel from '../components/dashboard/TrendPanel'
 import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn, SectionCard } from '../components/dashboard'
 import { apiGetJson } from '../lib/apiClient'
 import { buildJourneyHypothesisHref } from '../lib/journeyLinks'
+import { buildIncrementalityPlannerHref } from '../lib/experimentLinks'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import AdsActionsDrawer from '../components/ads/AdsActionsDrawer'
 import DecisionStatusCard from '../components/DecisionStatusCard'
@@ -1721,6 +1722,25 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
             loading={lagQuery.isLoading}
             error={lagQuery.isError ? (lagQuery.error as Error)?.message || 'Failed to load lag analysis' : null}
             emptyLabel="No campaign lag data is available for the selected period."
+            selectedActions={(item) => [
+              {
+                label: 'Open in Incrementality',
+                href: buildIncrementalityPlannerHref({
+                  channel: item.channel || channelFilter || '',
+                  conversionKey:
+                    conversionKey ||
+                    summaryQuery.data?.meta?.conversion_key ||
+                    trendQuery.data?.meta?.conversion_key ||
+                    summaryQuery.data?.config?.conversion_key ||
+                    journeysSummary?.primary_kpi_id ||
+                    null,
+                  startAt: trendDateRange.dateFrom,
+                  endAt: trendDateRange.dateTo,
+                  name: `Lag test: ${item.label}`,
+                  notes: `Investigate lag-heavy campaign ${item.label}${item.channel ? ` in channel ${item.channel}` : ''}. P50 first-touch lag ${item.p50_days_from_first_touch != null ? `${item.p50_days_from_first_touch.toFixed(1)}d` : 'n/a'}.`,
+                }),
+              },
+            ]}
           />
         </CollapsiblePanel>
       </div>

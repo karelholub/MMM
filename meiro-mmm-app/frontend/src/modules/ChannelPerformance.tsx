@@ -19,6 +19,7 @@ import {
 import { tokens } from '../theme/tokens'
 import { apiGetJson, withQuery } from '../lib/apiClient'
 import { buildJourneyHypothesisHref } from '../lib/journeyLinks'
+import { buildIncrementalityPlannerHref } from '../lib/experimentLinks'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
@@ -312,7 +313,7 @@ type SortKey = keyof ChannelData | 'attributed_share'
 type SortDir = 'asc' | 'desc'
 
 export default function ChannelPerformance({ model, modelsReady, configId }: ChannelPerformanceProps) {
-  const { globalDateFrom, globalDateTo } = useWorkspaceContext()
+  const { globalDateFrom, globalDateTo, journeysSummary } = useWorkspaceContext()
   const initialTrendParams = useMemo(() => {
     const params = new URLSearchParams(window.location.search)
     const kpiRaw = (params.get('kpi') || '').toLowerCase()
@@ -1042,6 +1043,24 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
             loading={lagQuery.isLoading}
             error={lagQuery.isError ? (lagQuery.error as Error)?.message || 'Failed to load lag analysis' : null}
             emptyLabel="No channel lag data is available for the selected period."
+            selectedActions={(item) => [
+              {
+                label: 'Open in Incrementality',
+                href: buildIncrementalityPlannerHref({
+                  channel: item.channel || item.label,
+                  conversionKey:
+                    summaryQuery.data?.meta?.conversion_key ||
+                    trendQuery.data?.meta?.conversion_key ||
+                    summaryQuery.data?.config?.conversion_key ||
+                    journeysSummary?.primary_kpi_id ||
+                    null,
+                  startAt: trendDateRange.dateFrom,
+                  endAt: trendDateRange.dateTo,
+                  name: `Lag test: ${item.label}`,
+                  notes: `Investigate lag-heavy channel ${item.label}. P50 first-touch lag ${item.p50_days_from_first_touch != null ? `${item.p50_days_from_first_touch.toFixed(1)}d` : 'n/a'}.`,
+                }),
+              },
+            ]}
           />
         </CollapsiblePanel>
       </div>

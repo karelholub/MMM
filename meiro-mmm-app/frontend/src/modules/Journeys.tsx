@@ -951,6 +951,7 @@ export default function Journeys({
   const [editingHypothesisId, setEditingHypothesisId] = useState<string | null>(null)
   const [hypothesisError, setHypothesisError] = useState<string | null>(null)
   const [hypothesisDraft, setHypothesisDraft] = useState<HypothesisDraft>(() => defaultHypothesisDraft())
+  const hypothesisSeedAppliedRef = useRef(false)
   const [sandboxHypothesisId, setSandboxHypothesisId] = useState<string | null>(() => readParams().get('hypothesis_id') || null)
   const [sandboxCandidateStep, setSandboxCandidateStep] = useState('')
   const [selectedJourneyExperimentId, setSelectedJourneyExperimentId] = useState<number | null>(() => readNumericUrlParam('experiment_id'))
@@ -1808,6 +1809,28 @@ export default function Journeys({
   }, [])
 
   useEffect(() => {
+    if (hypothesisSeedAppliedRef.current) return
+    if (!selectedJourneyId || !selectedDefinition) return
+    const params = readParams()
+    if (params.get('hypothesis_seed') !== 'lag_path') return
+    hypothesisSeedAppliedRef.current = true
+    startHypothesisFromLagPath({
+      title: params.get('seed_title') || 'Long-lag path follow-up test',
+      hypothesisText:
+        params.get('seed_note') ||
+        'This path converts more slowly than the visible path set. Test a faster follow-up action or shorter-delay intervention.',
+      pathHash: params.get('seed_path_hash'),
+      pathSteps: params.get('seed_path') || undefined,
+      supportCount: params.get('seed_support') ? Number(params.get('seed_support')) : null,
+      baselineRate: params.get('seed_baseline') ? Number(params.get('seed_baseline')) : null,
+      channelGroup: params.get('seed_channel'),
+      campaignId: params.get('seed_campaign'),
+      device: params.get('seed_device'),
+      country: params.get('seed_country'),
+    })
+  }, [selectedJourneyId, selectedDefinition])
+
+  useEffect(() => {
     const primary = kpisQuery.data?.primary_kpi_id || kpisQuery.data?.definitions?.[0]?.id || ''
     if (primary && !draft.conversion_kpi_id) {
       setDraft((prev) => ({ ...prev, conversion_kpi_id: primary }))
@@ -2439,6 +2462,45 @@ export default function Journeys({
       sample_size_target: item.suggested_hypothesis.sample_size_target ?? null,
       status: 'draft',
       result: {},
+    })
+  }
+
+  const startHypothesisFromLagPath = (item: {
+    title: string
+    hypothesisText: string
+    pathHash?: string | null
+    pathSteps?: string[] | string
+    supportCount?: number | null
+    baselineRate?: number | null
+    channelGroup?: string | null
+    campaignId?: string | null
+    device?: string | null
+    country?: string | null
+  }) => {
+    setEditingHypothesisId(null)
+    setHypothesisError(null)
+    setActiveTab('hypotheses')
+    setHypothesisDraft({
+      title: item.title,
+      target_kpi: selectedDefinition?.conversion_kpi_id || '',
+      hypothesis_text: item.hypothesisText,
+      trigger: {
+        ...(item.pathHash ? { path_hash: item.pathHash } : {}),
+        ...(item.pathSteps ? { steps: Array.isArray(item.pathSteps) ? item.pathSteps.map(String) : normalizeSteps(item.pathSteps) } : {}),
+      },
+      segment: {
+        ...(item.channelGroup ? { channel_group: item.channelGroup } : {}),
+        ...(item.campaignId ? { campaign_id: item.campaignId } : {}),
+        ...(item.device ? { device: item.device } : {}),
+        ...(item.country ? { country: item.country } : {}),
+      },
+      current_action: { type: 'observe_current_path' },
+      proposed_action: { type: 'nba_intervention', idea: 'Test a faster follow-up for this long-lag path.' },
+      support_count: Math.max(0, Math.round(item.supportCount || 0)),
+      baseline_rate: item.baselineRate ?? null,
+      sample_size_target: null,
+      status: 'draft',
+      result: { note: 'Seeded from lag analysis.' },
     })
   }
 
@@ -4937,6 +4999,29 @@ export default function Journeys({
                   )}
                   <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
                     Long-lag paths are more sensitive to tighter attribution windows and converted-flag exclusions than short-lag paths.
+                  </div>
+                  <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        startHypothesisFromLagPath({
+                          title: `Lag reduction test: ${normalizeSteps(selectedPath.path_steps).join(' → ')}`,
+                          hypothesisText:
+                            'This path shows slower-than-typical conversion timing. Test a faster follow-up action or shorter-delay intervention to improve conversion speed.',
+                          pathHash: selectedPath.path_hash,
+                          pathSteps: selectedPath.path_steps,
+                          supportCount: selectedPath.count_journeys,
+                          baselineRate: selectedPath.conversion_rate,
+                          channelGroup: selectedPath.channel_group,
+                          campaignId: selectedPath.campaign_id,
+                          device: selectedPath.device,
+                          country: selectedPath.country,
+                        })
+                      }
+                      style={{ border: `1px solid ${t.color.accent}`, background: t.color.accentMuted, color: t.color.accent, borderRadius: t.radius.sm, padding: '8px 12px', fontSize: t.font.sizeSm, cursor: 'pointer' }}
+                    >
+                      Draft hypothesis
+                    </button>
                   </div>
                 </div>
               </SectionCard>

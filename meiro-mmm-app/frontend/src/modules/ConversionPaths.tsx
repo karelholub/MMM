@@ -15,7 +15,7 @@ import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { apiGetJson } from '../lib/apiClient'
 import { buildListQuery, type PaginatedResponse } from '../lib/apiSchemas'
 import { defaultRecentDateRange } from '../lib/dateRange'
-import { buildJourneyHypothesisHref } from '../lib/journeyLinks'
+import { buildJourneyHypothesisHref, buildJourneyHypothesisSeedHref } from '../lib/journeyLinks'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 
 interface NextBestRec {
@@ -1792,6 +1792,50 @@ export default function ConversionPaths() {
                     }}
                   >
                     Open in Journey Lab
+                  </a>
+                ) : null}
+                {buildJourneyHypothesisSeedHref({
+                  journeyDefinitionId: selectedJourneyId,
+                  title: `Lag reduction test: ${selectedPath}`,
+                  hypothesisText:
+                    'This path family converts more slowly than the visible path set. Test a faster follow-up action or shorter-delay intervention.',
+                  path: selectedPath,
+                  supportCount: selectedPathDetails?.summary.count ?? null,
+                  channelGroup: filters.channel !== 'all' ? filters.channel : null,
+                  campaignId: filters.campaign !== 'all' ? filters.campaign : null,
+                  device: filters.device !== 'all' ? filters.device : null,
+                  country: filters.geo !== 'all' ? filters.geo : null,
+                }) ? (
+                  <a
+                    href={
+                      buildJourneyHypothesisSeedHref({
+                        journeyDefinitionId: selectedJourneyId,
+                        title: `Lag reduction test: ${selectedPath}`,
+                        hypothesisText:
+                          'This path family converts more slowly than the visible path set. Test a faster follow-up action or shorter-delay intervention.',
+                        path: selectedPath,
+                        supportCount: selectedPathDetails?.summary.count ?? null,
+                        baselineRate: selectedPathDetails?.summary.share ?? null,
+                        channelGroup: filters.channel !== 'all' ? filters.channel : null,
+                        campaignId: filters.campaign !== 'all' ? filters.campaign : null,
+                        device: filters.device !== 'all' ? filters.device : null,
+                        country: filters.geo !== 'all' ? filters.geo : null,
+                      }) || '#'
+                    }
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      border: `1px solid ${t.color.border}`,
+                      color: t.color.text,
+                      textDecoration: 'none',
+                      borderRadius: t.radius.sm,
+                      padding: '6px 10px',
+                      fontSize: t.font.sizeXs,
+                      fontWeight: t.font.weightSemibold,
+                    }}
+                  >
+                    Draft hypothesis
                   </a>
                 ) : null}
               </div>
