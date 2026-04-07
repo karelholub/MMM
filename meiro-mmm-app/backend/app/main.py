@@ -170,6 +170,7 @@ from app.modules.config_management.router import create_router as create_config_
 from app.modules.data_sources.router import create_router as create_data_sources_router
 from app.modules.meiro_integration.router import create_router as create_meiro_integration_router
 from app.modules.mmm.router import create_router as create_mmm_router
+from app.modules.segments.router import create_router as create_segments_router
 from app.modules.mmm import service as mmm_service
 from app.modules.mmm.schemas import BuildFromPlatformRequest, ModelConfig, OptimizeRequest, ValidateMappingRequest
 from app.modules.admin_access.schemas import (
@@ -2550,6 +2551,13 @@ app.include_router(
             db,
             definition_id=definition_id,
         ),
+    )
+)
+
+app.include_router(
+    create_segments_router(
+        get_db_dependency=get_db,
+        require_permission_dependency=require_permission,
     )
 )
 

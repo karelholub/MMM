@@ -7,6 +7,13 @@ import { useWorkspaceContext } from '../components/WorkspaceContext'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
+import {
+  buildSegmentReference,
+  isLocalAnalyticalSegment,
+  segmentOptionLabel,
+  type SegmentRegistryItem,
+  type SegmentRegistryResponse,
+} from '../lib/segments'
 
 function objectPreview(value: Record<string, unknown> | null | undefined): string {
   if (!value || typeof value !== 'object') return '—'
@@ -455,6 +462,7 @@ export default function IncrementalityPage() {
   const [exposureLogInput, setExposureLogInput] = useState('')
   const [outcomeLogInput, setOutcomeLogInput] = useState('')
   const [executionFormError, setExecutionFormError] = useState('')
+  const [selectedSegmentId, setSelectedSegmentId] = useState('')
   const [form, setForm] = useState({
     name: '',
     channel: '',
@@ -487,6 +495,14 @@ export default function IncrementalityPage() {
         fallbackMessage: 'Failed to load experiment setup context',
       })
     },
+  })
+
+  const segmentRegistryQuery = useQuery<SegmentRegistryResponse>({
+    queryKey: ['segment-registry'],
+    queryFn: async () =>
+      apiGetJson<SegmentRegistryResponse>('/api/segments/registry', {
+        fallbackMessage: 'Failed to load segment registry',
+      }),
   })
 
   const selectedConfigQuery = useQuery<ModelConfigDetail>({
@@ -695,12 +711,14 @@ export default function IncrementalityPage() {
       }
       const selectedChannel = setupContextQuery.data?.channels.find((item) => item.channel === form.channel) ?? null
       const selectedKpi = setupContextQuery.data?.kpis.find((item) => item.id === form.conversion_key) ?? null
+      const segment = buildSegmentReference(selectedSegment)
       const body = {
         name: form.name,
         channel: form.channel,
         conversion_key: form.conversion_key,
         start_at: new Date(form.start_at).toISOString(),
         end_at: new Date(form.end_at).toISOString(),
+        segment,
         setup_source: 'planner_setup_context',
         assignment_unit: 'profile_id',
         assignment_method: 'deterministic_hash',
@@ -760,6 +778,7 @@ export default function IncrementalityPage() {
         stop_rule: '',
         exclusion_window_days: '',
       })
+      setSelectedSegmentId('')
     },
   })
 
@@ -871,9 +890,22 @@ export default function IncrementalityPage() {
   const setupContext = setupContextQuery.data
   const setupChannels = setupContext?.channels ?? []
   const eligibleChannels = useMemo(() => setupChannels.filter((item) => item.eligible), [setupChannels])
+  const allSegmentRegistryItems = segmentRegistryQuery.data?.items ?? []
+  const localAnalyticalSegments = useMemo(
+    () => allSegmentRegistryItems.filter(isLocalAnalyticalSegment),
+    [allSegmentRegistryItems],
+  )
+  const operationalSegments = useMemo(
+    () => allSegmentRegistryItems.filter((item) => !isLocalAnalyticalSegment(item)),
+    [allSegmentRegistryItems],
+  )
   const selectedSetupChannel = useMemo(
     () => setupChannels.find((item) => item.channel === form.channel) ?? eligibleChannels[0] ?? null,
     [setupChannels, eligibleChannels, form.channel],
+  )
+  const selectedSegment = useMemo(
+    () => allSegmentRegistryItems.find((item) => item.id === selectedSegmentId) ?? null,
+    [allSegmentRegistryItems, selectedSegmentId],
   )
   const plannerPeriodLabel = formatDateRangeLabel(
     globalDateFrom || setupContext?.date_from || null,
@@ -1511,6 +1543,60 @@ export default function IncrementalityPage() {
                   {journeysSummary?.primary_kpi_label ? ` · workspace primary KPI: ${journeysSummary.primary_kpi_label}` : ''}
                 </span>
               </label>
+              <label style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                Audience segment
+                <select
+                  value={selectedSegmentId}
+                  onChange={(e) => setSelectedSegmentId(e.target.value)}
+                  style={{
+                    width: '100%',
+                    marginTop: 4,
+                    padding: `${tkn.space.sm}px ${tkn.space.md}px`,
+                    border: `1px solid ${tkn.color.border}`,
+                    borderRadius: tkn.radius.sm,
+                    fontSize: tkn.font.sizeSm,
+                    backgroundColor: 'white',
+                  }}
+                >
+                  <option value="">All eligible audience / no saved segment</option>
+                  {localAnalyticalSegments.length ? (
+                    <optgroup label="Local analytical segments">
+                      {localAnalyticalSegments.map((segment) => (
+                        <option key={segment.id} value={segment.id}>
+                          {segmentOptionLabel(segment)}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ) : null}
+                  {operationalSegments.length ? (
+                    <optgroup label="Meiro Pipes segments">
+                      {operationalSegments.map((segment) => (
+                        <option key={segment.id} value={segment.id}>
+                          {segmentOptionLabel(segment)}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ) : null}
+                </select>
+                <span style={{ fontSize: tkn.font.sizeXs, color: tkn.color.textMuted }}>
+                  Local analytical segments stay analysis-ready. Meiro Pipes segments are stored as operational audience references for execution and hypothesis alignment.
+                </span>
+              </label>
+              {selectedSegment && (
+                <div
+                  style={{
+                    fontSize: tkn.font.sizeXs,
+                    color: tkn.color.textSecondary,
+                    background: tkn.color.surfaceMuted ?? tkn.color.surface,
+                    borderRadius: tkn.radius.sm,
+                    padding: tkn.space.sm,
+                  }}
+                >
+                  Selected segment: <strong style={{ color: tkn.color.text }}>{selectedSegment.name}</strong>
+                  {selectedSegment.criteria_label ? ` · ${selectedSegment.criteria_label}` : ''}
+                  {selectedSegment.source_label ? ` · Source: ${selectedSegment.source_label}` : ''}
+                </div>
+              )}
               {selectedSetupChannel && (
                 <div
                   style={{

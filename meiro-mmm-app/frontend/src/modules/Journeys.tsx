@@ -5,11 +5,25 @@ import DashboardPage from '../components/dashboard/DashboardPage'
 import SectionCard from '../components/dashboard/SectionCard'
 import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn } from '../components/dashboard'
 import GlobalFilterBar, { GlobalFiltersState } from '../components/dashboard/GlobalFilterBar'
+import SaveLocalSegmentDialog from '../components/segments/SaveLocalSegmentDialog'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { tokens as t } from '../theme/tokens'
 import { apiGetJson, apiSendJson, getUserContext, withQuery } from '../lib/apiClient'
 import { buildListQuery, type PaginatedResponse } from '../lib/apiSchemas'
 import { defaultRecentDateRange } from '../lib/dateRange'
+import {
+  activeLocalSegmentDefinitionFromFilters,
+  applyLocalSegmentToFilterState,
+  buildLocalSegmentDefaultName,
+  buildSegmentReference,
+  clearSegmentReferenceMetadata,
+  hasLocalSegmentCriteria,
+  isLocalAnalyticalSegment,
+  readSelectedSegmentRegistryId,
+  segmentOptionLabel,
+  type SegmentRegistryItem,
+  type SegmentRegistryResponse,
+} from '../lib/segments'
 import CreateJourneyModal from './journeys/CreateJourneyModal'
 import {
   createJourneyAlert,
@@ -945,6 +959,8 @@ export default function Journeys({
   const [examplesStepFilter, setExamplesStepFilter] = useState('')
   const [savedViewName, setSavedViewName] = useState('')
   const [showCreateAlertModal, setShowCreateAlertModal] = useState(false)
+  const [showSaveSegmentModal, setShowSaveSegmentModal] = useState(false)
+  const [saveSegmentError, setSaveSegmentError] = useState<string | null>(null)
   const [createAlertError, setCreateAlertError] = useState<string | null>(null)
   const [alertScope, setAlertScope] = useState<Record<string, unknown>>({})
   const [alertPreview, setAlertPreview] = useState<JourneyAlertPreviewResponse | null>(null)
@@ -1043,6 +1059,14 @@ export default function Journeys({
   })
   const selectedDefinitionLifecycleStatus =
     definitionLifecycleQuery.data?.definition.lifecycle_status ?? (selectedDefinitionArchived ? 'archived' : 'active')
+  const segmentRegistryQuery = useQuery<SegmentRegistryResponse>({
+    queryKey: ['segment-registry'],
+    queryFn: async () =>
+      apiGetJson<SegmentRegistryResponse>('/api/segments/registry', {
+        fallbackMessage: 'Failed to load segment registry',
+      }),
+    enabled: !featureDisabled,
+  })
   const dimensionsQuery = useQuery<JourneyFilterDimensionsResponse>({
     queryKey: [
       'journey-dimensions',
@@ -1071,13 +1095,20 @@ export default function Journeys({
   })
   const journeyFilterOptions = useMemo(() => {
     const dims = dimensionsQuery.data
+    const localSegments = (segmentRegistryQuery.data?.items ?? []).filter(isLocalAnalyticalSegment)
     return {
       channels: (dims?.channels ?? []).map((item) => ({ value: item.value, label: dimensionLabel(item.value, item.count) })),
       campaigns: (dims?.campaigns ?? []).map((item) => ({ value: item.value, label: dimensionLabel(item.value, item.count) })),
       devices: (dims?.devices ?? []).map((item) => ({ value: item.value, label: dimensionLabel(item.value, item.count) })),
       geos: (dims?.countries ?? []).map((item) => ({ value: item.value, label: dimensionLabel(String(item.value).toUpperCase(), item.count) })),
+      segments: localSegments.map((item) => ({ value: item.id, label: segmentOptionLabel(item) })),
     }
-  }, [dimensionsQuery.data])
+  }, [dimensionsQuery.data, segmentRegistryQuery.data?.items])
+  const allSegmentRegistryItems = segmentRegistryQuery.data?.items ?? []
+  const localAnalyticalSegments = useMemo(
+    () => allSegmentRegistryItems.filter(isLocalAnalyticalSegment),
+    [allSegmentRegistryItems],
+  )
 
   function openAlertsForDefinition(definitionId: string) {
     if (typeof window === 'undefined') return
@@ -1111,6 +1142,25 @@ export default function Journeys({
         setActiveTab('paths')
         break
     }
+  }
+
+  const handleFiltersChange = (next: GlobalFiltersState) => {
+    setFilters((prev) => {
+      if (next.segment !== prev.segment) {
+        if (next.segment === 'all') return { ...next, segment: 'all' }
+        const selectedSegment = localAnalyticalSegments.find((item) => item.id === next.segment)
+        if (selectedSegment) return applyLocalSegmentToFilterState(next, selectedSegment)
+      }
+      const dimensionsChanged =
+        next.channel !== prev.channel ||
+        next.campaign !== prev.campaign ||
+        next.device !== prev.device ||
+        next.geo !== prev.geo
+      if (dimensionsChanged && prev.segment !== 'all') {
+        return { ...next, segment: 'all' }
+      }
+      return next
+    })
   }
 
   const pathsQuery = useQuery<JourneyPathsResponse>({
@@ -1785,6 +1835,29 @@ export default function Journeys({
     },
   })
 
+  const saveSegmentMutation = useMutation({
+    mutationFn: async ({ name, description }: { name: string; description: string }) => {
+      const definition = activeLocalSegmentDefinitionFromFilters(filters)
+      if (!hasLocalSegmentCriteria(definition)) {
+        throw new Error('Select at least one channel, campaign, device, or geo filter to save a local segment')
+      }
+      return apiSendJson<SegmentRegistryItem>('/api/segments/local', 'POST', {
+        name,
+        description,
+        definition,
+      }, {
+        fallbackMessage: 'Failed to save local segment',
+      })
+    },
+    onSuccess: async (segment) => {
+      setSaveSegmentError(null)
+      setShowSaveSegmentModal(false)
+      await queryClient.invalidateQueries({ queryKey: ['segment-registry'] })
+      setFilters((prev) => ({ ...prev, segment: segment.id }))
+    },
+    onError: (err) => setSaveSegmentError((err as Error).message || 'Failed to save local segment'),
+  })
+
   useEffect(() => {
     const params = readParams()
     setSelectedJourneyId(params.get('journey_id') || '')
@@ -1804,7 +1877,7 @@ export default function Journeys({
       campaign: params.get('campaign') || prev.campaign,
       device: params.get('device') || prev.device,
       geo: params.get('geo') || prev.geo,
-      segment: 'all',
+      segment: params.get('segment') || prev.segment,
     }))
   }, [])
 
@@ -1876,7 +1949,6 @@ export default function Journeys({
       if (next.campaign !== 'all' && !validCampaigns.has(next.campaign)) next.campaign = 'all'
       if (next.device !== 'all' && !validDevices.has(next.device)) next.device = 'all'
       if (next.geo !== 'all' && !validGeos.has(next.geo.toLowerCase())) next.geo = 'all'
-      next.segment = 'all'
       if (
         next.channel === prev.channel &&
         next.campaign === prev.campaign &&
@@ -1889,6 +1961,17 @@ export default function Journeys({
       return next
     })
   }, [dimensionsQuery.data])
+
+  useEffect(() => {
+    if (!localAnalyticalSegments.length) return
+    setFilters((prev) => {
+      if (prev.segment === 'all') return prev
+      const selectedSegment = localAnalyticalSegments.find((item) => item.id === prev.segment)
+      if (!selectedSegment) return { ...prev, segment: 'all' }
+      const applied = applyLocalSegmentToFilterState(prev, selectedSegment)
+      return JSON.stringify(applied) === JSON.stringify(prev) ? prev : applied
+    })
+  }, [localAnalyticalSegments])
 
   useEffect(() => {
     setEditingHypothesisId(null)
@@ -1932,7 +2015,8 @@ export default function Journeys({
     params.set('campaign', filters.campaign)
     params.set('device', filters.device)
     params.set('geo', filters.geo)
-    params.delete('segment')
+    if (filters.segment !== 'all') params.set('segment', filters.segment)
+    else params.delete('segment')
     if (examplesPathHash) params.set('examples_path_hash', examplesPathHash)
     else params.delete('examples_path_hash')
     if (examplesStepFilter.trim()) params.set('examples_step', examplesStepFilter.trim())
@@ -2668,21 +2752,49 @@ export default function Journeys({
     })
   }
 
+  const selectedHypothesisSegmentId = readSelectedSegmentRegistryId(hypothesisDraft.segment)
+  const currentFilterSegmentDefinition = activeLocalSegmentDefinitionFromFilters(filters)
+  const canSaveCurrentFilterSegment = hasLocalSegmentCriteria(currentFilterSegmentDefinition)
+  const defaultFilterSegmentName = buildLocalSegmentDefaultName(currentFilterSegmentDefinition)
+
   return (
     <>
       <DashboardPage
         title="Journeys"
         description="Customer journey paths + attribution overlay"
         filters={
-          <GlobalFilterBar
-            value={filters}
-            onChange={setFilters}
-            channels={journeyFilterOptions.channels}
-            campaigns={journeyFilterOptions.campaigns}
-            devices={journeyFilterOptions.devices}
-            geos={journeyFilterOptions.geos}
-            showSegment={false}
-          />
+          <div style={{ display: 'grid', gap: t.space.sm }}>
+            <GlobalFilterBar
+              value={filters}
+              onChange={handleFiltersChange}
+              channels={journeyFilterOptions.channels}
+              campaigns={journeyFilterOptions.campaigns}
+              devices={journeyFilterOptions.devices}
+              geos={journeyFilterOptions.geos}
+              segments={journeyFilterOptions.segments}
+              showSegment
+            />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: t.space.sm }}>
+              <button
+                type="button"
+                disabled={!canSaveCurrentFilterSegment}
+                onClick={() => {
+                  setSaveSegmentError(null)
+                  setShowSaveSegmentModal(true)
+                }}
+                style={{
+                  border: `1px solid ${t.color.border}`,
+                  background: 'transparent',
+                  borderRadius: t.radius.sm,
+                  padding: '8px 12px',
+                  cursor: canSaveCurrentFilterSegment ? 'pointer' : 'default',
+                  opacity: canSaveCurrentFilterSegment ? 1 : 0.6,
+                }}
+              >
+                Save local segment
+              </button>
+            </div>
+          </div>
         }
         isEmpty={featureDisabled}
         emptyState={
@@ -2995,7 +3107,7 @@ export default function Journeys({
                   ? `${dimensionsQuery.data.summary.journey_rows.toLocaleString()} rows observed from ${dimensionsQuery.data.summary.date_from} to ${dimensionsQuery.data.summary.date_to}.`
                   : 'Filter values load from current workspace activity once the selected definition resolves.'}
               </div>
-              <div>Segment is intentionally hidden here until it becomes a real modeled journey dimension.</div>
+              <div>Saved local segments apply here as analytical filter shortcuts. Meiro Pipes segments remain available in hypotheses and experiments as operational audiences.</div>
             </div>
             {selectedDefinition ? (
               <div style={{ display: 'grid', gap: 4 }}>
@@ -3628,6 +3740,57 @@ export default function Journeys({
                     </label>
                   </div>
 
+                  <div style={{ display: 'grid', gap: t.space.sm, minWidth: 0 }}>
+                    <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                      Saved segment
+                      <select
+                        value={selectedHypothesisSegmentId}
+                        onChange={(e) => {
+                          const value = e.target.value
+                          if (!value) {
+                            setHypothesisDraft((prev) => ({
+                              ...prev,
+                              segment: clearSegmentReferenceMetadata(prev.segment),
+                            }))
+                            return
+                          }
+                          const selectedSegment = allSegmentRegistryItems.find((item) => item.id === value)
+                          if (!selectedSegment) return
+                          setHypothesisDraft((prev) => ({
+                            ...prev,
+                            segment: buildSegmentReference(selectedSegment),
+                          }))
+                        }}
+                        style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                      >
+                        <option value="">Custom / no saved segment</option>
+                        {localAnalyticalSegments.length ? (
+                          <optgroup label="Local analytical segments">
+                            {localAnalyticalSegments.map((item) => (
+                              <option key={item.id} value={item.id}>
+                                {segmentOptionLabel(item)}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ) : null}
+                        {allSegmentRegistryItems.filter((item) => !isLocalAnalyticalSegment(item)).length ? (
+                          <optgroup label="Meiro Pipes segments">
+                            {allSegmentRegistryItems
+                              .filter((item) => !isLocalAnalyticalSegment(item))
+                              .map((item) => (
+                                <option key={item.id} value={item.id}>
+                                  {segmentOptionLabel(item)}
+                                </option>
+                              ))}
+                          </optgroup>
+                        ) : null}
+                      </select>
+                      <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                        Local segments apply analytical dimensions. Meiro Pipes segments are stored as operational audience references.
+                      </span>
+                    </label>
+                  </div>
+
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(180px, 100%), 1fr))', gap: t.space.md, minWidth: 0 }}>
                     <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
                       Channel group
@@ -3636,7 +3799,7 @@ export default function Journeys({
                         onChange={(e) =>
                           setHypothesisDraft((prev) => ({
                             ...prev,
-                            segment: { ...prev.segment, channel_group: e.target.value },
+                            segment: { ...clearSegmentReferenceMetadata(prev.segment), channel_group: e.target.value },
                           }))
                         }
                         style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
@@ -3649,7 +3812,7 @@ export default function Journeys({
                         onChange={(e) =>
                           setHypothesisDraft((prev) => ({
                             ...prev,
-                            segment: { ...prev.segment, campaign_id: e.target.value },
+                            segment: { ...clearSegmentReferenceMetadata(prev.segment), campaign_id: e.target.value },
                           }))
                         }
                         style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
@@ -3662,7 +3825,7 @@ export default function Journeys({
                         onChange={(e) =>
                           setHypothesisDraft((prev) => ({
                             ...prev,
-                            segment: { ...prev.segment, device: e.target.value },
+                            segment: { ...clearSegmentReferenceMetadata(prev.segment), device: e.target.value },
                           }))
                         }
                         style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
@@ -3675,7 +3838,7 @@ export default function Journeys({
                         onChange={(e) =>
                           setHypothesisDraft((prev) => ({
                             ...prev,
-                            segment: { ...prev.segment, country: e.target.value },
+                            segment: { ...clearSegmentReferenceMetadata(prev.segment), country: e.target.value },
                           }))
                         }
                         style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
@@ -5367,6 +5530,21 @@ export default function Journeys({
           </div>
         </>
       )}
+
+      <SaveLocalSegmentDialog
+        open={showSaveSegmentModal}
+        initialName={defaultFilterSegmentName}
+        criteriaLabel={Object.entries(currentFilterSegmentDefinition)
+          .map(([key, value]) => `${key}=${String(value)}`)
+          .join(' · ')}
+        error={saveSegmentError}
+        saving={saveSegmentMutation.isPending}
+        onClose={() => {
+          setShowSaveSegmentModal(false)
+          setSaveSegmentError(null)
+        }}
+        onSubmit={(payload) => saveSegmentMutation.mutate(payload)}
+      />
 
       {showCreateModal && canManageDefinitions && (
         <CreateJourneyModal

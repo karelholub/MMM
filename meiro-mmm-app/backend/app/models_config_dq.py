@@ -698,6 +698,25 @@ class JourneyHypothesis(Base):
     )
 
 
+class LocalAnalyticalSegment(Base):
+    __tablename__ = "local_analytical_segments"
+
+    id = Column(String(36), primary_key=True)
+    workspace_id = Column(String(36), nullable=False, default="default", index=True)
+    owner_user_id = Column(String(128), nullable=False, index=True)
+    name = Column(String(255), nullable=False, index=True)
+    description = Column(Text, nullable=True)
+    definition_json = Column(JSON, nullable=False, default={})
+    status = Column(String(32), nullable=False, default="active", index=True)
+    archived_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_local_segments_ws_status_created", "workspace_id", "status", "created_at"),
+    )
+
+
 class ChannelPerformanceDaily(Base):
     __tablename__ = "channel_performance_daily"
 

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Sankey } from 'recharts'
 import { tokens } from '../theme/tokens'
 import DashboardPage from '../components/dashboard/DashboardPage'
@@ -7,15 +7,26 @@ import SectionCard from '../components/dashboard/SectionCard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import GlobalFilterBar, { type GlobalFiltersState } from '../components/dashboard/GlobalFilterBar'
+import SaveLocalSegmentDialog from '../components/segments/SaveLocalSegmentDialog'
 import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn } from '../components/dashboard'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import ExplainabilityPanel from '../components/ExplainabilityPanel'
 import ConfidenceBadge, { type Confidence } from '../components/ConfidenceBadge'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
-import { apiGetJson } from '../lib/apiClient'
+import { apiGetJson, apiSendJson } from '../lib/apiClient'
 import { buildListQuery, type PaginatedResponse } from '../lib/apiSchemas'
 import { defaultRecentDateRange } from '../lib/dateRange'
 import { buildJourneyHypothesisHref, buildJourneyHypothesisSeedHref } from '../lib/journeyLinks'
+import {
+  activeLocalSegmentDefinitionFromFilters,
+  applyLocalSegmentToFilterState,
+  buildLocalSegmentDefaultName,
+  hasLocalSegmentCriteria,
+  isLocalAnalyticalSegment,
+  segmentOptionLabel,
+  type SegmentRegistryItem,
+  type SegmentRegistryResponse,
+} from '../lib/segments'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 
 interface NextBestRec {
@@ -311,9 +322,12 @@ function exportPathsCSV(
 }
 
 export default function ConversionPaths() {
+  const queryClient = useQueryClient()
   const { journeysSummary: journeys } = useWorkspaceContext()
   const [filters, setFilters] = useState<GlobalFiltersState>(() => buildInitialFilters(journeys?.date_min, journeys?.date_max))
   const [selectedJourneyId, setSelectedJourneyId] = useState('')
+  const [showSaveSegmentModal, setShowSaveSegmentModal] = useState(false)
+  const [saveSegmentError, setSaveSegmentError] = useState<string | null>(null)
   const [pathSort, setPathSort] = useState<'count' | 'share' | 'avg_time' | 'length'>('count')
   const [pathSortDir, setPathSortDir] = useState<'asc' | 'desc'>('desc')
   const [freqSort, setFreqSort] = useState<'channel' | 'count' | 'pct'>('count')
@@ -378,6 +392,14 @@ export default function ConversionPaths() {
     enabled: !selectedJourneyId,
   })
 
+  const segmentRegistryQuery = useQuery<SegmentRegistryResponse>({
+    queryKey: ['segment-registry'],
+    queryFn: async () =>
+      apiGetJson<SegmentRegistryResponse>('/api/segments/registry', {
+        fallbackMessage: 'Failed to load segment registry',
+      }),
+  })
+
   const dimensionsQuery = useQuery<JourneyFilterDimensionsResponse>({
     queryKey: ['journey-dimensions', 'conversion-paths', selectedJourneyId, filters.dateFrom, filters.dateTo, filters.channel, filters.campaign, filters.device, filters.geo],
     queryFn: async () => {
@@ -396,15 +418,61 @@ export default function ConversionPaths() {
     enabled: !!selectedJourneyId,
   })
 
+  const allSegmentRegistryItems = segmentRegistryQuery.data?.items ?? []
+  const localAnalyticalSegments = useMemo(
+    () => allSegmentRegistryItems.filter(isLocalAnalyticalSegment),
+    [allSegmentRegistryItems],
+  )
   const journeyFilterOptions = useMemo(
     () => ({
       channels: (dimensionsQuery.data?.channels ?? []).map((item) => ({ value: item.value, label: dimensionLabel(item.value, item.count) })),
       campaigns: (dimensionsQuery.data?.campaigns ?? []).map((item) => ({ value: item.value, label: dimensionLabel(item.value, item.count) })),
       devices: (dimensionsQuery.data?.devices ?? []).map((item) => ({ value: item.value, label: dimensionLabel(item.value, item.count) })),
       geos: (dimensionsQuery.data?.countries ?? []).map((item) => ({ value: item.value, label: dimensionLabel(String(item.value).toUpperCase(), item.count) })),
+      segments: localAnalyticalSegments.map((item) => ({ value: item.id, label: segmentOptionLabel(item) })),
     }),
-    [dimensionsQuery.data],
+    [dimensionsQuery.data, localAnalyticalSegments],
   )
+
+  const handleFiltersChange = (next: GlobalFiltersState) => {
+    setFilters((prev) => {
+      if (next.segment !== prev.segment) {
+        if (next.segment === 'all') return { ...next, segment: 'all' }
+        const selectedSegment = localAnalyticalSegments.find((item) => item.id === next.segment)
+        if (selectedSegment) return applyLocalSegmentToFilterState(next, selectedSegment)
+      }
+      const dimensionsChanged =
+        next.channel !== prev.channel ||
+        next.campaign !== prev.campaign ||
+        next.device !== prev.device ||
+        next.geo !== prev.geo
+      if (dimensionsChanged && prev.segment !== 'all') return { ...next, segment: 'all' }
+      return next
+    })
+  }
+
+  const saveSegmentMutation = useMutation({
+    mutationFn: async ({ name, description }: { name: string; description: string }) => {
+      const definition = activeLocalSegmentDefinitionFromFilters(filters)
+      if (!hasLocalSegmentCriteria(definition)) {
+        throw new Error('Select at least one channel, campaign, device, or geo filter to save a local segment')
+      }
+      return apiSendJson<SegmentRegistryItem>('/api/segments/local', 'POST', {
+        name,
+        description,
+        definition,
+      }, {
+        fallbackMessage: 'Failed to save local segment',
+      })
+    },
+    onSuccess: async (segment) => {
+      setSaveSegmentError(null)
+      setShowSaveSegmentModal(false)
+      await queryClient.invalidateQueries({ queryKey: ['segment-registry'] })
+      setFilters((prev) => ({ ...prev, segment: segment.id }))
+    },
+    onError: (err) => setSaveSegmentError((err as Error).message || 'Failed to save local segment'),
+  })
 
   const pathsQuery = useQuery<PathAnalysis>({
     queryKey: ['path-analysis', selectedJourneyId, directMode, pathScope, filters.dateFrom, filters.dateTo, filters.channel, filters.campaign, filters.device, filters.geo],
@@ -471,7 +539,6 @@ export default function ConversionPaths() {
       if (next.campaign !== 'all' && !validCampaigns.has(next.campaign)) next.campaign = 'all'
       if (next.device !== 'all' && !validDevices.has(next.device)) next.device = 'all'
       if (next.geo !== 'all' && !validGeos.has(next.geo)) next.geo = 'all'
-      next.segment = 'all'
       if (
         next.channel === prev.channel &&
         next.campaign === prev.campaign &&
@@ -484,6 +551,17 @@ export default function ConversionPaths() {
       return next
     })
   }, [dimensionsQuery.data])
+
+  useEffect(() => {
+    if (!localAnalyticalSegments.length) return
+    setFilters((prev) => {
+      if (prev.segment === 'all') return prev
+      const selectedSegment = localAnalyticalSegments.find((item) => item.id === prev.segment)
+      if (!selectedSegment) return { ...prev, segment: 'all' }
+      const applied = applyLocalSegmentToFilterState(prev, selectedSegment)
+      return JSON.stringify(applied) === JSON.stringify(prev) ? prev : applied
+    })
+  }, [localAnalyticalSegments])
 
   useEffect(() => {
     setSelectedPath(null)
@@ -888,6 +966,9 @@ export default function ConversionPaths() {
     null
   const noDefinitions = !dashboardLoading && definitions.length === 0
   const noDataForSelection = !dashboardLoading && !!selectedJourneyId && !!data && data.total_journeys === 0
+  const currentFilterSegmentDefinition = activeLocalSegmentDefinitionFromFilters(filters)
+  const canSaveCurrentFilterSegment = hasLocalSegmentCriteria(currentFilterSegmentDefinition)
+  const defaultFilterSegmentName = buildLocalSegmentDefaultName(currentFilterSegmentDefinition)
 
   return (
     <DashboardPage
@@ -909,18 +990,39 @@ export default function ConversionPaths() {
               ))}
             </select>
             <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-              Path analysis uses observed workspace values for the selected journey definition and date window.
+              Path analysis uses observed workspace values for the selected journey definition and date window. Saved local segments apply as analytical slices here.
             </div>
           </div>
           <GlobalFilterBar
             value={filters}
-            onChange={setFilters}
+            onChange={handleFiltersChange}
             channels={journeyFilterOptions.channels}
             campaigns={journeyFilterOptions.campaigns}
             devices={journeyFilterOptions.devices}
             geos={journeyFilterOptions.geos}
-            showSegment={false}
+            segments={journeyFilterOptions.segments}
+            showSegment
           />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: t.space.sm }}>
+            <button
+              type="button"
+              disabled={!canSaveCurrentFilterSegment}
+              onClick={() => {
+                setSaveSegmentError(null)
+                setShowSaveSegmentModal(true)
+              }}
+              style={{
+                border: `1px solid ${t.color.border}`,
+                background: 'transparent',
+                borderRadius: t.radius.sm,
+                padding: '8px 12px',
+                cursor: canSaveCurrentFilterSegment ? 'pointer' : 'default',
+                opacity: canSaveCurrentFilterSegment ? 1 : 0.6,
+              }}
+            >
+              Save local segment
+            </button>
+          </div>
         </div>
       }
       actions={
@@ -2086,6 +2188,20 @@ export default function ConversionPaths() {
           )}
         </div>
       )}
+      <SaveLocalSegmentDialog
+        open={showSaveSegmentModal}
+        initialName={defaultFilterSegmentName}
+        criteriaLabel={Object.entries(currentFilterSegmentDefinition)
+          .map(([key, value]) => `${key}=${String(value)}`)
+          .join(' · ')}
+        error={saveSegmentError}
+        saving={saveSegmentMutation.isPending}
+        onClose={() => {
+          setShowSaveSegmentModal(false)
+          setSaveSegmentError(null)
+        }}
+        onSubmit={(payload) => saveSegmentMutation.mutate(payload)}
+      />
       </div>
     </DashboardPage>
   )
