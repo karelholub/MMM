@@ -569,6 +569,29 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
     }
   }, [baselineKey, comparisonData, comparisonMode, models, selectedModel])
 
+  const focusedSegmentModelComparison = useMemo(() => {
+    if (!selectedSegmentDefinition.channel_group || !models.length) return []
+    return models.map((model) => {
+      const channels = results[model]?.channels ?? []
+      const totalValue = channels.reduce((sum: number, row: { attributed_value?: number }) => sum + Number(row.attributed_value || 0), 0)
+      const focusedRow = channels.find((row: { channel: string }) => row.channel === selectedSegmentDefinition.channel_group)
+      const focusedValue = Number(focusedRow?.attributed_value || 0)
+      const focusedShare = totalValue > 0 ? focusedValue / totalValue : 0
+      const baselineChannels = results[baselineKey]?.channels ?? []
+      const baselineTotal = baselineChannels.reduce((sum: number, row: { attributed_value?: number }) => sum + Number(row.attributed_value || 0), 0)
+      const baselineFocusedRow = baselineChannels.find((row: { channel: string }) => row.channel === selectedSegmentDefinition.channel_group)
+      const baselineFocusedValue = Number(baselineFocusedRow?.attributed_value || 0)
+      const baselineShare = baselineTotal > 0 ? baselineFocusedValue / baselineTotal : 0
+      return {
+        model,
+        focusedValue,
+        focusedShare,
+        baselineShare,
+        shareDelta: focusedShare - baselineShare,
+      }
+    })
+  }, [baselineKey, models, results, selectedSegmentDefinition.channel_group])
+
   if (resultsQuery.isError) {
     return (
       <div
@@ -683,6 +706,54 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
           ]}
         />
       </div>
+
+      {selectedSegment ? (
+        <div
+          style={{
+            display: 'grid',
+            gap: t.space.md,
+            marginBottom: t.space.lg,
+            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          }}
+        >
+          {focusedSegmentModelComparison.map((item) => {
+            const positive = item.shareDelta >= 0
+            return (
+              <div
+                key={item.model}
+                style={{
+                  border: `1px solid ${t.color.borderLight}`,
+                  borderRadius: t.radius.md,
+                  background: t.color.surface,
+                  padding: t.space.md,
+                  boxShadow: t.shadowSm,
+                  display: 'grid',
+                  gap: 6,
+                }}
+              >
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  {item.model}
+                </div>
+                <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                  {formatCurrency(item.focusedValue)}
+                </div>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  {selectedSegment.name} share of workspace value: <strong style={{ color: t.color.text }}>{(item.focusedShare * 100).toFixed(1)}%</strong>
+                </div>
+                <div
+                  style={{
+                    fontSize: t.font.sizeSm,
+                    fontWeight: t.font.weightSemibold,
+                    color: positive ? t.color.success : t.color.danger,
+                  }}
+                >
+                  vs {baselineKey}: {positive ? '+' : ''}{(item.shareDelta * 100).toFixed(1)} pp
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      ) : null}
 
       <div
         style={{
