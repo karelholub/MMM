@@ -6,6 +6,7 @@ import SectionCard from '../components/dashboard/SectionCard'
 import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn } from '../components/dashboard'
 import GlobalFilterBar, { GlobalFiltersState } from '../components/dashboard/GlobalFilterBar'
 import SaveLocalSegmentDialog from '../components/segments/SaveLocalSegmentDialog'
+import SegmentComparisonContextNote from '../components/segments/SegmentComparisonContextNote'
 import SegmentOverlapNotice from '../components/segments/SegmentOverlapNotice'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { tokens as t } from '../theme/tokens'
@@ -3967,6 +3968,17 @@ export default function Journeys({
                 gap: t.space.md,
               }}
             >
+              <SegmentComparisonContextNote
+                mode="exact_filter"
+                pageLabel="journey rows"
+                basisLabel="matched journey-definition instance rows"
+                primaryLabel={selectedLocalSegment.name}
+                primaryRows={segmentCompareQuery.data.primary_summary.journey_rows}
+                otherLabel={compareLocalSegment.name}
+                otherRows={segmentCompareQuery.data.other_summary.journey_rows}
+                baselineRows={segmentCompareQuery.data.baseline_summary.journey_rows}
+                overlapRows={segmentCompareQuery.data.overlap.overlap_rows}
+              />
               <div
                 style={{
                   display: 'flex',

@@ -9,6 +9,7 @@ import AnalysisShareActions from '../components/dashboard/AnalysisShareActions'
 import AnalysisNarrativePanel from '../components/dashboard/AnalysisNarrativePanel'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import { type LagInsightsResponse } from '../components/performance/LagInsightsPanel'
+import SegmentComparisonContextNote from '../components/segments/SegmentComparisonContextNote'
 import SegmentOverlapNotice from '../components/segments/SegmentOverlapNotice'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
 import { buildIncrementalityPlannerHref } from '../lib/experimentLinks'
@@ -892,6 +893,19 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
             gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
           }}
         >
+          <div style={{ gridColumn: '1 / -1' }}>
+            <SegmentComparisonContextNote
+              mode={selectedSegmentAutoCompatible ? 'exact_filter' : 'analytical_lens'}
+              pageLabel="model comparison rows"
+              basisLabel="matched journey-instance rows"
+              primaryLabel={selectedSegment.name}
+              primaryRows={segmentCompareQuery.data.primary_summary.journey_rows}
+              otherLabel={compareSegment.name}
+              otherRows={segmentCompareQuery.data.other_summary.journey_rows}
+              baselineRows={segmentCompareQuery.data.baseline_summary.journey_rows}
+              overlapRows={segmentCompareQuery.data.overlap.overlap_rows}
+            />
+          </div>
           <div
             style={{
               border: `1px solid ${t.color.borderLight}`,

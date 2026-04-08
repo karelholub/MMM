@@ -5,6 +5,7 @@ import { DashboardPage, ContextSummaryStrip, SectionCard, AnalysisShareActions, 
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
+import SegmentComparisonContextNote from '../components/segments/SegmentComparisonContextNote'
 import SegmentOverlapNotice from '../components/segments/SegmentOverlapNotice'
 import { apiGetJson } from '../lib/apiClient'
 import { buildIncrementalityPlannerHref } from '../lib/experimentLinks'
@@ -668,6 +669,14 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
             subtitle="How the selected audience changes role mix and contribution concentration relative to the full visible workspace."
           >
             <div style={{ display: 'grid', gap: t.space.lg }}>
+              <SegmentComparisonContextNote
+                mode={selectedSegmentAutoCompatible ? 'exact_filter' : 'analytical_lens'}
+                pageLabel={scope === 'campaigns' ? 'campaign role rows' : 'channel role rows'}
+                basisLabel="matched journey-instance rows and derived role entities"
+                primaryLabel={selectedSegment?.name || 'Selected audience'}
+                primaryRows={segmentAnalysisQuery.data?.summary.journey_rows}
+                baselineRows={segmentAnalysisQuery.data?.baseline_summary.journey_rows}
+              />
               <div
                 style={{
                   display: 'grid',

@@ -9,6 +9,7 @@ import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import AnalysisNarrativePanel from '../components/dashboard/AnalysisNarrativePanel'
 import GlobalFilterBar, { type GlobalFiltersState } from '../components/dashboard/GlobalFilterBar'
 import SaveLocalSegmentDialog from '../components/segments/SaveLocalSegmentDialog'
+import SegmentComparisonContextNote from '../components/segments/SegmentComparisonContextNote'
 import SegmentOverlapNotice from '../components/segments/SegmentOverlapNotice'
 import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn } from '../components/dashboard'
 import DecisionStatusCard from '../components/DecisionStatusCard'
@@ -1283,6 +1284,17 @@ export default function ConversionPaths() {
             subtitle={`How ${selectedLocalSegment.name} compares directly with ${compareLocalSegment.name} in path structure and lag.`}
           >
             <div style={{ display: 'grid', gap: t.space.lg }}>
+              <SegmentComparisonContextNote
+                mode="exact_filter"
+                pageLabel="conversion-path rows"
+                basisLabel="matched journey-instance rows"
+                primaryLabel={selectedLocalSegment.name}
+                primaryRows={segmentCompareQuery.data.primary_summary.journey_rows}
+                otherLabel={compareLocalSegment.name}
+                otherRows={segmentCompareQuery.data.other_summary.journey_rows}
+                baselineRows={segmentCompareQuery.data.baseline_summary.journey_rows}
+                overlapRows={segmentCompareQuery.data.overlap.overlap_rows}
+              />
               <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
                 <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bgSubtle, display: 'grid', gap: 4 }}>
                   <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Relationship</div>

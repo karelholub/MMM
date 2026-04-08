@@ -5,6 +5,7 @@ import { useWorkspaceContext } from '../components/WorkspaceContext'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import RecommendedActionsList, { type RecommendedActionItem } from '../components/RecommendedActionsList'
 import WorkspaceAssistantPanel from '../components/WorkspaceAssistantPanel'
+import SegmentComparisonContextNote from '../components/segments/SegmentComparisonContextNote'
 import SegmentOverlapNotice from '../components/segments/SegmentOverlapNotice'
 import { navigateForRecommendedAction } from '../lib/recommendedActions'
 import { apiGetJson, apiSendJson, withQuery } from '../lib/apiClient'
@@ -1291,6 +1292,14 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
             subtitle={`How ${selectedSegment?.name || 'this focus segment'} compares with the unfiltered workspace for the same period.`}
           >
             <div style={{ display: 'grid', gap: t.space.lg }}>
+              <SegmentComparisonContextNote
+                mode={selectedSegmentAutoCompatible ? 'exact_filter' : 'analytical_lens'}
+                pageLabel="overview metrics"
+                basisLabel="matched journey-instance rows"
+                primaryLabel={selectedSegment?.name || 'Selected audience'}
+                primaryRows={segmentAnalysisQuery.data?.summary.journey_rows}
+                baselineRows={segmentAnalysisQuery.data?.baseline_summary.journey_rows}
+              />
               <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
                 {segmentComparison.shares.map((item) => (
                   <div

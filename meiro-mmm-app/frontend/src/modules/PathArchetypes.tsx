@@ -4,6 +4,7 @@ import { tokens as t } from '../theme/tokens'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
+import SegmentComparisonContextNote from '../components/segments/SegmentComparisonContextNote'
 import SegmentOverlapNotice from '../components/segments/SegmentOverlapNotice'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { apiGetJson } from '../lib/apiClient'
@@ -823,6 +824,17 @@ export default function PathArchetypes() {
       {selectedSegment && compareSegment && segmentCompareQuery.data ? (
         <div style={{ marginBottom: tkn.space.lg }}>
           <div style={{ display: 'grid', gap: tkn.space.md }}>
+            <SegmentComparisonContextNote
+              mode="exact_filter"
+              pageLabel="archetype rows"
+              basisLabel="matched journey-instance rows clustered into archetypes"
+              primaryLabel={selectedSegment.name}
+              primaryRows={segmentCompareQuery.data.primary_summary.journey_rows}
+              otherLabel={compareSegment.name}
+              otherRows={segmentCompareQuery.data.other_summary.journey_rows}
+              baselineRows={segmentCompareQuery.data.baseline_summary.journey_rows}
+              overlapRows={segmentCompareQuery.data.overlap.overlap_rows}
+            />
             <ContextSummaryStrip
               minItemWidth={220}
               items={[
