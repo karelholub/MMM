@@ -4,6 +4,7 @@ import { tokens as t } from '../theme/tokens'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
+import SegmentOverlapNotice from '../components/segments/SegmentOverlapNotice'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { apiGetJson } from '../lib/apiClient'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
@@ -12,6 +13,7 @@ import {
   localSegmentCompatibleWithDimensions,
   readLocalSegmentDefinition,
   segmentOptionLabel,
+  type SegmentComparisonResponse,
   type SegmentRegistryResponse,
 } from '../lib/segments'
 
@@ -212,6 +214,7 @@ export default function PathArchetypes() {
   const [showContext, setShowContext] = usePersistentToggle('path-archetypes:show-context', false)
   const [showQualityPanel, setShowQualityPanel] = usePersistentToggle('path-archetypes:show-quality', false)
   const [selectedSegmentId, setSelectedSegmentId] = useState('')
+  const [compareSegmentId, setCompareSegmentId] = useState('')
   const [channelFilter, setChannelFilter] = useState<string[]>([])
   const [minAvgLength, setMinAvgLength] = useState<number | ''>('')
   const [maxAvgLength, setMaxAvgLength] = useState<number | ''>('')
@@ -242,6 +245,10 @@ export default function PathArchetypes() {
     () => compatibleSegments.find((item) => item.id === selectedSegmentId) ?? null,
     [compatibleSegments, selectedSegmentId],
   )
+  const compareSegment = useMemo(
+    () => compatibleSegments.find((item) => item.id === compareSegmentId) ?? null,
+    [compareSegmentId, compatibleSegments],
+  )
   const selectedSegmentDefinition = useMemo(
     () => readLocalSegmentDefinition(selectedSegment),
     [selectedSegment],
@@ -252,6 +259,8 @@ export default function PathArchetypes() {
     const params = new URLSearchParams(window.location.search)
     const segment = params.get('segment')
     if (segment) setSelectedSegmentId(segment)
+    const compareSegment = params.get('compare_segment')
+    if (compareSegment) setCompareSegmentId(compareSegment)
   }, [])
 
   useEffect(() => {
@@ -262,13 +271,21 @@ export default function PathArchetypes() {
   }, [compatibleSegments, selectedSegmentId, segmentRegistryQuery.data])
 
   useEffect(() => {
+    if (!compareSegmentId) return
+    if (compatibleSegments.some((item) => item.id === compareSegmentId && item.id !== selectedSegmentId)) return
+    setCompareSegmentId('')
+  }, [compareSegmentId, compatibleSegments, selectedSegmentId])
+
+  useEffect(() => {
     if (typeof window === 'undefined') return
     const params = new URLSearchParams(window.location.search)
     if (selectedSegmentId) params.set('segment', selectedSegmentId)
     else params.delete('segment')
+    if (compareSegmentId) params.set('compare_segment', compareSegmentId)
+    else params.delete('compare_segment')
     const next = `${window.location.pathname}?${params.toString()}${window.location.hash || ''}`
     window.history.replaceState({}, '', next)
-  }, [selectedSegmentId])
+  }, [compareSegmentId, selectedSegmentId])
 
   const archetypesQuery = useQuery<ArchetypesResponse>({
     queryKey: ['path-archetypes', kMode, kFixed, directMode, comparePrevious, selectedSegmentId],
@@ -300,6 +317,14 @@ export default function PathArchetypes() {
       })
     },
     enabled: !!selectedSegmentId,
+  })
+  const segmentCompareQuery = useQuery<SegmentComparisonResponse>({
+    queryKey: ['path-archetypes-segment-compare', selectedSegment?.id || 'none', compareSegment?.id || 'none'],
+    queryFn: async () =>
+      apiGetJson<SegmentComparisonResponse>(`/api/segments/local/${selectedSegment?.id}/compare?other_segment_id=${encodeURIComponent(compareSegment?.id || '')}`, {
+        fallbackMessage: 'Failed to compare saved analytical audiences',
+      }),
+    enabled: Boolean(selectedSegment?.id && compareSegment?.id && selectedSegment?.id !== compareSegment?.id),
   })
 
   const data = archetypesQuery.data
@@ -519,6 +544,33 @@ export default function PathArchetypes() {
                 ))}
               </select>
             </label>
+            {selectedSegment ? (
+              <label style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+                Compare with
+                <select
+                  value={compareSegmentId}
+                  onChange={(e) => setCompareSegmentId(e.target.value)}
+                  style={{
+                    marginLeft: 8,
+                    padding: `${tkn.space.xs}px ${tkn.space.sm}px`,
+                    fontSize: tkn.font.sizeSm,
+                    border: `1px solid ${tkn.color.border}`,
+                    borderRadius: tkn.radius.sm,
+                    background: '#ffffff',
+                    maxWidth: 260,
+                  }}
+                >
+                  <option value="">No paired comparison</option>
+                  {compatibleSegments
+                    .filter((segment) => segment.id !== selectedSegment.id)
+                    .map((segment) => (
+                      <option key={segment.id} value={segment.id}>
+                        {segmentOptionLabel(segment)}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            ) : null}
             {kMode === 'fixed' && (
               <label style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
                 K
@@ -756,6 +808,45 @@ export default function PathArchetypes() {
                   segmentComparison.focusedMedianLag != null
                     ? `${segmentComparison.focusedMedianLag.toFixed(1)}d vs ${segmentComparison.baselineMedianLag != null ? `${segmentComparison.baselineMedianLag.toFixed(1)}d` : '—'}`
                     : '—',
+              },
+            ]}
+          />
+        </div>
+      ) : null}
+      {selectedSegment ? (
+        <div style={{ marginBottom: tkn.space.lg }}>
+          <SegmentOverlapNotice selectedSegment={selectedSegment} />
+        </div>
+      ) : null}
+      {selectedSegment && compareSegment && segmentCompareQuery.data ? (
+        <div style={{ marginBottom: tkn.space.lg }}>
+          <ContextSummaryStrip
+            minItemWidth={220}
+            items={[
+              {
+                label: 'Relationship',
+                value: `${segmentCompareQuery.data.overlap.relationship.replace(/_/g, ' ')} · ${(segmentCompareQuery.data.overlap.jaccard * 100).toFixed(0)}% similarity`,
+              },
+              {
+                label: 'Journey delta',
+                value:
+                  segmentCompareQuery.data.deltas.journey_rows == null
+                    ? '—'
+                    : `${segmentCompareQuery.data.deltas.journey_rows >= 0 ? '+' : '-'}${Math.abs(segmentCompareQuery.data.deltas.journey_rows).toLocaleString()}`,
+              },
+              {
+                label: 'Median lag delta',
+                value:
+                  segmentCompareQuery.data.deltas.median_lag_days == null
+                    ? '—'
+                    : `${segmentCompareQuery.data.deltas.median_lag_days >= 0 ? '+' : ''}${segmentCompareQuery.data.deltas.median_lag_days}d`,
+              },
+              {
+                label: 'Avg path length delta',
+                value:
+                  segmentCompareQuery.data.deltas.avg_path_length == null
+                    ? '—'
+                    : `${segmentCompareQuery.data.deltas.avg_path_length >= 0 ? '+' : ''}${segmentCompareQuery.data.deltas.avg_path_length.toFixed(1)} steps`,
               },
             ]}
           />

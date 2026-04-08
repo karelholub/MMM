@@ -9,6 +9,7 @@ import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import AnalysisNarrativePanel from '../components/dashboard/AnalysisNarrativePanel'
 import GlobalFilterBar, { type GlobalFiltersState } from '../components/dashboard/GlobalFilterBar'
 import SaveLocalSegmentDialog from '../components/segments/SaveLocalSegmentDialog'
+import SegmentOverlapNotice from '../components/segments/SegmentOverlapNotice'
 import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn } from '../components/dashboard'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import ExplainabilityPanel from '../components/ExplainabilityPanel'
@@ -25,6 +26,7 @@ import {
   hasLocalSegmentCriteria,
   isLocalAnalyticalSegment,
   segmentOptionLabel,
+  type SegmentComparisonResponse,
   type SegmentRegistryItem,
   type SegmentRegistryResponse,
 } from '../lib/segments'
@@ -339,6 +341,7 @@ export default function ConversionPaths() {
   const [tryPathError, setTryPathError] = useState<string | null>(null)
   const [showContext, setShowContext] = usePersistentToggle('conversion-paths:show-context', false)
   const [showDiagnostics, setShowDiagnostics] = usePersistentToggle('conversion-paths:show-diagnostics', false)
+  const [compareSegmentId, setCompareSegmentId] = useState('')
 
   const [directMode, setDirectMode] = useState<'include' | 'exclude'>('include')
   const [pathScope, setPathScope] = useState<'converted' | 'all'>('converted')
@@ -423,6 +426,14 @@ export default function ConversionPaths() {
   const localAnalyticalSegments = useMemo(
     () => allSegmentRegistryItems.filter(isLocalAnalyticalSegment),
     [allSegmentRegistryItems],
+  )
+  const selectedLocalSegment = useMemo(
+    () => localAnalyticalSegments.find((item) => item.id === filters.segment) ?? null,
+    [filters.segment, localAnalyticalSegments],
+  )
+  const compareLocalSegment = useMemo(
+    () => localAnalyticalSegments.find((item) => item.id === compareSegmentId) ?? null,
+    [compareSegmentId, localAnalyticalSegments],
   )
   const journeyFilterOptions = useMemo(
     () => ({
@@ -511,6 +522,14 @@ export default function ConversionPaths() {
     },
     enabled: !!selectedJourneyId && filters.segment !== 'all',
   })
+  const segmentCompareQuery = useQuery<SegmentComparisonResponse>({
+    queryKey: ['conversion-paths-segment-compare', selectedLocalSegment?.id || 'none', compareLocalSegment?.id || 'none'],
+    queryFn: async () =>
+      apiGetJson<SegmentComparisonResponse>(`/api/segments/local/${selectedLocalSegment?.id}/compare?other_segment_id=${encodeURIComponent(compareLocalSegment?.id || '')}`, {
+        fallbackMessage: 'Failed to compare saved analytical audiences',
+      }),
+    enabled: Boolean(selectedLocalSegment?.id && compareLocalSegment?.id && selectedLocalSegment?.id !== compareLocalSegment?.id),
+  })
 
   const anomaliesQuery = useQuery<{ anomalies: PathAnomaly[] }>({
     queryKey: ['path-anomalies'],
@@ -579,6 +598,12 @@ export default function ConversionPaths() {
       return JSON.stringify(applied) === JSON.stringify(prev) ? prev : applied
     })
   }, [localAnalyticalSegments])
+
+  useEffect(() => {
+    if (!compareSegmentId) return
+    if (localAnalyticalSegments.some((item) => item.id === compareSegmentId && item.id !== filters.segment)) return
+    setCompareSegmentId('')
+  }, [compareSegmentId, filters.segment, localAnalyticalSegments])
 
   useEffect(() => {
     setSelectedPath(null)
@@ -1062,6 +1087,32 @@ export default function ConversionPaths() {
             showSegment
           />
           <div style={{ display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: t.space.sm }}>
+            {selectedLocalSegment ? (
+              <label style={{ display: 'grid', gap: 6, minWidth: 240, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                <span>Compare with</span>
+                <select
+                  value={compareSegmentId}
+                  onChange={(event) => setCompareSegmentId(event.target.value)}
+                  style={{
+                    padding: '8px 10px',
+                    borderRadius: t.radius.sm,
+                    border: `1px solid ${t.color.border}`,
+                    background: t.color.surface,
+                    color: t.color.text,
+                    fontSize: t.font.sizeSm,
+                  }}
+                >
+                  <option value="">No paired comparison</option>
+                  {localAnalyticalSegments
+                    .filter((segment) => segment.id !== selectedLocalSegment.id)
+                    .map((segment) => (
+                      <option key={segment.id} value={segment.id}>
+                        {segmentOptionLabel(segment)}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            ) : null}
             <a
               href="/?page=settings#settings/segments"
               style={{
@@ -1222,6 +1273,82 @@ export default function ConversionPaths() {
               },
             ]}
           />
+        ) : null}
+        {selectedLocalSegment ? <SegmentOverlapNotice selectedSegment={selectedLocalSegment} /> : null}
+        {selectedLocalSegment && compareLocalSegment && segmentCompareQuery.data ? (
+          <SectionCard
+            title="Segment vs segment"
+            subtitle={`How ${selectedLocalSegment.name} compares directly with ${compareLocalSegment.name} in path structure and lag.`}
+          >
+            <div style={{ display: 'grid', gap: t.space.lg }}>
+              <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bgSubtle, display: 'grid', gap: 4 }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Relationship</div>
+                  <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                    {segmentCompareQuery.data.overlap.relationship.replace(/_/g, ' ')}
+                  </div>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    {(segmentCompareQuery.data.overlap.jaccard * 100).toFixed(0)}% similarity · {segmentCompareQuery.data.overlap.overlap_rows.toLocaleString()} shared rows
+                  </div>
+                </div>
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bgSubtle, display: 'grid', gap: 4 }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{selectedLocalSegment.name}</div>
+                  <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                    {(segmentCompareQuery.data.primary_summary.journey_rows ?? 0).toLocaleString()}
+                  </div>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    rows · avg path {segmentCompareQuery.data.primary_summary.avg_path_length != null ? `${segmentCompareQuery.data.primary_summary.avg_path_length.toFixed(1)} steps` : '—'}
+                  </div>
+                </div>
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bgSubtle, display: 'grid', gap: 4 }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{compareLocalSegment.name}</div>
+                  <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                    {(segmentCompareQuery.data.other_summary.journey_rows ?? 0).toLocaleString()}
+                  </div>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    rows · avg path {segmentCompareQuery.data.other_summary.avg_path_length != null ? `${segmentCompareQuery.data.other_summary.avg_path_length.toFixed(1)} steps` : '—'}
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+                {[
+                  {
+                    label: 'Journey delta',
+                    value:
+                      segmentCompareQuery.data.deltas.journey_rows == null
+                        ? '—'
+                        : `${segmentCompareQuery.data.deltas.journey_rows >= 0 ? '+' : '-'}${Math.abs(segmentCompareQuery.data.deltas.journey_rows).toLocaleString()}`,
+                  },
+                  {
+                    label: 'Revenue delta',
+                    value:
+                      segmentCompareQuery.data.deltas.revenue == null
+                        ? '—'
+                        : `${segmentCompareQuery.data.deltas.revenue >= 0 ? '+' : '-'}$${Math.abs(segmentCompareQuery.data.deltas.revenue).toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+                  },
+                  {
+                    label: 'Median lag delta',
+                    value:
+                      segmentCompareQuery.data.deltas.median_lag_days == null
+                        ? '—'
+                        : `${segmentCompareQuery.data.deltas.median_lag_days >= 0 ? '+' : ''}${segmentCompareQuery.data.deltas.median_lag_days}d`,
+                  },
+                  {
+                    label: 'Avg. path length delta',
+                    value:
+                      segmentCompareQuery.data.deltas.avg_path_length == null
+                        ? '—'
+                        : `${segmentCompareQuery.data.deltas.avg_path_length >= 0 ? '+' : ''}${segmentCompareQuery.data.deltas.avg_path_length.toFixed(1)} steps`,
+                  },
+                ].map((item) => (
+                  <div key={item.label} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.surface, display: 'grid', gap: 4 }}>
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                    <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>{item.value}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </SectionCard>
         ) : null}
 
         <AnalysisNarrativePanel
