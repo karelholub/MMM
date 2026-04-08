@@ -302,6 +302,7 @@ def create_router(
     def overview_drivers(
         date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
         date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
+        timezone: str = Query("UTC", description="IANA timezone for bucketing"),
         top_campaigns_n: int = Query(10, ge=1, le=50, description="Top N campaigns"),
         conversion_key: Optional[str] = Query(None, description="Filter by conversion key"),
         channel_group: Optional[str] = Query(None, description="Optional saved-segment-compatible channel group filter"),
@@ -312,6 +313,7 @@ def create_router(
             db=db,
             date_from=date_from,
             date_to=date_to,
+            timezone=timezone,
             expenses=expenses_obj,
             top_campaigns_n=top_campaigns_n,
             conversion_key=conversion_key,
@@ -322,6 +324,7 @@ def create_router(
     def overview_funnels(
         date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
         date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
+        timezone: str = Query("UTC", description="IANA timezone for bucketing"),
         conversion_key: Optional[str] = Query(None, description="Optional conversion key filter"),
         limit: int = Query(5, ge=1, le=10, description="Rows per tab"),
         channel_group: Optional[str] = Query(None, description="Optional saved-segment-compatible channel group filter"),
@@ -332,6 +335,7 @@ def create_router(
             db=db,
             date_from=date_from,
             date_to=date_to,
+            timezone=timezone,
             conversion_key=conversion_key,
             limit=limit,
             channel_group=channel_group,
@@ -341,6 +345,7 @@ def create_router(
     def overview_trends(
         date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
         date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
+        timezone: str = Query("UTC", description="IANA timezone for bucketing"),
         conversion_key: Optional[str] = Query(None, description="Optional conversion key filter"),
         channel_group: Optional[str] = Query(None, description="Optional saved-segment-compatible channel group filter"),
         db=Depends(get_db_dependency),
@@ -350,6 +355,7 @@ def create_router(
             db=db,
             date_from=date_from,
             date_to=date_to,
+            timezone=timezone,
             conversion_key=conversion_key,
             channel_group=channel_group,
         )

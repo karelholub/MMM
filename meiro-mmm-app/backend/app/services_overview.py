@@ -1840,6 +1840,7 @@ def get_overview_drivers(
     db: Session,
     date_from: str,
     date_to: str,
+    timezone: str = "UTC",
     expenses: Any = None,
     top_campaigns_n: int = 10,
     conversion_key: Optional[str] = None,
@@ -2469,6 +2470,7 @@ def get_overview_trend_insights(
     *,
     date_from: str,
     date_to: str,
+    timezone: str = "UTC",
     conversion_key: Optional[str] = None,
     channel_group: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -2646,6 +2648,7 @@ def get_overview_funnels(
     *,
     date_from: str,
     date_to: str,
+    timezone: str = "UTC",
     conversion_key: Optional[str] = None,
     limit: int = 5,
     channel_group: Optional[str] = None,
