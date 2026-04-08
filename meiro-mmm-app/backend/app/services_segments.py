@@ -319,6 +319,32 @@ def _build_scoped_rows_query(
     return query
 
 
+def _matched_instance_ids(
+    db: Session,
+    *,
+    definition: Dict[str, Any],
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    journey_definition_id: Optional[str] = None,
+) -> List[int]:
+    query = db.query(JourneyDefinitionInstanceFact.id)
+    if date_from is not None:
+        query = query.filter(JourneyDefinitionInstanceFact.date >= date_from)
+    if date_to is not None:
+        query = query.filter(JourneyDefinitionInstanceFact.date <= date_to)
+    if journey_definition_id:
+        query = query.filter(JourneyDefinitionInstanceFact.journey_definition_id == journey_definition_id)
+    expressions = [expr for expr in (_segment_rule_expression(rule) for rule in definition.get("rules") or []) if expr is not None]
+    if expressions:
+        if definition.get("match") == "any":
+            from sqlalchemy import or_
+
+            query = query.filter(or_(*expressions))
+        else:
+            query = query.filter(*expressions)
+    return [int(row_id) for (row_id,) in query.all() if row_id is not None]
+
+
 def _summarize_scoped_rows(rows: List[Tuple[Any, ...]], baseline_count: int) -> Dict[str, Any]:
     profiles = {str(profile_id).strip() for _, profile_id, *_ in rows if str(profile_id or "").strip()}
     lag_days = [float(time_to_convert_sec) / 86400.0 for *_, time_to_convert_sec, _, _ in rows if time_to_convert_sec not in (None, "")]
@@ -498,6 +524,90 @@ def build_local_segment_analysis(
             "channels": _build_role_entity_summary(db, conversion_ids=conversion_ids, scope_type="channels"),
             "campaigns": _build_role_entity_summary(db, conversion_ids=conversion_ids, scope_type="campaigns"),
         },
+    }
+
+
+def _classify_segment_overlap(
+    *,
+    overlap_share_of_primary: float,
+    overlap_share_of_other: float,
+    jaccard: float,
+) -> str:
+    if overlap_share_of_primary >= 0.8 and overlap_share_of_other >= 0.8:
+        return "near_duplicate"
+    if overlap_share_of_primary >= 0.8:
+        return "mostly_contained_in_other"
+    if overlap_share_of_other >= 0.8:
+        return "mostly_contains_other"
+    if jaccard >= 0.4:
+        return "substantial_overlap"
+    if jaccard > 0:
+        return "partial_overlap"
+    return "distinct"
+
+
+def build_local_segment_overlap(
+    db: Session,
+    *,
+    segment_id: str,
+    workspace_id: str,
+) -> Optional[Dict[str, Any]]:
+    row = get_local_segment_row(db, segment_id=segment_id, workspace_id=workspace_id)
+    if not row:
+        return None
+    primary_item = _serialize_local_segment_with_preview(db, row)
+    primary_definition = dict(primary_item.get("definition") or {})
+    primary_ids = set(_matched_instance_ids(db, definition=primary_definition))
+    candidate_rows = (
+        db.query(LocalAnalyticalSegment)
+        .filter(
+            LocalAnalyticalSegment.workspace_id == workspace_id,
+            LocalAnalyticalSegment.id != segment_id,
+            LocalAnalyticalSegment.status != "archived",
+        )
+        .order_by(LocalAnalyticalSegment.created_at.desc())
+        .all()
+    )
+    items: List[Dict[str, Any]] = []
+    for candidate in candidate_rows:
+        candidate_item = _serialize_local_segment_with_preview(db, candidate)
+        candidate_definition = dict(candidate_item.get("definition") or {})
+        candidate_ids = set(_matched_instance_ids(db, definition=candidate_definition))
+        overlap_count = len(primary_ids & candidate_ids)
+        union_count = len(primary_ids | candidate_ids)
+        primary_count = len(primary_ids)
+        candidate_count = len(candidate_ids)
+        overlap_share_of_primary = (overlap_count / primary_count) if primary_count else 0.0
+        overlap_share_of_other = (overlap_count / candidate_count) if candidate_count else 0.0
+        jaccard = (overlap_count / union_count) if union_count else 0.0
+        items.append(
+            {
+                "segment": candidate_item,
+                "overlap_rows": overlap_count,
+                "primary_rows": primary_count,
+                "other_rows": candidate_count,
+                "overlap_share_of_primary": round(overlap_share_of_primary, 4),
+                "overlap_share_of_other": round(overlap_share_of_other, 4),
+                "jaccard": round(jaccard, 4),
+                "relationship": _classify_segment_overlap(
+                    overlap_share_of_primary=overlap_share_of_primary,
+                    overlap_share_of_other=overlap_share_of_other,
+                    jaccard=jaccard,
+                ),
+            }
+        )
+    items.sort(key=lambda item: (-float(item["jaccard"]), -int(item["overlap_rows"]), str(item["segment"].get("name") or "")))
+    return {
+        "segment": primary_item,
+        "summary": {
+            "journey_rows": len(primary_ids),
+            "compared_segments": len(items),
+            "near_duplicates": sum(1 for item in items if item["relationship"] == "near_duplicate"),
+            "substantial_overlaps": sum(
+                1 for item in items if item["relationship"] in {"near_duplicate", "mostly_contained_in_other", "mostly_contains_other", "substantial_overlap"}
+            ),
+        },
+        "items": items[:8],
     }
 
 

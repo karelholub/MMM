@@ -142,6 +142,28 @@ export interface SegmentAnalysisResponse {
   }
 }
 
+export interface SegmentOverlapItem {
+  segment: SegmentRegistryItem
+  overlap_rows: number
+  primary_rows: number
+  other_rows: number
+  overlap_share_of_primary: number
+  overlap_share_of_other: number
+  jaccard: number
+  relationship: string
+}
+
+export interface SegmentOverlapResponse {
+  segment: SegmentRegistryItem
+  summary: {
+    journey_rows: number
+    compared_segments: number
+    near_duplicates: number
+    substantial_overlaps: number
+  }
+  items: SegmentOverlapItem[]
+}
+
 export interface SegmentFilterState {
   channel: string
   campaign: string

@@ -34,6 +34,7 @@ import {
   isLocalAnalyticalSegment,
   segmentOptionLabel,
   type LocalSegmentDefinitionV2,
+  type SegmentOverlapResponse,
   type SegmentContextResponse,
   type SegmentRegistryItem,
   type SegmentRegistryResponse,
@@ -1314,6 +1315,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
     const [showArchivedSegments, setShowArchivedSegments] = useState(false)
     const [segmentEditorState, setSegmentEditorState] = useState<SegmentEditorState | null>(null)
     const [segmentError, setSegmentError] = useState<string | null>(null)
+    const [selectedOverlapSegmentId, setSelectedOverlapSegmentId] = useState<string>('')
 
     const [notificationsChannelsBaseline, setNotificationsChannelsBaseline] =
       useState<NotificationChannelRow[]>([])
@@ -1345,6 +1347,14 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
           fallbackMessage: 'Failed to load segment context',
         }),
       enabled: activeSection === 'segments',
+    })
+    const segmentOverlapQuery = useQuery<SegmentOverlapResponse>({
+      queryKey: ['segment-overlap', 'settings', selectedOverlapSegmentId],
+      queryFn: async () =>
+        apiGetJson<SegmentOverlapResponse>(`/api/segments/local/${selectedOverlapSegmentId}/overlap`, {
+          fallbackMessage: 'Failed to load segment overlap analysis',
+        }),
+      enabled: activeSection === 'segments' && Boolean(selectedOverlapSegmentId),
     })
     const taxonomyQuery = useQuery<Taxonomy>({
       queryKey: ['taxonomy'],
@@ -1384,6 +1394,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         setSegmentEditorState(null)
         setSegmentError(null)
         await queryClient.invalidateQueries({ queryKey: ['segment-registry'] })
+        await queryClient.invalidateQueries({ queryKey: ['segment-overlap'] })
       },
       onError: (err) => setSegmentError((err as Error).message || 'Failed to create analytical segment'),
     })
@@ -1400,6 +1411,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         setSegmentEditorState(null)
         setSegmentError(null)
         await queryClient.invalidateQueries({ queryKey: ['segment-registry'] })
+        await queryClient.invalidateQueries({ queryKey: ['segment-overlap'] })
       },
       onError: (err) => setSegmentError((err as Error).message || 'Failed to update analytical segment'),
     })
@@ -1410,6 +1422,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         }),
       onSuccess: async () => {
         await queryClient.invalidateQueries({ queryKey: ['segment-registry'] })
+        await queryClient.invalidateQueries({ queryKey: ['segment-overlap'] })
       },
     })
     const restoreSegmentMutation = useMutation({
@@ -1419,8 +1432,20 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         }),
       onSuccess: async () => {
         await queryClient.invalidateQueries({ queryKey: ['segment-registry'] })
+        await queryClient.invalidateQueries({ queryKey: ['segment-overlap'] })
       },
     })
+    useEffect(() => {
+      if (activeSection !== 'segments') return
+      const localSegments = (segmentRegistryQuery.data?.items ?? []).filter(isLocalAnalyticalSegment)
+      if (!localSegments.length) {
+        if (selectedOverlapSegmentId) setSelectedOverlapSegmentId('')
+        return
+      }
+      if (!selectedOverlapSegmentId || !localSegments.some((item) => item.id === selectedOverlapSegmentId)) {
+        setSelectedOverlapSegmentId(localSegments[0]?.id ?? '')
+      }
+    }, [activeSection, segmentRegistryQuery.data?.items, selectedOverlapSegmentId])
     const taxonomyCoverageQuery = useQuery<TaxonomyCoverageResponse>({
       queryKey: ['taxonomy', 'coverage'],
       queryFn: async () => apiGetJson<TaxonomyCoverageResponse>('/api/taxonomy/coverage', { fallbackMessage: 'Failed to load taxonomy coverage' }),
@@ -10704,6 +10729,118 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
               </div>
             </div>
           </div>
+
+          {localSegments.length > 0 ? (
+            <div style={cardStyle}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.md, flexWrap: 'wrap', alignItems: 'center' }}>
+                <div style={{ display: 'grid', gap: 4 }}>
+                  <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                    Overlap and redundancy
+                  </div>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    Inspect how much a saved analytical audience overlaps with the rest of your registry before it becomes duplicated reporting logic.
+                  </div>
+                </div>
+                <select
+                  value={selectedOverlapSegmentId}
+                  onChange={(event) => setSelectedOverlapSegmentId(event.target.value)}
+                  style={{
+                    minWidth: 260,
+                    maxWidth: '100%',
+                    border: `1px solid ${t.color.border}`,
+                    borderRadius: t.radius.sm,
+                    padding: '8px 12px',
+                    background: t.color.surface,
+                  }}
+                >
+                  {localSegments.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {segmentOverlapQuery.data ? (
+                <div style={{ display: 'grid', gap: t.space.md }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(180px, 100%), 1fr))', gap: t.space.sm }}>
+                    <div style={{ ...cardStyle, padding: t.space.md, boxShadow: 'none' }}>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Selected audience</div>
+                      <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                        {segmentOverlapQuery.data.segment.name}
+                      </div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                        {segmentOverlapQuery.data.summary.journey_rows.toLocaleString()} journey rows
+                      </div>
+                    </div>
+                    <div style={{ ...cardStyle, padding: t.space.md, boxShadow: 'none' }}>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Compared segments</div>
+                      <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                        {segmentOverlapQuery.data.summary.compared_segments.toLocaleString()}
+                      </div>
+                    </div>
+                    <div style={{ ...cardStyle, padding: t.space.md, boxShadow: 'none' }}>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Near duplicates</div>
+                      <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                        {segmentOverlapQuery.data.summary.near_duplicates.toLocaleString()}
+                      </div>
+                    </div>
+                    <div style={{ ...cardStyle, padding: t.space.md, boxShadow: 'none' }}>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Substantial overlaps</div>
+                      <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                        {segmentOverlapQuery.data.summary.substantial_overlaps.toLocaleString()}
+                      </div>
+                    </div>
+                  </div>
+
+                  {segmentOverlapQuery.data.items.length > 0 ? (
+                    <div style={{ display: 'grid', gap: t.space.sm }}>
+                      {segmentOverlapQuery.data.items.map((item) => {
+                        const tone: 'accent' | 'muted' | 'warning' =
+                          item.relationship === 'near_duplicate' || item.relationship === 'mostly_contained_in_other' || item.relationship === 'mostly_contains_other'
+                            ? 'warning'
+                            : item.relationship === 'substantial_overlap'
+                            ? 'accent'
+                            : 'muted'
+                        const relationshipLabel = item.relationship.replace(/_/g, ' ')
+                        return (
+                          <div
+                            key={item.segment.id}
+                            style={{
+                              border: `1px solid ${t.color.borderLight}`,
+                              borderRadius: t.radius.md,
+                              padding: t.space.md,
+                              display: 'grid',
+                              gap: t.space.xs,
+                              background: t.color.surface,
+                            }}
+                          >
+                            <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap', alignItems: 'center' }}>
+                              <strong style={{ color: t.color.text }}>{item.segment.name}</strong>
+                              <span style={chipStyle(tone)}>{relationshipLabel}</span>
+                              {item.segment.segment_family ? <span style={chipStyle('muted')}>{item.segment.segment_family.replace(/_/g, ' ')}</span> : null}
+                            </div>
+                            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                              {item.overlap_rows.toLocaleString()} shared journey rows · {Math.round(item.overlap_share_of_primary * 100)}% of selected audience · {Math.round(item.overlap_share_of_other * 100)}% of other audience
+                            </div>
+                            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                              Jaccard similarity {Math.round(item.jaccard * 100)}% · {(item.segment.preview?.journey_rows ?? item.other_rows).toLocaleString()} rows in {item.segment.name}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                      No overlap with other active analytical segments yet. This audience is currently distinct in the registry.
+                    </div>
+                  )}
+                </div>
+              ) : segmentOverlapQuery.isLoading ? (
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Computing overlap analysis…</div>
+              ) : null}
+            </div>
+          ) : null}
 
           <div style={cardStyle}>
             <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
