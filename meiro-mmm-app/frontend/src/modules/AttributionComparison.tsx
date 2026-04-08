@@ -11,8 +11,10 @@ import DecisionStatusCard from '../components/DecisionStatusCard'
 import { type LagInsightsResponse } from '../components/performance/LagInsightsPanel'
 import SegmentOverlapNotice from '../components/segments/SegmentOverlapNotice'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
+import { buildIncrementalityPlannerHref } from '../lib/experimentLinks'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import {
+  buildSegmentComparisonHref,
   isLocalAnalyticalSegment,
   localSegmentCompatibleWithDimensions,
   readLocalSegmentDefinition,
@@ -958,9 +960,46 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
             <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
               Path-length delta: <strong style={{ color: t.color.text }}>{segmentCompareQuery.data.deltas.avg_path_length == null ? '—' : `${segmentCompareQuery.data.deltas.avg_path_length >= 0 ? '+' : ''}${segmentCompareQuery.data.deltas.avg_path_length.toFixed(1)} steps`}</strong>
             </div>
-            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-              Top channels: <strong style={{ color: t.color.text }}>{segmentCompareQuery.data.distributions.primary_channels.map((item) => item.value).slice(0, 2).join(', ') || '—'}</strong> vs <strong style={{ color: t.color.text }}>{segmentCompareQuery.data.distributions.other_channels.map((item) => item.value).slice(0, 2).join(', ') || '—'}</strong>
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                Top channels: <strong style={{ color: t.color.text }}>{segmentCompareQuery.data.distributions.primary_channels.map((item) => item.value).slice(0, 2).join(', ') || '—'}</strong> vs <strong style={{ color: t.color.text }}>{segmentCompareQuery.data.distributions.other_channels.map((item) => item.value).slice(0, 2).join(', ') || '—'}</strong>
+              </div>
             </div>
+          <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', gridColumn: '1 / -1' }}>
+            <a
+              href={buildIncrementalityPlannerHref({
+                conversionKey: conversionKey || null,
+                startAt: journeysSummary?.date_min?.slice(0, 10) || null,
+                endAt: journeysSummary?.date_max?.slice(0, 10) || null,
+                segmentId: selectedSegment.id,
+                name: `Audience test: ${selectedSegment.name} vs ${compareSegment.name}`,
+                notes: `Compare ${selectedSegment.name} against ${compareSegment.name} from Attribution Comparison. Relationship ${segmentCompareQuery.data.overlap.relationship.replace(/_/g, ' ')} with ${(segmentCompareQuery.data.overlap.jaccard * 100).toFixed(0)}% similarity.`,
+              })}
+              style={{
+                border: `1px solid ${t.color.accent}`,
+                background: t.color.accent,
+                color: '#fff',
+                borderRadius: t.radius.sm,
+                padding: '8px 12px',
+                fontSize: t.font.sizeSm,
+                textDecoration: 'none',
+              }}
+            >
+              Draft experiment
+            </a>
+            <a
+              href={buildSegmentComparisonHref(selectedSegment.id, compareSegment.id)}
+              style={{
+                border: `1px solid ${t.color.border}`,
+                background: t.color.surface,
+                color: t.color.text,
+                borderRadius: t.radius.sm,
+                padding: '8px 12px',
+                fontSize: t.font.sizeSm,
+                textDecoration: 'none',
+              }}
+            >
+              Open segment compare
+            </a>
           </div>
         </div>
       ) : null}

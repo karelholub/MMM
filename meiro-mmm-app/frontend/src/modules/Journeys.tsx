@@ -12,9 +12,11 @@ import { tokens as t } from '../theme/tokens'
 import { apiGetJson, apiSendJson, getUserContext, withQuery } from '../lib/apiClient'
 import { buildListQuery, type PaginatedResponse } from '../lib/apiSchemas'
 import { defaultRecentDateRange } from '../lib/dateRange'
+import { buildIncrementalityPlannerHref } from '../lib/experimentLinks'
 import {
   activeLocalSegmentDefinitionFromFilters,
   applyLocalSegmentToFilterState,
+  buildSegmentComparisonHref,
   buildLocalSegmentDefaultName,
   buildSegmentReference,
   clearSegmentReferenceMetadata,
@@ -30,6 +32,7 @@ import {
   type SegmentRegistryResponse,
 } from '../lib/segments'
 import CreateJourneyModal from './journeys/CreateJourneyModal'
+import { buildJourneyHypothesisSeedHref } from '../lib/journeyLinks'
 import {
   createJourneyAlert,
   previewJourneyAlert,
@@ -4096,6 +4099,69 @@ export default function Journeys({
                     <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>{item.value}</div>
                   </div>
                 ))}
+              </div>
+              <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+                <a
+                  href={buildIncrementalityPlannerHref({
+                    conversionKey: selectedDefinition?.conversion_kpi_id || journeysSummary?.primary_kpi_id || null,
+                    startAt: filters.dateFrom,
+                    endAt: filters.dateTo,
+                    segmentId: selectedLocalSegment.id,
+                    name: `Audience journey test: ${selectedLocalSegment.name} vs ${compareLocalSegment.name}`,
+                    notes: `Compare ${selectedLocalSegment.name} against ${compareLocalSegment.name} in Journeys. Relationship ${segmentCompareQuery.data.overlap.relationship.replace(/_/g, ' ')} with ${(segmentCompareQuery.data.overlap.jaccard * 100).toFixed(0)}% similarity.`,
+                  })}
+                  style={{
+                    border: `1px solid ${t.color.accent}`,
+                    background: t.color.accent,
+                    color: '#fff',
+                    borderRadius: t.radius.sm,
+                    padding: '8px 12px',
+                    fontSize: t.font.sizeSm,
+                    textDecoration: 'none',
+                  }}
+                >
+                  Draft experiment
+                </a>
+                {buildJourneyHypothesisSeedHref({
+                  journeyDefinitionId: selectedJourneyId,
+                  title: `Audience journey hypothesis: ${selectedLocalSegment.name} vs ${compareLocalSegment.name}`,
+                  hypothesisText: `${selectedLocalSegment.name} behaves differently from ${compareLocalSegment.name} in this journey definition and should be tested with a targeted intervention.`,
+                  supportCount: segmentCompareQuery.data.primary_summary.journey_rows ?? null,
+                }) ? (
+                  <a
+                    href={buildJourneyHypothesisSeedHref({
+                      journeyDefinitionId: selectedJourneyId,
+                      title: `Audience journey hypothesis: ${selectedLocalSegment.name} vs ${compareLocalSegment.name}`,
+                      hypothesisText: `${selectedLocalSegment.name} behaves differently from ${compareLocalSegment.name} in this journey definition and should be tested with a targeted intervention.`,
+                      supportCount: segmentCompareQuery.data.primary_summary.journey_rows ?? null,
+                    }) || '#'}
+                    style={{
+                      border: `1px solid ${t.color.border}`,
+                      background: t.color.surface,
+                      color: t.color.text,
+                      borderRadius: t.radius.sm,
+                      padding: '8px 12px',
+                      fontSize: t.font.sizeSm,
+                      textDecoration: 'none',
+                    }}
+                  >
+                    Draft hypothesis
+                  </a>
+                ) : null}
+                <a
+                  href={buildSegmentComparisonHref(selectedLocalSegment.id, compareLocalSegment.id)}
+                  style={{
+                    border: `1px solid ${t.color.border}`,
+                    background: t.color.surface,
+                    color: t.color.text,
+                    borderRadius: t.radius.sm,
+                    padding: '8px 12px',
+                    fontSize: t.font.sizeSm,
+                    textDecoration: 'none',
+                  }}
+                >
+                  Open segment compare
+                </a>
               </div>
             </div>
           ) : null}

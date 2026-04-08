@@ -7,8 +7,10 @@ import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import SegmentOverlapNotice from '../components/segments/SegmentOverlapNotice'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { apiGetJson } from '../lib/apiClient'
+import { buildIncrementalityPlannerHref } from '../lib/experimentLinks'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import {
+  buildSegmentComparisonHref,
   isLocalAnalyticalSegment,
   localSegmentCompatibleWithDimensions,
   readLocalSegmentDefinition,
@@ -820,36 +822,75 @@ export default function PathArchetypes() {
       ) : null}
       {selectedSegment && compareSegment && segmentCompareQuery.data ? (
         <div style={{ marginBottom: tkn.space.lg }}>
-          <ContextSummaryStrip
-            minItemWidth={220}
-            items={[
-              {
-                label: 'Relationship',
-                value: `${segmentCompareQuery.data.overlap.relationship.replace(/_/g, ' ')} · ${(segmentCompareQuery.data.overlap.jaccard * 100).toFixed(0)}% similarity`,
-              },
-              {
-                label: 'Journey delta',
-                value:
-                  segmentCompareQuery.data.deltas.journey_rows == null
-                    ? '—'
-                    : `${segmentCompareQuery.data.deltas.journey_rows >= 0 ? '+' : '-'}${Math.abs(segmentCompareQuery.data.deltas.journey_rows).toLocaleString()}`,
-              },
-              {
-                label: 'Median lag delta',
-                value:
-                  segmentCompareQuery.data.deltas.median_lag_days == null
-                    ? '—'
-                    : `${segmentCompareQuery.data.deltas.median_lag_days >= 0 ? '+' : ''}${segmentCompareQuery.data.deltas.median_lag_days}d`,
-              },
-              {
-                label: 'Avg path length delta',
-                value:
-                  segmentCompareQuery.data.deltas.avg_path_length == null
-                    ? '—'
-                    : `${segmentCompareQuery.data.deltas.avg_path_length >= 0 ? '+' : ''}${segmentCompareQuery.data.deltas.avg_path_length.toFixed(1)} steps`,
-              },
-            ]}
-          />
+          <div style={{ display: 'grid', gap: tkn.space.md }}>
+            <ContextSummaryStrip
+              minItemWidth={220}
+              items={[
+                {
+                  label: 'Relationship',
+                  value: `${segmentCompareQuery.data.overlap.relationship.replace(/_/g, ' ')} · ${(segmentCompareQuery.data.overlap.jaccard * 100).toFixed(0)}% similarity`,
+                },
+                {
+                  label: 'Journey delta',
+                  value:
+                    segmentCompareQuery.data.deltas.journey_rows == null
+                      ? '—'
+                      : `${segmentCompareQuery.data.deltas.journey_rows >= 0 ? '+' : '-'}${Math.abs(segmentCompareQuery.data.deltas.journey_rows).toLocaleString()}`,
+                },
+                {
+                  label: 'Median lag delta',
+                  value:
+                    segmentCompareQuery.data.deltas.median_lag_days == null
+                      ? '—'
+                      : `${segmentCompareQuery.data.deltas.median_lag_days >= 0 ? '+' : ''}${segmentCompareQuery.data.deltas.median_lag_days}d`,
+                },
+                {
+                  label: 'Avg path length delta',
+                  value:
+                    segmentCompareQuery.data.deltas.avg_path_length == null
+                      ? '—'
+                      : `${segmentCompareQuery.data.deltas.avg_path_length >= 0 ? '+' : ''}${segmentCompareQuery.data.deltas.avg_path_length.toFixed(1)} steps`,
+                },
+              ]}
+            />
+            <div style={{ display: 'flex', gap: tkn.space.sm, flexWrap: 'wrap' }}>
+              <a
+                href={buildIncrementalityPlannerHref({
+                  conversionKey: conversionLabel,
+                  startAt: journeys?.date_min?.slice(0, 10) || null,
+                  endAt: journeys?.date_max?.slice(0, 10) || null,
+                  segmentId: selectedSegment.id,
+                  name: `Audience archetype test: ${selectedSegment.name} vs ${compareSegment.name}`,
+                  notes: `Compare ${selectedSegment.name} against ${compareSegment.name} in Path Archetypes. Relationship ${segmentCompareQuery.data.overlap.relationship.replace(/_/g, ' ')} with ${(segmentCompareQuery.data.overlap.jaccard * 100).toFixed(0)}% similarity.`,
+                })}
+                style={{
+                  border: `1px solid ${tkn.color.accent}`,
+                  background: tkn.color.accent,
+                  color: '#fff',
+                  borderRadius: tkn.radius.sm,
+                  padding: '8px 12px',
+                  fontSize: tkn.font.sizeSm,
+                  textDecoration: 'none',
+                }}
+              >
+                Draft experiment
+              </a>
+              <a
+                href={buildSegmentComparisonHref(selectedSegment.id, compareSegment.id)}
+                style={{
+                  border: `1px solid ${tkn.color.border}`,
+                  background: tkn.color.surface,
+                  color: tkn.color.text,
+                  borderRadius: tkn.radius.sm,
+                  padding: '8px 12px',
+                  fontSize: tkn.font.sizeSm,
+                  textDecoration: 'none',
+                }}
+              >
+                Open segment compare
+              </a>
+            </div>
+          </div>
         </div>
       ) : null}
 

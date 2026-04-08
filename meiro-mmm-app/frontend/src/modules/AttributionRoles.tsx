@@ -7,7 +7,9 @@ import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import SegmentOverlapNotice from '../components/segments/SegmentOverlapNotice'
 import { apiGetJson } from '../lib/apiClient'
+import { buildIncrementalityPlannerHref } from '../lib/experimentLinks'
 import {
+  buildSegmentComparisonHref,
   localSegmentCompatibleWithDimensions,
   readLocalSegmentDefinition,
   segmentOptionLabel,
@@ -807,6 +809,43 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
                     <strong style={{ color: t.color.text }}>{segmentCompareQuery.data.distributions.other_channels.map((item) => item.value).slice(0, 2).join(', ') || '—'}</strong>
                   </div>
                 </div>
+              </div>
+              <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+                <a
+                  href={buildIncrementalityPlannerHref({
+                    conversionKey: String(conversionKey || ''),
+                    startAt: dateFrom,
+                    endAt: dateTo,
+                    segmentId: selectedSegment.id,
+                    name: `Audience role test: ${selectedSegment.name} vs ${compareSegment.name}`,
+                    notes: `Compare ${selectedSegment.name} against ${compareSegment.name} in Attribution Roles. Relationship ${segmentCompareQuery.data.overlap.relationship.replace(/_/g, ' ')} with ${(segmentCompareQuery.data.overlap.jaccard * 100).toFixed(0)}% similarity.`,
+                  })}
+                  style={{
+                    border: `1px solid ${t.color.accent}`,
+                    background: t.color.accent,
+                    color: '#fff',
+                    borderRadius: t.radius.sm,
+                    padding: '8px 12px',
+                    fontSize: t.font.sizeSm,
+                    textDecoration: 'none',
+                  }}
+                >
+                  Draft experiment
+                </a>
+                <a
+                  href={buildSegmentComparisonHref(selectedSegment.id, compareSegment.id)}
+                  style={{
+                    border: `1px solid ${t.color.border}`,
+                    background: t.color.surface,
+                    color: t.color.text,
+                    borderRadius: t.radius.sm,
+                    padding: '8px 12px',
+                    fontSize: t.font.sizeSm,
+                    textDecoration: 'none',
+                  }}
+                >
+                  Open segment compare
+                </a>
               </div>
             </div>
           </SectionCard>

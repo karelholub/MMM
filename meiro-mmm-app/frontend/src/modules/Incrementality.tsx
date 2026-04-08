@@ -964,13 +964,15 @@ export default function IncrementalityPage() {
     const plannerEnd = params.get('planner_end')
     const plannerName = params.get('planner_name')
     const plannerNotes = params.get('planner_notes')
+    const plannerSegmentId = params.get('planner_segment_id')
     if (
       plannerChannel == null &&
       plannerConversionKey == null &&
       plannerStart == null &&
       plannerEnd == null &&
       plannerName == null &&
-      plannerNotes == null
+      plannerNotes == null &&
+      plannerSegmentId == null
     ) {
       return
     }
@@ -984,16 +986,20 @@ export default function IncrementalityPage() {
       ...(plannerName != null ? { name: plannerName } : {}),
       ...(plannerNotes != null ? { notes: plannerNotes } : {}),
     }))
+    if (plannerSegmentId != null) {
+      setSelectedSegmentId(plannerSegmentId)
+    }
     const summaryParts = [
       plannerChannel ? `channel ${plannerChannel}` : null,
       plannerConversionKey ? `KPI ${plannerConversionKey}` : null,
       plannerStart && plannerEnd ? `${plannerStart} – ${plannerEnd}` : null,
+      plannerSegmentId ? 'saved audience' : null,
     ].filter((value): value is string => Boolean(value))
     setPlannerPrefillSummary(
       summaryParts.length ? `Imported from lag analysis: ${summaryParts.join(' · ')}.` : 'Imported from lag analysis.',
     )
 
-    ;['planner_channel', 'planner_conversion_key', 'planner_start', 'planner_end', 'planner_name', 'planner_notes'].forEach((key) =>
+    ;['planner_channel', 'planner_conversion_key', 'planner_start', 'planner_end', 'planner_name', 'planner_notes', 'planner_segment_id'].forEach((key) =>
       params.delete(key),
     )
     const next = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}${window.location.hash}`

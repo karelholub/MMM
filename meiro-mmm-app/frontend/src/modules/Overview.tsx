@@ -8,6 +8,7 @@ import WorkspaceAssistantPanel from '../components/WorkspaceAssistantPanel'
 import SegmentOverlapNotice from '../components/segments/SegmentOverlapNotice'
 import { navigateForRecommendedAction } from '../lib/recommendedActions'
 import { apiGetJson, apiSendJson, withQuery } from '../lib/apiClient'
+import { buildIncrementalityPlannerHref } from '../lib/experimentLinks'
 import {
   listJourneyAlertDefinitions,
   listJourneyAlertEvents,
@@ -34,6 +35,7 @@ import {
   localSegmentCompatibleWithDimensions,
   readLocalSegmentDefinition,
   segmentOptionLabel,
+  buildSegmentComparisonHref,
   type SegmentAnalysisResponse,
   type SegmentComparisonResponse,
   type SegmentRegistryResponse,
@@ -1435,6 +1437,43 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
                     <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>{item.value}</div>
                   </div>
                 ))}
+              </div>
+              <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+                <a
+                  href={buildIncrementalityPlannerHref({
+                    conversionKey: selectedTileMap.conversions?.kpi_key || 'conversions',
+                    startAt: dateRange.date_from,
+                    endAt: dateRange.date_to,
+                    segmentId: selectedSegment.id,
+                    name: `Audience test: ${selectedSegment.name} vs ${compareSegment.name}`,
+                    notes: `Compare ${selectedSegment.name} against ${compareSegment.name}. Relationship ${segmentCompareQuery.data.overlap.relationship.replace(/_/g, ' ')} with ${(segmentCompareQuery.data.overlap.jaccard * 100).toFixed(0)}% similarity. Revenue delta ${segmentCompareQuery.data.deltas.revenue == null ? 'n/a' : `${segmentCompareQuery.data.deltas.revenue >= 0 ? '+' : '-'}${Math.abs(segmentCompareQuery.data.deltas.revenue).toLocaleString()}`}.`,
+                  })}
+                  style={{
+                    border: `1px solid ${t.color.accent}`,
+                    background: t.color.accent,
+                    color: '#fff',
+                    borderRadius: t.radius.sm,
+                    padding: '8px 12px',
+                    fontSize: t.font.sizeSm,
+                    textDecoration: 'none',
+                  }}
+                >
+                  Draft experiment
+                </a>
+                <a
+                  href={buildSegmentComparisonHref(selectedSegment.id, compareSegment.id)}
+                  style={{
+                    border: `1px solid ${t.color.border}`,
+                    background: t.color.surface,
+                    color: t.color.text,
+                    borderRadius: t.radius.sm,
+                    padding: '8px 12px',
+                    fontSize: t.font.sizeSm,
+                    textDecoration: 'none',
+                  }}
+                >
+                  Open segment compare
+                </a>
               </div>
             </div>
           </SectionCard>
