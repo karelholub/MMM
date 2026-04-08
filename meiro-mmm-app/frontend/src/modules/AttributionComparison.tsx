@@ -18,6 +18,7 @@ import {
   readLocalSegmentDefinition,
   segmentOptionLabel,
   type SegmentAnalysisResponse,
+  type SegmentComparisonResponse,
   type SegmentRegistryResponse,
 } from '../lib/segments'
 
@@ -240,6 +241,7 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
   const [showReplayPanel, setShowReplayPanel] = usePersistentToggle('attribution-comparison:show-replay', false)
   const [showSensitivityPanel, setShowSensitivityPanel] = usePersistentToggle('attribution-comparison:show-sensitivity', false)
   const [selectedSegmentId, setSelectedSegmentId] = useState('')
+  const [compareSegmentId, setCompareSegmentId] = useState('')
   const [sensitivityDraft, setSensitivityDraft] = useState<AttributionSettingsDraft | null>(null)
   const [sharedScenarioSummary, setSharedScenarioSummary] = useState<string | null>(null)
   const [savedSensitivityScenarios, setSavedSensitivityScenarios] = useState<SavedSensitivityScenario[]>(() => {
@@ -272,6 +274,8 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
     const params = new URLSearchParams(window.location.search)
     const segment = params.get('segment')
     if (segment) setSelectedSegmentId(segment)
+    const compareSegment = params.get('compare_segment')
+    if (compareSegment) setCompareSegmentId(compareSegment)
   }, [])
 
   useEffect(() => {
@@ -315,9 +319,11 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
     const params = new URLSearchParams(window.location.search)
     if (selectedSegmentId) params.set('segment', selectedSegmentId)
     else params.delete('segment')
+    if (compareSegmentId) params.set('compare_segment', compareSegmentId)
+    else params.delete('compare_segment')
     const next = `${window.location.pathname}?${params.toString()}${window.location.hash || ''}`
     window.history.replaceState({}, '', next)
-  }, [selectedSegmentId])
+  }, [compareSegmentId, selectedSegmentId])
 
   const sensitivityQuery = useQuery<SensitivityWorkspaceData>({
     queryKey: ['attribution-sensitivity-preview', sensitivityDraft],
@@ -419,6 +425,10 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
     () => localSegmentCompatibleWithDimensions(selectedSegment, ['channel_group']),
     [selectedSegment],
   )
+  const compareSegment = useMemo(
+    () => localSegments.find((item) => item.id === compareSegmentId) ?? null,
+    [localSegments, compareSegmentId],
+  )
   const segmentAnalysisQuery = useQuery<SegmentAnalysisResponse>({
     queryKey: ['attribution-comparison', 'segment-analysis', selectedSegment?.id || 'none', journeysSummary?.date_min, journeysSummary?.date_max],
     queryFn: async () => {
@@ -432,6 +442,15 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
     enabled: Boolean(selectedSegment && journeysSummary?.date_min && journeysSummary?.date_max),
     refetchInterval: false,
   })
+  const segmentCompareQuery = useQuery<SegmentComparisonResponse>({
+    queryKey: ['attribution-comparison', 'segment-compare', selectedSegment?.id || 'none', compareSegment?.id || 'none'],
+    queryFn: async () =>
+      apiGetJson<SegmentComparisonResponse>(`/api/segments/local/${selectedSegment?.id}/compare?other_segment_id=${encodeURIComponent(compareSegment?.id || '')}`, {
+        fallbackMessage: 'Failed to compare saved analytical audiences',
+      }),
+    enabled: Boolean(selectedSegment?.id && compareSegment?.id && selectedSegment?.id !== compareSegment?.id),
+    refetchInterval: false,
+  })
 
   useEffect(() => {
     if (!selectedSegmentId) return
@@ -439,6 +458,11 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
     if (localSegments.some((item) => item.id === selectedSegmentId)) return
     setSelectedSegmentId('')
   }, [localSegments, selectedSegmentId, segmentRegistryQuery.data])
+  useEffect(() => {
+    if (!compareSegmentId) return
+    if (localSegments.some((item) => item.id === compareSegmentId && item.id !== selectedSegmentId)) return
+    setCompareSegmentId('')
+  }, [compareSegmentId, localSegments, selectedSegmentId])
 
   const currentSensitivitySummary = useMemo(() => {
     if (!sensitivityDraft) return 'No draft loaded'
@@ -645,6 +669,9 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
           ? `${selectedSegment.name} is a focused analytical slice. Attribution totals stay workspace-wide, but visible channel rows are filtered to that audience context.`
           : `${selectedSegment.name} is an advanced analytical audience. Attribution totals stay workspace-wide, and this page adds an audience lens instead of pretending the model output can be exactly sliced by one channel rule.`
         : null,
+      selectedSegment && compareSegment && segmentCompareQuery.data
+        ? `${selectedSegment.name} vs ${compareSegment.name}: ${segmentCompareQuery.data.overlap.relationship.replace(/_/g, ' ')} with ${(segmentCompareQuery.data.overlap.jaccard * 100).toFixed(0)}% similarity. Revenue delta is ${segmentCompareQuery.data.deltas.revenue == null ? 'unknown' : `${segmentCompareQuery.data.deltas.revenue >= 0 ? '+' : ''}${formatCurrency(Math.abs(segmentCompareQuery.data.deltas.revenue))}`}.`
+        : null,
       selectedSegment && !selectedSegmentAutoCompatible && segmentAnalysisQuery.data?.summary
         ? `The audience currently matches ${(segmentAnalysisQuery.data.summary.journey_rows ?? 0).toLocaleString()} journey rows with ${segmentAnalysisQuery.data.summary.median_lag_days != null ? `${segmentAnalysisQuery.data.summary.median_lag_days}d` : 'unknown'} median lag.`
         : null,
@@ -653,6 +680,8 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
   }, [
     baselineKey,
     comparisonMode,
+    compareSegment,
+    segmentCompareQuery.data,
     selectedModel,
     selectedSegment,
     selectedSegmentAutoCompatible,
@@ -852,6 +881,90 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
         </div>
       ) : null}
 
+      {selectedSegment && compareSegment && segmentCompareQuery.data ? (
+        <div
+          style={{
+            display: 'grid',
+            gap: t.space.md,
+            marginBottom: t.space.lg,
+            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          }}
+        >
+          <div
+            style={{
+              border: `1px solid ${t.color.borderLight}`,
+              borderRadius: t.radius.md,
+              background: t.color.surface,
+              padding: t.space.md,
+              boxShadow: t.shadowSm,
+              display: 'grid',
+              gap: 6,
+            }}
+          >
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              Audience comparison
+            </div>
+            <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+              {selectedSegment.name} vs {compareSegment.name}
+            </div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              {segmentCompareQuery.data.overlap.relationship.replace(/_/g, ' ')} · {(segmentCompareQuery.data.overlap.jaccard * 100).toFixed(0)}% similarity
+            </div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Revenue delta {segmentCompareQuery.data.deltas.revenue == null ? '—' : `${segmentCompareQuery.data.deltas.revenue >= 0 ? '+' : '-'}${formatCurrency(Math.abs(segmentCompareQuery.data.deltas.revenue))}`}
+            </div>
+          </div>
+          <div
+            style={{
+              border: `1px solid ${t.color.borderLight}`,
+              borderRadius: t.radius.md,
+              background: t.color.surface,
+              padding: t.space.md,
+              boxShadow: t.shadowSm,
+              display: 'grid',
+              gap: 6,
+            }}
+          >
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              Matched journeys
+            </div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              {selectedSegment.name}: <strong style={{ color: t.color.text }}>{(segmentCompareQuery.data.primary_summary.journey_rows ?? 0).toLocaleString()}</strong>
+            </div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              {compareSegment.name}: <strong style={{ color: t.color.text }}>{(segmentCompareQuery.data.other_summary.journey_rows ?? 0).toLocaleString()}</strong>
+            </div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Shared rows: <strong style={{ color: t.color.text }}>{segmentCompareQuery.data.overlap.overlap_rows.toLocaleString()}</strong>
+            </div>
+          </div>
+          <div
+            style={{
+              border: `1px solid ${t.color.borderLight}`,
+              borderRadius: t.radius.md,
+              background: t.color.surface,
+              padding: t.space.md,
+              boxShadow: t.shadowSm,
+              display: 'grid',
+              gap: 6,
+            }}
+          >
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              Lag and path depth
+            </div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Median lag delta: <strong style={{ color: t.color.text }}>{segmentCompareQuery.data.deltas.median_lag_days == null ? '—' : `${segmentCompareQuery.data.deltas.median_lag_days >= 0 ? '+' : ''}${segmentCompareQuery.data.deltas.median_lag_days}d`}</strong>
+            </div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Path-length delta: <strong style={{ color: t.color.text }}>{segmentCompareQuery.data.deltas.avg_path_length == null ? '—' : `${segmentCompareQuery.data.deltas.avg_path_length >= 0 ? '+' : ''}${segmentCompareQuery.data.deltas.avg_path_length.toFixed(1)} steps`}</strong>
+            </div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Top channels: <strong style={{ color: t.color.text }}>{segmentCompareQuery.data.distributions.primary_channels.map((item) => item.value).slice(0, 2).join(', ') || '—'}</strong> vs <strong style={{ color: t.color.text }}>{segmentCompareQuery.data.distributions.other_channels.map((item) => item.value).slice(0, 2).join(', ') || '—'}</strong>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {selectedSegment && !selectedSegmentAutoCompatible && segmentAnalysisQuery.data ? (
         <div
           style={{
@@ -1012,6 +1125,41 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
             ))}
           </select>
         </div>
+
+        {selectedSegment ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 220 }}>
+            <span
+              style={{
+                fontSize: t.font.sizeXs,
+                fontWeight: t.font.weightMedium,
+                color: t.color.textSecondary,
+              }}
+            >
+              Compare with
+            </span>
+            <select
+              value={compareSegmentId}
+              onChange={(e) => setCompareSegmentId(e.target.value)}
+              style={{
+                padding: `${t.space.xs}px ${t.space.sm}px`,
+                fontSize: t.font.sizeXs,
+                borderRadius: t.radius.sm,
+                border: `1px solid ${t.color.border}`,
+                background: t.color.surface,
+                color: t.color.text,
+              }}
+            >
+              <option value="">No paired comparison</option>
+              {localSegments
+                .filter((segment) => segment.id !== selectedSegment.id)
+                .map((segment) => (
+                  <option key={segment.id} value={segment.id}>
+                    {segmentOptionLabel(segment)}
+                  </option>
+                ))}
+            </select>
+          </div>
+        ) : null}
 
         <div
           style={{

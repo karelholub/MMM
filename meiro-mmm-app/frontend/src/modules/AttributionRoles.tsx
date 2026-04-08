@@ -12,6 +12,7 @@ import {
   readLocalSegmentDefinition,
   segmentOptionLabel,
   type SegmentAnalysisResponse,
+  type SegmentComparisonResponse,
   type SegmentRegistryItem,
   type SegmentRegistryResponse,
 } from '../lib/segments'
@@ -152,6 +153,14 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
       return ''
     }
   })
+  const [compareSegmentId, setCompareSegmentId] = useState(() => {
+    if (typeof window === 'undefined') return ''
+    try {
+      return new URLSearchParams(window.location.search).get('compare_segment') || ''
+    } catch {
+      return ''
+    }
+  })
   const [showMethod, setShowMethod] = usePersistentToggle('attribution-roles:show-method', false)
   const [showTable, setShowTable] = usePersistentToggle('attribution-roles:show-table', true)
 
@@ -266,6 +275,10 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
     () => localSegmentCompatibleWithDimensions(selectedSegment, scope === 'channels' ? ['channel_group'] : ['channel_group', 'campaign_id']),
     [scope, selectedSegment],
   )
+  const compareSegment = useMemo<SegmentRegistryItem | null>(
+    () => localSegments.find((item) => item.id === compareSegmentId) ?? null,
+    [compareSegmentId, localSegments],
+  )
   const segmentAnalysisQuery = useQuery<SegmentAnalysisResponse>({
     queryKey: ['attribution-roles', 'segment-analysis', selectedSegment?.id || 'none', dateFrom, dateTo],
     queryFn: async () => {
@@ -276,6 +289,14 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
     },
     enabled: !!selectedSegment && !!dateFrom && !!dateTo,
   })
+  const segmentCompareQuery = useQuery<SegmentComparisonResponse>({
+    queryKey: ['attribution-roles', 'segment-compare', selectedSegment?.id || 'none', compareSegment?.id || 'none'],
+    queryFn: async () =>
+      apiGetJson<SegmentComparisonResponse>(`/api/segments/local/${selectedSegment?.id}/compare?other_segment_id=${encodeURIComponent(compareSegment?.id || '')}`, {
+        fallbackMessage: 'Failed to compare saved analytical audiences',
+      }),
+    enabled: Boolean(selectedSegment?.id && compareSegment?.id && selectedSegment?.id !== compareSegment?.id),
+  })
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -285,9 +306,11 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
     params.set('role', focusRole)
     if (selectedSegmentId) params.set('segment', selectedSegmentId)
     else params.delete('segment')
+    if (compareSegmentId) params.set('compare_segment', compareSegmentId)
+    else params.delete('compare_segment')
     const next = `${window.location.pathname}?${params.toString()}${window.location.hash || ''}`
     window.history.replaceState({}, '', next)
-  }, [focusRole, metric, scope, selectedSegmentId])
+  }, [compareSegmentId, focusRole, metric, scope, selectedSegmentId])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -298,7 +321,15 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
     if (nextScope === 'channels' || nextScope === 'campaigns') setScope(nextScope)
     if (nextMetric === 'conversions' || nextMetric === 'revenue') setMetric(nextMetric)
     if (nextRole === 'first' || nextRole === 'assist' || nextRole === 'last') setFocusRole(nextRole)
+    const nextCompareSegment = params.get('compare_segment')
+    if (nextCompareSegment) setCompareSegmentId(nextCompareSegment)
   }, [])
+
+  useEffect(() => {
+    if (!compareSegmentId) return
+    if (localSegments.some((item) => item.id === compareSegmentId && item.id !== selectedSegmentId)) return
+    setCompareSegmentId('')
+  }, [compareSegmentId, localSegments, selectedSegmentId])
 
   const entities = scope === 'channels' ? channelEntities : campaignEntities
   const advancedSegmentEntities = useMemo<RoleEntity[]>(() => {
@@ -445,6 +476,7 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
     { label: 'Focus segment', value: selectedSegment?.name || 'Workspace baseline' },
     { label: 'Journeys loaded', value: journeysSummary?.count?.toLocaleString() ?? '—' },
   ]
+  const compareConversionsDelta = segmentCompareQuery.data?.deltas.conversions
   const rolesNarrative = useMemo(() => {
     const dominant = topFocusedEntity ? dominantRole(topFocusedEntity, metric) : null
     const largestDelta = segmentComparison
@@ -466,6 +498,9 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
       largestDelta && selectedSegment
         ? `${selectedSegment.name} over-indexes most on ${largestDelta.label.toLowerCase()} behavior, shifting role mix by ${largestDelta.delta == null ? '—' : `${largestDelta.delta >= 0 ? '+' : ''}${(largestDelta.delta * 100).toFixed(1)}pp`} vs workspace.`
         : null,
+      selectedSegment && compareSegment && segmentCompareQuery.data
+        ? `${selectedSegment.name} vs ${compareSegment.name}: ${segmentCompareQuery.data.overlap.relationship.replace(/_/g, ' ')} with ${(segmentCompareQuery.data.overlap.jaccard * 100).toFixed(0)}% similarity. ${metric === 'conversions' ? 'Conversion' : 'Revenue'} delta is ${metric === 'conversions' ? compareConversionsDelta == null ? '—' : `${compareConversionsDelta >= 0 ? '+' : ''}${formatNumber(Math.abs(compareConversionsDelta))}` : segmentCompareQuery.data.deltas.revenue == null ? '—' : `${segmentCompareQuery.data.deltas.revenue >= 0 ? '+' : ''}${formatCurrency(Math.abs(segmentCompareQuery.data.deltas.revenue))}`}.`
+        : null,
       totalRoleValue > 0
         ? `Visible role-accounted ${metric} totals ${metric === 'conversions' ? formatNumber(totalRoleValue) : formatCurrency(totalRoleValue)} across ${visibleEntities.length.toLocaleString()} ${scope}.`
         : null,
@@ -473,9 +508,12 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
     return { headline, items }
   }, [
     concentration,
+    compareSegment,
+    compareConversionsDelta,
     focusRole,
     metric,
     scope,
+    segmentCompareQuery.data,
     segmentComparison,
     selectedSegment,
     topFocusedEntity,
@@ -585,6 +623,25 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
               ))}
             </select>
           </label>
+          {selectedSegment ? (
+            <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+              Compare with
+              <select
+                value={compareSegmentId}
+                onChange={(e) => setCompareSegmentId(e.target.value)}
+                style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, minWidth: 240 }}
+              >
+                <option value="">No paired comparison</option>
+                {localSegments
+                  .filter((segment) => segment.id !== selectedSegment.id)
+                  .map((segment) => (
+                    <option key={segment.id} value={segment.id}>
+                      {segmentOptionLabel(segment)}
+                    </option>
+                  ))}
+              </select>
+            </label>
+          ) : null}
           <a href="/?page=settings#settings/segments" style={{ color: t.color.accent, textDecoration: 'none', fontSize: t.font.sizeSm }}>
             Manage segments
           </a>
@@ -671,6 +728,85 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
                     </div>
                   )
                 })}
+              </div>
+            </div>
+          </SectionCard>
+        ) : null}
+
+        {selectedSegment && compareSegment && segmentCompareQuery.data ? (
+          <SectionCard
+            title="Segment vs segment"
+            subtitle="Direct audience-to-audience comparison for role behavior, lag, and overlap."
+          >
+            <div style={{ display: 'grid', gap: t.space.lg }}>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(min(180px, 100%), 1fr))',
+                  gap: t.space.md,
+                }}
+              >
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bgSubtle }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Relationship</div>
+                  <div style={{ marginTop: t.space.xs, fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                    {segmentCompareQuery.data.overlap.relationship.replace(/_/g, ' ')}
+                  </div>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    {(segmentCompareQuery.data.overlap.jaccard * 100).toFixed(0)}% similarity · {segmentCompareQuery.data.overlap.overlap_rows.toLocaleString()} shared rows
+                  </div>
+                </div>
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bgSubtle }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{selectedSegment.name}</div>
+                  <div style={{ marginTop: t.space.xs, fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                    {(segmentCompareQuery.data.primary_summary.journey_rows ?? 0).toLocaleString()}
+                  </div>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    rows · median lag {segmentCompareQuery.data.primary_summary.median_lag_days != null ? `${segmentCompareQuery.data.primary_summary.median_lag_days}d` : '—'}
+                  </div>
+                </div>
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bgSubtle }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{compareSegment.name}</div>
+                  <div style={{ marginTop: t.space.xs, fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                    {(segmentCompareQuery.data.other_summary.journey_rows ?? 0).toLocaleString()}
+                  </div>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    rows · median lag {segmentCompareQuery.data.other_summary.median_lag_days != null ? `${segmentCompareQuery.data.other_summary.median_lag_days}d` : '—'}
+                  </div>
+                </div>
+              </div>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))',
+                  gap: t.space.md,
+                }}
+              >
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.surface }}>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Role-metric delta</div>
+                  <div style={{ marginTop: t.space.xs, fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                    {metric === 'conversions'
+                      ? segmentCompareQuery.data.deltas.conversions == null
+                        ? '—'
+                        : `${segmentCompareQuery.data.deltas.conversions >= 0 ? '+' : '-'}${formatNumber(Math.abs(segmentCompareQuery.data.deltas.conversions))}`
+                      : segmentCompareQuery.data.deltas.revenue == null
+                        ? '—'
+                        : `${segmentCompareQuery.data.deltas.revenue >= 0 ? '+' : '-'}${formatCurrency(Math.abs(segmentCompareQuery.data.deltas.revenue))}`}
+                  </div>
+                </div>
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.surface }}>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Median lag delta</div>
+                  <div style={{ marginTop: t.space.xs, fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                    {segmentCompareQuery.data.deltas.median_lag_days == null ? '—' : `${segmentCompareQuery.data.deltas.median_lag_days >= 0 ? '+' : ''}${segmentCompareQuery.data.deltas.median_lag_days}d`}
+                  </div>
+                </div>
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.surface }}>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Top role entities</div>
+                  <div style={{ marginTop: t.space.xs, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    <strong style={{ color: t.color.text }}>{segmentCompareQuery.data.distributions.primary_channels.map((item) => item.value).slice(0, 2).join(', ') || '—'}</strong>
+                    {' '}vs{' '}
+                    <strong style={{ color: t.color.text }}>{segmentCompareQuery.data.distributions.other_channels.map((item) => item.value).slice(0, 2).join(', ') || '—'}</strong>
+                  </div>
+                </div>
               </div>
             </div>
           </SectionCard>
