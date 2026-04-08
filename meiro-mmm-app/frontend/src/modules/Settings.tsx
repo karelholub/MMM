@@ -35,6 +35,7 @@ import {
   segmentOptionLabel,
   type LocalSegmentDefinitionV2,
   type SegmentOverlapResponse,
+  type SegmentComparisonResponse,
   type SegmentContextResponse,
   type SegmentRegistryItem,
   type SegmentRegistryResponse,
@@ -1316,6 +1317,8 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
     const [segmentEditorState, setSegmentEditorState] = useState<SegmentEditorState | null>(null)
     const [segmentError, setSegmentError] = useState<string | null>(null)
     const [selectedOverlapSegmentId, setSelectedOverlapSegmentId] = useState<string>('')
+    const [selectedComparePrimaryId, setSelectedComparePrimaryId] = useState<string>('')
+    const [selectedCompareOtherId, setSelectedCompareOtherId] = useState<string>('')
 
     const [notificationsChannelsBaseline, setNotificationsChannelsBaseline] =
       useState<NotificationChannelRow[]>([])
@@ -1356,6 +1359,18 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         }),
       enabled: activeSection === 'segments' && Boolean(selectedOverlapSegmentId),
     })
+    const segmentComparisonQuery = useQuery<SegmentComparisonResponse>({
+      queryKey: ['segment-compare', 'settings', selectedComparePrimaryId, selectedCompareOtherId],
+      queryFn: async () =>
+        apiGetJson<SegmentComparisonResponse>(`/api/segments/local/${selectedComparePrimaryId}/compare?other_segment_id=${encodeURIComponent(selectedCompareOtherId)}`, {
+          fallbackMessage: 'Failed to load segment comparison',
+        }),
+      enabled:
+        activeSection === 'segments' &&
+        Boolean(selectedComparePrimaryId) &&
+        Boolean(selectedCompareOtherId) &&
+        selectedComparePrimaryId !== selectedCompareOtherId,
+    })
     const taxonomyQuery = useQuery<Taxonomy>({
       queryKey: ['taxonomy'],
       queryFn: async () => apiGetJson<Taxonomy>('/api/taxonomy', { fallbackMessage: 'Failed to load taxonomy' }),
@@ -1395,6 +1410,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         setSegmentError(null)
         await queryClient.invalidateQueries({ queryKey: ['segment-registry'] })
         await queryClient.invalidateQueries({ queryKey: ['segment-overlap'] })
+        await queryClient.invalidateQueries({ queryKey: ['segment-compare'] })
       },
       onError: (err) => setSegmentError((err as Error).message || 'Failed to create analytical segment'),
     })
@@ -1412,6 +1428,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         setSegmentError(null)
         await queryClient.invalidateQueries({ queryKey: ['segment-registry'] })
         await queryClient.invalidateQueries({ queryKey: ['segment-overlap'] })
+        await queryClient.invalidateQueries({ queryKey: ['segment-compare'] })
       },
       onError: (err) => setSegmentError((err as Error).message || 'Failed to update analytical segment'),
     })
@@ -1423,6 +1440,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       onSuccess: async () => {
         await queryClient.invalidateQueries({ queryKey: ['segment-registry'] })
         await queryClient.invalidateQueries({ queryKey: ['segment-overlap'] })
+        await queryClient.invalidateQueries({ queryKey: ['segment-compare'] })
       },
     })
     const restoreSegmentMutation = useMutation({
@@ -1433,6 +1451,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       onSuccess: async () => {
         await queryClient.invalidateQueries({ queryKey: ['segment-registry'] })
         await queryClient.invalidateQueries({ queryKey: ['segment-overlap'] })
+        await queryClient.invalidateQueries({ queryKey: ['segment-compare'] })
       },
     })
     useEffect(() => {
@@ -1446,6 +1465,20 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
         setSelectedOverlapSegmentId(localSegments[0]?.id ?? '')
       }
     }, [activeSection, segmentRegistryQuery.data?.items, selectedOverlapSegmentId])
+    useEffect(() => {
+      if (activeSection !== 'segments') return
+      const localSegments = (segmentRegistryQuery.data?.items ?? []).filter(isLocalAnalyticalSegment)
+      if (localSegments.length < 2) {
+        if (selectedComparePrimaryId) setSelectedComparePrimaryId('')
+        if (selectedCompareOtherId) setSelectedCompareOtherId('')
+        return
+      }
+      const ids = localSegments.map((item) => item.id)
+      const primaryId = ids.includes(selectedComparePrimaryId) ? selectedComparePrimaryId : ids[0]
+      let otherId = ids.includes(selectedCompareOtherId) && selectedCompareOtherId !== primaryId ? selectedCompareOtherId : ids.find((id) => id !== primaryId) ?? ''
+      if (selectedComparePrimaryId !== primaryId) setSelectedComparePrimaryId(primaryId)
+      if (selectedCompareOtherId !== otherId) setSelectedCompareOtherId(otherId)
+    }, [activeSection, segmentRegistryQuery.data?.items, selectedComparePrimaryId, selectedCompareOtherId])
     const taxonomyCoverageQuery = useQuery<TaxonomyCoverageResponse>({
       queryKey: ['taxonomy', 'coverage'],
       queryFn: async () => apiGetJson<TaxonomyCoverageResponse>('/api/taxonomy/coverage', { fallbackMessage: 'Failed to load taxonomy coverage' }),
@@ -10838,6 +10871,164 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                 </div>
               ) : segmentOverlapQuery.isLoading ? (
                 <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Computing overlap analysis…</div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {localSegments.length > 1 ? (
+            <div style={cardStyle}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.md, flexWrap: 'wrap', alignItems: 'center' }}>
+                <div style={{ display: 'grid', gap: 4 }}>
+                  <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                    Segment comparison
+                  </div>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    Compare two analytical audiences directly to see whether they differ materially in size, lag, value, and path structure.
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+                  <select
+                    value={selectedComparePrimaryId}
+                    onChange={(event) => setSelectedComparePrimaryId(event.target.value)}
+                    style={{
+                      minWidth: 220,
+                      maxWidth: '100%',
+                      border: `1px solid ${t.color.border}`,
+                      borderRadius: t.radius.sm,
+                      padding: '8px 12px',
+                      background: t.color.surface,
+                    }}
+                  >
+                    {localSegments.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={selectedCompareOtherId}
+                    onChange={(event) => setSelectedCompareOtherId(event.target.value)}
+                    style={{
+                      minWidth: 220,
+                      maxWidth: '100%',
+                      border: `1px solid ${t.color.border}`,
+                      borderRadius: t.radius.sm,
+                      padding: '8px 12px',
+                      background: t.color.surface,
+                    }}
+                  >
+                    {localSegments.filter((item) => item.id !== selectedComparePrimaryId).map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {segmentComparisonQuery.data ? (
+                <div style={{ display: 'grid', gap: t.space.md }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(200px, 100%), 1fr))', gap: t.space.sm }}>
+                    {[
+                      {
+                        label: 'Journey rows',
+                        left: segmentComparisonQuery.data.primary_summary.journey_rows,
+                        right: segmentComparisonQuery.data.other_summary.journey_rows,
+                        delta: segmentComparisonQuery.data.deltas.journey_rows,
+                        formatter: (value: number | null | undefined) => (value ?? 0).toLocaleString(),
+                      },
+                      {
+                        label: 'Conversions',
+                        left: segmentComparisonQuery.data.primary_summary.conversions,
+                        right: segmentComparisonQuery.data.other_summary.conversions,
+                        delta: segmentComparisonQuery.data.deltas.conversions,
+                        formatter: (value: number | null | undefined) => (value ?? 0).toLocaleString(),
+                      },
+                      {
+                        label: 'Revenue',
+                        left: segmentComparisonQuery.data.primary_summary.revenue,
+                        right: segmentComparisonQuery.data.other_summary.revenue,
+                        delta: segmentComparisonQuery.data.deltas.revenue,
+                        formatter: (value: number | null | undefined) => `€${Number(value ?? 0).toLocaleString()}`,
+                      },
+                      {
+                        label: 'Median lag',
+                        left: segmentComparisonQuery.data.primary_summary.median_lag_days,
+                        right: segmentComparisonQuery.data.other_summary.median_lag_days,
+                        delta: segmentComparisonQuery.data.deltas.median_lag_days,
+                        formatter: (value: number | null | undefined) => (value == null ? '—' : `${value}d`),
+                      },
+                      {
+                        label: 'Avg path length',
+                        left: segmentComparisonQuery.data.primary_summary.avg_path_length,
+                        right: segmentComparisonQuery.data.other_summary.avg_path_length,
+                        delta: segmentComparisonQuery.data.deltas.avg_path_length,
+                        formatter: (value: number | null | undefined) => (value == null ? '—' : `${value.toFixed(1)} steps`),
+                      },
+                    ].map((metric) => (
+                      <div key={metric.label} style={{ ...cardStyle, padding: t.space.md, boxShadow: 'none' }}>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{metric.label}</div>
+                        <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                          {segmentComparisonQuery.data.primary_segment.name}: {metric.formatter(metric.left)}
+                        </div>
+                        <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                          {segmentComparisonQuery.data.other_segment.name}: {metric.formatter(metric.right)}
+                        </div>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                          Delta: {metric.delta == null ? '—' : metric.formatter(metric.delta)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(260px, 100%), 1fr))', gap: t.space.sm }}>
+                    <div style={{ ...cardStyle, padding: t.space.md, boxShadow: 'none' }}>
+                      <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap', alignItems: 'center' }}>
+                        <strong style={{ color: t.color.text }}>Audience relationship</strong>
+                        <span style={chipStyle(
+                          segmentComparisonQuery.data.overlap.relationship === 'near_duplicate' ||
+                          segmentComparisonQuery.data.overlap.relationship === 'mostly_contained_in_other' ||
+                          segmentComparisonQuery.data.overlap.relationship === 'mostly_contains_other'
+                            ? 'warning'
+                            : segmentComparisonQuery.data.overlap.relationship === 'substantial_overlap'
+                            ? 'accent'
+                            : 'muted'
+                        )}>
+                          {segmentComparisonQuery.data.overlap.relationship.replace(/_/g, ' ')}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                        {segmentComparisonQuery.data.overlap.overlap_rows.toLocaleString()} shared journey rows
+                      </div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                        {Math.round(segmentComparisonQuery.data.overlap.overlap_share_of_primary * 100)}% of {segmentComparisonQuery.data.primary_segment.name} · {Math.round(segmentComparisonQuery.data.overlap.overlap_share_of_other * 100)}% of {segmentComparisonQuery.data.other_segment.name}
+                      </div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                        Jaccard similarity {Math.round(segmentComparisonQuery.data.overlap.jaccard * 100)}%
+                      </div>
+                    </div>
+                    <div style={{ ...cardStyle, padding: t.space.md, boxShadow: 'none' }}>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Top channels</div>
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                        {segmentComparisonQuery.data.primary_segment.name}: {segmentComparisonQuery.data.distributions.primary_channels.map((item) => item.value).join(', ') || '—'}
+                      </div>
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                        {segmentComparisonQuery.data.other_segment.name}: {segmentComparisonQuery.data.distributions.other_channels.map((item) => item.value).join(', ') || '—'}
+                      </div>
+                    </div>
+                    <div style={{ ...cardStyle, padding: t.space.md, boxShadow: 'none' }}>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Top path types</div>
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                        {segmentComparisonQuery.data.primary_segment.name}: {segmentComparisonQuery.data.distributions.primary_path_types.map((item) => item.value).join(', ') || '—'}
+                      </div>
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                        {segmentComparisonQuery.data.other_segment.name}: {segmentComparisonQuery.data.distributions.other_path_types.map((item) => item.value).join(', ') || '—'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : segmentComparisonQuery.isLoading ? (
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Comparing analytical audiences…</div>
               ) : null}
             </div>
           ) : null}

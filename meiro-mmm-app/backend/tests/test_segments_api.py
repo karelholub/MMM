@@ -315,6 +315,97 @@ def test_local_segment_overlap_analysis(client: TestClient):
     assert top["relationship"] in {"near_duplicate", "mostly_contained_in_other", "mostly_contains_other"}
 
 
+def test_local_segment_compare_analysis(client: TestClient):
+    db_gen = app.dependency_overrides[get_db]()
+    db = next(db_gen)
+    try:
+        db.add_all(
+            [
+                JourneyDefinitionInstanceFact(
+                    date=date(2026, 4, 4),
+                    journey_definition_id="def-1",
+                    conversion_id="conv-1",
+                    profile_id="p-1",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2026, 4, 4, 10, 0, tzinfo=timezone.utc),
+                    path_hash="h-1",
+                    steps_json=["paid_search", "checkout"],
+                    path_length=2,
+                    channel_group="paid_search",
+                    last_touch_channel="google_ads",
+                    campaign_id="brand_search",
+                    device="mobile",
+                    country="cz",
+                    net_revenue_total=100,
+                    net_conversions_total=1,
+                ),
+                JourneyDefinitionInstanceFact(
+                    date=date(2026, 4, 5),
+                    journey_definition_id="def-1",
+                    conversion_id="conv-2",
+                    profile_id="p-2",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2026, 4, 5, 10, 0, tzinfo=timezone.utc),
+                    path_hash="h-2",
+                    steps_json=["email", "checkout"],
+                    path_length=3,
+                    channel_group="email",
+                    last_touch_channel="email",
+                    campaign_id="promo_april",
+                    device="desktop",
+                    country="de",
+                    net_revenue_total=80,
+                    net_conversions_total=1,
+                    time_to_convert_sec=172800,
+                ),
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
+
+    headers_view = {"X-User-Role": "viewer", "X-User-Id": "qa-viewer"}
+    headers_edit = {"X-User-Role": "editor", "X-User-Id": "qa-editor"}
+
+    left = client.post(
+        "/api/segments/local",
+        headers=headers_edit,
+        json={
+            "name": "Paid search journeys",
+            "description": "Left side",
+            "definition": {"rules": [{"field": "channel_group", "op": "eq", "value": "paid_search"}]},
+        },
+    )
+    right = client.post(
+        "/api/segments/local",
+        headers=headers_edit,
+        json={
+            "name": "Long lag journeys",
+            "description": "Right side",
+            "definition": {"rules": [{"field": "lag_days", "op": "gte", "value": 1}]},
+        },
+    )
+    assert left.status_code == 200
+    assert right.status_code == 200
+
+    response = client.get(
+        f"/api/segments/local/{left.json()['id']}/compare?other_segment_id={right.json()['id']}",
+        headers=headers_view,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["primary_segment"]["name"] == "Paid search journeys"
+    assert payload["other_segment"]["name"] == "Long lag journeys"
+    assert payload["primary_summary"]["journey_rows"] == 1
+    assert payload["other_summary"]["journey_rows"] == 1
+    assert payload["overlap"]["relationship"] == "distinct"
+    assert payload["deltas"]["revenue"] == 20.0
+
+
 def test_segment_registry_includes_webhook_derived_meiro_segments(client: TestClient, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(meiro_cdp, "is_connected", lambda: False)
 

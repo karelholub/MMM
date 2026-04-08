@@ -611,6 +611,78 @@ def build_local_segment_overlap(
     }
 
 
+def build_local_segment_comparison(
+    db: Session,
+    *,
+    segment_id: str,
+    other_segment_id: str,
+    workspace_id: str,
+) -> Optional[Dict[str, Any]]:
+    primary_row = get_local_segment_row(db, segment_id=segment_id, workspace_id=workspace_id)
+    other_row = get_local_segment_row(db, segment_id=other_segment_id, workspace_id=workspace_id)
+    if not primary_row or not other_row:
+        return None
+    primary_item = _serialize_local_segment_with_preview(db, primary_row)
+    other_item = _serialize_local_segment_with_preview(db, other_row)
+    primary_definition = dict(primary_item.get("definition") or {})
+    other_definition = dict(other_item.get("definition") or {})
+
+    baseline_count = int(db.query(func.count(JourneyDefinitionInstanceFact.id)).scalar() or 0)
+    primary_rows = _build_scoped_rows_query(db, definition=primary_definition).all()
+    other_rows = _build_scoped_rows_query(db, definition=other_definition).all()
+    primary_summary = _summarize_scoped_rows(primary_rows, baseline_count)
+    other_summary = _summarize_scoped_rows(other_rows, baseline_count)
+
+    primary_ids = {int(row_id) for row_id in _matched_instance_ids(db, definition=primary_definition)}
+    other_ids = {int(row_id) for row_id in _matched_instance_ids(db, definition=other_definition)}
+    overlap_count = len(primary_ids & other_ids)
+    union_count = len(primary_ids | other_ids)
+    overlap_share_of_primary = (overlap_count / len(primary_ids)) if primary_ids else 0.0
+    overlap_share_of_other = (overlap_count / len(other_ids)) if other_ids else 0.0
+    jaccard = (overlap_count / union_count) if union_count else 0.0
+
+    def _delta(key: str) -> Optional[float]:
+        left = primary_summary.get(key)
+        right = other_summary.get(key)
+        if left is None or right is None:
+            return None
+        return round(float(left) - float(right), 2)
+
+    return {
+        "primary_segment": primary_item,
+        "other_segment": other_item,
+        "baseline_summary": {"journey_rows": baseline_count},
+        "primary_summary": primary_summary,
+        "other_summary": other_summary,
+        "overlap": {
+            "overlap_rows": overlap_count,
+            "overlap_share_of_primary": round(overlap_share_of_primary, 4),
+            "overlap_share_of_other": round(overlap_share_of_other, 4),
+            "jaccard": round(jaccard, 4),
+            "relationship": _classify_segment_overlap(
+                overlap_share_of_primary=overlap_share_of_primary,
+                overlap_share_of_other=overlap_share_of_other,
+                jaccard=jaccard,
+            ),
+        },
+        "distributions": {
+            "primary_channels": _top_values_from_rows([row[2] for row in primary_rows], limit=5),
+            "other_channels": _top_values_from_rows([row[2] for row in other_rows], limit=5),
+            "primary_path_types": _top_values_from_rows([row[8] for row in primary_rows], limit=5),
+            "other_path_types": _top_values_from_rows([row[8] for row in other_rows], limit=5),
+        },
+        "deltas": {
+            "journey_rows": _delta("journey_rows"),
+            "share_of_rows": _delta("share_of_rows"),
+            "profiles": _delta("profiles"),
+            "conversions": _delta("conversions"),
+            "revenue": _delta("revenue"),
+            "median_lag_days": _delta("median_lag_days"),
+            "avg_path_length": _delta("avg_path_length"),
+        },
+    }
+
+
 def serialize_local_segment(row: LocalAnalyticalSegment) -> Dict[str, Any]:
     definition = normalize_local_segment_definition(dict(row.definition_json or {}))
     compatibility = _build_segment_compatibility(definition)

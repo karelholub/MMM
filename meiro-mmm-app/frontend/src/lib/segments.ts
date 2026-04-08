@@ -164,6 +164,38 @@ export interface SegmentOverlapResponse {
   items: SegmentOverlapItem[]
 }
 
+export interface SegmentComparisonResponse {
+  primary_segment: SegmentRegistryItem
+  other_segment: SegmentRegistryItem
+  baseline_summary: {
+    journey_rows?: number
+  }
+  primary_summary: SegmentPreview
+  other_summary: SegmentPreview
+  overlap: {
+    overlap_rows: number
+    overlap_share_of_primary: number
+    overlap_share_of_other: number
+    jaccard: number
+    relationship: string
+  }
+  distributions: {
+    primary_channels: SegmentContextDimensionValue[]
+    other_channels: SegmentContextDimensionValue[]
+    primary_path_types: SegmentContextDimensionValue[]
+    other_path_types: SegmentContextDimensionValue[]
+  }
+  deltas: {
+    journey_rows?: number | null
+    share_of_rows?: number | null
+    profiles?: number | null
+    conversions?: number | null
+    revenue?: number | null
+    median_lag_days?: number | null
+    avg_path_length?: number | null
+  }
+}
+
 export interface SegmentFilterState {
   channel: string
   campaign: string

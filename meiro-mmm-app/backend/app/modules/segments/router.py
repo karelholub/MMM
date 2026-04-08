@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.modules.segments.schemas import LocalSegmentPayload
 from app.services_segments import (
     build_local_segment_analysis,
+    build_local_segment_comparison,
     build_local_segment_overlap,
     build_segment_context,
     create_local_segment,
@@ -101,6 +102,23 @@ def create_router(
         item = build_local_segment_overlap(
             db,
             segment_id=segment_id,
+            workspace_id=ctx.workspace_id,
+        )
+        if not item:
+            raise HTTPException(status_code=404, detail="Segment not found")
+        return item
+
+    @router.get("/api/segments/local/{segment_id}/compare")
+    def api_local_segment_compare(
+        segment_id: str,
+        other_segment_id: str = Query(...),
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        item = build_local_segment_comparison(
+            db,
+            segment_id=segment_id,
+            other_segment_id=other_segment_id,
             workspace_id=ctx.workspace_id,
         )
         if not item:
