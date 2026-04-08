@@ -2551,18 +2551,13 @@ export default function Journeys({
             note: `${(summary.journey_rows ?? 0).toLocaleString()} matched journey rows in this definition`,
           },
           {
-            label: 'Profile count',
-            value: summary.profiles != null && (focusedSegmentAnalysisQuery.data?.baseline_summary.journey_rows ?? 0) > 0 ? summary.profiles / Math.max(summary.journey_rows ?? 1, 1) : null,
-            note: `${(summary.profiles ?? 0).toLocaleString()} matched profiles`,
-          },
-          {
             label: 'Conversion share',
             value: currentInsightsSummary?.conversions ? (summary.conversions ?? 0) / Math.max(currentInsightsSummary.conversions, 1) : null,
             note: `${Number(summary.conversions ?? 0).toLocaleString()} conversions in the audience`,
           },
           {
             label: 'Revenue share',
-            value: null,
+            value: currentInsightsSummary?.revenue ? Number(summary.revenue ?? 0) / Math.max(currentInsightsSummary.revenue, 1) : null,
             note: `${Number(summary.revenue ?? 0).toLocaleString()} revenue across matched journeys`,
           },
         ],
@@ -2604,7 +2599,7 @@ export default function Journeys({
         },
       ],
     }
-  }, [currentInsightsSummary?.conversions, flowSegmentComparison, focusedSegmentAnalysisQuery.data?.baseline_summary.journey_rows, focusedSegmentAnalysisQuery.data?.summary, insightsSegmentComparison, selectedLocalSegment, selectedLocalSegmentAutoCompatible])
+  }, [currentInsightsSummary?.conversions, currentInsightsSummary?.revenue, flowSegmentComparison, focusedSegmentAnalysisQuery.data?.summary, insightsSegmentComparison, selectedLocalSegment, selectedLocalSegmentAutoCompatible])
   const pathTableColumns: AnalyticsTableColumn<JourneyPathRow>[] = [
     {
       key: 'path_steps',
