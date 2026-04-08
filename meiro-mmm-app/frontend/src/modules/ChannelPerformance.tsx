@@ -675,83 +675,6 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
 
   const t = tokens
 
-  if (loading) {
-    return (
-      <div
-        style={{
-          background: t.color.surface,
-          border: `1px solid ${t.color.border}`,
-          borderRadius: t.radius.lg,
-          padding: t.space.xxl * 2,
-          textAlign: 'center',
-          boxShadow: t.shadowSm,
-        }}
-      >
-        <p style={{ fontSize: t.font.sizeBase, color: t.color.textSecondary, margin: 0 }}>
-          Loading attribution data…
-        </p>
-        <p style={{ fontSize: t.font.sizeSm, color: t.color.textMuted, marginTop: t.space.sm }}>
-          Models are being computed. This may take a moment.
-        </p>
-      </div>
-    )
-  }
-
-  if (summaryQuery.isError && !channelRows.length) {
-    return (
-      <div
-        style={{
-          background: t.color.surface,
-          border: `1px solid ${t.color.danger}`,
-          borderRadius: t.radius.lg,
-          padding: t.space.xxl,
-          boxShadow: t.shadowSm,
-        }}
-      >
-        <h3 style={{ margin: '0 0 8px', fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.danger }}>
-          Failed to load
-        </h3>
-        <p style={{ margin: 0, fontSize: t.font.sizeMd, color: t.color.textSecondary }}>
-          {(summaryQuery.error as Error)?.message}
-        </p>
-      </div>
-    )
-  }
-
-  if (!channelRows.length) {
-    return (
-      <div
-        style={{
-          background: t.color.surface,
-          border: `1px solid ${t.color.border}`,
-          borderRadius: t.radius.lg,
-          padding: t.space.xxl,
-          boxShadow: t.shadowSm,
-        }}
-      >
-        <h3 style={{ margin: '0 0 8px', fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-          No performance data
-        </h3>
-        <p style={{ margin: 0, fontSize: t.font.sizeMd, color: t.color.textSecondary }}>
-          Load conversion journeys and map expenses to channels, then run attribution models.
-        </p>
-        {latestEventReplayDiagnostics ? (
-          <div style={{ marginTop: t.space.md, display: 'grid', gap: t.space.sm }}>
-            <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Latest raw-event replay diagnosis</div>
-            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-              Events {Number(latestEventReplayDiagnostics.events_loaded || 0).toLocaleString()} · reconstructed profiles {Number(latestEventReplayDiagnostics.profiles_reconstructed || 0).toLocaleString()} · touchpoints {Number(latestEventReplayDiagnostics.touchpoints_reconstructed || 0).toLocaleString()} · conversions {Number(latestEventReplayDiagnostics.conversions_reconstructed || 0).toLocaleString()} · attributable profiles {Number(latestEventReplayDiagnostics.attributable_profiles || 0).toLocaleString()} · persisted journeys {Number(latestEventReplayDiagnostics.journeys_persisted || 0).toLocaleString()}
-            </div>
-            {!!latestEventReplayDiagnostics.warnings?.length && (
-              <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>
-                {latestEventReplayDiagnostics.warnings.join(' · ')}
-              </div>
-            )}
-          </div>
-        ) : null}
-      </div>
-    )
-  }
-
   const summaryCurrent = summaryQuery.data?.totals?.current ?? { spend: 0, visits: 0, revenue: 0, conversions: 0 }
   const summaryPrevious = summaryQuery.data?.totals?.previous ?? { spend: 0, visits: 0, revenue: 0, conversions: 0 }
   const summaryOutcomesCurrent = summaryQuery.data?.totals?.outcomes_current ?? {}
@@ -881,6 +804,83 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     totalValue,
     totalVisits,
   ])
+
+  if (loading) {
+    return (
+      <div
+        style={{
+          background: t.color.surface,
+          border: `1px solid ${t.color.border}`,
+          borderRadius: t.radius.lg,
+          padding: t.space.xxl * 2,
+          textAlign: 'center',
+          boxShadow: t.shadowSm,
+        }}
+      >
+        <p style={{ fontSize: t.font.sizeBase, color: t.color.textSecondary, margin: 0 }}>
+          Loading attribution data…
+        </p>
+        <p style={{ fontSize: t.font.sizeSm, color: t.color.textMuted, marginTop: t.space.sm }}>
+          Models are being computed. This may take a moment.
+        </p>
+      </div>
+    )
+  }
+
+  if (summaryQuery.isError && !channelRows.length) {
+    return (
+      <div
+        style={{
+          background: t.color.surface,
+          border: `1px solid ${t.color.danger}`,
+          borderRadius: t.radius.lg,
+          padding: t.space.xxl,
+          boxShadow: t.shadowSm,
+        }}
+      >
+        <h3 style={{ margin: '0 0 8px', fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.danger }}>
+          Failed to load
+        </h3>
+        <p style={{ margin: 0, fontSize: t.font.sizeMd, color: t.color.textSecondary }}>
+          {(summaryQuery.error as Error)?.message}
+        </p>
+      </div>
+    )
+  }
+
+  if (!channelRows.length) {
+    return (
+      <div
+        style={{
+          background: t.color.surface,
+          border: `1px solid ${t.color.border}`,
+          borderRadius: t.radius.lg,
+          padding: t.space.xxl,
+          boxShadow: t.shadowSm,
+        }}
+      >
+        <h3 style={{ margin: '0 0 8px', fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+          No performance data
+        </h3>
+        <p style={{ margin: 0, fontSize: t.font.sizeMd, color: t.color.textSecondary }}>
+          Load conversion journeys and map expenses to channels, then run attribution models.
+        </p>
+        {latestEventReplayDiagnostics ? (
+          <div style={{ marginTop: t.space.md, display: 'grid', gap: t.space.sm }}>
+            <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Latest raw-event replay diagnosis</div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Events {Number(latestEventReplayDiagnostics.events_loaded || 0).toLocaleString()} · reconstructed profiles {Number(latestEventReplayDiagnostics.profiles_reconstructed || 0).toLocaleString()} · touchpoints {Number(latestEventReplayDiagnostics.touchpoints_reconstructed || 0).toLocaleString()} · conversions {Number(latestEventReplayDiagnostics.conversions_reconstructed || 0).toLocaleString()} · attributable profiles {Number(latestEventReplayDiagnostics.attributable_profiles || 0).toLocaleString()} · persisted journeys {Number(latestEventReplayDiagnostics.journeys_persisted || 0).toLocaleString()}
+            </div>
+            {!!latestEventReplayDiagnostics.warnings?.length && (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>
+                {latestEventReplayDiagnostics.warnings.join(' · ')}
+              </div>
+            )}
+          </div>
+        ) : null}
+      </div>
+    )
+  }
 
   const tableColumns: { key: SortKey; label: string; align: 'left' | 'right'; format: (ch: ChannelData) => string }[] = [
     { key: 'channel', label: 'Channel', align: 'left', format: (ch) => ch.channel },
