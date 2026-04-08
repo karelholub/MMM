@@ -1493,6 +1493,9 @@ export default function ConversionPaths() {
                     .join(' · ')
                 : 'Read-only attribution defaults'}
             </div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              The analysis context above carries the time contract for this page: selected period, materialized outputs through date, and lifecycle freshness for the chosen journey definition.
+            </div>
           </div>
         </CollapsiblePanel>
 

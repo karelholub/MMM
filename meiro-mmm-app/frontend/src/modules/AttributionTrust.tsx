@@ -911,13 +911,13 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
       >
         <div style={{ display: 'grid', gap: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
           <div>
-            Live attribution counts come from the active journey source and current attribution ingestion pipeline. Conversion Paths uses materialized journey-definition outputs, so it can legitimately lag live counts when definitions have not been rebuilt for the latest day.
-          </div>
-          <div>
             Mapping coverage and taxonomy coverage answer different questions: mapping coverage is how much spend or value can be assigned cleanly into modeled entities, while taxonomy coverage is how much source/medium traffic can be classified into channels at all.
           </div>
           <div>
             Direct and unknown shares are not always errors, but high values reduce confidence in path interpretation and make model deltas harder to explain to stakeholders.
+          </div>
+          <div>
+            Use the reconciliation section below for the live-vs-materialized contract. This panel stays focused on how to interpret mapping, taxonomy, and direct/unknown diagnostics.
           </div>
         </div>
       </CollapsiblePanel>

@@ -968,6 +968,9 @@ export default function PathArchetypes() {
                 </>
               ) : null}
             </div>
+            <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+              Reconciliation against workspace-wide converted journeys is handled separately above. This panel stays focused on clustering mechanics and the filters that shape the archetypes themselves.
+            </div>
           </div>
         </CollapsiblePanel>
 
