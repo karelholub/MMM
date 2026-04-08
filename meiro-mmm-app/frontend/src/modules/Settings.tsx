@@ -1301,6 +1301,10 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
             : null
         })()) ||
       'attribution'
+    const initialSegmentPrimaryId =
+      (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('segment_primary')) || ''
+    const initialSegmentOtherId =
+      (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('segment_other')) || ''
 
     const [activeSection, setActiveSection] =
       useState<SectionKey>(initialSection)
@@ -1317,8 +1321,8 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
     const [segmentEditorState, setSegmentEditorState] = useState<SegmentEditorState | null>(null)
     const [segmentError, setSegmentError] = useState<string | null>(null)
     const [selectedOverlapSegmentId, setSelectedOverlapSegmentId] = useState<string>('')
-    const [selectedComparePrimaryId, setSelectedComparePrimaryId] = useState<string>('')
-    const [selectedCompareOtherId, setSelectedCompareOtherId] = useState<string>('')
+    const [selectedComparePrimaryId, setSelectedComparePrimaryId] = useState<string>(initialSegmentPrimaryId)
+    const [selectedCompareOtherId, setSelectedCompareOtherId] = useState<string>(initialSegmentOtherId)
 
     const [notificationsChannelsBaseline, setNotificationsChannelsBaseline] =
       useState<NotificationChannelRow[]>([])

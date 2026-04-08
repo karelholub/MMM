@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { DashboardPage, ContextSummaryStrip, SectionCard, AnalysisShareActions, AnalysisNarrativePanel } from '../components/dashboard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import DecisionStatusCard from '../components/DecisionStatusCard'
+import SegmentOverlapNotice from '../components/segments/SegmentOverlapNotice'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { apiGetJson } from '../lib/apiClient'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
@@ -641,6 +642,8 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
       }
     >
       <ContextSummaryStrip items={summaryItems} />
+
+      <SegmentOverlapNotice selectedSegment={selectedSegment} />
 
       <AnalysisNarrativePanel
         title="What to trust"

@@ -5,6 +5,7 @@ import { useWorkspaceContext } from '../components/WorkspaceContext'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import RecommendedActionsList, { type RecommendedActionItem } from '../components/RecommendedActionsList'
 import WorkspaceAssistantPanel from '../components/WorkspaceAssistantPanel'
+import SegmentOverlapNotice from '../components/segments/SegmentOverlapNotice'
 import { navigateForRecommendedAction } from '../lib/recommendedActions'
 import { apiGetJson, apiSendJson, withQuery } from '../lib/apiClient'
 import {
@@ -1220,6 +1221,8 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
             </div>
           </div>
         </SectionCard>
+
+        <SegmentOverlapNotice selectedSegment={selectedSegment} />
 
         {segmentComparison ? (
           <SectionCard

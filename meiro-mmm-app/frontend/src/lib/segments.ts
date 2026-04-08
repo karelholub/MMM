@@ -196,6 +196,14 @@ export interface SegmentComparisonResponse {
   }
 }
 
+export function buildSegmentComparisonHref(primarySegmentId: string, otherSegmentId?: string | null): string {
+  const params = new URLSearchParams()
+  params.set('page', 'settings')
+  params.set('segment_primary', primarySegmentId)
+  if (otherSegmentId) params.set('segment_other', otherSegmentId)
+  return `/?${params.toString()}#settings/segments`
+}
+
 export interface SegmentFilterState {
   channel: string
   campaign: string

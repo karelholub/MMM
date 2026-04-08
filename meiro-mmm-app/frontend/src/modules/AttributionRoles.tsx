@@ -5,6 +5,7 @@ import { DashboardPage, ContextSummaryStrip, SectionCard, AnalysisShareActions, 
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
+import SegmentOverlapNotice from '../components/segments/SegmentOverlapNotice'
 import { apiGetJson } from '../lib/apiClient'
 import {
   localSegmentCompatibleWithDimensions,
@@ -592,6 +593,8 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
     >
       <div style={{ display: 'grid', gap: t.space.xl }}>
         <ContextSummaryStrip items={summaryItems} minItemWidth={180} />
+
+        <SegmentOverlapNotice selectedSegment={selectedSegment} />
 
         <AnalysisNarrativePanel
           title="What changed"

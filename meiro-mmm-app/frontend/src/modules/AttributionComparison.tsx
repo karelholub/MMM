@@ -9,6 +9,7 @@ import AnalysisShareActions from '../components/dashboard/AnalysisShareActions'
 import AnalysisNarrativePanel from '../components/dashboard/AnalysisNarrativePanel'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import { type LagInsightsResponse } from '../components/performance/LagInsightsPanel'
+import SegmentOverlapNotice from '../components/segments/SegmentOverlapNotice'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import {
@@ -1059,6 +1060,8 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
       </div>
 
       <div style={{ display: 'grid', gap: t.space.lg, marginBottom: t.space.xl }}>
+        <SegmentOverlapNotice selectedSegment={selectedSegment} />
+
         <CollapsiblePanel
           title="Method & Context"
           subtitle="Measurement windows, eligible touchpoints, and the current direct-traffic view filter."
