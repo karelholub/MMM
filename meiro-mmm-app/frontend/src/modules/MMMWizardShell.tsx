@@ -6,6 +6,8 @@ import MMMRunConfigStep from './MMMRunConfigStep'
 import MMMDashboard from './MMMDashboard'
 import BudgetOptimizer from './BudgetOptimizer'
 import { MMMContextBar, KpiMode } from '../components/MMMContextBar'
+import DashboardPage from '../components/dashboard/DashboardPage'
+import SectionCard from '../components/dashboard/SectionCard'
 
 type StepKey = 'data_source' | 'mapping' | 'model_run' | 'results' | 'optimize'
 
@@ -333,196 +335,192 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
   }
 
   const primaryKpi = primaryKpiLabel ?? (kpiMode === 'sales' ? 'Total sales' : 'Marketing-driven conversions')
+  const activeStep = steps[activeStepIndex]
+  const statusLabel =
+    activeStep?.status === 'completed'
+      ? 'Completed'
+      : activeStep?.status === 'ready'
+        ? 'Ready'
+        : 'Not started'
+  const canContinue =
+    activeStepIndex < steps.length - 1 && steps[activeStepIndex + 1]?.status !== 'not_started'
+  const workflowActions =
+    mmmRunId || pendingMmmMapping || mmmDatasetId ? (
+      <button
+        type="button"
+        onClick={() => {
+          onStartOver()
+          setCurrentStep('data_source')
+        }}
+        style={{
+          padding: `${t.space.sm}px ${t.space.lg}px`,
+          fontSize: t.font.sizeSm,
+          fontWeight: t.font.weightMedium,
+          color: t.color.surface,
+          backgroundColor: t.color.textSecondary,
+          border: 'none',
+          borderRadius: t.radius.sm,
+          cursor: 'pointer',
+        }}
+      >
+        Start new MMM run
+      </button>
+    ) : null
 
   return (
-    <div style={{ maxWidth: 1400, margin: '0 auto' }}>
-      {/* Page header */}
-      <div
-        style={{
-          marginBottom: t.space.md,
-          display: 'flex',
-          flexWrap: 'wrap',
-          justifyContent: 'space-between',
-          gap: t.space.md,
-        }}
-      >
-        <div>
-          <h1
-            style={{
-              margin: 0,
-              fontSize: t.font.size2xl,
-              fontWeight: t.font.weightBold,
-              color: t.color.text,
-              letterSpacing: '-0.02em',
-            }}
-          >
-            Marketing Mix Modeling
-          </h1>
-          <p
-            style={{
-              margin: `${t.space.xs}px 0 0`,
-              fontSize: t.font.sizeSm,
-              color: t.color.textSecondary,
-            }}
-          >
-            Measure the incremental impact of media channels on{' '}
-            <strong style={{ color: t.color.text }}>{primaryKpi}</strong> and optimize budget allocation.
-          </p>
-        </div>
-      </div>
+    <DashboardPage
+      title="Marketing Mix Modeling"
+      description={`Model incremental media impact on ${primaryKpi} and move directly from model setup into budget decisions.`}
+      actions={workflowActions}
+      filters={null}
+      dateRange={null}
+    >
+      <div style={{ maxWidth: 1400, margin: '0 auto', display: 'grid', gap: t.space.xl }}>
+        <SectionCard
+          title="Model context"
+          subtitle="MMM now follows the same workspace shell, trust language, and action model as the rest of the app."
+        >
+          <MMMContextBar
+            periodLabel="Weekly (MMM model frequency: W)"
+            periodReadOnly
+            kpiMode={kpiMode}
+            onKpiModeChange={setKpiMode}
+            currencyCode={currencyCode ?? '—'}
+            currencyReadOnly
+            onOpenDataQuality={onOpenDataQuality}
+            activeConfigLabel={activeConfigLabel}
+          />
+        </SectionCard>
 
-      {/* Measurement context bar */}
-      <MMMContextBar
-        periodLabel="Weekly (MMM model frequency: W)"
-        periodReadOnly
-        kpiMode={kpiMode}
-        onKpiModeChange={setKpiMode}
-        currencyCode={currencyCode ?? '—'}
-        currencyReadOnly
-        onOpenDataQuality={onOpenDataQuality}
-        activeConfigLabel={activeConfigLabel}
-      />
-
-      {/* Stepper */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: t.space.md,
-          marginBottom: t.space.lg,
-          overflowX: 'auto',
-          paddingBottom: t.space.xs,
-        }}
-      >
-        {steps.map((step, idx) => {
-          const isActive = step.key === currentStep
-          const isCompleted = step.status === 'completed'
-          const isClickable = step.status !== 'not_started'
-          return (
+        <SectionCard
+          title="Workflow"
+          subtitle="Prepare the dataset, run the model, review results, and move into optimization without leaving the shared workspace flow."
+        >
+          <div style={{ display: 'grid', gap: t.space.lg }}>
             <div
-              key={step.key}
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: t.space.xs,
+                gap: t.space.md,
+                overflowX: 'auto',
+                paddingBottom: t.space.xs,
               }}
             >
+              {steps.map((step, idx) => {
+                const isActive = step.key === currentStep
+                const isCompleted = step.status === 'completed'
+                const isClickable = step.status !== 'not_started'
+                return (
+                  <div
+                    key={step.key}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: t.space.xs,
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setStepSafely(step.key)}
+                      disabled={!isClickable}
+                      style={{
+                        padding: `${t.space.sm}px ${t.space.md}px`,
+                        borderRadius: 999,
+                        border: `1px solid ${
+                          isActive ? t.color.accent : isCompleted ? t.color.success : t.color.border
+                        }`,
+                        backgroundColor: isActive
+                          ? t.color.accent
+                          : isCompleted
+                            ? t.color.successMuted
+                            : t.color.surface,
+                        color: isActive
+                          ? '#ffffff'
+                          : isCompleted
+                            ? t.color.success
+                            : t.color.textSecondary,
+                        cursor: isClickable ? 'pointer' : 'default',
+                        fontSize: t.font.sizeSm,
+                        fontWeight: isActive ? t.font.weightSemibold : t.font.weightMedium,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: t.space.xs,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: 18,
+                          height: 18,
+                          borderRadius: 999,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: t.font.sizeXs,
+                          backgroundColor: isCompleted
+                            ? t.color.success
+                            : isActive
+                              ? 'rgba(15,23,42,0.15)'
+                              : t.color.bg,
+                          color: isCompleted ? '#ffffff' : isActive ? '#ffffff' : t.color.textMuted,
+                        }}
+                      >
+                        {idx + 1}
+                      </span>
+                      <span>{step.label}</span>
+                    </button>
+                    {idx < steps.length - 1 && (
+                      <div
+                        style={{
+                          width: 32,
+                          height: 1,
+                          backgroundColor: t.color.borderLight,
+                          flexShrink: 0,
+                        }}
+                      />
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: t.space.sm,
+              }}
+            >
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                <strong style={{ color: t.color.text }}>Step {activeStepIndex + 1}:</strong> {activeStep?.label}{' '}
+                <span style={{ color: t.color.textMuted }}>({statusLabel})</span>
+              </div>
               <button
                 type="button"
-                onClick={() => setStepSafely(step.key)}
-                disabled={!isClickable}
+                onClick={nextStep}
+                disabled={!canContinue}
                 style={{
-                  padding: `${t.space.sm}px ${t.space.md}px`,
-                  borderRadius: 999,
-                  border: `1px solid ${
-                    isActive ? t.color.accent : isCompleted ? t.color.success : t.color.border
-                  }`,
-                  backgroundColor: isActive
-                    ? t.color.accent
-                    : isCompleted
-                      ? t.color.successMuted
-                      : t.color.surface,
-                  color: isActive
-                    ? '#ffffff'
-                    : isCompleted
-                      ? t.color.success
-                      : t.color.textSecondary,
-                  cursor: isClickable ? 'pointer' : 'default',
+                  padding: `${t.space.sm}px ${t.space.lg}px`,
                   fontSize: t.font.sizeSm,
-                  fontWeight: isActive ? t.font.weightSemibold : t.font.weightMedium,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: t.space.xs,
-                  whiteSpace: 'nowrap',
+                  fontWeight: t.font.weightMedium,
+                  borderRadius: t.radius.sm,
+                  border: 'none',
+                  backgroundColor: canContinue ? t.color.accent : t.color.border,
+                  color: '#ffffff',
+                  cursor: canContinue ? 'pointer' : 'not-allowed',
                 }}
               >
-                <span
-                  style={{
-                    width: 18,
-                    height: 18,
-                    borderRadius: 999,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: t.font.sizeXs,
-                    backgroundColor: isCompleted
-                      ? t.color.success
-                      : isActive
-                        ? 'rgba(15,23,42,0.15)'
-                        : t.color.bg,
-                    color: isCompleted ? '#ffffff' : isActive ? '#ffffff' : t.color.textMuted,
-                  }}
-                >
-                  {idx + 1}
-                </span>
-                <span>{step.label}</span>
+                Continue
               </button>
-              {idx < steps.length - 1 && (
-                <div
-                  style={{
-                    width: 32,
-                    height: 1,
-                    backgroundColor: t.color.borderLight,
-                    flexShrink: 0,
-                  }}
-                />
-              )}
             </div>
-          )
-        })}
-      </div>
+          </div>
+        </SectionCard>
 
-      {/* Step CTA row */}
-      <div
-        style={{
-          marginBottom: t.space.lg,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: t.space.sm,
-        }}
-      >
-        <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-          <strong style={{ color: t.color.text }}>Step {activeStepIndex + 1}:</strong>{' '}
-          {steps[activeStepIndex]?.label}{' '}
-          <span style={{ color: t.color.textMuted }}>
-            ({steps[activeStepIndex]?.status === 'completed'
-              ? 'Completed'
-              : steps[activeStepIndex]?.status === 'ready'
-                ? 'Ready'
-                : 'Not started'}
-            )
-          </span>
-        </div>
-        <button
-          type="button"
-          onClick={nextStep}
-          disabled={activeStepIndex >= steps.length - 1 || steps[activeStepIndex + 1]?.status === 'not_started'}
-          style={{
-            padding: `${t.space.sm}px ${t.space.lg}px`,
-            fontSize: t.font.sizeSm,
-            fontWeight: t.font.weightMedium,
-            borderRadius: t.radius.sm,
-            border: 'none',
-            backgroundColor:
-              activeStepIndex >= steps.length - 1 || steps[activeStepIndex + 1]?.status === 'not_started'
-                ? t.color.border
-                : t.color.accent,
-            color: '#ffffff',
-            cursor:
-              activeStepIndex >= steps.length - 1 || steps[activeStepIndex + 1]?.status === 'not_started'
-                ? 'not-allowed'
-                : 'pointer',
-          }}
-        >
-          Continue
-        </button>
+        {renderStepContent()}
       </div>
-
-      {/* Step content */}
-      {renderStepContent()}
-    </div>
+    </DashboardPage>
   )
 }
 
@@ -566,4 +564,3 @@ function SectionHeader(props: { title: string; subtitle?: string; trailing?: Rea
     </div>
   )
 }
-

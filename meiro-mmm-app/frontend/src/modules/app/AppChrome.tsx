@@ -50,7 +50,7 @@ export const NAV_ITEMS: NavItem[] = [
   { key: 'paths', label: 'Conversion paths', section: 'Journeys', icon: 'JP', breadcrumb: 'Journeys / Conversion paths' },
   { key: 'path_archetypes', label: 'Path archetypes', section: 'Journeys', icon: 'JA', breadcrumb: 'Journeys / Path archetypes' },
   { key: 'incrementality', label: 'Incrementality', section: 'Causal / Planning', icon: 'IC', breadcrumb: 'Causal / Incrementality' },
-  { key: 'mmm', label: 'MMM (advanced)', section: 'Causal / Planning', icon: 'MM', breadcrumb: 'Causal / MMM (advanced)' },
+  { key: 'mmm', label: 'MMM', section: 'Causal / Planning', icon: 'MM', breadcrumb: 'Causal / MMM' },
   { key: 'dq', label: 'Data quality', section: 'Data & Ops', icon: 'DQ', breadcrumb: 'Data & Ops / Data quality' },
   { key: 'datasources', label: 'Data sources', section: 'Data & Ops', icon: 'DS', breadcrumb: 'Data & Ops / Data sources' },
   { key: 'meiro', label: 'Meiro', section: 'Data & Ops', icon: 'ME', breadcrumb: 'Data & Ops / Meiro' },
