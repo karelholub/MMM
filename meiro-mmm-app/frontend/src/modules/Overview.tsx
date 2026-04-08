@@ -700,7 +700,6 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
       return {
         shares: [
           { label: 'Journey share', value: summary.share_of_rows ?? null },
-          { label: 'Profile share', value: summary.profiles != null && summary.journey_rows ? summary.profiles / Math.max(summary.journey_rows, 1) : null },
           { label: 'Conversion share', value: workspaceConversions > 0 ? segmentConversions / workspaceConversions : null },
           { label: 'Revenue share', value: workspaceRevenue > 0 ? segmentRevenue / workspaceRevenue : null },
         ],
@@ -799,6 +798,8 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
             ? 'Visits'
             : 'Spend'
       : null
+    const conversionShare = segmentComparison?.shares.find((item) => item.label === 'Conversion share')?.value ?? null
+    const cvrRate = segmentComparison?.rates.find((item) => item.label === 'CVR')?.segment ?? null
     const headline =
       biggestTileDelta?.delta_pct != null && tileLabel
         ? `${tileLabel} ${biggestTileDelta.delta_pct >= 0 ? 'rose' : 'fell'} ${Math.abs(biggestTileDelta.delta_pct).toFixed(1)}% ${baselineLabel}.`
@@ -817,7 +818,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
           ? `Median time to convert is ${funnelMedianLag.toFixed(1)} days in the current visible slice.`
           : null,
       selectedSegment && segmentComparison
-        ? `${selectedSegment.name} contributes ${formatPercent(segmentComparison.shares[2]?.value)} of visible conversions and runs at ${formatPercent(segmentComparison.rates[0]?.segment)} CVR.`
+        ? `${selectedSegment.name} contributes ${formatPercent(conversionShare)} of visible conversions and runs at ${formatPercent(cvrRate)} CVR.`
         : null,
       selectedSegment && !selectedSegmentAutoCompatible && segmentAnalysisQuery.data?.summary
         ? `This advanced audience matches ${(segmentAnalysisQuery.data.summary.journey_rows ?? 0).toLocaleString()} journey rows with ${segmentAnalysisQuery.data.summary.median_lag_days != null ? `${segmentAnalysisQuery.data.summary.median_lag_days}d` : 'unknown'} median lag.`
@@ -834,6 +835,8 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
     highlights,
     orderedKpiTiles,
     compareSegment,
+    cvrRate,
+    conversionShare,
     segmentCompareQuery.data,
     segmentComparison,
     selectedSegment,
