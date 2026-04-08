@@ -2480,6 +2480,32 @@ export default function Journeys({
     workspaceFlowStats.totalTransitions,
     workspaceInsightsSummary,
   ])
+  const workspaceAudienceBaseline = useMemo(() => {
+    if (!selectedLocalSegment || !insightsSegmentComparison || !flowSegmentComparison) return null
+    const cvrNote = insightsSegmentComparison.rates[0]?.note ?? 'Workspace baseline unavailable'
+    const topLinkNote = flowSegmentComparison.rates[0]?.note ?? 'Workspace flow baseline unavailable'
+    return {
+      name: selectedLocalSegment.name,
+      cards: [
+        insightsSegmentComparison.shares[0],
+        insightsSegmentComparison.shares[1],
+        insightsSegmentComparison.shares[2],
+        flowSegmentComparison.shares[1],
+      ],
+      diagnostics: [
+        {
+          label: 'Baseline CVR',
+          value: insightsSegmentComparison.rates[0]?.value ?? '—',
+          note: cvrNote,
+        },
+        {
+          label: 'Top-link concentration',
+          value: flowSegmentComparison.rates[0]?.value ?? '—',
+          note: topLinkNote,
+        },
+      ],
+    }
+  }, [flowSegmentComparison, insightsSegmentComparison, selectedLocalSegment])
   const pathTableColumns: AnalyticsTableColumn<JourneyPathRow>[] = [
     {
       key: 'path_steps',
@@ -3667,6 +3693,135 @@ export default function Journeys({
             </div>
           ) : null}
           <div style={{ display: 'grid', gap: t.space.md, minWidth: 0 }}>
+          {!selectedDefinitionArchived && selectedLocalSegment ? (
+            baselineInsightsQuery.isLoading || baselineTransitionsQuery.isLoading ? (
+              <div
+                style={{
+                  border: `1px solid ${t.color.borderLight}`,
+                  borderRadius: t.radius.md,
+                  background: t.color.bgSubtle,
+                  padding: t.space.md,
+                  fontSize: t.font.sizeSm,
+                  color: t.color.textSecondary,
+                }}
+              >
+                Loading workspace audience baseline for {selectedLocalSegment.name}…
+              </div>
+            ) : workspaceAudienceBaseline ? (
+              <div
+                style={{
+                  border: `1px solid ${t.color.borderLight}`,
+                  borderRadius: t.radius.md,
+                  background: t.color.surface,
+                  padding: t.space.md,
+                  display: 'grid',
+                  gap: t.space.md,
+                }}
+              >
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    gap: t.space.md,
+                    alignItems: 'flex-start',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <div style={{ display: 'grid', gap: 4 }}>
+                    <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                      Audience baseline vs workspace: {workspaceAudienceBaseline.name}
+                    </div>
+                    <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary, maxWidth: 760 }}>
+                      This analytical slice is active across Journey insights, flow, and path analysis. These cards show how the selected audience differs from the full workspace before you drill into a specific tab.
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <button
+                      type="button"
+                      onClick={() => setFilters((current) => ({ ...current, segment: 'all' }))}
+                      style={{
+                        border: `1px solid ${t.color.border}`,
+                        background: t.color.surface,
+                        color: t.color.text,
+                        borderRadius: t.radius.sm,
+                        fontSize: t.font.sizeSm,
+                        padding: '8px 12px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Clear segment focus
+                    </button>
+                    <a
+                      href="/?page=settings#settings/segments"
+                      style={{
+                        border: `1px solid ${t.color.border}`,
+                        background: t.color.surface,
+                        color: t.color.text,
+                        borderRadius: t.radius.sm,
+                        fontSize: t.font.sizeSm,
+                        padding: '8px 12px',
+                        textDecoration: 'none',
+                      }}
+                    >
+                      Manage segments
+                    </a>
+                  </div>
+                </div>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(min(190px, 100%), 1fr))',
+                    gap: t.space.md,
+                  }}
+                >
+                  {workspaceAudienceBaseline.cards.map((item) => (
+                    <div
+                      key={item.label}
+                      style={{
+                        border: `1px solid ${t.color.borderLight}`,
+                        borderRadius: t.radius.md,
+                        background: t.color.bgSubtle,
+                        padding: t.space.md,
+                        display: 'grid',
+                        gap: 4,
+                      }}
+                    >
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                      <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                        {item.value != null ? formatPercentDetailed(item.value) : '—'}
+                      </div>
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{item.note}</div>
+                    </div>
+                  ))}
+                </div>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))',
+                    gap: t.space.md,
+                  }}
+                >
+                  {workspaceAudienceBaseline.diagnostics.map((item) => (
+                    <div
+                      key={item.label}
+                      style={{
+                        border: `1px solid ${t.color.borderLight}`,
+                        borderRadius: t.radius.md,
+                        background: t.color.surface,
+                        padding: t.space.md,
+                        display: 'grid',
+                        gap: 4,
+                      }}
+                    >
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                      <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>{item.value}</div>
+                      <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{item.note}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null
+          ) : null}
           <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', marginBottom: t.space.md, minWidth: 0 }}>
             {tabs.map((tab) => (
               <button
