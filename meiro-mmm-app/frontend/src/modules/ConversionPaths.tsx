@@ -1239,7 +1239,11 @@ export default function ConversionPaths() {
               items={[
                 { label: 'Journey definition', value: <strong style={{ fontWeight: t.font.weightSemibold }}>{selectedDefinitionName}</strong> },
                 { label: 'Data source', value: data?.source || '—' },
-                { label: 'Covered period', value: data?.date_from && data?.date_to ? `${data.date_from} – ${data.date_to}` : periodLabel },
+                { label: 'Selected period', value: periodLabel },
+                {
+                  label: 'Materialized outputs through',
+                  value: data?.date_to || '—',
+                },
                 { label: 'Last rebuilt', value: formatLifecycleTimestamp(definitionLifecycleQuery.data?.rebuild_state?.last_rebuilt_at) },
                 {
                   label: 'Lifecycle status',

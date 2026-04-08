@@ -375,7 +375,13 @@ export default function PathArchetypes() {
   const qualityBadge = diagnostics?.quality_badge ?? 'ok'
   const stabilityPct = diagnostics?.stability_score_pct ?? null
   const stabilityLabel = diagnostics?.stability_label ?? null
-  const convertedMismatch = journeys?.converted != null && data?.total_converted != null ? journeys.converted !== data.total_converted : false
+  const canCompareToWorkspaceConverted =
+    !selectedSegment &&
+    directMode === 'include'
+  const convertedMismatch =
+    canCompareToWorkspaceConverted && journeys?.converted != null && data?.total_converted != null
+      ? journeys.converted !== data.total_converted
+      : false
   const clusterLagBenchmark = useMemo(
     () => medianOf(clusters.map((cluster) => cluster.time_to_conversion_median_days ?? cluster.avg_time_to_conversion_days)),
     [clusters],
@@ -772,9 +778,10 @@ export default function PathArchetypes() {
           minItemWidth={220}
           items={[
             { label: 'Source', value: 'Live attribution journeys' },
-            { label: 'Period', value: periodLabel },
+            { label: 'Selected period', value: periodLabel },
             { label: 'Conversion KPI', value: conversionLabel },
             { label: 'Focus segment', value: selectedSegment ? selectedSegment.name : 'All journeys' },
+            { label: 'Direct handling', value: directMode },
             {
               label: 'Converted journeys used',
               value: data?.total_converted != null ? data.total_converted.toLocaleString() : '—',
@@ -922,6 +929,17 @@ export default function PathArchetypes() {
           }}
         >
           Workspace summary shows <strong>{journeys?.converted?.toLocaleString() ?? '—'}</strong> converted journeys, while Path Archetypes is currently using <strong>{data?.total_converted?.toLocaleString() ?? '—'}</strong>.
+        </div>
+      ) : null}
+      {!canCompareToWorkspaceConverted && data ? (
+        <div
+          style={{
+            marginBottom: tkn.space.lg,
+            fontSize: tkn.font.sizeSm,
+            color: tkn.color.textSecondary,
+          }}
+        >
+          Workspace-to-archetype converted-journey reconciliation is hidden here because focus-segment or direct-handling settings narrow the clustering basis away from the workspace-wide converted journeys baseline.
         </div>
       ) : null}
 
