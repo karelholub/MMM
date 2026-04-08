@@ -926,18 +926,18 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
               </div>
             </SectionCard>
           ))}
-          <SectionCard
-            title="Observed base"
-            subtitle="Raw observed outcomes in the selected scope and period."
-          >
-            <div style={{ display: 'grid', gap: 6 }}>
+        <SectionCard
+          title="Observed base"
+          subtitle="Raw observed outcomes in the selected scope and period."
+        >
+          <div style={{ display: 'grid', gap: 6 }}>
               <div style={{ fontSize: t.font.sizeXl, fontWeight: t.font.weightSemibold, color: t.color.text }}>
                 {metric === 'conversions' ? formatNumber(totalObservedConversions) : formatCurrency(totalObservedRevenue)}
               </div>
               <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
                 {metric === 'conversions'
-                  ? `${formatCurrency(totalObservedRevenue)} observed revenue across ${entities.length.toLocaleString()} ${scope}`
-                  : `${formatNumber(totalObservedConversions)} observed conversions across ${entities.length.toLocaleString()} ${scope}`}
+                  ? `${formatCurrency(totalObservedRevenue)} observed revenue across ${visibleEntities.length.toLocaleString()} visible ${scope}`
+                  : `${formatNumber(totalObservedConversions)} observed conversions across ${visibleEntities.length.toLocaleString()} visible ${scope}`}
               </div>
             </div>
           </SectionCard>
