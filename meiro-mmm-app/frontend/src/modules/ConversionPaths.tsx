@@ -6,6 +6,7 @@ import DashboardPage from '../components/dashboard/DashboardPage'
 import SectionCard from '../components/dashboard/SectionCard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
+import AnalysisNarrativePanel from '../components/dashboard/AnalysisNarrativePanel'
 import GlobalFilterBar, { type GlobalFiltersState } from '../components/dashboard/GlobalFilterBar'
 import SaveLocalSegmentDialog from '../components/segments/SaveLocalSegmentDialog'
 import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn } from '../components/dashboard'
@@ -751,6 +752,30 @@ export default function ConversionPaths() {
   const directDiag = data?.direct_unknown_diagnostics ?? null
   const nbaConfig = data?.nba_config ?? null
   const hasAvgTimeColumn = filteredAndSortedPaths.some((path) => path.avg_time_to_convert_days != null)
+  const pathsNarrative = useMemo(() => {
+    const topPath = commonPaths[0] ?? null
+    const headline = data
+      ? `The current visible slice contains ${data.total_journeys.toLocaleString()} materialized journeys across ${commonPaths.length.toLocaleString()} ranked common paths.`
+      : 'Conversion path analysis is loaded for the current slice.'
+    const items = [
+      topPath
+        ? `The leading path contributes ${(topPath.share * 100).toFixed(1)}% of visible journeys: ${topPath.path}.`
+        : null,
+      timeDist?.median != null
+        ? `Median time to convert is ${timeDist.median.toFixed(1)} days, with a P90 of ${timeDist.p90?.toFixed(1) ?? timeDist.max.toFixed(1)} days.`
+        : null,
+      directDiag
+        ? `Direct or unknown touches account for ${(directDiag.touchpoint_share * 100).toFixed(1)}% of touchpoints, and ${(directDiag.journeys_ending_direct_share * 100).toFixed(1)}% of journeys end on Direct.`
+        : null,
+      segmentComparison
+        ? `The focused audience contributes ${segmentComparison.journeySharePct?.toFixed(1) ?? '—'}% of workspace journeys and averages ${segmentComparison.focusedAvgLength.toFixed(1)} touches per path.`
+        : null,
+      selectedPath && selectedPathLagNote
+        ? `Selected path family read: ${selectedPathLagNote}`
+        : null,
+    ].filter((item): item is string => Boolean(item))
+    return { headline, items }
+  }, [commonPaths, data, directDiag, segmentComparison, selectedPath, selectedPathLagNote, timeDist])
 
   const loadPathDetails = async (path: string) => {
     setSelectedPath(path)
@@ -1198,6 +1223,13 @@ export default function ConversionPaths() {
             ]}
           />
         ) : null}
+
+        <AnalysisNarrativePanel
+          title="What changed"
+          subtitle="A short readout of the visible path family before you move into the detailed charts and tables."
+          headline={pathsNarrative.headline}
+          items={pathsNarrative.items}
+        />
 
         <CollapsiblePanel
           title="Method & Context"

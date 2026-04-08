@@ -13,6 +13,7 @@ import { useWorkspaceContext } from '../components/WorkspaceContext'
 import AdsActionsDrawer from '../components/ads/AdsActionsDrawer'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
+import AnalysisNarrativePanel from '../components/dashboard/AnalysisNarrativePanel'
 import { getAdsDeepLink, type AdsProviderKey } from '../connectors/adsManagerConnector'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import LagInsightsPanel, { type LagInsightsResponse } from '../components/performance/LagInsightsPanel'
@@ -858,6 +859,42 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
     totalValue,
     totalVisits,
   ])
+  const campaignNarrative = useMemo(() => {
+    const topRevenueCampaign = [...filteredCampaigns].sort((a, b) => b.attributed_value - a.attributed_value)[0] ?? null
+    const topRoasCampaign = [...filteredCampaigns]
+      .filter((item) => item.spend > 0 && item.roas != null)
+      .sort((a, b) => Number(b.roas || 0) - Number(a.roas || 0))[0] ?? null
+    const lagRiskCampaign = [...(lagQuery.data?.items ?? [])]
+      .filter((item) => item.conversions > 0)
+      .sort((a, b) => (b.lag_buckets.over_7d / b.conversions) - (a.lag_buckets.over_7d / a.conversions))[0] ?? null
+    const headline =
+      comparePrevious && totalValue > 0 && Math.abs(summaryQuery.data?.totals?.previous?.revenue ?? 0) > 1e-9
+        ? `Attributed revenue ${totalValue >= (summaryQuery.data?.totals?.previous?.revenue ?? 0) ? 'rose' : 'fell'} ${Math.abs((((totalValue - (summaryQuery.data?.totals?.previous?.revenue ?? 0)) / (summaryQuery.data?.totals?.previous?.revenue ?? 1)) * 100)).toFixed(1)}% vs the previous period.`
+        : 'Campaign performance is loaded for the current slice.'
+    const items = [
+      topRevenueCampaign
+        ? `${topRevenueCampaign.campaign_name || topRevenueCampaign.campaign} is the largest revenue campaign at ${formatCurrency(topRevenueCampaign.attributed_value)}.`
+        : null,
+      topRoasCampaign
+        ? `${topRoasCampaign.campaign_name || topRoasCampaign.campaign} is the most efficient visible campaign at ${Number(topRoasCampaign.roas || 0).toFixed(2)}× ROAS.`
+        : null,
+      lagRiskCampaign
+        ? `${lagRiskCampaign.label} has the heaviest long-lag exposure, with ${((lagRiskCampaign.lag_buckets.over_7d / lagRiskCampaign.conversions) * 100).toFixed(1)}% of conversions taking more than 7 days.`
+        : null,
+      focusedSegmentSummary && selectedSegment
+        ? `${selectedSegment.name} contributes ${focusedSegmentSummary.revenueShare?.toFixed(1) ?? '—'}% of campaign revenue and runs ${formatPercent(focusedSegmentSummary.roasDeltaPct)} vs workspace ROAS.`
+        : null,
+    ].filter((item): item is string => Boolean(item))
+    return { headline, items }
+  }, [
+    comparePrevious,
+    filteredCampaigns,
+    focusedSegmentSummary,
+    lagQuery.data?.items,
+    selectedSegment,
+    summaryQuery.data?.totals?.previous?.revenue,
+    totalValue,
+  ])
 
   if (loading) {
     return (
@@ -1456,6 +1493,15 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
         </SectionCard>
         </div>
       ) : null}
+
+      <div style={{ marginBottom: t.space.xl }}>
+        <AnalysisNarrativePanel
+          title="What changed"
+          subtitle="A short readout of the current campaign mix before you move into charts and tables."
+          headline={campaignNarrative.headline}
+          items={campaignNarrative.items}
+        />
+      </div>
 
       {summaryQuery.data?.readiness && (summaryQuery.data.readiness.status === 'blocked' || summaryQuery.data.readiness.warnings.length > 0) ? (
         <DecisionStatusCard

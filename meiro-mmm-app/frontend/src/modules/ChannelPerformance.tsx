@@ -24,6 +24,7 @@ import { useWorkspaceContext } from '../components/WorkspaceContext'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn, SectionCard } from '../components/dashboard'
+import AnalysisNarrativePanel from '../components/dashboard/AnalysisNarrativePanel'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import LagInsightsPanel, { type LagInsightsResponse } from '../components/performance/LagInsightsPanel'
 import {
@@ -804,6 +805,34 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     totalValue,
     totalVisits,
   ])
+  const channelNarrative = useMemo(() => {
+    const topRevenueChannel = [...filteredForCharts].sort((a, b) => b.attributed_value - a.attributed_value)[0] ?? null
+    const topRoasChannel = [...filteredForCharts].filter((item) => item.spend > 0).sort((a, b) => b.roas - a.roas)[0] ?? null
+    const lagRiskChannel = [...(lagBaselineQuery.data?.items ?? [])]
+      .filter((item) => item.conversions > 0)
+      .sort((a, b) => (b.lag_buckets.over_7d / b.conversions) - (a.lag_buckets.over_7d / a.conversions))[0] ?? null
+    const headline =
+      kpiDeltas?.totalValuePct != null
+        ? `Attributed revenue ${kpiDeltas.totalValuePct >= 0 ? 'rose' : 'fell'} ${Math.abs(kpiDeltas.totalValuePct).toFixed(1)}% vs the previous period.`
+        : 'Channel performance is loaded for the current period.'
+    const items = [
+      topRevenueChannel
+        ? `${topRevenueChannel.channel} is currently the largest revenue channel at ${formatCurrency(topRevenueChannel.attributed_value)}.`
+        : null,
+      topRoasChannel
+        ? `${topRoasChannel.channel} is the most efficient visible channel at ${topRoasChannel.roas.toFixed(2)}× ROAS.`
+        : null,
+      lagRiskChannel
+        ? `${lagRiskChannel.label} has the heaviest long-lag exposure, with ${formatPercent(
+            lagRiskChannel.conversions > 0 ? (lagRiskChannel.lag_buckets.over_7d / lagRiskChannel.conversions) * 100 : null,
+          )} of conversions taking more than 7 days.`
+        : null,
+      focusedSegmentSummary && selectedSegment
+        ? `${selectedSegment.name} contributes ${focusedSegmentSummary.revenueShare?.toFixed(1) ?? '—'}% of revenue and runs ${formatPercent(focusedSegmentSummary.cvrDeltaPct)} vs workspace CVR.`
+        : null,
+    ].filter((item): item is string => Boolean(item))
+    return { headline, items }
+  }, [filteredForCharts, focusedSegmentSummary, kpiDeltas?.totalValuePct, lagBaselineQuery.data?.items, selectedSegment])
 
   if (loading) {
     return (
@@ -1201,6 +1230,15 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
         </SectionCard>
         </div>
       ) : null}
+
+      <div style={{ marginBottom: t.space.xl }}>
+        <AnalysisNarrativePanel
+          title="What changed"
+          subtitle="A short readout of the current channel mix before you move into charts and tables."
+          headline={channelNarrative.headline}
+          items={channelNarrative.items}
+        />
+      </div>
 
       {summaryQuery.data?.readiness && (summaryQuery.data.readiness.status === 'blocked' || summaryQuery.data.readiness.warnings.length > 0) ? (
         <DecisionStatusCard
