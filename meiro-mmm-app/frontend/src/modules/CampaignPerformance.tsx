@@ -771,81 +771,6 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
   const journeysKpis = journeysSummary?.kpi_counts ?? {}
   const availableKpis = Object.keys(journeysKpis)
   const primaryKpiId = journeysSummary?.primary_kpi_id ?? null
-
-  if (loading) {
-    return (
-      <div
-        style={{
-          background: t.color.surface,
-          border: `1px solid ${t.color.border}`,
-          borderRadius: t.radius.lg,
-          padding: t.space.xxl * 2,
-          textAlign: 'center',
-          boxShadow: t.shadowSm,
-        }}
-      >
-        <p style={{ fontSize: t.font.sizeBase, color: t.color.textSecondary, margin: 0 }}>
-          Loading campaign performance…
-        </p>
-      </div>
-    )
-  }
-
-  if (summaryQuery.isError && !campaigns.length) {
-    return (
-      <div
-        style={{
-          background: t.color.surface,
-          border: `1px solid ${t.color.danger}`,
-          borderRadius: t.radius.lg,
-          padding: t.space.xxl,
-          boxShadow: t.shadowSm,
-        }}
-      >
-        <h3 style={{ margin: '0 0 8px', fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.danger }}>
-          Failed to load
-        </h3>
-        <p style={{ margin: 0, fontSize: t.font.sizeMd, color: t.color.textSecondary }}>
-          {(summaryQuery.error as Error)?.message}
-        </p>
-      </div>
-    )
-  }
-
-  if (!campaigns.length) {
-    return (
-      <div
-        style={{
-          background: t.color.surface,
-          border: `1px solid ${t.color.border}`,
-          borderRadius: t.radius.lg,
-          padding: t.space.xxl,
-          boxShadow: t.shadowSm,
-        }}
-      >
-        <h3 style={{ margin: '0 0 8px', fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-          No campaign data
-        </h3>
-        <p style={{ margin: 0, fontSize: t.font.sizeMd, color: t.color.textSecondary }}>
-          {'Load conversion journeys with a "campaign" field on touchpoints (e.g. load sample data), then run attribution models.'}
-        </p>
-        {latestEventReplayDiagnostics ? (
-          <div style={{ marginTop: t.space.md, display: 'grid', gap: t.space.sm }}>
-            <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Latest raw-event replay diagnosis</div>
-            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-              Events {Number(latestEventReplayDiagnostics.events_loaded || 0).toLocaleString()} · reconstructed profiles {Number(latestEventReplayDiagnostics.profiles_reconstructed || 0).toLocaleString()} · touchpoints {Number(latestEventReplayDiagnostics.touchpoints_reconstructed || 0).toLocaleString()} · conversions {Number(latestEventReplayDiagnostics.conversions_reconstructed || 0).toLocaleString()} · attributable profiles {Number(latestEventReplayDiagnostics.attributable_profiles || 0).toLocaleString()} · persisted journeys {Number(latestEventReplayDiagnostics.journeys_persisted || 0).toLocaleString()}
-            </div>
-            {!!latestEventReplayDiagnostics.warnings?.length && (
-              <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>
-                {latestEventReplayDiagnostics.warnings.join(' · ')}
-              </div>
-            )}
-          </div>
-        ) : null}
-      </div>
-    )
-  }
-
   const summaryCurrent = summaryQuery.data?.totals?.current ?? { spend: 0, visits: 0, revenue: 0, conversions: 0 }
   const summaryOutcomesCurrent = summaryQuery.data?.totals?.outcomes_current ?? {}
   const totalSpend = summaryCurrent.spend
@@ -933,6 +858,80 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
     totalValue,
     totalVisits,
   ])
+
+  if (loading) {
+    return (
+      <div
+        style={{
+          background: t.color.surface,
+          border: `1px solid ${t.color.border}`,
+          borderRadius: t.radius.lg,
+          padding: t.space.xxl * 2,
+          textAlign: 'center',
+          boxShadow: t.shadowSm,
+        }}
+      >
+        <p style={{ fontSize: t.font.sizeBase, color: t.color.textSecondary, margin: 0 }}>
+          Loading campaign performance…
+        </p>
+      </div>
+    )
+  }
+
+  if (summaryQuery.isError && !campaigns.length) {
+    return (
+      <div
+        style={{
+          background: t.color.surface,
+          border: `1px solid ${t.color.danger}`,
+          borderRadius: t.radius.lg,
+          padding: t.space.xxl,
+          boxShadow: t.shadowSm,
+        }}
+      >
+        <h3 style={{ margin: '0 0 8px', fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.danger }}>
+          Failed to load
+        </h3>
+        <p style={{ margin: 0, fontSize: t.font.sizeMd, color: t.color.textSecondary }}>
+          {(summaryQuery.error as Error)?.message}
+        </p>
+      </div>
+    )
+  }
+
+  if (!campaigns.length) {
+    return (
+      <div
+        style={{
+          background: t.color.surface,
+          border: `1px solid ${t.color.border}`,
+          borderRadius: t.radius.lg,
+          padding: t.space.xxl,
+          boxShadow: t.shadowSm,
+        }}
+      >
+        <h3 style={{ margin: '0 0 8px', fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+          No campaign data
+        </h3>
+        <p style={{ margin: 0, fontSize: t.font.sizeMd, color: t.color.textSecondary }}>
+          {'Load conversion journeys with a "campaign" field on touchpoints (e.g. load sample data), then run attribution models.'}
+        </p>
+        {latestEventReplayDiagnostics ? (
+          <div style={{ marginTop: t.space.md, display: 'grid', gap: t.space.sm }}>
+            <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Latest raw-event replay diagnosis</div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Events {Number(latestEventReplayDiagnostics.events_loaded || 0).toLocaleString()} · reconstructed profiles {Number(latestEventReplayDiagnostics.profiles_reconstructed || 0).toLocaleString()} · touchpoints {Number(latestEventReplayDiagnostics.touchpoints_reconstructed || 0).toLocaleString()} · conversions {Number(latestEventReplayDiagnostics.conversions_reconstructed || 0).toLocaleString()} · attributable profiles {Number(latestEventReplayDiagnostics.attributable_profiles || 0).toLocaleString()} · persisted journeys {Number(latestEventReplayDiagnostics.journeys_persisted || 0).toLocaleString()}
+            </div>
+            {!!latestEventReplayDiagnostics.warnings?.length && (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>
+                {latestEventReplayDiagnostics.warnings.join(' · ')}
+              </div>
+            )}
+          </div>
+        ) : null}
+      </div>
+    )
+  }
   const coverage = summaryQuery.data?.mapping_coverage
   const roleRows = [...sortedCampaigns]
     .sort((a, b) => b.last_touch_revenue + b.assist_revenue + b.first_touch_revenue - (a.last_touch_revenue + a.assist_revenue + a.first_touch_revenue))
