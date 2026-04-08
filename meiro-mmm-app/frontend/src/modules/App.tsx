@@ -227,10 +227,14 @@ export default function App() {
   )
 
   const journeysQuery = useQuery<JourneysSummary>({
-    queryKey: ['journeys-summary'],
+    queryKey: ['journeys-summary', globalDateRange.dateFrom || 'all', globalDateRange.dateTo || 'all'],
     queryFn: async () => {
       try {
-        return await apiGetJson<JourneysSummary>('/api/attribution/journeys', { fallbackMessage: 'Failed to load journeys summary' })
+        const params = new URLSearchParams()
+        if (globalDateRange.dateFrom) params.set('date_from', globalDateRange.dateFrom)
+        if (globalDateRange.dateTo) params.set('date_to', globalDateRange.dateTo)
+        const suffix = params.toString() ? `?${params.toString()}` : ''
+        return await apiGetJson<JourneysSummary>(`/api/attribution/journeys${suffix}`, { fallbackMessage: 'Failed to load journeys summary' })
       } catch {
         return { loaded: false, count: 0, converted: 0, non_converted: 0 }
       }

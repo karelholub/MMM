@@ -207,7 +207,7 @@ function exportArchetypesCSV(clusters: PathCluster[], meta: { period?: string; c
 }
 
 export default function PathArchetypes() {
-  const { journeysSummary: journeys } = useWorkspaceContext()
+  const { journeysSummary: journeys, globalDateFrom, globalDateTo } = useWorkspaceContext()
   const [kMode, setKMode] = useState<'auto' | 'fixed'>('auto')
   const [kFixed, setKFixed] = useState(6)
   const [selectedId, setSelectedId] = useState<number | null>(null)
@@ -334,8 +334,10 @@ export default function PathArchetypes() {
   const clustersRaw = data?.clusters ?? []
 
   const periodLabel =
-    journeys?.date_min && journeys?.date_max
-      ? `${journeys.date_min.slice(0, 10)} – ${journeys.date_max.slice(0, 10)}`
+    globalDateFrom && globalDateTo
+      ? `${globalDateFrom} – ${globalDateTo}`
+      : journeys?.date_min && journeys?.date_max
+        ? `${journeys.date_min.slice(0, 10)} – ${journeys.date_max.slice(0, 10)}`
       : 'current dataset'
   const conversionLabel =
     journeys?.primary_kpi_label ||
@@ -869,8 +871,8 @@ export default function PathArchetypes() {
               <a
                 href={buildIncrementalityPlannerHref({
                   conversionKey: conversionLabel,
-                  startAt: journeys?.date_min?.slice(0, 10) || null,
-                  endAt: journeys?.date_max?.slice(0, 10) || null,
+                  startAt: globalDateFrom || journeys?.date_min?.slice(0, 10) || null,
+                  endAt: globalDateTo || journeys?.date_max?.slice(0, 10) || null,
                   segmentId: selectedSegment.id,
                   name: `Audience archetype test: ${selectedSegment.name} vs ${compareSegment.name}`,
                   notes: `Compare ${selectedSegment.name} against ${compareSegment.name} in Path Archetypes. Relationship ${segmentCompareQuery.data.overlap.relationship.replace(/_/g, ' ')} with ${(segmentCompareQuery.data.overlap.jaccard * 100).toFixed(0)}% similarity.`,

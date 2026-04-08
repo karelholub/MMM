@@ -329,8 +329,10 @@ function exportPathsCSV(
 
 export default function ConversionPaths() {
   const queryClient = useQueryClient()
-  const { journeysSummary: journeys } = useWorkspaceContext()
-  const [filters, setFilters] = useState<GlobalFiltersState>(() => buildInitialFilters(journeys?.date_min, journeys?.date_max))
+  const { journeysSummary: journeys, globalDateFrom, globalDateTo } = useWorkspaceContext()
+  const [filters, setFilters] = useState<GlobalFiltersState>(() =>
+    buildInitialFilters(globalDateFrom || journeys?.date_min, globalDateTo || journeys?.date_max),
+  )
   const [selectedJourneyId, setSelectedJourneyId] = useState('')
   const [showSaveSegmentModal, setShowSaveSegmentModal] = useState(false)
   const [saveSegmentError, setSaveSegmentError] = useState<string | null>(null)
@@ -542,14 +544,14 @@ export default function ConversionPaths() {
   })
 
   useEffect(() => {
-    if (journeys?.date_min && journeys?.date_max) {
+    if ((globalDateFrom && globalDateTo) || (journeys?.date_min && journeys?.date_max)) {
       setFilters((prev) => ({
         ...prev,
-        dateFrom: journeys.date_min?.slice(0, 10) ?? prev.dateFrom,
-        dateTo: journeys.date_max?.slice(0, 10) ?? prev.dateTo,
+        dateFrom: globalDateFrom || journeys?.date_min?.slice(0, 10) || prev.dateFrom,
+        dateTo: globalDateTo || journeys?.date_max?.slice(0, 10) || prev.dateTo,
       }))
     }
-  }, [journeys?.date_min, journeys?.date_max])
+  }, [globalDateFrom, globalDateTo, journeys?.date_min, journeys?.date_max])
 
   useEffect(() => {
     const defs = definitionsQuery.data?.items ?? []

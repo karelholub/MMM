@@ -111,6 +111,56 @@ def create_router(
             filtered.append(journey)
         return filtered
 
+    def _filter_journeys_to_window(
+        journeys: List[Dict[str, Any]],
+        *,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        if not date_from and not date_to:
+            return journeys
+        try:
+            start = pd.to_datetime(date_from).to_pydatetime() if date_from else None
+            end = pd.to_datetime(date_to).to_pydatetime() if date_to else None
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="date_from/date_to must be YYYY-MM-DD") from exc
+        if start and end and start > end:
+            raise HTTPException(status_code=400, detail="date_from must be <= date_to")
+
+        filtered: List[Dict[str, Any]] = []
+        for journey in journeys or []:
+            touchpoints = journey.get("touchpoints") or []
+            conversions = journey.get("conversions") or []
+            conv_ts = None
+            if conversions and isinstance(conversions[0], dict):
+                conv_raw = conversions[0].get("ts") or conversions[0].get("timestamp")
+                if conv_raw:
+                    parsed = pd.to_datetime(conv_raw, utc=True, errors="coerce")
+                    if not pd.isna(parsed):
+                        conv_ts = parsed.to_pydatetime()
+            if conv_ts is None:
+                tp_times = []
+                for tp in touchpoints:
+                    if not isinstance(tp, dict):
+                        continue
+                    raw = tp.get("ts") or tp.get("timestamp")
+                    if not raw:
+                        continue
+                    parsed = pd.to_datetime(raw, utc=True, errors="coerce")
+                    if pd.isna(parsed):
+                        continue
+                    tp_times.append(parsed.to_pydatetime())
+                conv_ts = max(tp_times) if tp_times else None
+            if conv_ts is None:
+                continue
+            conv_day = conv_ts.date()
+            if start and conv_day < start.date():
+                continue
+            if end and conv_day > end.date():
+                continue
+            filtered.append(journey)
+        return filtered
+
     def _build_consistency_payload(db: Any, journeys: List[Dict[str, Any]]) -> tuple[Dict[str, Any] | None, List[str]]:
         try:
             from app.services_journey_readiness import build_journey_readiness
@@ -145,8 +195,12 @@ def create_router(
         return {"models": attribution_models_obj}
 
     @router.get("/api/attribution/journeys")
-    def get_journeys_summary(db=Depends(get_db_dependency)):
-        journeys = get_journeys_fn(db)
+    def get_journeys_summary(
+        date_from: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+        date_to: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+        db=Depends(get_db_dependency),
+    ):
+        journeys = _filter_journeys_to_window(get_journeys_fn(db), date_from=date_from, date_to=date_to)
         if not journeys:
             runs = get_import_runs_fn(limit=1)
             last_run = runs[0] if runs and runs[0].get("status") == "success" else None

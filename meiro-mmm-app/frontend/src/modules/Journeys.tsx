@@ -964,7 +964,7 @@ export default function Journeys({
   funnelBuilderEnabled,
 }: JourneysProps) {
   const queryClient = useQueryClient()
-  const { journeysSummary, attributionModel, setAttributionModel } = useWorkspaceContext()
+  const { journeysSummary, attributionModel, setAttributionModel, globalDateFrom, globalDateTo } = useWorkspaceContext()
   const user = useMemo(() => getUserContext(), [])
   const featureDisabled = !featureEnabled || !hasPermission
 
@@ -2112,10 +2112,10 @@ export default function Journeys({
   useEffect(() => {
     setFilters((prev) => ({
       ...prev,
-      dateFrom: journeysSummary?.date_min?.slice(0, 10) ?? prev.dateFrom,
-      dateTo: journeysSummary?.date_max?.slice(0, 10) ?? prev.dateTo,
+      dateFrom: globalDateFrom || journeysSummary?.date_min?.slice(0, 10) || prev.dateFrom,
+      dateTo: globalDateTo || journeysSummary?.date_max?.slice(0, 10) || prev.dateTo,
     }))
-  }, [journeysSummary?.date_min, journeysSummary?.date_max])
+  }, [globalDateFrom, globalDateTo, journeysSummary?.date_min, journeysSummary?.date_max])
 
   useEffect(() => {
     const defs = definitionsQuery.data?.items ?? []

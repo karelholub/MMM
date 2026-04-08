@@ -232,7 +232,7 @@ function summarizeSensitivityRisk(preview?: AttributionPreviewResult | null): st
 }
 
 export default function AttributionComparison({ selectedModel, onSelectModel }: AttributionComparisonProps) {
-  const { journeysSummary } = useWorkspaceContext()
+  const { journeysSummary, globalDateFrom, globalDateTo } = useWorkspaceContext()
   const [sortBy, setSortBy] = useState<'channel' | string>('channel')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [comparisonMode, setComparisonMode] = useState<'absolute' | 'delta'>('absolute')
@@ -386,17 +386,20 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
     enabled: !!sensitivityDraft,
     refetchInterval: false,
   })
+  const comparisonDateFrom = globalDateFrom || journeysSummary?.date_min?.slice(0, 10) || ''
+  const comparisonDateTo = globalDateTo || journeysSummary?.date_max?.slice(0, 10) || ''
+
   const channelLagQuery = useQuery<LagInsightsResponse>({
-    queryKey: ['attribution-comparison-channel-lag', journeysSummary?.date_min, journeysSummary?.date_max],
+    queryKey: ['attribution-comparison-channel-lag', comparisonDateFrom || 'none', comparisonDateTo || 'none'],
     queryFn: async () => {
       const params = new URLSearchParams()
-      if (journeysSummary?.date_min) params.set('date_from', journeysSummary.date_min.slice(0, 10))
-      if (journeysSummary?.date_max) params.set('date_to', journeysSummary.date_max.slice(0, 10))
+      if (comparisonDateFrom) params.set('date_from', comparisonDateFrom)
+      if (comparisonDateTo) params.set('date_to', comparisonDateTo)
       return apiGetJson<LagInsightsResponse>(`/api/performance/channel/lag?${params.toString()}`, {
         fallbackMessage: 'Failed to load channel lag analysis',
       })
     },
-    enabled: Boolean(journeysSummary?.date_min && journeysSummary?.date_max),
+    enabled: Boolean(comparisonDateFrom && comparisonDateTo),
     refetchInterval: false,
   })
   const segmentRegistryQuery = useQuery<SegmentRegistryResponse>({
@@ -433,16 +436,16 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
     [localSegments, compareSegmentId],
   )
   const segmentAnalysisQuery = useQuery<SegmentAnalysisResponse>({
-    queryKey: ['attribution-comparison', 'segment-analysis', selectedSegment?.id || 'none', journeysSummary?.date_min, journeysSummary?.date_max],
+    queryKey: ['attribution-comparison', 'segment-analysis', selectedSegment?.id || 'none', comparisonDateFrom || 'none', comparisonDateTo || 'none'],
     queryFn: async () => {
       const params = new URLSearchParams()
-      if (journeysSummary?.date_min) params.set('date_from', journeysSummary.date_min.slice(0, 10))
-      if (journeysSummary?.date_max) params.set('date_to', journeysSummary.date_max.slice(0, 10))
+      if (comparisonDateFrom) params.set('date_from', comparisonDateFrom)
+      if (comparisonDateTo) params.set('date_to', comparisonDateTo)
       return apiGetJson<SegmentAnalysisResponse>(`/api/segments/local/${selectedSegment?.id}/analysis?${params.toString()}`, {
         fallbackMessage: 'Failed to load segment audience analysis',
       })
     },
-    enabled: Boolean(selectedSegment && journeysSummary?.date_min && journeysSummary?.date_max),
+    enabled: Boolean(selectedSegment && comparisonDateFrom && comparisonDateTo),
     refetchInterval: false,
   })
   const segmentCompareQuery = useQuery<SegmentComparisonResponse>({
@@ -521,8 +524,8 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
   const readiness = journeysSummary?.readiness ?? null
   const latestEventReplayDiagnostics = readiness?.details?.latest_event_replay?.diagnostics
   const periodLabel =
-    journeysSummary?.date_min && journeysSummary?.date_max
-      ? `${new Date(journeysSummary.date_min).toLocaleDateString()} – ${new Date(journeysSummary.date_max).toLocaleDateString()}`
+    comparisonDateFrom && comparisonDateTo
+      ? `${new Date(comparisonDateFrom).toLocaleDateString()} – ${new Date(comparisonDateTo).toLocaleDateString()}`
       : 'Current dataset (range not configured)'
   const freshnessLabel =
     journeysSummary?.data_freshness_hours != null
@@ -982,8 +985,8 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
             <a
               href={buildIncrementalityPlannerHref({
                 conversionKey: conversionKey || null,
-                startAt: journeysSummary?.date_min?.slice(0, 10) || null,
-                endAt: journeysSummary?.date_max?.slice(0, 10) || null,
+                startAt: comparisonDateFrom || null,
+                endAt: comparisonDateTo || null,
                 segmentId: selectedSegment.id,
                 name: `Audience test: ${selectedSegment.name} vs ${compareSegment.name}`,
                 notes: `Compare ${selectedSegment.name} against ${compareSegment.name} from Attribution Comparison. Relationship ${segmentCompareQuery.data.overlap.relationship.replace(/_/g, ' ')} with ${(segmentCompareQuery.data.overlap.jaccard * 100).toFixed(0)}% similarity.`,
