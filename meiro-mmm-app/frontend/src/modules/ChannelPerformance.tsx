@@ -193,6 +193,12 @@ interface ChannelSummaryResponse {
     value_mapped: number
     value_total: number
   } | null
+  spend_quality?: {
+    status?: string
+    measured_spend?: number
+    allocated_spend?: number
+    allocated_share?: number
+  } | null
   readiness?: {
     status: string
     blockers: string[]
@@ -693,6 +699,10 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
   const totalCVR = totalVisits > 0 ? totalConversions / totalVisits : 0
   const totalCostPerVisit = totalVisits > 0 ? totalSpend / totalVisits : 0
   const totalRevenuePerVisit = totalVisits > 0 ? totalValue / totalVisits : 0
+  const spendQuality = summaryQuery.data?.spend_quality ?? null
+  const spendSignalWeak = totalSpend < 50
+  const spendAllocatedOnly = (spendQuality?.status || '') === 'allocated_only'
+  const showSpendConfidentSummary = !spendSignalWeak && !spendAllocatedOnly && totalSpend > 0
 
   const periodLabel =
     globalDateFrom && globalDateTo
@@ -823,7 +833,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
       topRevenueChannel
         ? `${topRevenueChannel.channel} is currently the largest revenue channel at ${formatCurrency(topRevenueChannel.attributed_value)}.`
         : null,
-      topRoasChannel
+      showSpendConfidentSummary && topRoasChannel
         ? `${topRoasChannel.channel} is the most efficient visible channel at ${topRoasChannel.roas.toFixed(2)}× ROAS.`
         : null,
       lagRiskChannel
@@ -831,12 +841,22 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
             lagRiskChannel.conversions > 0 ? (lagRiskChannel.lag_buckets.over_7d / lagRiskChannel.conversions) * 100 : null,
           )} of conversions taking more than 7 days.`
         : null,
-      focusedSegmentSummary && selectedSegment
+      focusedSegmentSummary && selectedSegment && showSpendConfidentSummary
         ? `${selectedSegment.name} contributes ${focusedSegmentSummary.revenueShare?.toFixed(1) ?? '—'}% of revenue and runs ${formatPercent(focusedSegmentSummary.cvrDeltaPct)} vs workspace CVR.`
+        : focusedSegmentSummary && selectedSegment
+        ? `${selectedSegment.name} contributes ${focusedSegmentSummary.revenueShare?.toFixed(1) ?? '—'}% of revenue. Spend-based ROAS comparisons are muted because channel spend is ${spendAllocatedOnly ? 'allocated only in this slice' : 'too weak in this slice'}.`
         : null,
     ].filter((item): item is string => Boolean(item))
     return { headline, items }
-  }, [filteredForCharts, focusedSegmentSummary, kpiDeltas?.totalValuePct, lagBaselineQuery.data?.items, selectedSegment])
+  }, [
+    filteredForCharts,
+    focusedSegmentSummary,
+    kpiDeltas?.totalValuePct,
+    lagBaselineQuery.data?.items,
+    selectedSegment,
+    showSpendConfidentSummary,
+    spendAllocatedOnly,
+  ])
 
   if (loading) {
     return (
@@ -1203,11 +1223,6 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
                 note: `${focusedSegmentSummary.visits.toLocaleString()} of ${totalVisits.toLocaleString()}`,
               },
               {
-                label: 'ROAS vs workspace',
-                value: focusedSegmentSummary.roas.toFixed(2),
-                note: `${formatPercent(focusedSegmentSummary.roasDeltaPct)} vs ${totalROAS.toFixed(2)} overall`,
-              },
-              {
                 label: 'CVR vs workspace',
                 value: `${(focusedSegmentSummary.cvr * 100).toFixed(2)}%`,
                 note: `${formatPercent(focusedSegmentSummary.cvrDeltaPct)} vs ${(totalCVR * 100).toFixed(2)}% overall`,
@@ -1223,6 +1238,23 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
                     ? `${focusedSegmentSummary.lagDeltaDays != null && focusedSegmentSummary.lagDeltaDays >= 0 ? '+' : ''}${focusedSegmentSummary.lagDeltaDays?.toFixed(1) ?? '0.0'}d vs ${focusedSegmentSummary.workspaceMedianLag.toFixed(1)}d overall`
                     : 'Lag baseline unavailable',
               },
+              ...(showSpendConfidentSummary
+                ? [
+                    {
+                      label: 'ROAS vs workspace',
+                      value: focusedSegmentSummary.roas.toFixed(2),
+                      note: `${formatPercent(focusedSegmentSummary.roasDeltaPct)} vs ${totalROAS.toFixed(2)} overall`,
+                    },
+                  ]
+                : [
+                    {
+                      label: 'Spend trust',
+                      value: spendAllocatedOnly ? 'Allocated only' : 'Too weak',
+                      note: spendAllocatedOnly
+                        ? 'Channel spend in this slice is allocation-derived, so ROAS comparisons are directional.'
+                        : 'This slice has too little measured spend for confident ROAS comparisons.',
+                    },
+                  ]),
             ].map((item) => (
               <div
                 key={item.label}
