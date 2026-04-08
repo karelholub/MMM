@@ -14,6 +14,7 @@ import AdsActionsDrawer from '../components/ads/AdsActionsDrawer'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import AnalysisNarrativePanel from '../components/dashboard/AnalysisNarrativePanel'
+import SegmentComparisonContextNote from '../components/segments/SegmentComparisonContextNote'
 import { getAdsDeepLink, type AdsProviderKey } from '../connectors/adsManagerConnector'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import LagInsightsPanel, { type LagInsightsResponse } from '../components/performance/LagInsightsPanel'
@@ -1429,6 +1430,15 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
           subtitle={`Focused on ${focusedSegmentSummary.itemCount.toLocaleString()} campaign${focusedSegmentSummary.itemCount === 1 ? '' : 's'} from the selected saved slice.`}
           overflow="visible"
         >
+          <div style={{ display: 'grid', gap: t.space.lg }}>
+          <SegmentComparisonContextNote
+            mode="exact_filter"
+            pageLabel="visible campaign rows"
+            basisLabel="visible campaign summary rows under the current filters"
+            primaryLabel={selectedSegment?.name || 'Selected audience'}
+            primaryRows={focusedSegmentSummary.itemCount}
+            baselineRows={workspaceCampaigns.length}
+          />
           <div
             style={{
               display: 'grid',
@@ -1489,6 +1499,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
                 <div style={{ marginTop: t.space.xs, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>{item.note}</div>
               </div>
             ))}
+          </div>
           </div>
         </SectionCard>
         </div>

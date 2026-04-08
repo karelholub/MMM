@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { DashboardPage, ContextSummaryStrip, SectionCard, AnalysisShareActions, AnalysisNarrativePanel } from '../components/dashboard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import DecisionStatusCard from '../components/DecisionStatusCard'
+import SegmentComparisonContextNote from '../components/segments/SegmentComparisonContextNote'
 import SegmentOverlapNotice from '../components/segments/SegmentOverlapNotice'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { apiGetJson } from '../lib/apiClient'
@@ -658,6 +659,14 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
           subtitle="This compares the selected audience's attributable and path diagnostics against the full workspace baseline. Source freshness and taxonomy coverage stay global."
         >
           <div style={{ display: 'grid', gap: t.space.lg }}>
+            <SegmentComparisonContextNote
+              mode={selectedSegmentAutoCompatible ? 'exact_filter' : 'analytical_lens'}
+              pageLabel="trust diagnostics"
+              basisLabel="matched journey-instance rows, with workspace-wide freshness and taxonomy diagnostics layered on top"
+              primaryLabel={selectedSegment?.name || 'Selected audience'}
+              primaryRows={segmentAnalysisQuery.data?.summary.journey_rows}
+              baselineRows={segmentAnalysisQuery.data?.baseline_summary.journey_rows}
+            />
             <div
               style={{
                 display: 'grid',

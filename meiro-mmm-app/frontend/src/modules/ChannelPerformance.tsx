@@ -25,6 +25,7 @@ import DecisionStatusCard from '../components/DecisionStatusCard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn, SectionCard } from '../components/dashboard'
 import AnalysisNarrativePanel from '../components/dashboard/AnalysisNarrativePanel'
+import SegmentComparisonContextNote from '../components/segments/SegmentComparisonContextNote'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import LagInsightsPanel, { type LagInsightsResponse } from '../components/performance/LagInsightsPanel'
 import {
@@ -1166,6 +1167,15 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
           subtitle={`Focused on ${selectedSegmentDefinition.channel_group || 'selected channels'} with the same direct-handling view as the page.`}
           overflow="visible"
         >
+          <div style={{ display: 'grid', gap: t.space.lg }}>
+          <SegmentComparisonContextNote
+            mode="exact_filter"
+            pageLabel="visible channel rows"
+            basisLabel="visible channel summary rows under the current direct-handling mode"
+            primaryLabel={selectedSegment?.name || 'Selected audience'}
+            primaryRows={focusedSegmentRows.length}
+            baselineRows={workspaceRows.length}
+          />
           <div
             style={{
               display: 'grid',
@@ -1226,6 +1236,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
                 <div style={{ marginTop: t.space.xs, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>{item.note}</div>
               </div>
             ))}
+          </div>
           </div>
         </SectionCard>
         </div>
