@@ -1039,9 +1039,27 @@ export default function ConversionPaths() {
   const selectedDefinitionName = selectedDefinition?.name || 'Journey definition'
   const lifecycleStatus = definitionLifecycleQuery.data?.rebuild_state?.status || selectedDefinition?.lifecycle_status || 'active'
   const liveJourneyCount = journeys?.count ?? null
-  const countMismatch = liveJourneyCount != null && data ? liveJourneyCount !== data.total_journeys : false
+  const liveJourneyThrough = globalDateTo || journeys?.date_max?.slice(0, 10) || null
+  const hasScopedComparison =
+    filters.channel !== 'all' ||
+    filters.campaign !== 'all' ||
+    filters.device !== 'all' ||
+    filters.geo !== 'all' ||
+    filters.segment !== 'all' ||
+    directMode !== 'include' ||
+    pathScope !== 'all'
+  const isPreferredWorkspaceDefinition =
+    !preferredDefinitionQuery.data?.journey_definition_id ||
+    selectedJourneyId === preferredDefinitionQuery.data.journey_definition_id
+  const canCompareToWorkspaceLiveJourneys = !hasScopedComparison && isPreferredWorkspaceDefinition
+  const countMismatch =
+    canCompareToWorkspaceLiveJourneys && liveJourneyCount != null && data
+      ? liveJourneyCount !== data.total_journeys
+      : false
   const rangeMismatch =
-    Boolean(journeys?.date_max && data?.date_to) && journeys?.date_max?.slice(0, 10) !== data?.date_to
+    canCompareToWorkspaceLiveJourneys &&
+    Boolean(liveJourneyThrough && data?.date_to) &&
+    liveJourneyThrough !== data?.date_to
   const dashboardLoading =
     definitionsQuery.isLoading ||
     (!selectedJourneyId && preferredDefinitionQuery.isLoading) ||
@@ -1234,9 +1252,14 @@ export default function ConversionPaths() {
             {countMismatch || rangeMismatch ? (
               <div style={{ padding: t.space.md, borderRadius: t.radius.md, border: `1px solid ${t.color.warning}`, background: t.color.warningMuted, fontSize: t.font.sizeSm, color: t.color.text }}>
                 Workspace attribution currently shows <strong>{liveJourneyCount?.toLocaleString() ?? '—'}</strong> live journeys through{' '}
-                <strong>{journeys?.date_max?.slice(0, 10) ?? '—'}</strong>. Conversion Paths is using{' '}
+                <strong>{liveJourneyThrough ?? '—'}</strong>. Conversion Paths is using{' '}
                 <strong>{data?.total_journeys.toLocaleString() ?? '—'}</strong> materialized journey outputs through{' '}
                 <strong>{data?.date_to ?? '—'}</strong>.
+              </div>
+            ) : null}
+            {!canCompareToWorkspaceLiveJourneys && data ? (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                Live-vs-materialized reconciliation is hidden for this view because direct mode, path scope, segment focus, page filters, or a non-default journey definition narrows the analysis away from the workspace-wide live journeys basis.
               </div>
             ) : null}
             {buildJourneyPathsHref(selectedJourneyId) ? (
