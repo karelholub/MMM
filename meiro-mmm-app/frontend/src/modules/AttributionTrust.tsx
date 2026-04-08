@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { DashboardPage, ContextSummaryStrip, SectionCard, AnalysisShareActions } from '../components/dashboard'
+import { DashboardPage, ContextSummaryStrip, SectionCard, AnalysisShareActions, AnalysisNarrativePanel } from '../components/dashboard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
@@ -472,6 +472,46 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
           : t.color.text,
     },
   ]
+  const trustNarrative = useMemo(() => {
+    const gapPct =
+      liveJourneys != null && materializedJourneys != null && liveJourneys > 0
+        ? Math.abs(materializedJourneys - liveJourneys) / liveJourneys
+        : null
+    const headline =
+      gapPct != null && gapPct >= 0.05
+        ? `Live attribution and materialized path outputs are currently not fully aligned.`
+        : 'Current attribution inputs look broadly aligned at the workspace level.'
+    const items = [
+      `Journey source is ${formatSourceLabel(sourceStateQuery.data?.active_source)} with ${
+        journeysSummary?.data_freshness_hours != null
+          ? `${Math.round(Number(journeysSummary.data_freshness_hours))}h lag`
+          : 'freshness unavailable'
+      }.`,
+      mappingCoverage
+        ? `Mapped value coverage is ${formatPercent(mappingCoverage.value_mapped_pct / 100)} and mapped spend coverage is ${formatPercent(mappingCoverage.spend_mapped_pct / 100)}.`
+        : null,
+      taxonomyUnknownQuery.data?.unknown_share != null
+        ? `Unknown taxonomy share is ${formatPercent(taxonomyUnknownQuery.data.unknown_share)}${taxonomyUnknownQuery.data.unknown_share > 0.2 ? ', which is high enough to distort channel rollups.' : '.'}`
+        : null,
+      pathDiagnostics
+        ? `Direct or unknown touchpoints make up ${formatPercent(pathDiagnostics.touchpoint_share)} of visible touches, and ${formatPercent(pathDiagnostics.journeys_ending_direct_share)} of journeys end direct.`
+        : null,
+      selectedSegment && focusedTrustComparison
+        ? `${selectedSegment.name} represents ${formatPercent(focusedTrustComparison.shares[0]?.value)} of materialized path journeys in the visible trust slice.`
+        : null,
+    ].filter((item): item is string => Boolean(item))
+    return { headline, items }
+  }, [
+    focusedTrustComparison,
+    journeysSummary?.data_freshness_hours,
+    mappingCoverage,
+    materializedJourneys,
+    pathDiagnostics,
+    selectedSegment,
+    sourceStateQuery.data?.active_source,
+    taxonomyUnknownQuery.data?.unknown_share,
+    liveJourneys,
+  ])
   const comparisonHref = selectedSegmentId ? `/?page=comparison&segment=${encodeURIComponent(selectedSegmentId)}` : '/?page=comparison'
   const journeysHref = selectedSegmentId ? `/?page=journeys&segment=${encodeURIComponent(selectedSegmentId)}` : '/?page=journeys'
 
@@ -571,6 +611,13 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
       }
     >
       <ContextSummaryStrip items={summaryItems} />
+
+      <AnalysisNarrativePanel
+        title="What to trust"
+        subtitle="A short readout of the current attribution data contract before you act on the diagnostics below."
+        headline={trustNarrative.headline}
+        items={trustNarrative.items}
+      />
 
       {focusedTrustComparison ? (
         <SectionCard

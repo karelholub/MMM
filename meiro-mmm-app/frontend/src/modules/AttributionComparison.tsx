@@ -6,6 +6,7 @@ import { useWorkspaceContext } from '../components/WorkspaceContext'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import AnalysisShareActions from '../components/dashboard/AnalysisShareActions'
+import AnalysisNarrativePanel from '../components/dashboard/AnalysisNarrativePanel'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import { type LagInsightsResponse } from '../components/performance/LagInsightsPanel'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
@@ -167,6 +168,11 @@ function formatCurrency(v: number): string {
   if (v >= 1000000) return `$${(v / 1000000).toFixed(1)}M`
   if (v >= 1000) return `$${(v / 1000).toFixed(0)}K`
   return `$${v.toFixed(0)}`
+}
+
+function formatPercent(value: number | null | undefined, digits = 1): string {
+  if (value == null || !Number.isFinite(value)) return '—'
+  return `${(value * 100).toFixed(digits)}%`
 }
 
 function exportComparisonCSV(
@@ -592,6 +598,44 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
       }
     })
   }, [baselineKey, models, results, selectedSegmentDefinition.channel_group])
+  const comparisonNarrative = useMemo(() => {
+    const winner = winnersLosers.winners[0] ?? null
+    const loser = winnersLosers.losers[0] ?? null
+    const topLagRisk = topExposedChannels[0] ?? null
+    const selectedModelLabel = MODEL_LABELS[selectedModel] || selectedModel
+    const baselineModelLabel = MODEL_LABELS[baselineKey] || baselineKey
+    const headline =
+      comparisonMode === 'delta' && baselineKey
+        ? `${selectedModelLabel} is currently being read against ${baselineModelLabel}.`
+        : `${selectedModelLabel} is currently the primary comparison view.`
+    const items = [
+      winner
+        ? `${winner.channel} gains the most value under ${selectedModelLabel} relative to ${baselineModelLabel}, up ${formatCurrency(winner.delta)} in attributed value.`
+        : null,
+      loser
+        ? `${loser.channel} loses the most value under ${selectedModelLabel} relative to ${baselineModelLabel}, down ${formatCurrency(Math.abs(loser.delta))}.`
+        : null,
+      sensitivityQuery.data?.current?.previewAvailable
+        ? `Sensitivity draft impact: ${summarizeSensitivityRisk(sensitivityQuery.data.current)}.`
+        : 'Sensitivity preview is unavailable, so window and quality impact are not yet quantified.',
+      topLagRisk
+        ? `${topLagRisk.label} has the heaviest long-lag exposure, with ${formatPercent(topLagRisk.conversions > 0 ? topLagRisk.lag_buckets.over_7d / topLagRisk.conversions : null)} of conversions taking more than 7 days.`
+        : null,
+      selectedSegment
+        ? `${selectedSegment.name} is a focused analytical slice. Attribution totals stay workspace-wide, but visible channel rows are filtered to that audience context.`
+        : null,
+    ].filter((item): item is string => Boolean(item))
+    return { headline, items }
+  }, [
+    baselineKey,
+    comparisonMode,
+    selectedModel,
+    selectedSegment,
+    sensitivityQuery.data?.current,
+    topExposedChannels,
+    winnersLosers.losers,
+    winnersLosers.winners,
+  ])
 
   if (resultsQuery.isError) {
     return (
@@ -722,6 +766,15 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
             { label: 'Sensitivity draft', value: currentSensitivitySummary },
             { label: 'Sensitivity risk', value: summarizeSensitivityRisk(sensitivityQuery.data?.current) },
           ]}
+        />
+      </div>
+
+      <div style={{ marginBottom: t.space.lg }}>
+        <AnalysisNarrativePanel
+          title="What changed"
+          subtitle="A short interpretation of the current model-comparison view."
+          headline={comparisonNarrative.headline}
+          items={comparisonNarrative.items}
         />
       </div>
 

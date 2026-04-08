@@ -24,6 +24,7 @@ import {
   DataHealthCard,
   ContextSummaryStrip,
   AnalysisShareActions,
+  AnalysisNarrativePanel,
 } from '../components/dashboard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
@@ -678,7 +679,6 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
     funnelSummary?.top_paths_conversion_share,
     selectedTileMap,
   ])
-
   const handleOverviewAction = (action: RecommendedActionItem) => {
     navigateForRecommendedAction(action, { onNavigate, defaultPage: 'datasources' })
   }
@@ -695,6 +695,55 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
   const orderedKpiTiles = tileOrder
     .map((key) => kpiTiles.find((k) => k.kpi_key === key))
     .filter((k): k is KpiTileResponse => Boolean(k))
+  const overviewNarrative = useMemo(() => {
+    const biggestTileDelta = [...orderedKpiTiles]
+      .filter((tile) => tile.delta_pct != null && Number.isFinite(tile.delta_pct))
+      .sort((a, b) => Math.abs(Number(b.delta_pct || 0)) - Math.abs(Number(a.delta_pct || 0)))[0]
+    const strongestMomentum = trendInsights?.momentum?.rising?.[0] ?? null
+    const weakestMomentum = trendInsights?.momentum?.falling?.[0] ?? null
+    const lagDelta = funnelMedianLag != null && baselineMedianLag != null ? funnelMedianLag - baselineMedianLag : null
+    const tileLabel = biggestTileDelta
+      ? biggestTileDelta.kpi_key === 'revenue'
+        ? 'Revenue'
+        : biggestTileDelta.kpi_key === 'conversions'
+          ? 'Conversions'
+          : biggestTileDelta.kpi_key === 'visits'
+            ? 'Visits'
+            : 'Spend'
+      : null
+    const headline =
+      biggestTileDelta?.delta_pct != null && tileLabel
+        ? `${tileLabel} ${biggestTileDelta.delta_pct >= 0 ? 'rose' : 'fell'} ${Math.abs(biggestTileDelta.delta_pct).toFixed(1)}% ${baselineLabel}.`
+        : 'This period is loaded, but no strong period-over-period movement stands out yet.'
+    const items = [
+      highlights[0]?.message ? `Top signal: ${highlights[0].message}` : null,
+      strongestMomentum
+        ? `${strongestMomentum.channel} is the strongest rising revenue driver with ${formatCurrency(strongestMomentum.delta_revenue)} change vs the previous period.`
+        : null,
+      weakestMomentum
+        ? `${weakestMomentum.channel} is the strongest falling revenue driver with ${formatCurrency(Math.abs(weakestMomentum.delta_revenue))} reversal vs the previous period.`
+        : null,
+      lagDelta != null
+        ? `Median time to convert is ${lagDelta >= 0 ? 'slower' : 'faster'} by ${Math.abs(lagDelta).toFixed(1)} days than the workspace baseline.`
+        : funnelMedianLag != null
+          ? `Median time to convert is ${funnelMedianLag.toFixed(1)} days in the current visible slice.`
+          : null,
+      selectedSegment && segmentComparison
+        ? `${selectedSegment.name} contributes ${formatPercent(segmentComparison.shares[2]?.value)} of visible conversions and runs at ${formatPercent(segmentComparison.rates[0]?.segment)} CVR.`
+        : null,
+    ].filter((item): item is string => Boolean(item))
+    return { headline, items }
+  }, [
+    baselineLabel,
+    baselineMedianLag,
+    funnelMedianLag,
+    highlights,
+    orderedKpiTiles,
+    segmentComparison,
+    selectedSegment,
+    trendInsights?.momentum?.falling,
+    trendInsights?.momentum?.rising,
+  ])
   const channelColumns: AnalyticsTableColumn<(typeof byChannel)[number]>[] = [
     {
       key: 'channel',
@@ -1206,6 +1255,13 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
             { label: 'Journeys loaded', value: journeysLoadedLabel },
             { label: 'Lag posture', value: lagPostureLabel },
           ]}
+        />
+
+        <AnalysisNarrativePanel
+          title="What changed"
+          subtitle="A short readout of the current period before you move into the detailed tiles and tables."
+          headline={overviewNarrative.headline}
+          items={overviewNarrative.items}
         />
 
         <SectionCard

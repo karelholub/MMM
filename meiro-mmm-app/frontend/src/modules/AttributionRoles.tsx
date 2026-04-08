@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { DashboardPage, ContextSummaryStrip, SectionCard, AnalysisShareActions } from '../components/dashboard'
+import { DashboardPage, ContextSummaryStrip, SectionCard, AnalysisShareActions, AnalysisNarrativePanel } from '../components/dashboard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
@@ -406,6 +406,43 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
     { label: 'Focus segment', value: selectedSegment?.name || 'Workspace baseline' },
     { label: 'Journeys loaded', value: journeysSummary?.count?.toLocaleString() ?? '—' },
   ]
+  const rolesNarrative = useMemo(() => {
+    const dominant = topFocusedEntity ? dominantRole(topFocusedEntity, metric) : null
+    const largestDelta = segmentComparison
+      ? [...segmentComparison.roles]
+          .filter((item) => item.delta != null)
+          .sort((a, b) => Math.abs(Number(b.delta || 0)) - Math.abs(Number(a.delta || 0)))[0] ?? null
+      : null
+    const focusConcentration = concentration[focusRole]
+    const headline = topFocusedEntity
+      ? `${topFocusedEntity.label} currently leads the ${ROLE_LABELS[focusRole].toLowerCase()} view.`
+      : `No ${ROLE_LABELS[focusRole].toLowerCase()} leader is visible in the current slice.`
+    const items = [
+      topFocusedEntity && dominant
+        ? `${topFocusedEntity.label} is primarily acting as a ${ROLE_LABELS[dominant].toLowerCase()} and is ${roleDescriptor(dominant)}.`
+        : null,
+      focusConcentration != null
+        ? `The top 3 ${ROLE_LABELS[focusRole].toLowerCase()}s hold ${formatPercent(focusConcentration)} of visible ${metric}, so this role is ${focusConcentration > 0.6 ? 'highly concentrated' : 'fairly distributed'}.`
+        : null,
+      largestDelta && selectedSegment
+        ? `${selectedSegment.name} over-indexes most on ${largestDelta.label.toLowerCase()} behavior, shifting role mix by ${largestDelta.delta == null ? '—' : `${largestDelta.delta >= 0 ? '+' : ''}${(largestDelta.delta * 100).toFixed(1)}pp`} vs workspace.`
+        : null,
+      totalRoleValue > 0
+        ? `Visible role-accounted ${metric} totals ${metric === 'conversions' ? formatNumber(totalRoleValue) : formatCurrency(totalRoleValue)} across ${visibleEntities.length.toLocaleString()} ${scope}.`
+        : null,
+    ].filter((item): item is string => Boolean(item))
+    return { headline, items }
+  }, [
+    concentration,
+    focusRole,
+    metric,
+    scope,
+    segmentComparison,
+    selectedSegment,
+    topFocusedEntity,
+    totalRoleValue,
+    visibleEntities.length,
+  ])
   const comparisonHref = selectedSegmentId ? `/?page=comparison&segment=${encodeURIComponent(selectedSegmentId)}` : '/?page=comparison'
   const trustHref = selectedSegmentId ? `/?page=trust&segment=${encodeURIComponent(selectedSegmentId)}` : '/?page=trust'
   const journeysHref = selectedSegmentId ? `/?page=journeys&segment=${encodeURIComponent(selectedSegmentId)}` : '/?page=journeys'
@@ -517,6 +554,13 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
     >
       <div style={{ display: 'grid', gap: t.space.xl }}>
         <ContextSummaryStrip items={summaryItems} minItemWidth={180} />
+
+        <AnalysisNarrativePanel
+          title="What changed"
+          subtitle="A short readout of who is starting, assisting, and closing demand in the current slice."
+          headline={rolesNarrative.headline}
+          items={rolesNarrative.items}
+        />
 
         {segmentComparison ? (
           <SectionCard
