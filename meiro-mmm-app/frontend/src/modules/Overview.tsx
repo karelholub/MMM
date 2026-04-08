@@ -690,12 +690,13 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
       const workspaceVisits = readBaseline('visits')
       const workspaceConversions = readBaseline('conversions')
       const workspaceRevenue = readBaseline('revenue')
-      const workspaceSpend = readBaseline('spend')
       const segmentVisits = summary.journey_rows ?? 0
       const segmentConversions = Number(summary.conversions ?? 0)
       const segmentRevenue = Number(summary.revenue ?? 0)
       const segmentCvr = segmentVisits > 0 ? segmentConversions / segmentVisits : null
       const workspaceCvr = workspaceVisits > 0 ? workspaceConversions / workspaceVisits : null
+      const segmentRevenuePerJourney = segmentVisits > 0 ? segmentRevenue / segmentVisits : null
+      const workspaceRevenuePerJourney = workspaceVisits > 0 ? workspaceRevenue / workspaceVisits : null
       return {
         shares: [
           { label: 'Journey share', value: summary.share_of_rows ?? null },
@@ -707,7 +708,16 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
           { label: 'CVR', segment: segmentCvr, baseline: workspaceCvr, delta: segmentCvr != null && workspaceCvr != null ? segmentCvr - workspaceCvr : null, percent: true },
           { label: 'Median lag', segment: summary.median_lag_days ?? null, baseline: baselineMedianLag, delta: summary.median_lag_days != null && baselineMedianLag != null ? summary.median_lag_days - baselineMedianLag : null, percent: false, suffix: 'd' },
           { label: 'Average path length', segment: summary.avg_path_length ?? null, baseline: null, delta: null, percent: false, suffix: 'x' },
-          { label: 'Spend share context', segment: workspaceSpend > 0 ? (segmentRevenue / workspaceSpend) : null, baseline: null, delta: null, percent: true },
+          {
+            label: 'Revenue / journey row',
+            segment: segmentRevenuePerJourney,
+            baseline: workspaceRevenuePerJourney,
+            delta:
+              segmentRevenuePerJourney != null && workspaceRevenuePerJourney != null
+                ? segmentRevenuePerJourney - workspaceRevenuePerJourney
+                : null,
+            percent: false,
+          },
         ],
       }
     }
