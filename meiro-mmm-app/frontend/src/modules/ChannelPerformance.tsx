@@ -563,17 +563,19 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
       channelRows.filter((ch) => {
         if (selectedSegmentDefinition.channel_group && ch.channel !== selectedSegmentDefinition.channel_group) return false
         if (directMode === 'exclude' && ch.channel === 'direct') return false
+        if (onlyLowConfidence && (!ch.confidence || ch.confidence.score >= 70)) return false
         return true
       }),
-    [channelRows, directMode, selectedSegmentDefinition.channel_group],
+    [channelRows, directMode, onlyLowConfidence, selectedSegmentDefinition.channel_group],
   )
   const workspaceRows = useMemo(
     () =>
       channelRows.filter((ch) => {
         if (directMode === 'exclude' && ch.channel === 'direct') return false
+        if (onlyLowConfidence && (!ch.confidence || ch.confidence.score >= 70)) return false
         return true
       }),
-    [channelRows, directMode],
+    [channelRows, directMode, onlyLowConfidence],
   )
   const focusedSegmentRows = useMemo(
     () =>
