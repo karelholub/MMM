@@ -246,8 +246,6 @@ def build_campaign_aggregate_overlay(
     channels: Optional[List[str]] = None,
     conversion_key: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    if (timezone or "UTC").upper() != "UTC":
-        return None
     windows = resolve_period_windows(date_from, date_to, "daily")
     resolved_grain = windows["current_period"]["grain"]
     curr_from = _parse_date(windows["current_period"]["date_from"])
@@ -256,6 +254,20 @@ def build_campaign_aggregate_overlay(
     prev_to = _parse_date(windows["previous_period"]["date_to"])
     allowed_channels = set(channels or [])
     filter_channels = bool(allowed_channels)
+    if (timezone or "UTC").upper() != "UTC":
+        return _build_campaign_aggregate_overlay_from_silver(
+            db,
+            curr_from=curr_from,
+            curr_to=curr_to,
+            prev_from=prev_from,
+            prev_to=prev_to,
+            compare=compare,
+            resolved_grain=resolved_grain,
+            allowed_channels=allowed_channels,
+            filter_channels=filter_channels,
+            conversion_key=conversion_key,
+            timezone=timezone,
+        )
     journey_definition_id = _single_active_journey_definition_id(db, conversion_key=conversion_key)
     if not journey_definition_id:
         return _build_campaign_aggregate_overlay_from_silver(
@@ -269,6 +281,7 @@ def build_campaign_aggregate_overlay(
             allowed_channels=allowed_channels,
             filter_channels=filter_channels,
             conversion_key=conversion_key,
+            timezone=timezone,
         )
 
     rows = (
@@ -292,6 +305,7 @@ def build_campaign_aggregate_overlay(
             allowed_channels=allowed_channels,
             filter_channels=filter_channels,
             conversion_key=conversion_key,
+            timezone=timezone,
         )
     if not _rows_have_positive_revenue(rows):
         return None
@@ -368,7 +382,9 @@ def _build_campaign_aggregate_overlay_from_silver(
     allowed_channels: Set[str],
     filter_channels: bool,
     conversion_key: Optional[str],
+    timezone: str = "UTC",
 ) -> Optional[Dict[str, Any]]:
+    tz = _safe_tz(timezone)
     start_day = prev_from if compare else curr_from
     day_start = datetime.combine(start_day, datetime.min.time())
     day_end = datetime.combine(curr_to + timedelta(days=1), datetime.min.time())
@@ -392,7 +408,9 @@ def _build_campaign_aggregate_overlay_from_silver(
 
     for journey in journeys:
         conversion_ts = journey["conversion_ts"]
-        day = conversion_ts.date()
+        day = _local_date_from_ts(conversion_ts, tz)
+        if day is None:
+            continue
         if "payload" in journey:
             touchpoints = (journey["payload"] or {}).get("touchpoints") or []
             last_touch = touchpoints[-1] if touchpoints else {}
@@ -468,8 +486,6 @@ def build_channel_aggregate_overlay(
     conversion_key: Optional[str] = None,
     grain: str = "daily",
 ) -> Optional[Dict[str, Any]]:
-    if (timezone or "UTC").upper() != "UTC":
-        return None
     windows = resolve_period_windows(date_from, date_to, grain)
     resolved_grain = windows["current_period"]["grain"]
     curr_from = _parse_date(windows["current_period"]["date_from"])
@@ -478,6 +494,20 @@ def build_channel_aggregate_overlay(
     prev_to = _parse_date(windows["previous_period"]["date_to"])
     allowed_channels = set(channels or [])
     filter_channels = bool(allowed_channels)
+    if (timezone or "UTC").upper() != "UTC":
+        return _build_channel_aggregate_overlay_from_silver(
+            db,
+            curr_from=curr_from,
+            curr_to=curr_to,
+            prev_from=prev_from,
+            prev_to=prev_to,
+            compare=compare,
+            resolved_grain=resolved_grain,
+            allowed_channels=allowed_channels,
+            filter_channels=filter_channels,
+            conversion_key=conversion_key,
+            timezone=timezone,
+        )
 
     rows = (
         db.query(ChannelPerformanceDaily)
@@ -499,6 +529,7 @@ def build_channel_aggregate_overlay(
             allowed_channels=allowed_channels,
             filter_channels=filter_channels,
             conversion_key=conversion_key,
+            timezone=timezone,
         )
     if not _rows_have_positive_revenue(rows):
         return None
@@ -574,7 +605,9 @@ def _build_channel_aggregate_overlay_from_silver(
     allowed_channels: Set[str],
     filter_channels: bool,
     conversion_key: Optional[str],
+    timezone: str = "UTC",
 ) -> Optional[Dict[str, Any]]:
+    tz = _safe_tz(timezone)
     touchpoint_start = prev_from if compare else curr_from
     day_start = datetime.combine(touchpoint_start, datetime.min.time())
     day_end_exclusive = datetime.combine(curr_to + timedelta(days=1), datetime.min.time())
@@ -598,7 +631,9 @@ def _build_channel_aggregate_overlay_from_silver(
         channel_raw = row.channel
         if not isinstance(touchpoint_ts, datetime):
             continue
-        day = touchpoint_ts.date()
+        day = _local_date_from_ts(touchpoint_ts, tz)
+        if day is None:
+            continue
         channel = str(channel_raw or "unknown")
         if filter_channels and channel not in allowed_channels:
             continue
@@ -615,7 +650,9 @@ def _build_channel_aggregate_overlay_from_silver(
         conversion_ts = journey.conversion_ts
         if not isinstance(conversion_ts, datetime):
             continue
-        day = conversion_ts.date()
+        day = _local_date_from_ts(conversion_ts, tz)
+        if day is None:
+            continue
         channel = str(last_touch_channel_by_conversion.get(str(journey.conversion_id or ""), "unknown") or "unknown")
         if filter_channels and channel not in allowed_channels:
             continue

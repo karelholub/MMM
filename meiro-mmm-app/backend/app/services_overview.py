@@ -12,6 +12,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -56,6 +57,13 @@ def _coerce_utc_datetime(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _safe_tz(timezone_name: Optional[str]) -> ZoneInfo:
+    try:
+        return ZoneInfo(timezone_name or "UTC")
+    except ZoneInfoNotFoundError:
+        return ZoneInfo("UTC")
 
 
 def _overview_path_type(payload: Dict[str, Any]) -> str:
@@ -745,13 +753,26 @@ def _as_datetime(value: Any) -> Optional[datetime]:
         return None
 
 
-def _normalize_period_bounds(date_from: str, date_to: str) -> Tuple[datetime, datetime]:
+def _normalize_period_bounds(date_from: str, date_to: str, timezone_name: str = "UTC") -> Tuple[datetime, datetime]:
+    local_tz = _safe_tz(timezone_name)
     dt_from = _parse_dt(date_from) or (datetime.utcnow() - timedelta(days=30))
     dt_to = _parse_dt(date_to) or datetime.utcnow()
     if isinstance(date_from, str) and len(date_from) == 10:
-        dt_from = dt_from.replace(hour=0, minute=0, second=0, microsecond=0)
+        dt_from = datetime.fromisoformat(date_from[:10]).replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+            tzinfo=local_tz,
+        ).astimezone(timezone.utc)
     if isinstance(date_to, str) and len(date_to) == 10:
-        dt_to = dt_to.replace(hour=23, minute=59, second=59, microsecond=999999)
+        dt_to = datetime.fromisoformat(date_to[:10]).replace(
+            hour=23,
+            minute=59,
+            second=59,
+            microsecond=999999,
+            tzinfo=local_tz,
+        ).astimezone(timezone.utc)
     if dt_to < dt_from:
         dt_from, dt_to = dt_to, dt_from
     return dt_from, dt_to
@@ -1434,11 +1455,12 @@ def get_overview_summary(
     Returns kpi_tiles, highlights, freshness.
     Does not require MMM/Incrementality; uses raw paths + expenses.
     """
-    dt_from, dt_to = _normalize_period_bounds(date_from, date_to)
+    dt_from, dt_to = _normalize_period_bounds(date_from, date_to, timezone)
     period_span = dt_to - dt_from
     prev_to = dt_from - timedelta(microseconds=1)
     prev_from = prev_to - period_span
     use_channel_group_filter = bool(str(channel_group or "").strip())
+    use_utc_daily_aggregates = (timezone or "UTC").upper() == "UTC"
     current_conversion_ids = _filtered_conversion_ids_for_channel_group(
         db,
         dt_from=dt_from,
@@ -1458,10 +1480,10 @@ def get_overview_summary(
     bucket_keys_prev = _bucket_keys_in_range(prev_from, prev_to, grain)
     expected_points = len(bucket_keys_current)
 
-    fact_current = None if use_channel_group_filter else _series_from_channel_facts(db, dt_from, dt_to, grain)
-    fact_prev = None if use_channel_group_filter else _series_from_channel_facts(db, prev_from, prev_to, grain)
-    fact_current_outcomes = None if use_channel_group_filter else _aggregate_outcomes_from_channel_facts(db, dt_from, dt_to)
-    fact_prev_outcomes = None if use_channel_group_filter else _aggregate_outcomes_from_channel_facts(db, prev_from, prev_to)
+    fact_current = None if use_channel_group_filter or not use_utc_daily_aggregates else _series_from_channel_facts(db, dt_from, dt_to, grain)
+    fact_prev = None if use_channel_group_filter or not use_utc_daily_aggregates else _series_from_channel_facts(db, prev_from, prev_to, grain)
+    fact_current_outcomes = None if use_channel_group_filter or not use_utc_daily_aggregates else _aggregate_outcomes_from_channel_facts(db, dt_from, dt_to)
+    fact_prev_outcomes = None if use_channel_group_filter or not use_utc_daily_aggregates else _aggregate_outcomes_from_channel_facts(db, prev_from, prev_to)
     if (
         fact_current is not None
         and fact_prev is not None
@@ -1475,7 +1497,7 @@ def get_overview_summary(
         current_visits = fact_current
         prev_visits = fact_prev
     else:
-        aggregate_definition_id = _single_active_overview_definition_id(db) if grain == "daily" and not use_channel_group_filter else None
+        aggregate_definition_id = _single_active_overview_definition_id(db) if grain == "daily" and not use_channel_group_filter and use_utc_daily_aggregates else None
         if aggregate_definition_id:
             current_paths = _series_from_daily_path_aggregates(
                 db,
@@ -1830,7 +1852,7 @@ def get_overview_drivers(
     dedupe_seen_current = set()
     dedupe_seen_prev = set()
 
-    dt_from, dt_to = _normalize_period_bounds(date_from, date_to)
+    dt_from, dt_to = _normalize_period_bounds(date_from, date_to, timezone)
     period_span = dt_to - dt_from
     prev_to = dt_from - timedelta(microseconds=1)
     prev_from = prev_to - period_span
@@ -2450,7 +2472,7 @@ def get_overview_trend_insights(
     conversion_key: Optional[str] = None,
     channel_group: Optional[str] = None,
 ) -> Dict[str, Any]:
-    dt_from, dt_to = _normalize_period_bounds(date_from, date_to)
+    dt_from, dt_to = _normalize_period_bounds(date_from, date_to, timezone)
     period_span = dt_to - dt_from
     prev_to = dt_from - timedelta(microseconds=1)
     prev_from = prev_to - period_span
@@ -2628,7 +2650,7 @@ def get_overview_funnels(
     limit: int = 5,
     channel_group: Optional[str] = None,
 ) -> Dict[str, Any]:
-    dt_from, dt_to = _normalize_period_bounds(date_from, date_to)
+    dt_from, dt_to = _normalize_period_bounds(date_from, date_to, timezone)
     use_channel_group_filter = bool(str(channel_group or "").strip())
     current_conversion_ids = _filtered_conversion_ids_for_channel_group(
         db,
