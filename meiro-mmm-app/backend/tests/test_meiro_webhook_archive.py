@@ -1243,6 +1243,73 @@ def test_raw_event_ingest_marks_auto_replay_unavailable_on_sqlite_io_error(monke
     assert status_payload["history"][0]["status"] == "unavailable"
 
 
+def test_events_webhook_degrades_when_event_facts_are_unavailable(monkeypatch, tmp_path):
+    monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(meiro_config, "CONFIG_PATH", tmp_path / "meiro_config.json")
+    monkeypatch.setattr(meiro_config, "WEBHOOK_ARCHIVE_PATH", tmp_path / "meiro_webhook_archive.jsonl")
+    monkeypatch.setattr(meiro_config, "EVENT_ARCHIVE_PATH", tmp_path / "meiro_event_archive.jsonl")
+
+    _clear_meiro_raw_batches()
+    _clear_meiro_replay_runs()
+    _clear_meiro_event_profile_state()
+
+    def fail_event_facts(*args, **kwargs):
+        raise meiro_router.MeiroEventFactsUnavailableError("database disk image is malformed")
+
+    monkeypatch.setattr(meiro_router, "upsert_meiro_event_facts", fail_event_facts)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/connectors/meiro/events",
+        json={
+            "events": [
+                {
+                    "event_id": "evt-degrade-touch",
+                    "event_payload": {
+                        "event_id": "evt-degrade-touch",
+                        "customer_id": "cust-degrade-1",
+                        "timestamp": "2026-03-29T10:00:00Z",
+                        "event_name": "page_view",
+                        "source": "google",
+                        "medium": "cpc",
+                    },
+                },
+                {
+                    "event_id": "evt-degrade-conv",
+                    "event_payload": {
+                        "event_id": "evt-degrade-conv",
+                        "customer_id": "cust-degrade-1",
+                        "timestamp": "2026-03-29T10:05:00Z",
+                        "event_name": "purchase",
+                        "conversion_id": "conv-degrade-1",
+                        "value": 15.0,
+                        "currency": "EUR",
+                    },
+                },
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["event_facts"]["ok"] is False
+    assert payload["event_facts"]["stored"] is False
+    assert "event-facts storage is unavailable" in payload["event_facts"]["warning"].lower()
+
+    batch = _latest_meiro_raw_batch("events")
+    assert batch is not None
+    assert batch.records_count == 2
+
+    db = SessionLocal()
+    try:
+        state = db.query(MeiroEventProfileState).filter(MeiroEventProfileState.profile_id == "cust-degrade-1").one()
+        assert len(state.profile_json["touchpoints"]) == 1
+        assert len(state.profile_json["conversions"]) == 1
+        assert db.query(MeiroEventFact).count() == 0
+    finally:
+        db.close()
+
+
 def test_auto_replay_status_endpoint_prefers_db_run_history(monkeypatch, tmp_path):
     monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(meiro_config, "CONFIG_PATH", tmp_path / "meiro_config.json")

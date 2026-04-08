@@ -60,7 +60,11 @@ from app.services_meiro_event_profile_state import (
     list_meiro_event_profile_state,
     upsert_meiro_event_profile_state,
 )
-from app.services_meiro_event_facts import list_meiro_event_facts, upsert_meiro_event_facts
+from app.services_meiro_event_facts import (
+    MeiroEventFactsUnavailableError,
+    list_meiro_event_facts,
+    upsert_meiro_event_facts,
+)
 from app.services_meiro_profile_facts import list_meiro_profile_facts, upsert_meiro_profile_facts
 from app.services_meiro_replay_runs import list_meiro_replay_runs, record_meiro_replay_run
 from app.services_meiro_replay_snapshots import create_meiro_replay_snapshot
@@ -1727,12 +1731,22 @@ def create_router(
                     "user_agent": (request.headers.get("user-agent") or "")[:256] or None,
                 },
             )
-            upsert_meiro_event_facts(
-                db,
-                raw_events=events,
-                raw_batch_db_id=(int(raw_batch.id) if getattr(raw_batch, "id", None) is not None else None),
-                reset=bool(replace),
-            )
+            event_facts_status = {"ok": True, "stored": True, "warning": None}
+            try:
+                upsert_meiro_event_facts(
+                    db,
+                    raw_events=events,
+                    raw_batch_db_id=(int(raw_batch.id) if getattr(raw_batch, "id", None) is not None else None),
+                    reset=bool(replace),
+                )
+            except MeiroEventFactsUnavailableError as exc:
+                logger.warning("Canonical Meiro event facts are unavailable; continuing with archive + profile-state persistence", exc_info=True)
+                event_facts_status = {
+                    "ok": False,
+                    "stored": False,
+                    "warning": "Canonical event-facts storage is unavailable. Raw archive and event-derived profile state were still updated.",
+                    "reason": str(exc),
+                }
             rebuilt_profiles = rebuild_profiles_from_meiro_events_fn(events, dedup_config=get_pull_config())
             upsert_meiro_event_profile_state(
                 db,
@@ -1763,6 +1777,8 @@ def create_router(
                     "error_class": None,
                     "ingest_kind": "events",
                     "reconstructed_profiles": len(rebuilt_profiles),
+                    "warning_class": None if event_facts_status["ok"] else "event_facts_unavailable",
+                    "warning_detail": event_facts_status["warning"],
                 },
                 max_items=100,
             )
@@ -1782,6 +1798,7 @@ def create_router(
                     "stored_total": len(to_store),
                     "reconstructed_profiles": len(rebuilt_profiles),
                     "message": "Events saved. Use Replay archived webhook payloads or import from the event archive to build journeys.",
+                    "event_facts": event_facts_status,
                     "auto_replay": auto_replay_result,
                 },
             )

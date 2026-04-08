@@ -1,6 +1,7 @@
 """Meiro integration config: metadata, mapping, webhook stats."""
 import json
 import secrets
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -149,6 +150,26 @@ def query_event_archive_entries(
 ) -> list[Dict[str, Any]]:
     if not EVENT_ARCHIVE_PATH.exists():
         return []
+    if limit is not None and since is None and until is None:
+        keep = max(1, min(50000, int(limit)))
+        try:
+            tail = deque(maxlen=keep)
+            with EVENT_ARCHIVE_PATH.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if line:
+                        tail.append(line)
+            rows: list[Dict[str, Any]] = []
+            for line in reversed(tail):
+                try:
+                    parsed = json.loads(line)
+                except Exception:
+                    continue
+                if isinstance(parsed, dict):
+                    rows.append(parsed)
+            return rows
+        except Exception:
+            return []
     rows: list[Dict[str, Any]] = []
     try:
         with EVENT_ARCHIVE_PATH.open("r", encoding="utf-8") as handle:

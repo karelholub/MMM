@@ -4,12 +4,35 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import DatabaseError, OperationalError
 
 from app.models_config_dq import MeiroEventFact
+
+logger = logging.getLogger(__name__)
+
+
+class MeiroEventFactsUnavailableError(RuntimeError):
+    pass
+
+
+def _is_retryable_or_corrupt_sqlite_error(exc: Exception) -> bool:
+    message = str(getattr(exc, "orig", exc) or exc).lower()
+    markers = (
+        "disk i/o error",
+        "database is locked",
+        "database table is locked",
+        "unable to open database file",
+        "readonly database",
+        "cannot commit transaction",
+        "database disk image is malformed",
+        "malformed",
+    )
+    return any(marker in message for marker in markers)
 
 
 def _unwrap_event(item: Any) -> Optional[Dict[str, Any]]:
@@ -89,39 +112,51 @@ def upsert_meiro_event_facts(
     if not normalized:
         return 0
 
-    existing_rows = (
-        db.query(MeiroEventFact)
-        .filter(MeiroEventFact.event_uid.in_(list(normalized.keys())))
-        .all()
-    )
+    try:
+        existing_rows = (
+            db.query(MeiroEventFact)
+            .filter(MeiroEventFact.event_uid.in_(list(normalized.keys())))
+            .all()
+        )
+    except (OperationalError, DatabaseError) as exc:
+        db.rollback()
+        if _is_retryable_or_corrupt_sqlite_error(exc):
+            raise MeiroEventFactsUnavailableError(str(exc)) from exc
+        raise
     existing_by_uid = {row.event_uid: row for row in existing_rows}
     now = datetime.utcnow()
     upserted = 0
-    for uid, payload in normalized.items():
-        row = existing_by_uid.get(uid)
-        if row is None:
-            db.add(
-                MeiroEventFact(
-                    event_uid=uid,
-                    profile_id=payload["profile_id"],
-                    raw_batch_db_id=raw_batch_db_id,
-                    source_snapshot_id=source_snapshot_id,
-                    event_ts=payload["event_ts"],
-                    event_name=payload["event_name"] or None,
-                    event_json=payload["event_json"],
-                    updated_at=now,
+    try:
+        for uid, payload in normalized.items():
+            row = existing_by_uid.get(uid)
+            if row is None:
+                db.add(
+                    MeiroEventFact(
+                        event_uid=uid,
+                        profile_id=payload["profile_id"],
+                        raw_batch_db_id=raw_batch_db_id,
+                        source_snapshot_id=source_snapshot_id,
+                        event_ts=payload["event_ts"],
+                        event_name=payload["event_name"] or None,
+                        event_json=payload["event_json"],
+                        updated_at=now,
+                    )
                 )
-            )
-        else:
-            row.profile_id = payload["profile_id"]
-            row.raw_batch_db_id = raw_batch_db_id
-            row.source_snapshot_id = source_snapshot_id
-            row.event_ts = payload["event_ts"]
-            row.event_name = payload["event_name"] or None
-            row.event_json = payload["event_json"]
-            row.updated_at = now
-        upserted += 1
-    db.commit()
+            else:
+                row.profile_id = payload["profile_id"]
+                row.raw_batch_db_id = raw_batch_db_id
+                row.source_snapshot_id = source_snapshot_id
+                row.event_ts = payload["event_ts"]
+                row.event_name = payload["event_name"] or None
+                row.event_json = payload["event_json"]
+                row.updated_at = now
+            upserted += 1
+        db.commit()
+    except (OperationalError, DatabaseError) as exc:
+        db.rollback()
+        if _is_retryable_or_corrupt_sqlite_error(exc):
+            raise MeiroEventFactsUnavailableError(str(exc)) from exc
+        raise
     return upserted
 
 
@@ -132,12 +167,19 @@ def list_meiro_event_facts(
     after_raw_batch_db_id: Optional[int] = None,
     limit: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    query = db.query(MeiroEventFact).order_by(MeiroEventFact.event_ts.asc(), MeiroEventFact.id.asc())
-    normalized_profile_ids = [str(item).strip() for item in (profile_ids or []) if str(item).strip()]
-    if normalized_profile_ids:
-        query = query.filter(MeiroEventFact.profile_id.in_(normalized_profile_ids))
-    if after_raw_batch_db_id is not None:
-        query = query.filter(MeiroEventFact.raw_batch_db_id > max(0, int(after_raw_batch_db_id)))
-    if limit is not None:
-        query = query.limit(max(1, min(50000, int(limit))))
-    return [dict(row.event_json or {}) for row in query.all()]
+    try:
+        query = db.query(MeiroEventFact).order_by(MeiroEventFact.event_ts.asc(), MeiroEventFact.id.asc())
+        normalized_profile_ids = [str(item).strip() for item in (profile_ids or []) if str(item).strip()]
+        if normalized_profile_ids:
+            query = query.filter(MeiroEventFact.profile_id.in_(normalized_profile_ids))
+        if after_raw_batch_db_id is not None:
+            query = query.filter(MeiroEventFact.raw_batch_db_id > max(0, int(after_raw_batch_db_id)))
+        if limit is not None:
+            query = query.limit(max(1, min(50000, int(limit))))
+        return [dict(row.event_json or {}) for row in query.all()]
+    except (OperationalError, DatabaseError) as exc:
+        db.rollback()
+        if _is_retryable_or_corrupt_sqlite_error(exc):
+            logger.warning("Meiro event facts unavailable; falling back to archive/state paths", exc_info=True)
+            return []
+        raise
