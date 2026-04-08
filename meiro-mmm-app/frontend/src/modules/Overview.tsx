@@ -35,6 +35,7 @@ import {
   readLocalSegmentDefinition,
   segmentOptionLabel,
   type SegmentAnalysisResponse,
+  type SegmentComparisonResponse,
   type SegmentRegistryResponse,
 } from '../lib/segments'
 
@@ -369,6 +370,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
   const [assistantCollapsed, setAssistantCollapsed] = useState(true)
   const [showWorkspaceSignals, setShowWorkspaceSignals] = usePersistentToggle('overview:show-workspace-signals', false)
   const [selectedSegmentId, setSelectedSegmentId] = useState('')
+  const [compareSegmentId, setCompareSegmentId] = useState('')
 
   const dateRange = useMemo(() => {
     const dateFrom = globalDateFrom || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
@@ -397,6 +399,10 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
     () => localSegments.find((item) => item.id === selectedSegmentId) ?? null,
     [localSegments, selectedSegmentId],
   )
+  const compareSegment = useMemo(
+    () => localSegments.find((item) => item.id === compareSegmentId) ?? null,
+    [localSegments, compareSegmentId],
+  )
   const selectedSegmentDefinition = useMemo(
     () => readLocalSegmentDefinition(selectedSegment),
     [selectedSegment],
@@ -410,6 +416,8 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
     const params = new URLSearchParams(window.location.search)
     const segment = params.get('segment')
     if (segment) setSelectedSegmentId(segment)
+    const compareSegment = params.get('compare_segment')
+    if (compareSegment) setCompareSegmentId(compareSegment)
   }, [])
 
   useEffect(() => {
@@ -420,11 +428,19 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
   }, [localSegments, selectedSegmentId, segmentRegistryQuery.data])
 
   useEffect(() => {
+    if (!compareSegmentId) return
+    if (localSegments.some((item) => item.id === compareSegmentId && item.id !== selectedSegmentId)) return
+    setCompareSegmentId('')
+  }, [compareSegmentId, localSegments, selectedSegmentId])
+
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     if (selectedSegmentId) params.set('segment', selectedSegmentId)
     else params.delete('segment')
+    if (compareSegmentId) params.set('compare_segment', compareSegmentId)
+    else params.delete('compare_segment')
     window.history.replaceState(null, '', `${window.location.pathname}?${params.toString()}`)
-  }, [selectedSegmentId])
+  }, [compareSegmentId, selectedSegmentId])
 
   const summaryQuery = useQuery<OverviewSummaryResponse>({
     queryKey: ['overview-summary', dateRange.date_from, dateRange.date_to, selectedSegmentDefinition.channel_group || 'all'],
@@ -511,6 +527,15 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
         { fallbackMessage: 'Failed to load segment audience analysis' },
       ),
     enabled: Boolean(selectedSegment),
+  })
+  const segmentCompareQuery = useQuery<SegmentComparisonResponse>({
+    queryKey: ['overview-segment-compare', selectedSegment?.id || 'none', compareSegment?.id || 'none'],
+    queryFn: async () =>
+      apiGetJson<SegmentComparisonResponse>(
+        `/api/segments/local/${selectedSegment?.id}/compare?other_segment_id=${encodeURIComponent(compareSegment?.id || '')}`,
+        { fallbackMessage: 'Failed to compare saved analytical audiences' },
+      ),
+    enabled: Boolean(selectedSegment?.id && compareSegment?.id && selectedSegment?.id !== compareSegment?.id),
   })
 
   const journeyFunnelAlertsQuery = useQuery<{ defs: JourneyAlertDefinitionItem[]; events: JourneyAlertEventItem[] }>({
@@ -783,6 +808,9 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
       selectedSegment && !selectedSegmentAutoCompatible && segmentAnalysisQuery.data?.summary
         ? `This advanced audience matches ${(segmentAnalysisQuery.data.summary.journey_rows ?? 0).toLocaleString()} journey rows with ${segmentAnalysisQuery.data.summary.median_lag_days != null ? `${segmentAnalysisQuery.data.summary.median_lag_days}d` : 'unknown'} median lag.`
         : null,
+      selectedSegment && compareSegment && segmentCompareQuery.data
+        ? `${selectedSegment.name} vs ${compareSegment.name}: ${segmentCompareQuery.data.overlap.relationship.replace(/_/g, ' ')} with ${(segmentCompareQuery.data.overlap.jaccard * 100).toFixed(0)}% similarity. Revenue delta is ${segmentCompareQuery.data.deltas.revenue == null ? '—' : `${segmentCompareQuery.data.deltas.revenue >= 0 ? '+' : ''}${formatCurrency(Math.abs(segmentCompareQuery.data.deltas.revenue))}`}.`
+        : null,
     ].filter((item): item is string => Boolean(item))
     return { headline, items }
   }, [
@@ -791,6 +819,8 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
     funnelMedianLag,
     highlights,
     orderedKpiTiles,
+    compareSegment,
+    segmentCompareQuery.data,
     segmentComparison,
     selectedSegment,
     selectedSegmentAutoCompatible,
@@ -1193,6 +1223,35 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
                 ))}
               </select>
             </div>
+            {selectedSegment ? (
+              <div style={{ display: 'grid', gap: 6, minWidth: 260, flex: '1 1 260px' }}>
+                <span style={{ fontSize: t.font.sizeXs, fontWeight: t.font.weightMedium, color: t.color.textSecondary }}>
+                  Compare with
+                </span>
+                <select
+                  value={compareSegmentId}
+                  onChange={(event) => setCompareSegmentId(event.target.value)}
+                  style={{
+                    minWidth: 0,
+                    padding: `${t.space.sm}px ${t.space.md}px`,
+                    borderRadius: t.radius.sm,
+                    border: `1px solid ${t.color.border}`,
+                    background: t.color.surface,
+                    color: t.color.text,
+                    fontSize: t.font.sizeSm,
+                  }}
+                >
+                  <option value="">No paired comparison</option>
+                  {localSegments
+                    .filter((segment) => segment.id !== selectedSegment.id)
+                    .map((segment) => (
+                      <option key={segment.id} value={segment.id}>
+                        {segmentOptionLabel(segment)}
+                      </option>
+                    ))}
+                </select>
+              </div>
+            ) : null}
             <div style={{ display: 'grid', gap: 6, minWidth: 200, flex: '1 1 200px' }}>
               <span style={{ fontSize: t.font.sizeXs, fontWeight: t.font.weightMedium, color: t.color.textSecondary }}>
                 Applied filter
@@ -1300,6 +1359,82 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
                     </div>
                   )
                 })}
+              </div>
+            </div>
+          </SectionCard>
+        ) : null}
+
+        {selectedSegment && compareSegment && segmentCompareQuery.data ? (
+          <SectionCard
+            title="Segment vs segment"
+            subtitle={`How ${selectedSegment.name} compares directly with ${compareSegment.name} in the same period.`}
+          >
+            <div style={{ display: 'grid', gap: t.space.lg }}>
+              <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bgSubtle, display: 'grid', gap: 4 }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Relationship</div>
+                  <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                    {segmentCompareQuery.data.overlap.relationship.replace(/_/g, ' ')}
+                  </div>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    {(segmentCompareQuery.data.overlap.jaccard * 100).toFixed(0)}% similarity · {segmentCompareQuery.data.overlap.overlap_rows.toLocaleString()} shared rows
+                  </div>
+                </div>
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bgSubtle, display: 'grid', gap: 4 }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{selectedSegment.name}</div>
+                  <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                    {(segmentCompareQuery.data.primary_summary.journey_rows ?? 0).toLocaleString()}
+                  </div>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    rows · median lag {segmentCompareQuery.data.primary_summary.median_lag_days != null ? `${segmentCompareQuery.data.primary_summary.median_lag_days}d` : '—'}
+                  </div>
+                </div>
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bgSubtle, display: 'grid', gap: 4 }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{compareSegment.name}</div>
+                  <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                    {(segmentCompareQuery.data.other_summary.journey_rows ?? 0).toLocaleString()}
+                  </div>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    rows · median lag {segmentCompareQuery.data.other_summary.median_lag_days != null ? `${segmentCompareQuery.data.other_summary.median_lag_days}d` : '—'}
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+                {[
+                  {
+                    label: 'Revenue delta',
+                    value:
+                      segmentCompareQuery.data.deltas.revenue == null
+                        ? '—'
+                        : `${segmentCompareQuery.data.deltas.revenue >= 0 ? '+' : '-'}${formatCurrency(Math.abs(segmentCompareQuery.data.deltas.revenue))}`,
+                  },
+                  {
+                    label: 'Conversion delta',
+                    value:
+                      segmentCompareQuery.data.deltas.conversions == null
+                        ? '—'
+                        : `${segmentCompareQuery.data.deltas.conversions >= 0 ? '+' : '-'}${Math.abs(segmentCompareQuery.data.deltas.conversions).toLocaleString()}`,
+                  },
+                  {
+                    label: 'Median lag delta',
+                    value:
+                      segmentCompareQuery.data.deltas.median_lag_days == null
+                        ? '—'
+                        : `${segmentCompareQuery.data.deltas.median_lag_days >= 0 ? '+' : ''}${segmentCompareQuery.data.deltas.median_lag_days}d`,
+                  },
+                  {
+                    label: 'Avg. path length delta',
+                    value:
+                      segmentCompareQuery.data.deltas.avg_path_length == null
+                        ? '—'
+                        : `${segmentCompareQuery.data.deltas.avg_path_length >= 0 ? '+' : ''}${segmentCompareQuery.data.deltas.avg_path_length.toFixed(1)} steps`,
+                  },
+                ].map((item) => (
+                  <div key={item.label} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.surface, display: 'grid', gap: 4 }}>
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                    <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>{item.value}</div>
+                  </div>
+                ))}
               </div>
             </div>
           </SectionCard>
