@@ -542,7 +542,6 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
     mappingCoverage,
     materializedJourneys,
     pathDiagnostics,
-    pathJourneyShare,
     selectedSegment,
     sourceStateQuery.data?.active_source,
     taxonomyUnknownQuery.data?.unknown_share,

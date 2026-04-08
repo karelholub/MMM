@@ -2555,11 +2555,6 @@ export default function Journeys({
             value: currentInsightsSummary?.conversions ? (summary.conversions ?? 0) / Math.max(currentInsightsSummary.conversions, 1) : null,
             note: `${Number(summary.conversions ?? 0).toLocaleString()} conversions in the audience`,
           },
-          {
-            label: 'Revenue share',
-            value: currentInsightsSummary?.revenue ? Number(summary.revenue ?? 0) / Math.max(currentInsightsSummary.revenue, 1) : null,
-            note: `${Number(summary.revenue ?? 0).toLocaleString()} revenue across matched journeys`,
-          },
         ],
         diagnostics: [
           {
@@ -2576,30 +2571,37 @@ export default function Journeys({
       }
     }
     if (!insightsSegmentComparison || !flowSegmentComparison) return null
-    const cvrNote = insightsSegmentComparison.rates[0]?.note ?? 'Workspace baseline unavailable'
-    const topLinkNote = flowSegmentComparison.rates[0]?.note ?? 'Workspace flow baseline unavailable'
+    const journeyShare = insightsSegmentComparison.shares.find((item) => item.label === 'Journey share')
+    const conversionShare = insightsSegmentComparison.shares.find((item) => item.label === 'Conversion share')
+    const pathCoverageShare = insightsSegmentComparison.shares.find((item) => item.label === 'Path coverage share')
+    const flowShare = flowSegmentComparison.shares.find((item) => item.label === 'Visible flow share')
+    const cvrEntry = insightsSegmentComparison.rates.find((item) => item.label === 'Baseline CVR vs workspace')
+    const topLinkEntry = flowSegmentComparison.rates.find((item) => item.label === 'Top-link concentration')
     return {
       name: selectedLocalSegment.name,
-      cards: [
-        insightsSegmentComparison.shares[0],
-        insightsSegmentComparison.shares[1],
-        insightsSegmentComparison.shares[2],
-        flowSegmentComparison.shares[1],
-      ],
+      cards: [journeyShare, conversionShare, pathCoverageShare, flowShare].filter(
+        (
+          item,
+        ): item is {
+          label: string
+          value: number | null
+          note: string
+        } => Boolean(item),
+      ),
       diagnostics: [
         {
           label: 'Baseline CVR',
-          value: insightsSegmentComparison.rates[0]?.value ?? '—',
-          note: cvrNote,
+          value: cvrEntry?.value ?? '—',
+          note: cvrEntry?.note ?? 'Workspace baseline unavailable',
         },
         {
           label: 'Top-link concentration',
-          value: flowSegmentComparison.rates[0]?.value ?? '—',
-          note: topLinkNote,
+          value: topLinkEntry?.value ?? '—',
+          note: topLinkEntry?.note ?? 'Workspace flow baseline unavailable',
         },
       ],
     }
-  }, [currentInsightsSummary?.conversions, currentInsightsSummary?.revenue, flowSegmentComparison, focusedSegmentAnalysisQuery.data?.summary, insightsSegmentComparison, selectedLocalSegment, selectedLocalSegmentAutoCompatible])
+  }, [currentInsightsSummary?.conversions, flowSegmentComparison, focusedSegmentAnalysisQuery.data?.summary, insightsSegmentComparison, selectedLocalSegment, selectedLocalSegmentAutoCompatible])
   const pathTableColumns: AnalyticsTableColumn<JourneyPathRow>[] = [
     {
       key: 'path_steps',
@@ -4234,9 +4236,21 @@ export default function Journeys({
                 ) : insightsSegmentComparison ? (
                   <SectionCard
                     title={`Segment vs workspace baseline: ${selectedLocalSegment.name}`}
-                    subtitle="This saved analytical segment narrows the current journey discovery view. Use the baseline below to judge whether this slice is structurally different from the full workspace."
+                    subtitle={
+                      selectedLocalSegmentAutoCompatible
+                        ? 'Use the baseline below to judge whether this visible slice is structurally different from the full workspace.'
+                        : 'This advanced audience stays as an analytical lens here. Compare it to the workspace before drilling into paths or hypotheses.'
+                    }
                   >
                     <div style={{ display: 'grid', gap: t.space.lg }}>
+                      <SegmentComparisonContextNote
+                        mode={selectedLocalSegmentAutoCompatible ? 'exact_filter' : 'analytical_lens'}
+                        pageLabel="journey discovery rows"
+                        basisLabel="matched journey-definition instance rows"
+                        primaryLabel={selectedLocalSegment.name}
+                        primaryRows={currentInsightsSummary?.journeys}
+                        baselineRows={workspaceInsightsSummary?.journeys}
+                      />
                       <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
                         {insightsSegmentComparison.shares.map((item) => (
                           <div
