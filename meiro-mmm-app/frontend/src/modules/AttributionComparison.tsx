@@ -16,6 +16,7 @@ import {
   localSegmentCompatibleWithDimensions,
   readLocalSegmentDefinition,
   segmentOptionLabel,
+  type SegmentAnalysisResponse,
   type SegmentRegistryResponse,
 } from '../lib/segments'
 
@@ -406,20 +407,37 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
     [localSegments],
   )
   const selectedSegment = useMemo(
-    () => compatibleSegments.find((item) => item.id === selectedSegmentId) ?? null,
-    [compatibleSegments, selectedSegmentId],
+    () => localSegments.find((item) => item.id === selectedSegmentId) ?? null,
+    [localSegments, selectedSegmentId],
   )
   const selectedSegmentDefinition = useMemo(
     () => readLocalSegmentDefinition(selectedSegment),
     [selectedSegment],
   )
+  const selectedSegmentAutoCompatible = useMemo(
+    () => localSegmentCompatibleWithDimensions(selectedSegment, ['channel_group']),
+    [selectedSegment],
+  )
+  const segmentAnalysisQuery = useQuery<SegmentAnalysisResponse>({
+    queryKey: ['attribution-comparison', 'segment-analysis', selectedSegment?.id || 'none', journeysSummary?.date_min, journeysSummary?.date_max],
+    queryFn: async () => {
+      const params = new URLSearchParams()
+      if (journeysSummary?.date_min) params.set('date_from', journeysSummary.date_min.slice(0, 10))
+      if (journeysSummary?.date_max) params.set('date_to', journeysSummary.date_max.slice(0, 10))
+      return apiGetJson<SegmentAnalysisResponse>(`/api/segments/local/${selectedSegment?.id}/analysis?${params.toString()}`, {
+        fallbackMessage: 'Failed to load segment audience analysis',
+      })
+    },
+    enabled: Boolean(selectedSegment && journeysSummary?.date_min && journeysSummary?.date_max),
+    refetchInterval: false,
+  })
 
   useEffect(() => {
     if (!selectedSegmentId) return
     if (!segmentRegistryQuery.data) return
-    if (compatibleSegments.some((item) => item.id === selectedSegmentId)) return
+    if (localSegments.some((item) => item.id === selectedSegmentId)) return
     setSelectedSegmentId('')
-  }, [compatibleSegments, selectedSegmentId, segmentRegistryQuery.data])
+  }, [localSegments, selectedSegmentId, segmentRegistryQuery.data])
 
   const currentSensitivitySummary = useMemo(() => {
     if (!sensitivityDraft) return 'No draft loaded'
@@ -433,7 +451,7 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
     () =>
       [...(channelLagQuery.data?.items ?? [])]
         .filter((item) => {
-          if (selectedSegmentDefinition.channel_group && item.key !== selectedSegmentDefinition.channel_group) return false
+          if (selectedSegmentAutoCompatible && selectedSegmentDefinition.channel_group && item.key !== selectedSegmentDefinition.channel_group) return false
           return true
         })
         .sort((a, b) => {
@@ -442,7 +460,7 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
           return bShare - aShare
         })
         .slice(0, 4),
-    [channelLagQuery.data?.items, selectedSegmentDefinition.channel_group],
+    [channelLagQuery.data?.items, selectedSegmentAutoCompatible, selectedSegmentDefinition.channel_group],
   )
 
   const buildSensitivityHref = (settings: AttributionSettingsDraft | null): string => {
@@ -499,7 +517,7 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
     if (r?.channels) {
       for (const ch of r.channels) {
         if (directMode === 'exclude_view' && ch.channel.toLowerCase() === 'direct') continue
-        if (selectedSegmentDefinition.channel_group && ch.channel !== selectedSegmentDefinition.channel_group) continue
+        if (selectedSegmentAutoCompatible && selectedSegmentDefinition.channel_group && ch.channel !== selectedSegmentDefinition.channel_group) continue
         allChannels.add(ch.channel)
       }
     }
@@ -577,7 +595,7 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
   }, [baselineKey, comparisonData, comparisonMode, models, selectedModel])
 
   const focusedSegmentModelComparison = useMemo(() => {
-    if (!selectedSegmentDefinition.channel_group || !models.length) return []
+    if (!selectedSegmentAutoCompatible || !selectedSegmentDefinition.channel_group || !models.length) return []
     return models.map((model) => {
       const channels = results[model]?.channels ?? []
       const totalValue = channels.reduce((sum: number, row: { attributed_value?: number }) => sum + Number(row.attributed_value || 0), 0)
@@ -597,7 +615,7 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
         shareDelta: focusedShare - baselineShare,
       }
     })
-  }, [baselineKey, models, results, selectedSegmentDefinition.channel_group])
+  }, [baselineKey, models, results, selectedSegmentAutoCompatible, selectedSegmentDefinition.channel_group])
   const comparisonNarrative = useMemo(() => {
     const winner = winnersLosers.winners[0] ?? null
     const loser = winnersLosers.losers[0] ?? null
@@ -622,7 +640,12 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
         ? `${topLagRisk.label} has the heaviest long-lag exposure, with ${formatPercent(topLagRisk.conversions > 0 ? topLagRisk.lag_buckets.over_7d / topLagRisk.conversions : null)} of conversions taking more than 7 days.`
         : null,
       selectedSegment
-        ? `${selectedSegment.name} is a focused analytical slice. Attribution totals stay workspace-wide, but visible channel rows are filtered to that audience context.`
+        ? selectedSegmentAutoCompatible
+          ? `${selectedSegment.name} is a focused analytical slice. Attribution totals stay workspace-wide, but visible channel rows are filtered to that audience context.`
+          : `${selectedSegment.name} is an advanced analytical audience. Attribution totals stay workspace-wide, and this page adds an audience lens instead of pretending the model output can be exactly sliced by one channel rule.`
+        : null,
+      selectedSegment && !selectedSegmentAutoCompatible && segmentAnalysisQuery.data?.summary
+        ? `The audience currently matches ${(segmentAnalysisQuery.data.summary.journey_rows ?? 0).toLocaleString()} journey rows with ${segmentAnalysisQuery.data.summary.median_lag_days != null ? `${segmentAnalysisQuery.data.summary.median_lag_days}d` : 'unknown'} median lag.`
         : null,
     ].filter((item): item is string => Boolean(item))
     return { headline, items }
@@ -631,6 +654,8 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
     comparisonMode,
     selectedModel,
     selectedSegment,
+    selectedSegmentAutoCompatible,
+    segmentAnalysisQuery.data?.summary,
     sensitivityQuery.data?.current,
     topExposedChannels,
     winnersLosers.losers,
@@ -778,7 +803,7 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
         />
       </div>
 
-      {selectedSegment ? (
+      {selectedSegment && selectedSegmentAutoCompatible ? (
         <div
           style={{
             display: 'grid',
@@ -823,6 +848,45 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
               </div>
             )
           })}
+        </div>
+      ) : null}
+
+      {selectedSegment && !selectedSegmentAutoCompatible && segmentAnalysisQuery.data ? (
+        <div
+          style={{
+            display: 'grid',
+            gap: t.space.md,
+            marginBottom: t.space.lg,
+            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          }}
+        >
+          <div
+            style={{
+              border: `1px solid ${t.color.borderLight}`,
+              borderRadius: t.radius.md,
+              background: t.color.surface,
+              padding: t.space.md,
+              boxShadow: t.shadowSm,
+              display: 'grid',
+              gap: 6,
+            }}
+          >
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              Advanced audience lens
+            </div>
+            <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+              {(segmentAnalysisQuery.data.summary.journey_rows ?? 0).toLocaleString()} matched rows
+            </div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Median lag {segmentAnalysisQuery.data.summary.median_lag_days != null ? `${segmentAnalysisQuery.data.summary.median_lag_days}d` : '—'} · average path {segmentAnalysisQuery.data.summary.avg_path_length != null ? `${segmentAnalysisQuery.data.summary.avg_path_length.toFixed(1)} steps` : '—'}
+            </div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Top channels: {(segmentAnalysisQuery.data.distributions.channels ?? []).slice(0, 3).map((item) => item.value).join(', ') || '—'}
+            </div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Path types: {(segmentAnalysisQuery.data.distributions.path_types ?? []).slice(0, 3).map((item) => item.value).join(', ') || '—'}
+            </div>
+          </div>
         </div>
       ) : null}
 
@@ -940,7 +1004,7 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
             }}
           >
             <option value="">All visible channels / no saved segment</option>
-            {compatibleSegments.map((segment) => (
+            {localSegments.map((segment) => (
               <option key={segment.id} value={segment.id}>
                 {segmentOptionLabel(segment)}
               </option>
@@ -983,7 +1047,7 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
           <div style={{ marginTop: 6 }}>
             Focus:{' '}
             <strong style={{ color: t.color.text }}>
-              {selectedSegment ? `${selectedSegment.name} (channel-group compatible)` : 'all visible channels'}
+              {selectedSegment ? (selectedSegmentAutoCompatible ? `${selectedSegment.name} (channel-group compatible)` : `${selectedSegment.name} (advanced audience lens)`) : 'all visible channels'}
             </strong>
           </div>
           <div style={{ marginTop: 6 }}>

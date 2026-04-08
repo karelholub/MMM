@@ -33,6 +33,7 @@ import {
   localSegmentCompatibleWithDimensions,
   readLocalSegmentDefinition,
   segmentOptionLabel,
+  type SegmentAnalysisResponse,
   type SegmentRegistryResponse,
 } from '../lib/segments'
 
@@ -392,11 +393,15 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
     [localSegments],
   )
   const selectedSegment = useMemo(
-    () => compatibleSegments.find((item) => item.id === selectedSegmentId) ?? null,
-    [compatibleSegments, selectedSegmentId],
+    () => localSegments.find((item) => item.id === selectedSegmentId) ?? null,
+    [localSegments, selectedSegmentId],
   )
   const selectedSegmentDefinition = useMemo(
     () => readLocalSegmentDefinition(selectedSegment),
+    [selectedSegment],
+  )
+  const selectedSegmentAutoCompatible = useMemo(
+    () => localSegmentCompatibleWithDimensions(selectedSegment, ['channel_group']),
     [selectedSegment],
   )
 
@@ -409,9 +414,9 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
   useEffect(() => {
     if (!selectedSegmentId) return
     if (!segmentRegistryQuery.data) return
-    if (compatibleSegments.some((item) => item.id === selectedSegmentId)) return
+    if (localSegments.some((item) => item.id === selectedSegmentId)) return
     setSelectedSegmentId('')
-  }, [compatibleSegments, selectedSegmentId, segmentRegistryQuery.data])
+  }, [localSegments, selectedSegmentId, segmentRegistryQuery.data])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -426,7 +431,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
       return apiGetJson<OverviewSummaryResponse>(withQuery('/api/overview/summary', {
         date_from: dateRange.date_from,
         date_to: dateRange.date_to,
-        channel_group: selectedSegmentDefinition.channel_group,
+        channel_group: selectedSegmentAutoCompatible ? selectedSegmentDefinition.channel_group : undefined,
       }), { fallbackMessage: 'Failed to load overview summary' })
     },
   })
@@ -438,7 +443,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
         date_to: dateRange.date_to,
       }), { fallbackMessage: 'Failed to load workspace overview baseline' })
     },
-    enabled: Boolean(selectedSegmentDefinition.channel_group),
+    enabled: Boolean(selectedSegmentDefinition.channel_group) && selectedSegmentAutoCompatible,
   })
 
   const driversQuery = useQuery<OverviewDriversResponse>({
@@ -447,7 +452,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
       return apiGetJson<OverviewDriversResponse>(withQuery('/api/overview/drivers', {
         date_from: dateRange.date_from,
         date_to: dateRange.date_to,
-        channel_group: selectedSegmentDefinition.channel_group,
+        channel_group: selectedSegmentAutoCompatible ? selectedSegmentDefinition.channel_group : undefined,
       }), { fallbackMessage: 'Failed to load drivers' })
     },
   })
@@ -468,7 +473,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
         date_from: dateRange.date_from,
         date_to: dateRange.date_to,
         limit: 5,
-        channel_group: selectedSegmentDefinition.channel_group,
+        channel_group: selectedSegmentAutoCompatible ? selectedSegmentDefinition.channel_group : undefined,
       }), { fallbackMessage: 'Failed to load top funnels' })
     },
   })
@@ -481,7 +486,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
         limit: 5,
       }), { fallbackMessage: 'Failed to load workspace funnel baseline' })
     },
-    enabled: Boolean(selectedSegmentDefinition.channel_group),
+    enabled: Boolean(selectedSegmentDefinition.channel_group) && selectedSegmentAutoCompatible,
   })
 
   const trendsQuery = useQuery<OverviewTrendsResponse>({
@@ -490,9 +495,21 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
       return apiGetJson<OverviewTrendsResponse>(withQuery('/api/overview/trends', {
         date_from: dateRange.date_from,
         date_to: dateRange.date_to,
-        channel_group: selectedSegmentDefinition.channel_group,
+        channel_group: selectedSegmentAutoCompatible ? selectedSegmentDefinition.channel_group : undefined,
       }), { fallbackMessage: 'Failed to load trend insights' })
     },
+  })
+  const segmentAnalysisQuery = useQuery<SegmentAnalysisResponse>({
+    queryKey: ['overview-segment-analysis', selectedSegment?.id || 'none', dateRange.date_from, dateRange.date_to],
+    queryFn: async () =>
+      apiGetJson<SegmentAnalysisResponse>(
+        withQuery(`/api/segments/local/${selectedSegment?.id}/analysis`, {
+          date_from: dateRange.date_from,
+          date_to: dateRange.date_to,
+        }),
+        { fallbackMessage: 'Failed to load segment audience analysis' },
+      ),
+    enabled: Boolean(selectedSegment),
   })
 
   const journeyFunnelAlertsQuery = useQuery<{ defs: JourneyAlertDefinitionItem[]; events: JourneyAlertEventItem[] }>({
@@ -635,7 +652,35 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
     [baselineSummary?.kpi_tiles],
   )
   const segmentComparison = useMemo(() => {
-    if (!selectedSegmentDefinition.channel_group || !baselineSummary) return null
+    if (!selectedSegment || !baselineSummary) return null
+    if (!selectedSegmentAutoCompatible) {
+      const summary = segmentAnalysisQuery.data?.summary
+      if (!summary) return null
+      const readBaseline = (key: string) => Number(baselineTileMap[key]?.value ?? 0)
+      const workspaceVisits = readBaseline('visits')
+      const workspaceConversions = readBaseline('conversions')
+      const workspaceRevenue = readBaseline('revenue')
+      const workspaceSpend = readBaseline('spend')
+      const segmentVisits = summary.journey_rows ?? 0
+      const segmentConversions = Number(summary.conversions ?? 0)
+      const segmentRevenue = Number(summary.revenue ?? 0)
+      const segmentCvr = segmentVisits > 0 ? segmentConversions / segmentVisits : null
+      const workspaceCvr = workspaceVisits > 0 ? workspaceConversions / workspaceVisits : null
+      return {
+        shares: [
+          { label: 'Journey share', value: summary.share_of_rows ?? null },
+          { label: 'Profile share', value: summary.profiles != null && summary.journey_rows ? summary.profiles / Math.max(summary.journey_rows, 1) : null },
+          { label: 'Conversion share', value: workspaceConversions > 0 ? segmentConversions / workspaceConversions : null },
+          { label: 'Revenue share', value: workspaceRevenue > 0 ? segmentRevenue / workspaceRevenue : null },
+        ],
+        rates: [
+          { label: 'CVR', segment: segmentCvr, baseline: workspaceCvr, delta: segmentCvr != null && workspaceCvr != null ? segmentCvr - workspaceCvr : null, percent: true },
+          { label: 'Median lag', segment: summary.median_lag_days ?? null, baseline: baselineMedianLag, delta: summary.median_lag_days != null && baselineMedianLag != null ? summary.median_lag_days - baselineMedianLag : null, percent: false, suffix: 'd' },
+          { label: 'Average path length', segment: summary.avg_path_length ?? null, baseline: null, delta: null, percent: false, suffix: 'x' },
+          { label: 'Spend share context', segment: workspaceSpend > 0 ? (segmentRevenue / workspaceSpend) : null, baseline: null, delta: null, percent: true },
+        ],
+      }
+    }
     const readValue = (key: string) => Number(selectedTileMap[key]?.value ?? 0)
     const readBaseline = (key: string) => Number(baselineTileMap[key]?.value ?? 0)
     const segmentSpend = readValue('spend')
@@ -678,6 +723,9 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
     funnelMedianLag,
     funnelSummary?.top_paths_conversion_share,
     selectedTileMap,
+    selectedSegment,
+    selectedSegmentAutoCompatible,
+    segmentAnalysisQuery.data?.summary,
   ])
   const handleOverviewAction = (action: RecommendedActionItem) => {
     navigateForRecommendedAction(action, { onNavigate, defaultPage: 'datasources' })
@@ -731,6 +779,9 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
       selectedSegment && segmentComparison
         ? `${selectedSegment.name} contributes ${formatPercent(segmentComparison.shares[2]?.value)} of visible conversions and runs at ${formatPercent(segmentComparison.rates[0]?.segment)} CVR.`
         : null,
+      selectedSegment && !selectedSegmentAutoCompatible && segmentAnalysisQuery.data?.summary
+        ? `This advanced audience matches ${(segmentAnalysisQuery.data.summary.journey_rows ?? 0).toLocaleString()} journey rows with ${segmentAnalysisQuery.data.summary.median_lag_days != null ? `${segmentAnalysisQuery.data.summary.median_lag_days}d` : 'unknown'} median lag.`
+        : null,
     ].filter((item): item is string => Boolean(item))
     return { headline, items }
   }, [
@@ -741,6 +792,8 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
     orderedKpiTiles,
     segmentComparison,
     selectedSegment,
+    selectedSegmentAutoCompatible,
+    segmentAnalysisQuery.data?.summary,
     trendInsights?.momentum?.falling,
     trendInsights?.momentum?.rising,
   ])
@@ -1132,7 +1185,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
                 }}
               >
                 <option value="">All journeys / no saved segment</option>
-                {compatibleSegments.map((segment) => (
+                {localSegments.map((segment) => (
                   <option key={segment.id} value={segment.id}>
                     {segmentOptionLabel(segment)}
                   </option>
@@ -1146,6 +1199,8 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
               <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
                 {selectedSegmentDefinition.channel_group
                   ? `channel_group=${selectedSegmentDefinition.channel_group}`
+                  : selectedSegment
+                  ? 'Advanced analytical audience lens active'
                   : 'No saved segment filter applied'}
               </div>
             </div>
@@ -1203,12 +1258,14 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
                     if (value == null || !Number.isFinite(value)) return '—'
                     if (usePercent) return formatPercent(value, 2)
                     if (suffix === 'd') return `${value.toFixed(1)}d`
+                    if (suffix === 'x') return `${value.toFixed(1)} steps`
                     return formatCurrency(value)
                   }
                   const renderDelta = () => {
                     if (item.delta == null || !Number.isFinite(item.delta)) return '—'
                     if (item.percent) return `${deltaPositive ? '+' : ''}${(item.delta * 100).toFixed(2)} pp`
                     if (item.suffix === 'd') return `${deltaPositive ? '+' : ''}${item.delta.toFixed(1)}d`
+                    if (item.suffix === 'x') return `${deltaPositive ? '+' : ''}${item.delta.toFixed(1)} steps`
                     return `${deltaPositive ? '+' : ''}${formatCurrency(item.delta)}`
                   }
                   return (
