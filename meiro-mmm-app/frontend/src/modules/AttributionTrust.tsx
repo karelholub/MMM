@@ -506,6 +506,8 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
     },
   ]
   const trustNarrative = useMemo(() => {
+    const pathJourneyShare =
+      focusedTrustComparison?.shares.find((item) => item.label === 'Path journey share')?.value ?? null
     const gapPct =
       liveJourneys != null && materializedJourneys != null && liveJourneys > 0
         ? Math.abs(materializedJourneys - liveJourneys) / liveJourneys
@@ -530,7 +532,7 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
         ? `Direct or unknown touchpoints make up ${formatPercent(pathDiagnostics.touchpoint_share)} of visible touches, and ${formatPercent(pathDiagnostics.journeys_ending_direct_share)} of journeys end direct.`
         : null,
       selectedSegment && focusedTrustComparison
-        ? `${selectedSegment.name} represents ${formatPercent(focusedTrustComparison.shares[0]?.value)} of materialized path journeys in the visible trust slice.`
+        ? `${selectedSegment.name} represents ${formatPercent(pathJourneyShare)} of materialized path journeys in the visible trust slice.`
         : null,
     ].filter((item): item is string => Boolean(item))
     return { headline, items }
@@ -540,6 +542,7 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
     mappingCoverage,
     materializedJourneys,
     pathDiagnostics,
+    pathJourneyShare,
     selectedSegment,
     sourceStateQuery.data?.active_source,
     taxonomyUnknownQuery.data?.unknown_share,

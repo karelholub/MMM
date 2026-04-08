@@ -481,6 +481,8 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
     { label: 'Journeys loaded', value: journeysSummary?.count?.toLocaleString() ?? '—' },
   ]
   const compareConversionsDelta = segmentCompareQuery.data?.deltas.conversions
+  const roleVolumeShare =
+    segmentComparison?.shares.find((item) => item.label === 'Role-volume share')?.value ?? null
   const rolesNarrative = useMemo(() => {
     const dominant = topFocusedEntity ? dominantRole(topFocusedEntity, metric) : null
     const largestDelta = segmentComparison
@@ -876,7 +878,7 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
               <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bgSubtle }}>
                 <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Role-volume share</div>
                 <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-                  {formatPercent(segmentComparison?.shares[0]?.value)}
+                  {formatPercent(roleVolumeShare)}
                 </div>
               </div>
               <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bgSubtle }}>
