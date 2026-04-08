@@ -292,9 +292,11 @@ export default function PathArchetypes() {
   }, [compareSegmentId, selectedSegmentId])
 
   const archetypesQuery = useQuery<ArchetypesResponse>({
-    queryKey: ['path-archetypes', kMode, kFixed, directMode, comparePrevious, selectedSegmentId],
+    queryKey: ['path-archetypes', globalDateFrom, globalDateTo, kMode, kFixed, directMode, comparePrevious, selectedSegmentId],
     queryFn: async () => {
       const params = new URLSearchParams()
+      if (globalDateFrom) params.set('date_from', globalDateFrom)
+      if (globalDateTo) params.set('date_to', globalDateTo)
       params.set('k_mode', kMode)
       if (kMode === 'fixed') params.set('k', String(kFixed))
       params.set('direct_mode', directMode)
@@ -309,9 +311,11 @@ export default function PathArchetypes() {
     },
   })
   const baselineArchetypesQuery = useQuery<ArchetypesResponse>({
-    queryKey: ['path-archetypes-baseline', kMode, kFixed, directMode, comparePrevious],
+    queryKey: ['path-archetypes-baseline', globalDateFrom, globalDateTo, kMode, kFixed, directMode, comparePrevious],
     queryFn: async () => {
       const params = new URLSearchParams()
+      if (globalDateFrom) params.set('date_from', globalDateFrom)
+      if (globalDateTo) params.set('date_to', globalDateTo)
       params.set('k_mode', kMode)
       if (kMode === 'fixed') params.set('k', String(kFixed))
       params.set('direct_mode', directMode)

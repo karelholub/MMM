@@ -1041,6 +1041,8 @@ def create_router(
 
     @router.get("/api/paths/archetypes")
     def get_path_archetypes(
+        date_from: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+        date_to: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
         conversion_key: Optional[str] = None,
         config_id: Optional[str] = None,
         k_mode: str = "auto",
@@ -1059,6 +1061,7 @@ def create_router(
         journeys = get_journeys_fn(db)
         if not journeys:
             raise HTTPException(status_code=400, detail="No journeys loaded.")
+        journeys = _filter_journeys_to_window(journeys, date_from=date_from, date_to=date_to)
         resolved_cfg, _meta = load_config_and_meta_fn(db, config_id)
         journeys_for_analysis = apply_model_config_fn(journeys, resolved_cfg.config_json or {}) if resolved_cfg else journeys
         direct_mode_normalized = (direct_mode or "include").lower()
@@ -1083,6 +1086,8 @@ def create_router(
             journeys_for_analysis = filtered_journeys
 
         cache_key = (
+            date_from or "",
+            date_to or "",
             conversion_key or "",
             config_id or "",
             k_mode,
