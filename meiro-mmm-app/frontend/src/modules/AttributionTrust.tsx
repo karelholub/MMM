@@ -494,7 +494,7 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
         (taxonomyUnknownQuery.data?.unknown_share ?? 0) > 0.2 ? t.color.warning : t.color.text,
     },
     {
-      label: 'Live vs materialized',
+      label: selectedSegment ? 'Live vs materialized (workspace)' : 'Live vs materialized',
       value:
         liveJourneys != null && materializedJourneys != null
           ? `${formatNumber(liveJourneys)} vs ${formatNumber(materializedJourneys)}`
@@ -834,9 +834,18 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
 
         <SectionCard
           title="Reconciliation"
-          subtitle="Where live journey counts and materialized path outputs line up, and where direct traffic still dominates."
+          subtitle={
+            selectedSegment
+              ? 'Workspace-wide reconciliation between live journey counts and materialized path outputs. Audience focus below remains analytical.'
+              : 'Where live journey counts and materialized path outputs line up, and where direct traffic still dominates.'
+          }
         >
           <div style={{ display: 'grid', gap: t.space.sm }}>
+            {selectedSegment ? (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                Focus segment <strong style={{ color: t.color.text }}>{selectedSegment.name}</strong> does not narrow this reconciliation card. It remains anchored to workspace-wide live journeys and workspace-wide materialized path outputs so trust diagnostics stay comparable.
+              </div>
+            ) : null}
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.md, flexWrap: 'wrap' }}>
               <span style={{ color: t.color.textSecondary }}>Live journeys</span>
               <strong>{formatNumber(liveJourneys)}</strong>
@@ -1016,7 +1025,11 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
 
       <CollapsiblePanel
         title="Reconciliation detail"
-        subtitle="Where the live attribution layer and materialized journey outputs diverge, and what that means."
+        subtitle={
+          selectedSegment
+            ? 'Workspace-wide reconciliation detail. Focused audience diagnostics above do not replace this baseline.'
+            : 'Where the live attribution layer and materialized journey outputs diverge, and what that means.'
+        }
         open={showReconcilePanel}
         onToggle={() => setShowReconcilePanel((prev) => !prev)}
       >
