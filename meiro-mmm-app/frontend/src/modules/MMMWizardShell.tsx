@@ -311,6 +311,7 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
           runId={mmmRunId!}
           datasetId={mmmDatasetId ?? ''}
           runMetadata={{ attribution_model: runData?.attribution_model, attribution_config_id: runData?.attribution_config_id }}
+          onOpenDataQuality={onOpenDataQuality}
         />
         {(mmmRunQuery.data as any)?.roi?.length > 0 &&
           (mmmRunQuery.data as any)?.contrib?.length > 0 && (

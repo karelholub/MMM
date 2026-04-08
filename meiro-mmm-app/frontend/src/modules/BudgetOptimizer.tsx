@@ -620,10 +620,10 @@ export default function BudgetOptimizer({
       }}
     >
       <h2 style={{ marginTop: 0, marginBottom: t.space.sm, fontSize: t.font.sizeXl, fontWeight: t.font.weightBold, color: t.color.text }}>
-        Budget Optimizer
+        Budget actions
       </h2>
       <p style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary, marginBottom: t.space.xl }}>
-        Reallocate spend across channels using model ROI and contribution. Sliders scale each channel’s spend relative to the dataset baseline. Constraints and total budget guardrails keep scenarios realistic.
+        Turn MMM output into a budget plan. Start from the model-backed recommendation, then refine the allocation against observed spend ranges and rollout guardrails.
       </p>
 
       <div style={{ marginBottom: t.space.lg }}>

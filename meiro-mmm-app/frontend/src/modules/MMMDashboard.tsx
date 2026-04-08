@@ -20,11 +20,13 @@ import { apiGetJson } from '../lib/apiClient'
 import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
+import { buildSettingsHref } from '../lib/settingsLinks'
 
 interface MMMDashboardProps {
   runId: string
   datasetId: string
   runMetadata?: { attribution_model?: string; attribution_config_id?: string }
+  onOpenDataQuality?: () => void
 }
 
 interface KPI {
@@ -95,7 +97,7 @@ function channelDisplayName(
   return channel.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
-export default function MMMDashboard({ runId, datasetId, runMetadata }: MMMDashboardProps) {
+export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenDataQuality }: MMMDashboardProps) {
   const t = tokens
   const [showTrustPanel, setShowTrustPanel] = usePersistentToggle('mmm-dashboard:show-trust-panel', false)
   const [showReconcilePanel, setShowReconcilePanel] = usePersistentToggle('mmm-dashboard:show-reconcile-panel', false)
@@ -592,7 +594,7 @@ export default function MMMDashboard({ runId, datasetId, runMetadata }: MMMDashb
               <button
                 type="button"
                 onClick={() => {
-                  window.alert('Mapping summary will be available in a future version.')
+                  window.location.assign(buildSettingsHref('mmm'))
                 }}
                 style={{
                   padding: `${t.space.xs}px ${t.space.sm}px`,
@@ -604,13 +606,11 @@ export default function MMMDashboard({ runId, datasetId, runMetadata }: MMMDashb
                   cursor: 'pointer',
                 }}
               >
-                View mapping
+                Open MMM settings
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  window.dispatchEvent(new CustomEvent('mmm-open-dq'))
-                }}
+                onClick={() => onOpenDataQuality?.()}
                 style={{
                   padding: `${t.space.xs}px ${t.space.sm}px`,
                   fontSize: t.font.sizeXs,
@@ -618,7 +618,7 @@ export default function MMMDashboard({ runId, datasetId, runMetadata }: MMMDashb
                   background: 'transparent',
                   border: 'none',
                   textAlign: 'left',
-                  cursor: 'pointer',
+                  cursor: onOpenDataQuality ? 'pointer' : 'default',
                 }}
               >
                 View data quality
@@ -689,7 +689,7 @@ export default function MMMDashboard({ runId, datasetId, runMetadata }: MMMDashb
                     Large divergence detected. Check data quality and attribution setup.{' '}
                     <button
                       type="button"
-                      onClick={() => window.dispatchEvent(new CustomEvent('mmm-open-dq'))}
+                      onClick={() => onOpenDataQuality?.()}
                       style={{ background: 'none', border: 'none', color: t.color.accent, cursor: 'pointer', textDecoration: 'underline', padding: 0, fontSize: 'inherit' }}
                     >
                       Open Data Quality
