@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { DashboardPage, ContextSummaryStrip, SectionCard, AnalysisShareActions } from '../components/dashboard'
@@ -142,7 +142,14 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
   const [scope, setScope] = useState<ScopeKey>('channels')
   const [metric, setMetric] = useState<MetricKey>('conversions')
   const [focusRole, setFocusRole] = useState<RoleKey>('assist')
-  const [selectedSegmentId, setSelectedSegmentId] = useState('')
+  const [selectedSegmentId, setSelectedSegmentId] = useState(() => {
+    if (typeof window === 'undefined') return ''
+    try {
+      return new URLSearchParams(window.location.search).get('segment') || ''
+    } catch {
+      return ''
+    }
+  })
   const [showMethod, setShowMethod] = usePersistentToggle('attribution-roles:show-method', false)
   const [showTable, setShowTable] = usePersistentToggle('attribution-roles:show-table', true)
 
@@ -253,6 +260,29 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
     () => readLocalSegmentDefinition(selectedSegment),
     [selectedSegment],
   )
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    params.set('scope', scope)
+    params.set('metric', metric)
+    params.set('role', focusRole)
+    if (selectedSegmentId) params.set('segment', selectedSegmentId)
+    else params.delete('segment')
+    const next = `${window.location.pathname}?${params.toString()}${window.location.hash || ''}`
+    window.history.replaceState({}, '', next)
+  }, [focusRole, metric, scope, selectedSegmentId])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const nextScope = params.get('scope')
+    const nextMetric = params.get('metric')
+    const nextRole = params.get('role')
+    if (nextScope === 'channels' || nextScope === 'campaigns') setScope(nextScope)
+    if (nextMetric === 'conversions' || nextMetric === 'revenue') setMetric(nextMetric)
+    if (nextRole === 'first' || nextRole === 'assist' || nextRole === 'last') setFocusRole(nextRole)
+  }, [])
 
   const entities = scope === 'channels' ? channelEntities : campaignEntities
   const visibleEntities = useMemo(() => {
@@ -376,6 +406,20 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
     { label: 'Focus segment', value: selectedSegment?.name || 'Workspace baseline' },
     { label: 'Journeys loaded', value: journeysSummary?.count?.toLocaleString() ?? '—' },
   ]
+  const comparisonHref = selectedSegmentId ? `/?page=comparison&segment=${encodeURIComponent(selectedSegmentId)}` : '/?page=comparison'
+  const trustHref = selectedSegmentId ? `/?page=trust&segment=${encodeURIComponent(selectedSegmentId)}` : '/?page=trust'
+  const journeysHref = selectedSegmentId ? `/?page=journeys&segment=${encodeURIComponent(selectedSegmentId)}` : '/?page=journeys'
+  const actionButtonStyle: React.CSSProperties = {
+    padding: `${t.space.sm}px ${t.space.md}px`,
+    borderRadius: t.radius.sm,
+    border: `1px solid ${t.color.border}`,
+    background: t.color.surface,
+    color: t.color.text,
+    fontSize: t.font.sizeSm,
+    fontWeight: t.font.weightMedium,
+    cursor: 'pointer',
+    textDecoration: 'none',
+  }
 
   const isLoading = activeQuery.isLoading
   const isError = activeQuery.isError
@@ -386,18 +430,29 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
       title="Attribution Roles"
       description="Who starts demand, who assists it, and who closes it."
       actions={
-        <AnalysisShareActions
-          fileStem="attribution-roles"
-          summaryTitle="Attribution roles brief"
-          summaryLines={[
-            `Period: ${dateFrom} – ${dateTo}`,
-            `Scope: ${scope === 'channels' ? 'Channels' : 'Campaigns'}`,
-            `Metric: ${metric === 'conversions' ? 'Conversions' : 'Revenue'}`,
-            `Ranked by: ${ROLE_LABELS[focusRole]}`,
-            `Focus segment: ${selectedSegment?.name || 'Workspace baseline'}`,
-            `Top ${ROLE_LABELS[focusRole].toLowerCase()}: ${topFocusedEntity ? `${topFocusedEntity.label} (${metric === 'conversions' ? formatNumber(readRoleValue(topFocusedEntity, focusRole, metric)) : formatCurrency(readRoleValue(topFocusedEntity, focusRole, metric))})` : 'No ranked entity in the current slice'}`,
-          ]}
-        />
+        <>
+          <AnalysisShareActions
+            fileStem="attribution-roles"
+            summaryTitle="Attribution roles brief"
+            summaryLines={[
+              `Period: ${dateFrom} – ${dateTo}`,
+              `Scope: ${scope === 'channels' ? 'Channels' : 'Campaigns'}`,
+              `Metric: ${metric === 'conversions' ? 'Conversions' : 'Revenue'}`,
+              `Ranked by: ${ROLE_LABELS[focusRole]}`,
+              `Focus segment: ${selectedSegment?.name || 'Workspace baseline'}`,
+              `Top ${ROLE_LABELS[focusRole].toLowerCase()}: ${topFocusedEntity ? `${topFocusedEntity.label} (${metric === 'conversions' ? formatNumber(readRoleValue(topFocusedEntity, focusRole, metric)) : formatCurrency(readRoleValue(topFocusedEntity, focusRole, metric))})` : 'No ranked entity in the current slice'}`,
+            ]}
+          />
+          <a href={comparisonHref} style={actionButtonStyle}>
+            Open model comparison
+          </a>
+          <a href={trustHref} style={actionButtonStyle}>
+            Open attribution trust
+          </a>
+          <a href={journeysHref} style={actionButtonStyle}>
+            Open journeys
+          </a>
+        </>
       }
       isLoading={isLoading}
       isError={isError}

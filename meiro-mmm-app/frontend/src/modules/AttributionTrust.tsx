@@ -167,7 +167,8 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
   const [selectedSegmentId, setSelectedSegmentId] = useState<string>(() => {
     if (typeof window === 'undefined') return ''
     try {
-      return window.localStorage.getItem('attribution-trust:selected-segment') || ''
+      const params = new URLSearchParams(window.location.search)
+      return params.get('segment') || window.localStorage.getItem('attribution-trust:selected-segment') || ''
     } catch {
       return ''
     }
@@ -185,6 +186,15 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
     } catch {
       // Ignore persistence failures and keep the selector usable.
     }
+  }, [selectedSegmentId])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    if (selectedSegmentId) params.set('segment', selectedSegmentId)
+    else params.delete('segment')
+    const next = `${window.location.pathname}?${params.toString()}${window.location.hash || ''}`
+    window.history.replaceState({}, '', next)
   }, [selectedSegmentId])
 
   const dateTo = globalDateTo || new Date().toISOString().slice(0, 10)
@@ -462,6 +472,8 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
           : t.color.text,
     },
   ]
+  const comparisonHref = selectedSegmentId ? `/?page=comparison&segment=${encodeURIComponent(selectedSegmentId)}` : '/?page=comparison'
+  const journeysHref = selectedSegmentId ? `/?page=journeys&segment=${encodeURIComponent(selectedSegmentId)}` : '/?page=journeys'
 
   const actionButtonStyle = {
     display: 'inline-flex',
@@ -521,11 +533,11 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
               `Direct / unknown touch share: ${formatPercent(pathDiagnostics?.touchpoint_share)}`,
             ]}
           />
-          <a href="/?page=comparison" style={actionButtonStyle}>
+          <a href={comparisonHref} style={actionButtonStyle}>
             Open model comparison
           </a>
-          <a href="/?page=paths" style={actionButtonStyle}>
-            Open conversion paths
+          <a href={journeysHref} style={actionButtonStyle}>
+            Open journey workspace
           </a>
           <a href="/?page=settings#settings/taxonomy" style={actionButtonStyle}>
             Review taxonomy
