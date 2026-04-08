@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.modules.segments.schemas import LocalSegmentPayload
 from app.services_segments import (
+    build_local_segment_analysis,
     build_segment_context,
     create_local_segment,
     list_local_segments,
@@ -52,6 +53,43 @@ def create_router(
         _ctx=Depends(require_permission_dependency("journeys.view")),
     ):
         return build_segment_context(db)
+
+    @router.get("/api/segments/local/{segment_id}/analysis")
+    def api_local_segment_analysis(
+        segment_id: str,
+        date_from: str | None = Query(None),
+        date_to: str | None = Query(None),
+        journey_definition_id: str | None = Query(None),
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        parsed_from = None
+        parsed_to = None
+        if date_from:
+            try:
+                from datetime import datetime
+
+                parsed_from = datetime.fromisoformat(date_from).date()
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail="date_from must be YYYY-MM-DD") from exc
+        if date_to:
+            try:
+                from datetime import datetime
+
+                parsed_to = datetime.fromisoformat(date_to).date()
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail="date_to must be YYYY-MM-DD") from exc
+        item = build_local_segment_analysis(
+            db,
+            segment_id=segment_id,
+            workspace_id=ctx.workspace_id,
+            date_from=parsed_from,
+            date_to=parsed_to,
+            journey_definition_id=journey_definition_id,
+        )
+        if not item:
+            raise HTTPException(status_code=404, detail="Segment not found")
+        return item
 
     @router.post("/api/segments/local")
     def api_create_local_segment(

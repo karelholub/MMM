@@ -11,6 +11,7 @@ import {
   localSegmentCompatibleWithDimensions,
   readLocalSegmentDefinition,
   segmentOptionLabel,
+  type SegmentAnalysisResponse,
   type SegmentRegistryItem,
   type SegmentRegistryResponse,
 } from '../lib/segments'
@@ -291,13 +292,27 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
     [localSegments],
   )
   const selectedSegment = useMemo<SegmentRegistryItem | null>(
-    () => compatibleSegments.find((item) => item.id === selectedSegmentId) ?? null,
-    [compatibleSegments, selectedSegmentId],
+    () => localSegments.find((item) => item.id === selectedSegmentId) ?? null,
+    [localSegments, selectedSegmentId],
   )
   const selectedSegmentDefinition = useMemo(
     () => readLocalSegmentDefinition(selectedSegment),
     [selectedSegment],
   )
+  const selectedSegmentAutoCompatible = useMemo(
+    () => localSegmentCompatibleWithDimensions(selectedSegment, ['channel_group']),
+    [selectedSegment],
+  )
+  const segmentAnalysisQuery = useQuery<SegmentAnalysisResponse>({
+    queryKey: ['attribution-trust', 'segment-analysis', selectedSegment?.id || 'none', dateFrom, dateTo],
+    queryFn: async () => {
+      const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo })
+      return apiGetJson<SegmentAnalysisResponse>(`/api/segments/local/${selectedSegment?.id}/analysis?${params.toString()}`, {
+        fallbackMessage: 'Failed to load segment trust analysis',
+      })
+    },
+    enabled: !!selectedSegment && !!dateFrom && !!dateTo,
+  })
 
   const focusedChannelSummaryQuery = useQuery<ChannelSummaryResponse>({
     queryKey: ['attribution-trust', 'focused-channel-summary', dateFrom, dateTo, selectedSegmentDefinition.channel_group || 'all'],
@@ -313,7 +328,7 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
         fallbackMessage: 'Failed to load focused channel trust diagnostics',
       })
     },
-    enabled: !!selectedSegmentDefinition.channel_group && !!dateFrom && !!dateTo,
+    enabled: !!selectedSegmentDefinition.channel_group && !!dateFrom && !!dateTo && selectedSegmentAutoCompatible,
   })
 
   const focusedCampaignSummaryQuery = useQuery<CampaignSummaryResponse>({
@@ -330,7 +345,7 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
         fallbackMessage: 'Failed to load focused campaign trust diagnostics',
       })
     },
-    enabled: !!selectedSegmentDefinition.channel_group && !!dateFrom && !!dateTo,
+    enabled: !!selectedSegmentDefinition.channel_group && !!dateFrom && !!dateTo && selectedSegmentAutoCompatible,
   })
 
   const focusedPathsAnalysisQuery = useQuery<ConversionPathsAnalysis>({
@@ -347,7 +362,7 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
         fallbackMessage: 'Failed to load focused path diagnostics',
       })
     },
-    enabled: !!selectedSegmentDefinition.channel_group && !!dateFrom && !!dateTo,
+    enabled: !!selectedSegmentDefinition.channel_group && !!dateFrom && !!dateTo && selectedSegmentAutoCompatible,
   })
 
   const readiness = journeysSummary?.readiness ?? channelSummaryQuery.data?.readiness ?? null
@@ -376,16 +391,18 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
   const focusedPathDiagnostics = focusedPathsAnalysisQuery.data?.direct_unknown_diagnostics ?? null
   const focusedMaterializedJourneys = focusedPathsAnalysisQuery.data?.total_journeys ?? null
   const focusedTrustComparison = useMemo(() => {
-    if (!selectedSegment || !selectedSegmentDefinition.channel_group) return null
+    if (!selectedSegment) return null
+    const segmentSummary = segmentAnalysisQuery.data?.summary
+    const segmentRows = segmentSummary?.journey_rows ?? null
     return {
       shares: [
         {
           label: 'Path journey share',
-          value: materializedJourneys && focusedMaterializedJourneys != null ? focusedMaterializedJourneys / materializedJourneys : null,
+          value: materializedJourneys && segmentRows != null ? segmentRows / materializedJourneys : null,
           note:
-            focusedMaterializedJourneys != null && materializedJourneys != null
-              ? `${formatNumber(focusedMaterializedJourneys)} of ${formatNumber(materializedJourneys)} materialized path journeys`
-              : 'Focused path slice unavailable',
+            segmentRows != null && materializedJourneys != null
+              ? `${formatNumber(segmentRows)} matched rows vs ${formatNumber(materializedJourneys)} materialized path journeys`
+              : 'Focused segment slice unavailable',
         },
         {
           label: 'Mapped value rate',
@@ -393,6 +410,8 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
           note:
             mappingCoverage?.value_mapped_pct != null
               ? `${formatSignedPercentPoints(((focusedMappingCoverage?.value_mapped_pct ?? 0) - mappingCoverage.value_mapped_pct) / 100)} vs workspace`
+              : segmentSummary?.revenue != null
+              ? `Segment revenue ${formatNumber(segmentSummary.revenue)} in selected period`
               : 'Workspace mapping baseline unavailable',
         },
         {
@@ -401,7 +420,17 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
           note:
             mappingCoverage?.spend_mapped_pct != null
               ? `${formatSignedPercentPoints(((focusedMappingCoverage?.spend_mapped_pct ?? 0) - mappingCoverage.spend_mapped_pct) / 100)} vs workspace`
-              : 'Workspace mapping baseline unavailable',
+              : selectedSegmentAutoCompatible
+              ? 'Workspace mapping baseline unavailable'
+              : 'Spend mapping remains workspace-wide for advanced segments',
+        },
+        {
+          label: 'Median lag',
+          value: null,
+          note:
+            segmentSummary?.median_lag_days != null
+              ? `${segmentSummary.median_lag_days}d median lag in segment`
+              : 'Segment lag unavailable',
         },
       ],
       diagnostics: [
@@ -419,6 +448,7 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
       spendQuality: focusedSpendQuality?.status || null,
     }
   }, [
+    segmentAnalysisQuery.data?.summary,
     focusedMappingCoverage?.spend_mapped_pct,
     focusedMappingCoverage?.value_mapped_pct,
     focusedMaterializedJourneys,
@@ -431,7 +461,7 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
     pathDiagnostics?.journeys_ending_direct_share,
     pathDiagnostics?.touchpoint_share,
     selectedSegment,
-    selectedSegmentDefinition.channel_group,
+    selectedSegmentAutoCompatible,
   ])
 
   const summaryItems = [
@@ -597,7 +627,7 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
               style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, minWidth: 240 }}
             >
               <option value="">Workspace baseline</option>
-              {compatibleSegments.map((segment) => (
+              {localSegments.map((segment) => (
                 <option key={segment.id} value={segment.id}>
                   {segmentOptionLabel(segment)}
                 </option>
@@ -605,7 +635,7 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
             </select>
           </label>
           <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary, maxWidth: 360 }}>
-            Trust focus currently supports saved analytical segments with a channel-group rule. Source freshness and taxonomy unknown share remain workspace-wide diagnostics.
+            Advanced saved segments now run as a real audience slice here. Source freshness and taxonomy unknown share remain workspace-wide diagnostics.
           </div>
         </div>
       }

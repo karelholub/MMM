@@ -108,6 +108,40 @@ export interface SegmentContextResponse {
   }
 }
 
+export interface SegmentAnalysisResponse {
+  segment: SegmentRegistryItem
+  scope: {
+    date_from?: string | null
+    date_to?: string | null
+    journey_definition_id?: string | null
+  }
+  summary: SegmentPreview
+  baseline_summary: {
+    journey_rows?: number
+  }
+  distributions: {
+    channels: SegmentContextDimensionValue[]
+    campaigns: SegmentContextDimensionValue[]
+    devices: SegmentContextDimensionValue[]
+    countries: SegmentContextDimensionValue[]
+    conversion_keys: SegmentContextDimensionValue[]
+    last_touch_channels: SegmentContextDimensionValue[]
+    path_types: SegmentContextDimensionValue[]
+  }
+  role_mix: {
+    first_touch_conversions: number
+    assist_conversions: number
+    last_touch_conversions: number
+    first_touch_revenue: number
+    assist_revenue: number
+    last_touch_revenue: number
+  }
+  role_entities: {
+    channels: Array<Record<string, unknown>>
+    campaigns: Array<Record<string, unknown>>
+  }
+}
+
 export interface SegmentFilterState {
   channel: string
   campaign: string
@@ -182,7 +216,7 @@ export function readLocalSegmentDefinition(item: SegmentRegistryItem | null | un
     if (rule.op !== 'eq') return
     if (!LEGACY_FILTER_FIELDS.includes(rule.field)) return
     if (typeof rule.value !== 'string') return
-    extracted[rule.field] = rule.value
+    extracted[rule.field as keyof LocalSegmentFilterDefinition] = rule.value
   })
   return extracted
 }

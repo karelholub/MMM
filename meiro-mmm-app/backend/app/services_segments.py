@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import statistics
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import func
@@ -12,7 +12,9 @@ from sqlalchemy.orm import Session
 
 from app.connectors import meiro_cdp
 from app.models_config_dq import (
+    ConversionScopeDiagnosticFact,
     JourneyDefinitionInstanceFact,
+    JourneyRoleFact,
     LocalAnalyticalSegment,
     MeiroEventProfileState,
     MeiroProfileFact,
@@ -258,6 +260,244 @@ def _build_segment_preview(db: Session, definition: Dict[str, Any]) -> Dict[str,
         "revenue": round(revenue, 2),
         "median_lag_days": round(statistics.median(lag_days), 2) if lag_days else None,
         "avg_path_length": round(sum(path_lengths) / len(path_lengths), 2) if path_lengths else None,
+    }
+
+
+def get_local_segment_row(
+    db: Session,
+    *,
+    segment_id: str,
+    workspace_id: str,
+) -> Optional[LocalAnalyticalSegment]:
+    return (
+        db.query(LocalAnalyticalSegment)
+        .filter(
+            LocalAnalyticalSegment.id == segment_id,
+            LocalAnalyticalSegment.workspace_id == workspace_id,
+        )
+        .first()
+    )
+
+
+def _build_scoped_rows_query(
+    db: Session,
+    *,
+    definition: Dict[str, Any],
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    journey_definition_id: Optional[str] = None,
+):
+    query = db.query(
+        JourneyDefinitionInstanceFact.conversion_id,
+        JourneyDefinitionInstanceFact.profile_id,
+        JourneyDefinitionInstanceFact.channel_group,
+        JourneyDefinitionInstanceFact.campaign_id,
+        JourneyDefinitionInstanceFact.device,
+        JourneyDefinitionInstanceFact.country,
+        JourneyDefinitionInstanceFact.conversion_key,
+        JourneyDefinitionInstanceFact.last_touch_channel,
+        JourneyDefinitionInstanceFact.interaction_path_type,
+        JourneyDefinitionInstanceFact.path_length,
+        JourneyDefinitionInstanceFact.time_to_convert_sec,
+        JourneyDefinitionInstanceFact.net_conversions_total,
+        JourneyDefinitionInstanceFact.net_revenue_total,
+    )
+    if date_from is not None:
+        query = query.filter(JourneyDefinitionInstanceFact.date >= date_from)
+    if date_to is not None:
+        query = query.filter(JourneyDefinitionInstanceFact.date <= date_to)
+    if journey_definition_id:
+        query = query.filter(JourneyDefinitionInstanceFact.journey_definition_id == journey_definition_id)
+    expressions = [expr for expr in (_segment_rule_expression(rule) for rule in definition.get("rules") or []) if expr is not None]
+    if expressions:
+        if definition.get("match") == "any":
+            from sqlalchemy import or_
+
+            query = query.filter(or_(*expressions))
+        else:
+            query = query.filter(*expressions)
+    return query
+
+
+def _summarize_scoped_rows(rows: List[Tuple[Any, ...]], baseline_count: int) -> Dict[str, Any]:
+    profiles = {str(profile_id).strip() for _, profile_id, *_ in rows if str(profile_id or "").strip()}
+    lag_days = [float(time_to_convert_sec) / 86400.0 for *_, time_to_convert_sec, _, _ in rows if time_to_convert_sec not in (None, "")]
+    path_lengths = [int(path_length) for *_, path_length, _, _, _ in rows if path_length not in (None, "")]
+    conversions = sum(float(net_conversions_total or 0) for *_, net_conversions_total, _ in rows)
+    revenue = sum(float(net_revenue_total or 0) for *_, net_revenue_total in rows)
+    return {
+        "journey_rows": len(rows),
+        "share_of_rows": (len(rows) / baseline_count) if baseline_count else 0.0,
+        "profiles": len(profiles),
+        "conversions": round(conversions, 2),
+        "revenue": round(revenue, 2),
+        "median_lag_days": round(statistics.median(lag_days), 2) if lag_days else None,
+        "avg_path_length": round(sum(path_lengths) / len(path_lengths), 2) if path_lengths else None,
+    }
+
+
+def _top_values_from_rows(values: List[Any], *, limit: int = 8) -> List[Dict[str, Any]]:
+    counts: Dict[str, int] = {}
+    total = 0
+    for value in values:
+        normalized = str(value or "").strip()
+        if not normalized:
+            continue
+        total += 1
+        counts[normalized] = counts.get(normalized, 0) + 1
+    ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]
+    return [
+        {"value": value, "count": count, "share": round(count / total, 4) if total else 0.0}
+        for value, count in ordered
+    ]
+
+
+def _build_role_entity_summary(
+    db: Session,
+    *,
+    conversion_ids: List[str],
+    scope_type: str,
+    limit: int = 24,
+) -> List[Dict[str, Any]]:
+    if not conversion_ids:
+        return []
+    q = (
+        db.query(JourneyRoleFact)
+        .filter(JourneyRoleFact.conversion_id.in_(conversion_ids))
+        .filter(JourneyRoleFact.role_key.in_(["first", "assist", "last"]))
+    )
+    buckets: Dict[str, Dict[str, Any]] = {}
+    for row in q.all():
+        if scope_type == "channels":
+            key = str(row.channel_group or row.channel or "unknown")
+            label = key
+            secondary_label = "Channel"
+        else:
+            key = str(row.campaign or "").strip() or str(row.channel_group or row.channel or "unknown")
+            label = key
+            secondary_label = str(row.channel_group or row.channel or "unknown")
+        bucket = buckets.setdefault(
+            key,
+            {
+                "id": key,
+                "label": label,
+                "secondaryLabel": secondary_label,
+                "firstConversions": 0.0,
+                "assistConversions": 0.0,
+                "lastConversions": 0.0,
+                "firstRevenue": 0.0,
+                "assistRevenue": 0.0,
+                "lastRevenue": 0.0,
+            },
+        )
+        if row.role_key == "first":
+            bucket["firstConversions"] += float(row.net_conversions_total or 0)
+            bucket["firstRevenue"] += float(row.net_revenue_total or 0)
+        elif row.role_key == "assist":
+            bucket["assistConversions"] += float(row.net_conversions_total or 0)
+            bucket["assistRevenue"] += float(row.net_revenue_total or 0)
+        else:
+            bucket["lastConversions"] += float(row.net_conversions_total or 0)
+            bucket["lastRevenue"] += float(row.net_revenue_total or 0)
+    items = sorted(
+        buckets.values(),
+        key=lambda item: -(
+            float(item["firstConversions"])
+            + float(item["assistConversions"])
+            + float(item["lastConversions"])
+        ),
+    )
+    return items[:limit]
+
+
+def _build_role_mix(db: Session, *, conversion_ids: List[str]) -> Dict[str, Any]:
+    if not conversion_ids:
+        return {
+            "first_touch_conversions": 0.0,
+            "assist_conversions": 0.0,
+            "last_touch_conversions": 0.0,
+            "first_touch_revenue": 0.0,
+            "assist_revenue": 0.0,
+            "last_touch_revenue": 0.0,
+        }
+    q = (
+        db.query(ConversionScopeDiagnosticFact)
+        .filter(ConversionScopeDiagnosticFact.scope_type == "channel")
+        .filter(ConversionScopeDiagnosticFact.conversion_id.in_(conversion_ids))
+    )
+    totals = {
+        "first_touch_conversions": 0.0,
+        "assist_conversions": 0.0,
+        "last_touch_conversions": 0.0,
+        "first_touch_revenue": 0.0,
+        "assist_revenue": 0.0,
+        "last_touch_revenue": 0.0,
+    }
+    for row in q.all():
+        totals["first_touch_conversions"] += float(row.first_touch_conversions or 0)
+        totals["assist_conversions"] += float(row.assist_conversions or 0)
+        totals["last_touch_conversions"] += float(row.last_touch_conversions or 0)
+        totals["first_touch_revenue"] += float(row.first_touch_revenue or 0)
+        totals["assist_revenue"] += float(row.assist_revenue or 0)
+        totals["last_touch_revenue"] += float(row.last_touch_revenue or 0)
+    for key, value in list(totals.items()):
+        totals[key] = round(value, 2)
+    return totals
+
+
+def build_local_segment_analysis(
+    db: Session,
+    *,
+    segment_id: str,
+    workspace_id: str,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    journey_definition_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    row = get_local_segment_row(db, segment_id=segment_id, workspace_id=workspace_id)
+    if not row:
+        return None
+    item = _serialize_local_segment_with_preview(db, row)
+    definition = dict(item.get("definition") or {})
+    baseline_query = db.query(func.count(JourneyDefinitionInstanceFact.id))
+    if date_from is not None:
+        baseline_query = baseline_query.filter(JourneyDefinitionInstanceFact.date >= date_from)
+    if date_to is not None:
+        baseline_query = baseline_query.filter(JourneyDefinitionInstanceFact.date <= date_to)
+    if journey_definition_id:
+        baseline_query = baseline_query.filter(JourneyDefinitionInstanceFact.journey_definition_id == journey_definition_id)
+    baseline_count = int(baseline_query.scalar() or 0)
+    rows = _build_scoped_rows_query(
+        db,
+        definition=definition,
+        date_from=date_from,
+        date_to=date_to,
+        journey_definition_id=journey_definition_id,
+    ).all()
+    conversion_ids = [str(conversion_id or "").strip() for conversion_id, *_ in rows if str(conversion_id or "").strip()]
+    return {
+        "segment": item,
+        "scope": {
+            "date_from": date_from.isoformat() if date_from else None,
+            "date_to": date_to.isoformat() if date_to else None,
+            "journey_definition_id": journey_definition_id,
+        },
+        "summary": _summarize_scoped_rows(rows, baseline_count),
+        "baseline_summary": {"journey_rows": baseline_count},
+        "distributions": {
+            "channels": _top_values_from_rows([row[2] for row in rows]),
+            "campaigns": _top_values_from_rows([row[3] for row in rows]),
+            "devices": _top_values_from_rows([row[4] for row in rows]),
+            "countries": _top_values_from_rows([row[5] for row in rows]),
+            "conversion_keys": _top_values_from_rows([row[6] for row in rows]),
+            "last_touch_channels": _top_values_from_rows([row[7] for row in rows]),
+            "path_types": _top_values_from_rows([row[8] for row in rows]),
+        },
+        "role_mix": _build_role_mix(db, conversion_ids=conversion_ids),
+        "role_entities": {
+            "channels": _build_role_entity_summary(db, conversion_ids=conversion_ids, scope_type="channels"),
+            "campaigns": _build_role_entity_summary(db, conversion_ids=conversion_ids, scope_type="campaigns"),
+        },
     }
 
 

@@ -19,9 +19,11 @@ import {
   clearSegmentReferenceMetadata,
   hasLocalSegmentCriteria,
   isLocalAnalyticalSegment,
+  localSegmentCompatibleWithDimensions,
   readLocalSegmentDefinition,
   readSelectedSegmentRegistryId,
   segmentOptionLabel,
+  type SegmentAnalysisResponse,
   type SegmentRegistryItem,
   type SegmentRegistryResponse,
 } from '../lib/segments'
@@ -1140,6 +1142,10 @@ export default function Journeys({
     () => localAnalyticalSegments.find((item) => item.id === filters.segment) ?? null,
     [filters.segment, localAnalyticalSegments],
   )
+  const selectedLocalSegmentAutoCompatible = useMemo(
+    () => localSegmentCompatibleWithDimensions(selectedLocalSegment, ['channel_group', 'campaign_id', 'device', 'country']),
+    [selectedLocalSegment],
+  )
   const hasFocusedLocalSegment = Boolean(selectedLocalSegment)
   const selectedHypothesisSegmentId = readSelectedSegmentRegistryId(hypothesisDraft.segment)
   const selectedHypothesisSegmentItem = useMemo(
@@ -1216,7 +1222,12 @@ export default function Journeys({
       if (next.segment !== prev.segment) {
         if (next.segment === 'all') return { ...next, segment: 'all' }
         const selectedSegment = localAnalyticalSegments.find((item) => item.id === next.segment)
-        if (selectedSegment) return applyLocalSegmentToFilterState(next, selectedSegment)
+        if (selectedSegment) {
+          if (localSegmentCompatibleWithDimensions(selectedSegment, ['channel_group', 'campaign_id', 'device', 'country'])) {
+            return applyLocalSegmentToFilterState(next, selectedSegment)
+          }
+          return next
+        }
       }
       const dimensionsChanged =
         next.channel !== prev.channel ||
@@ -1511,6 +1522,7 @@ export default function Journeys({
     enabled:
       !!selectedJourneyId &&
       needsWorkspaceJourneyBaseline &&
+      selectedLocalSegmentAutoCompatible &&
       (activeTab === 'insights' || activeTab === 'flow' || activeTab === 'hypotheses') &&
       !definitionWorkspaceReadOnly,
   })
@@ -1544,7 +1556,21 @@ export default function Journeys({
         fallbackMessage: 'Failed to load workspace flow baseline',
       })
     },
-    enabled: !!selectedJourneyId && hasFocusedLocalSegment && activeTab === 'flow' && !definitionWorkspaceReadOnly,
+    enabled: !!selectedJourneyId && hasFocusedLocalSegment && selectedLocalSegmentAutoCompatible && activeTab === 'flow' && !definitionWorkspaceReadOnly,
+  })
+  const focusedSegmentAnalysisQuery = useQuery<SegmentAnalysisResponse>({
+    queryKey: ['journey-segment-analysis', selectedJourneyId, selectedLocalSegment?.id ?? '', filters.dateFrom, filters.dateTo],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        date_from: filters.dateFrom,
+        date_to: filters.dateTo,
+        journey_definition_id: selectedJourneyId,
+      })
+      return apiGetJson<SegmentAnalysisResponse>(`/api/segments/local/${selectedLocalSegment?.id}/analysis?${params.toString()}`, {
+        fallbackMessage: 'Failed to load focused analytical segment',
+      })
+    },
+    enabled: !!selectedJourneyId && !!selectedLocalSegment && !definitionWorkspaceReadOnly,
   })
 
   const hypothesesQuery = useQuery<JourneyHypothesesResponse>({
@@ -2114,6 +2140,9 @@ export default function Journeys({
       if (prev.segment === 'all') return prev
       const selectedSegment = localAnalyticalSegments.find((item) => item.id === prev.segment)
       if (!selectedSegment) return { ...prev, segment: 'all' }
+      if (!localSegmentCompatibleWithDimensions(selectedSegment, ['channel_group', 'campaign_id', 'device', 'country'])) {
+        return prev
+      }
       const applied = applyLocalSegmentToFilterState(prev, selectedSegment)
       return JSON.stringify(applied) === JSON.stringify(prev) ? prev : applied
     })
@@ -2481,7 +2510,49 @@ export default function Journeys({
     workspaceInsightsSummary,
   ])
   const workspaceAudienceBaseline = useMemo(() => {
-    if (!selectedLocalSegment || !insightsSegmentComparison || !flowSegmentComparison) return null
+    if (!selectedLocalSegment) return null
+    if (!selectedLocalSegmentAutoCompatible) {
+      const summary = focusedSegmentAnalysisQuery.data?.summary
+      if (!summary) return null
+      return {
+        name: selectedLocalSegment.name,
+        cards: [
+          {
+            label: 'Journey share',
+            value: summary.share_of_rows ?? null,
+            note: `${(summary.journey_rows ?? 0).toLocaleString()} matched journey rows in this definition`,
+          },
+          {
+            label: 'Profile count',
+            value: summary.profiles != null && (focusedSegmentAnalysisQuery.data?.baseline_summary.journey_rows ?? 0) > 0 ? summary.profiles / Math.max(summary.journey_rows ?? 1, 1) : null,
+            note: `${(summary.profiles ?? 0).toLocaleString()} matched profiles`,
+          },
+          {
+            label: 'Conversion share',
+            value: currentInsightsSummary?.conversions ? (summary.conversions ?? 0) / Math.max(currentInsightsSummary.conversions, 1) : null,
+            note: `${Number(summary.conversions ?? 0).toLocaleString()} conversions in the audience`,
+          },
+          {
+            label: 'Revenue share',
+            value: null,
+            note: `${Number(summary.revenue ?? 0).toLocaleString()} revenue across matched journeys`,
+          },
+        ],
+        diagnostics: [
+          {
+            label: 'Median lag',
+            value: summary.median_lag_days != null ? `${summary.median_lag_days}d` : '—',
+            note: 'Computed from matched journey rows in the selected definition and date range.',
+          },
+          {
+            label: 'Average path length',
+            value: summary.avg_path_length != null ? `${summary.avg_path_length}` : '—',
+            note: 'Advanced segments stay as an analytical lens here and do not auto-apply page filters.',
+          },
+        ],
+      }
+    }
+    if (!insightsSegmentComparison || !flowSegmentComparison) return null
     const cvrNote = insightsSegmentComparison.rates[0]?.note ?? 'Workspace baseline unavailable'
     const topLinkNote = flowSegmentComparison.rates[0]?.note ?? 'Workspace flow baseline unavailable'
     return {
@@ -2505,7 +2576,7 @@ export default function Journeys({
         },
       ],
     }
-  }, [flowSegmentComparison, insightsSegmentComparison, selectedLocalSegment])
+  }, [currentInsightsSummary?.conversions, flowSegmentComparison, focusedSegmentAnalysisQuery.data?.baseline_summary.journey_rows, focusedSegmentAnalysisQuery.data?.summary, insightsSegmentComparison, selectedLocalSegment, selectedLocalSegmentAutoCompatible])
   const pathTableColumns: AnalyticsTableColumn<JourneyPathRow>[] = [
     {
       key: 'path_steps',
@@ -3694,7 +3765,9 @@ export default function Journeys({
           ) : null}
           <div style={{ display: 'grid', gap: t.space.md, minWidth: 0 }}>
           {!selectedDefinitionArchived && selectedLocalSegment ? (
-            baselineInsightsQuery.isLoading || baselineTransitionsQuery.isLoading ? (
+            (selectedLocalSegmentAutoCompatible
+              ? baselineInsightsQuery.isLoading || baselineTransitionsQuery.isLoading
+              : focusedSegmentAnalysisQuery.isLoading) ? (
               <div
                 style={{
                   border: `1px solid ${t.color.borderLight}`,

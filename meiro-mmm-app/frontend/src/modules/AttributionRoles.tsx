@@ -10,6 +10,7 @@ import {
   localSegmentCompatibleWithDimensions,
   readLocalSegmentDefinition,
   segmentOptionLabel,
+  type SegmentAnalysisResponse,
   type SegmentRegistryItem,
   type SegmentRegistryResponse,
 } from '../lib/segments'
@@ -253,13 +254,27 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
     [localSegments, scope],
   )
   const selectedSegment = useMemo<SegmentRegistryItem | null>(
-    () => compatibleSegments.find((item) => item.id === selectedSegmentId) ?? null,
-    [compatibleSegments, selectedSegmentId],
+    () => localSegments.find((item) => item.id === selectedSegmentId) ?? null,
+    [localSegments, selectedSegmentId],
   )
   const selectedSegmentDefinition = useMemo(
     () => readLocalSegmentDefinition(selectedSegment),
     [selectedSegment],
   )
+  const selectedSegmentAutoCompatible = useMemo(
+    () => localSegmentCompatibleWithDimensions(selectedSegment, scope === 'channels' ? ['channel_group'] : ['channel_group', 'campaign_id']),
+    [scope, selectedSegment],
+  )
+  const segmentAnalysisQuery = useQuery<SegmentAnalysisResponse>({
+    queryKey: ['attribution-roles', 'segment-analysis', selectedSegment?.id || 'none', dateFrom, dateTo],
+    queryFn: async () => {
+      const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo })
+      return apiGetJson<SegmentAnalysisResponse>(`/api/segments/local/${selectedSegment?.id}/analysis?${params.toString()}`, {
+        fallbackMessage: 'Failed to load advanced segment analysis',
+      })
+    },
+    enabled: !!selectedSegment && !!dateFrom && !!dateTo,
+  })
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -285,8 +300,31 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
   }, [])
 
   const entities = scope === 'channels' ? channelEntities : campaignEntities
+  const advancedSegmentEntities = useMemo<RoleEntity[]>(() => {
+    const items = (scope === 'channels'
+      ? segmentAnalysisQuery.data?.role_entities.channels
+      : segmentAnalysisQuery.data?.role_entities.campaigns) ?? []
+    return items.map((item) => ({
+      id: String(item.id || ''),
+      label: String(item.label || item.id || 'Unknown'),
+      secondaryLabel: String(item.secondaryLabel || ''),
+      firstConversions: Number(item.firstConversions || 0),
+      assistConversions: Number(item.assistConversions || 0),
+      lastConversions: Number(item.lastConversions || 0),
+      firstRevenue: Number(item.firstRevenue || 0),
+      assistRevenue: Number(item.assistRevenue || 0),
+      lastRevenue: Number(item.lastRevenue || 0),
+      visits: 0,
+      conversions:
+        Number(item.firstConversions || 0) + Number(item.assistConversions || 0) + Number(item.lastConversions || 0),
+      revenue:
+        Number(item.firstRevenue || 0) + Number(item.assistRevenue || 0) + Number(item.lastRevenue || 0),
+      spend: 0,
+    }))
+  }, [scope, segmentAnalysisQuery.data?.role_entities])
   const visibleEntities = useMemo(() => {
     if (!selectedSegment) return entities
+    if (!selectedSegmentAutoCompatible) return advancedSegmentEntities
     return entities.filter((item) => {
       if (scope === 'channels') {
         if (selectedSegmentDefinition.channel_group && item.id !== selectedSegmentDefinition.channel_group) return false
@@ -296,7 +334,7 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
       if (selectedSegmentDefinition.campaign_id && item.id !== selectedSegmentDefinition.campaign_id) return false
       return true
     })
-  }, [entities, scope, selectedSegment, selectedSegmentDefinition])
+  }, [advancedSegmentEntities, entities, scope, selectedSegment, selectedSegmentAutoCompatible, selectedSegmentDefinition])
   const activeQuery = scope === 'channels' ? channelSummaryQuery : campaignSummaryQuery
   const conversionKey =
     channelSummaryQuery.data?.config?.conversion_key ||
@@ -539,7 +577,7 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
               style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, minWidth: 240 }}
             >
               <option value="">Workspace baseline</option>
-              {compatibleSegments.map((segment) => (
+              {localSegments.map((segment) => (
                 <option key={segment.id} value={segment.id}>
                   {segmentOptionLabel(segment)}
                 </option>
@@ -630,6 +668,34 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
                     </div>
                   )
                 })}
+              </div>
+            </div>
+          </SectionCard>
+        ) : null}
+
+        {selectedSegment && !selectedSegmentAutoCompatible && segmentAnalysisQuery.data ? (
+          <SectionCard
+            title={`Advanced audience lens: ${selectedSegment.name}`}
+            subtitle="This segment is not a simple page filter, so the role view is computed from matched conversions directly instead of channel/campaign filter shortcuts."
+          >
+            <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
+              <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bgSubtle }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Matched journey rows</div>
+                <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                  {(segmentAnalysisQuery.data.summary.journey_rows ?? 0).toLocaleString()}
+                </div>
+              </div>
+              <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bgSubtle }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Role-volume share</div>
+                <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                  {formatPercent(segmentComparison?.shares[0]?.value)}
+                </div>
+              </div>
+              <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bgSubtle }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Median lag</div>
+                <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                  {segmentAnalysisQuery.data.summary.median_lag_days != null ? `${segmentAnalysisQuery.data.summary.median_lag_days}d` : '—'}
+                </div>
               </div>
             </div>
           </SectionCard>

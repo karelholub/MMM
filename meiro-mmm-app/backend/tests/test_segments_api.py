@@ -8,7 +8,13 @@ from sqlalchemy.pool import StaticPool
 from app.db import Base, get_db
 from app.main import app
 from app.connectors import meiro_cdp
-from app.models_config_dq import JourneyDefinitionInstanceFact, MeiroEventProfileState, MeiroProfileFact
+from app.models_config_dq import (
+    ConversionScopeDiagnosticFact,
+    JourneyDefinitionInstanceFact,
+    JourneyRoleFact,
+    MeiroEventProfileState,
+    MeiroProfileFact,
+)
 
 
 @pytest.fixture
@@ -321,3 +327,117 @@ def test_smart_segment_v2_preview_and_compatibility(client: TestClient):
     assert payload["preview"]["revenue"] == 120.0
     assert payload["preview"]["median_lag_days"] == 4.0
     assert "Lag (days) >=" in payload["criteria_label"]
+
+
+def test_local_segment_analysis_endpoint_returns_distributions_and_roles(client: TestClient):
+    db_gen = app.dependency_overrides[get_db]()
+    db = next(db_gen)
+    try:
+        db.add_all(
+            [
+                JourneyDefinitionInstanceFact(
+                    date=date(2026, 4, 4),
+                    journey_definition_id="def-1",
+                    conversion_id="conv-1",
+                    profile_id="p-1",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2026, 4, 4, 10, 0, tzinfo=timezone.utc),
+                    path_hash="h-1",
+                    steps_json=["paid_search", "email", "checkout"],
+                    path_length=3,
+                    channel_group="paid_search",
+                    last_touch_channel="email",
+                    campaign_id="brand_search",
+                    device="mobile",
+                    country="cz",
+                    interaction_path_type="multi_touch",
+                    time_to_convert_sec=2 * 86400,
+                    net_conversions_total=1,
+                    net_revenue_total=80,
+                ),
+                JourneyRoleFact(
+                    conversion_id="conv-1",
+                    profile_id="p-1",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2026, 4, 4, 10, 0, tzinfo=timezone.utc),
+                    role_key="first",
+                    ordinal=0,
+                    channel_group="paid_search",
+                    channel="google_ads",
+                    campaign="brand_search",
+                    net_conversions_total=1,
+                    net_revenue_total=80,
+                ),
+                JourneyRoleFact(
+                    conversion_id="conv-1",
+                    profile_id="p-1",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2026, 4, 4, 10, 0, tzinfo=timezone.utc),
+                    role_key="last",
+                    ordinal=1,
+                    channel_group="email",
+                    channel="email",
+                    campaign="newsletter",
+                    net_conversions_total=1,
+                    net_revenue_total=80,
+                ),
+                ConversionScopeDiagnosticFact(
+                    conversion_id="conv-1",
+                    profile_id="p-1",
+                    conversion_key="purchase",
+                    scope_type="channel",
+                    scope_key="paid_search",
+                    scope_channel="paid_search",
+                    first_touch_ts=datetime(2026, 4, 2, 10, 0, tzinfo=timezone.utc),
+                    last_touch_ts=datetime(2026, 4, 4, 10, 0, tzinfo=timezone.utc),
+                    conversion_ts=datetime(2026, 4, 4, 10, 0, tzinfo=timezone.utc),
+                    touch_journeys=1,
+                    content_journeys=1,
+                    checkout_journeys=1,
+                    converted_journeys=1,
+                    first_touch_conversions=1,
+                    last_touch_conversions=0,
+                    assist_conversions=0,
+                    first_touch_revenue=80,
+                    last_touch_revenue=0,
+                    assist_revenue=0,
+                ),
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
+
+    create_response = client.post(
+        "/api/segments/local",
+        headers={"X-User-Role": "editor", "X-User-Id": "qa-editor"},
+        json={
+            "name": "Paid search CZ",
+            "description": "Focus paid search journeys",
+            "definition": {
+                "version": "v2",
+                "match": "all",
+                "rules": [
+                    {"field": "channel_group", "op": "eq", "value": "paid_search"},
+                    {"field": "country", "op": "eq", "value": "cz"},
+                ],
+            },
+        },
+    )
+    assert create_response.status_code == 200
+    segment_id = create_response.json()["id"]
+
+    response = client.get(
+        f"/api/segments/local/{segment_id}/analysis?date_from=2026-04-01&date_to=2026-04-06&journey_definition_id=def-1",
+        headers={"X-User-Role": "viewer", "X-User-Id": "qa-viewer"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"]["journey_rows"] == 1
+    assert payload["distributions"]["channels"][0]["value"] == "paid_search"
+    assert payload["role_mix"]["first_touch_conversions"] == 1.0
+    assert payload["role_entities"]["channels"][0]["id"] == "paid_search"
