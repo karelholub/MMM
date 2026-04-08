@@ -9,6 +9,7 @@ import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn, SectionCar
 import { apiGetJson } from '../lib/apiClient'
 import { buildJourneyHypothesisHref } from '../lib/journeyLinks'
 import { buildIncrementalityPlannerHref } from '../lib/experimentLinks'
+import { buildSettingsHref } from '../lib/settingsLinks'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import AdsActionsDrawer from '../components/ads/AdsActionsDrawer'
 import DecisionStatusCard from '../components/DecisionStatusCard'
@@ -2084,7 +2085,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
                 </button>
               )}
               <a
-                href="/?page=settings#settings/segments"
+                href={buildSettingsHref('segments')}
                 style={{ fontSize: t.font.sizeSm, color: t.color.accent, textDecoration: 'none' }}
               >
                 Manage segments

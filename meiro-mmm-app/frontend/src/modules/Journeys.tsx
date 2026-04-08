@@ -32,6 +32,7 @@ import {
   type SegmentRegistryItem,
   type SegmentRegistryResponse,
 } from '../lib/segments'
+import { buildSettingsHref } from '../lib/settingsLinks'
 import CreateJourneyModal from './journeys/CreateJourneyModal'
 import { buildJourneyHypothesisSeedHref } from '../lib/journeyLinks'
 import {
@@ -3229,7 +3230,7 @@ export default function Journeys({
                 </label>
               ) : null}
               <a
-                href="/?page=settings#settings/segments"
+                href={buildSettingsHref('segments')}
                 style={{
                   border: `1px solid ${t.color.border}`,
                   background: 'transparent',
@@ -3886,7 +3887,7 @@ export default function Journeys({
                       Clear segment focus
                     </button>
                     <a
-                      href="/?page=settings#settings/segments"
+                      href={buildSettingsHref('segments')}
                       style={{
                         border: `1px solid ${t.color.border}`,
                         background: t.color.surface,

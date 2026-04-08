@@ -197,11 +197,12 @@ export interface SegmentComparisonResponse {
 }
 
 export function buildSegmentComparisonHref(primarySegmentId: string, otherSegmentId?: string | null): string {
-  const params = new URLSearchParams()
-  params.set('page', 'settings')
-  params.set('segment_primary', primarySegmentId)
-  if (otherSegmentId) params.set('segment_other', otherSegmentId)
-  return `/?${params.toString()}#settings/segments`
+  return buildSettingsHref('segments', {
+    searchParams: {
+      segment_primary: primarySegmentId,
+      segment_other: otherSegmentId || undefined,
+    },
+  })
 }
 
 export interface SegmentFilterState {
@@ -400,3 +401,4 @@ export function clearSegmentReferenceMetadata(segment: Record<string, unknown> |
   delete next.external_segment_name
   return next
 }
+import { buildSettingsHref } from './settingsLinks'

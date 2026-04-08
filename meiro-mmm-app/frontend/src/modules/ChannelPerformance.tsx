@@ -20,6 +20,7 @@ import { tokens } from '../theme/tokens'
 import { apiGetJson, withQuery } from '../lib/apiClient'
 import { buildJourneyHypothesisHref } from '../lib/journeyLinks'
 import { buildIncrementalityPlannerHref } from '../lib/experimentLinks'
+import { buildSettingsHref } from '../lib/settingsLinks'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
@@ -1932,7 +1933,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
                     Show only low confidence (Conf. &lt; 70)
                   </label>
                   <a
-                    href="/?page=settings#settings/segments"
+                    href={buildSettingsHref('segments')}
                     style={{ fontSize: t.font.sizeSm, color: t.color.accent, textDecoration: 'none' }}
                   >
                     Manage segments

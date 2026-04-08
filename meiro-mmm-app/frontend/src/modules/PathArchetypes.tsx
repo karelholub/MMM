@@ -9,6 +9,7 @@ import SegmentOverlapNotice from '../components/segments/SegmentOverlapNotice'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { apiGetJson } from '../lib/apiClient'
 import { buildIncrementalityPlannerHref } from '../lib/experimentLinks'
+import { buildSettingsHref } from '../lib/settingsLinks'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import {
   buildSegmentComparisonHref,
@@ -665,7 +666,7 @@ export default function PathArchetypes() {
               Export CSV
             </button>
             <a
-              href="/?page=settings#settings/segments"
+              href={buildSettingsHref('segments')}
               style={{
                 color: tkn.color.accent,
                 textDecoration: 'none',

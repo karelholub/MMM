@@ -4,6 +4,7 @@ import { tokens as t } from '../theme/tokens'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
+import { buildSettingsHref } from '../lib/settingsLinks'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
@@ -1588,7 +1589,7 @@ export default function IncrementalityPage() {
                   Local analytical segments stay analysis-ready. Meiro Pipes segments are stored as operational audience references for execution and hypothesis alignment.
                 </span>
                 <span style={{ fontSize: tkn.font.sizeXs }}>
-                  <a href="/?page=settings#settings/segments" style={{ color: tkn.color.accent, textDecoration: 'none' }}>
+                  <a href={buildSettingsHref('segments')} style={{ color: tkn.color.accent, textDecoration: 'none' }}>
                     Manage segments
                   </a>
                 </span>

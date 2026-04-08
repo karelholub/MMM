@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 
 import { apiGetJson } from '../../lib/apiClient'
 import { buildSegmentComparisonHref, type SegmentOverlapResponse, type SegmentRegistryItem } from '../../lib/segments'
+import { buildSettingsHref } from '../../lib/settingsLinks'
 import { tokens as t } from '../../theme/tokens'
 
 type NoticeTone = 'warning' | 'accent'
@@ -79,7 +80,7 @@ export default function SegmentOverlapNotice({
         <a href={compareHref} style={{ color: t.color.accent, textDecoration: 'none', fontWeight: t.font.weightMedium }}>
           Compare audiences
         </a>
-        <a href="/?page=settings#settings/segments" style={{ color: t.color.accent, textDecoration: 'none' }}>
+        <a href={buildSettingsHref('segments')} style={{ color: t.color.accent, textDecoration: 'none' }}>
           Manage segments
         </a>
       </div>

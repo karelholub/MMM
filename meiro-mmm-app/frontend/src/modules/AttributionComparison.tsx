@@ -13,6 +13,7 @@ import SegmentComparisonContextNote from '../components/segments/SegmentComparis
 import SegmentOverlapNotice from '../components/segments/SegmentOverlapNotice'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
 import { buildIncrementalityPlannerHref } from '../lib/experimentLinks'
+import { buildSettingsHref } from '../lib/settingsLinks'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import {
   buildSegmentComparisonHref,
@@ -1256,7 +1257,7 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
             </strong>
           </div>
           <div style={{ marginTop: 6 }}>
-            <a href="/?page=settings#settings/segments" style={{ color: t.color.accent, textDecoration: 'none' }}>
+            <a href={buildSettingsHref('segments')} style={{ color: t.color.accent, textDecoration: 'none' }}>
               Manage segments
             </a>
           </div>
@@ -1508,11 +1509,17 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
                   Reset to workspace defaults
                 </button>
                 <a
-                  href={
-                    sensitivityDraft
-                      ? `/?page=settings&attr_lookback=${encodeURIComponent(String(sensitivityDraft.lookback_window_days))}&attr_quality=${encodeURIComponent(String(sensitivityDraft.min_journey_quality_score))}&attr_converted=${sensitivityDraft.use_converted_flag ? '1' : '0'}#settings/attribution`
-                      : '/?page=settings#settings/attribution'
-                  }
+                    href={
+                      sensitivityDraft
+                        ? buildSettingsHref('attribution', {
+                            searchParams: {
+                              attr_lookback: String(sensitivityDraft.lookback_window_days),
+                              attr_quality: String(sensitivityDraft.min_journey_quality_score),
+                              attr_converted: sensitivityDraft.use_converted_flag ? '1' : '0',
+                            },
+                          })
+                        : buildSettingsHref('attribution')
+                    }
                   style={{
                     border: `1px solid ${t.color.border}`,
                     background: t.color.surface,

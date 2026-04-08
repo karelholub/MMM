@@ -9,6 +9,7 @@ import SegmentComparisonContextNote from '../components/segments/SegmentComparis
 import SegmentOverlapNotice from '../components/segments/SegmentOverlapNotice'
 import { apiGetJson } from '../lib/apiClient'
 import { buildIncrementalityPlannerHref } from '../lib/experimentLinks'
+import { buildSettingsHref } from '../lib/settingsLinks'
 import {
   buildSegmentComparisonHref,
   localSegmentCompatibleWithDimensions,
@@ -645,7 +646,7 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
               </select>
             </label>
           ) : null}
-          <a href="/?page=settings#settings/segments" style={{ color: t.color.accent, textDecoration: 'none', fontSize: t.font.sizeSm }}>
+          <a href={buildSettingsHref('segments')} style={{ color: t.color.accent, textDecoration: 'none', fontSize: t.font.sizeSm }}>
             Manage segments
           </a>
         </div>

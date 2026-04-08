@@ -21,6 +21,7 @@ import { buildListQuery, type PaginatedResponse } from '../lib/apiSchemas'
 import { defaultRecentDateRange } from '../lib/dateRange'
 import { buildIncrementalityPlannerHref } from '../lib/experimentLinks'
 import { buildJourneyHypothesisHref, buildJourneyHypothesisSeedHref } from '../lib/journeyLinks'
+import { buildSettingsHref } from '../lib/settingsLinks'
 import {
   activeLocalSegmentDefinitionFromFilters,
   applyLocalSegmentToFilterState,
@@ -1119,7 +1120,7 @@ export default function ConversionPaths() {
               </label>
             ) : null}
             <a
-              href="/?page=settings#settings/segments"
+              href={buildSettingsHref('segments')}
               style={{
                 border: `1px solid ${t.color.border}`,
                 background: 'transparent',

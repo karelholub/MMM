@@ -29,6 +29,7 @@ import SegmentEditorDialog from '../components/segments/SegmentEditorDialog'
 import { usePermissions } from '../hooks/usePermissions'
 import { navigateForRecommendedAction } from '../lib/recommendedActions'
 import { ApiError, apiGetJson, apiSendJson } from '../lib/apiClient'
+import { buildSettingsHref, type SettingsTabKey } from '../lib/settingsLinks'
 import {
   formatSegmentPreview,
   isLocalAnalyticalSegment,
@@ -75,6 +76,22 @@ const SECTION_ORDER: SectionKey[] = [
   'mmm',
   'notifications',
 ]
+
+function parseSettingsHash(): {
+  section: SectionKey | null
+  tab: SettingsTabKey | null
+} {
+  if (typeof window === 'undefined') return { section: null, tab: null }
+  const raw = window.location.hash.replace(/^#settings\/?/, '').trim()
+  if (!raw) return { section: null, tab: null }
+  const [sectionRaw, tabRaw] = raw.split('/')
+  const section = SECTION_ORDER.includes(sectionRaw as SectionKey) ? (sectionRaw as SectionKey) : null
+  const tab =
+    tabRaw && ['overview', 'suggestions', 'preview', 'advanced'].includes(tabRaw)
+      ? (tabRaw as SettingsTabKey)
+      : null
+  return { section, tab }
+}
 
 const SECTION_META: Record<SectionKey, SectionMeta> = {
   attribution: {
@@ -1292,15 +1309,8 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
   ({ onDirtySectionsChange }, ref) => {
     const queryClient = useQueryClient()
     const permissions = usePermissions()
-    const initialSection: SectionKey =
-      (typeof window !== 'undefined' &&
-        (() => {
-          const hash = window.location.hash.replace('#settings/', '')
-          return SECTION_ORDER.includes(hash as SectionKey)
-            ? (hash as SectionKey)
-            : null
-        })()) ||
-      'attribution'
+    const initialHashState = typeof window !== 'undefined' ? parseSettingsHash() : { section: null, tab: null }
+    const initialSection: SectionKey = initialHashState.section || 'attribution'
     const initialSegmentPrimaryId =
       (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('segment_primary')) || ''
     const initialSegmentOtherId =
@@ -1309,9 +1319,13 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
     const [activeSection, setActiveSection] =
       useState<SectionKey>(initialSection)
     const [kpiActiveTab, setKpiActiveTab] =
-      useState<KpiTabKey>('overview')
+      useState<KpiTabKey>(
+        initialSection === 'kpi' && initialHashState.tab ? (initialHashState.tab as KpiTabKey) : 'overview',
+      )
     const [taxonomyActiveTab, setTaxonomyActiveTab] =
-      useState<TaxonomyTabKey>('overview')
+      useState<TaxonomyTabKey>(
+        initialSection === 'taxonomy' && initialHashState.tab ? (initialHashState.tab as TaxonomyTabKey) : 'overview',
+      )
     const [pendingSectionChange, setPendingSectionChange] =
       useState<PendingSectionChange | null>(null)
     const [lastSavedAt, setLastSavedAt] = useState<
@@ -3973,9 +3987,15 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
     useEffect(() => {
       if (typeof window === 'undefined') return
       const handler = () => {
-        const hash = window.location.hash.replace('#settings/', '')
-        if (SECTION_ORDER.includes(hash as SectionKey)) {
-          setActiveSection(hash as SectionKey)
+        const { section, tab } = parseSettingsHash()
+        if (section) {
+          setActiveSection(section)
+        }
+        if (section === 'taxonomy' && tab) {
+          setTaxonomyActiveTab(tab as TaxonomyTabKey)
+        }
+        if (section === 'kpi' && tab) {
+          setKpiActiveTab(tab as KpiTabKey)
         }
       }
       window.addEventListener('hashchange', handler)
@@ -3984,11 +4004,22 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
 
     useEffect(() => {
       if (typeof window === 'undefined') return
-      const nextHash = `#settings/${activeSection}`
+      const nextTab =
+        activeSection === 'taxonomy'
+          ? taxonomyActiveTab
+          : activeSection === 'kpi'
+            ? kpiActiveTab
+            : null
+      const nextHref = buildSettingsHref(activeSection, { tab: nextTab })
+      const nextHash = nextHref.slice(nextHref.indexOf('#'))
       if (window.location.hash !== nextHash) {
-        window.history.replaceState(null, '', nextHash)
+        window.history.replaceState(
+          null,
+          '',
+          `${window.location.pathname}${window.location.search}${nextHash}`,
+        )
       }
-    }, [activeSection])
+    }, [activeSection, kpiActiveTab, taxonomyActiveTab])
 
     useEffect(() => {
       if (!visibleSectionOrder.includes(activeSection)) {

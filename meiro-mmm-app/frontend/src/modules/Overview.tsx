@@ -7,6 +7,7 @@ import RecommendedActionsList, { type RecommendedActionItem } from '../component
 import WorkspaceAssistantPanel from '../components/WorkspaceAssistantPanel'
 import SegmentComparisonContextNote from '../components/segments/SegmentComparisonContextNote'
 import SegmentOverlapNotice from '../components/segments/SegmentOverlapNotice'
+import { buildSettingsHref } from '../lib/settingsLinks'
 import { navigateForRecommendedAction } from '../lib/recommendedActions'
 import { apiGetJson, apiSendJson, withQuery } from '../lib/apiClient'
 import { buildIncrementalityPlannerHref } from '../lib/experimentLinks'
@@ -1269,7 +1270,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
             </div>
             <div style={{ marginLeft: 'auto', display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
               <a
-                href="/?page=settings#settings/segments"
+                href={buildSettingsHref('segments')}
                 style={{
                   alignSelf: 'center',
                   color: t.color.accent,

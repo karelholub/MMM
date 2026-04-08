@@ -1,4 +1,5 @@
 import type { RecommendedActionItem } from '../components/RecommendedActionsList'
+import { buildSettingsHref } from './settingsLinks'
 
 export function navigateForRecommendedAction(
   action: RecommendedActionItem,
@@ -12,10 +13,11 @@ export function navigateForRecommendedAction(
     options.onNavigate(targetPage)
   }
   if (targetPage === 'settings' && action.target_section) {
-    const hash = action.target_tab
-      ? `#settings/${action.target_section}/${action.target_tab}`
-      : `#settings/${action.target_section}`
-    window.location.assign(hash)
+    window.location.assign(
+      buildSettingsHref(action.target_section as any, {
+        tab: (action.target_tab as any) || null,
+      }),
+    )
     return
   }
   if (targetPage && !options?.onNavigate) {

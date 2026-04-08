@@ -7,6 +7,7 @@ import SegmentComparisonContextNote from '../components/segments/SegmentComparis
 import SegmentOverlapNotice from '../components/segments/SegmentOverlapNotice'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { apiGetJson } from '../lib/apiClient'
+import { buildSettingsHref } from '../lib/settingsLinks'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import {
   isLocalAnalyticalSegment,
@@ -611,7 +612,7 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
           <a href={journeysHref} style={actionButtonStyle}>
             Open journey workspace
           </a>
-          <a href="/?page=settings#settings/taxonomy" style={actionButtonStyle}>
+          <a href={buildSettingsHref('taxonomy')} style={actionButtonStyle}>
             Review taxonomy
           </a>
         </>
