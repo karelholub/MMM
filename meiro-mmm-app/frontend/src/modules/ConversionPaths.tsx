@@ -1506,41 +1506,6 @@ export default function ConversionPaths() {
           onToggle={() => setShowDiagnostics((v) => !v)}
         >
           <div style={{ display: 'grid', gap: t.space.lg }}>
-            {directDiag ? (
-              <div
-                style={{
-                  padding: t.space.md,
-                  borderRadius: t.radius.lg,
-                  border: `1px solid ${t.color.borderLight}`,
-                  background: t.color.surface,
-                  boxShadow: t.shadowSm,
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  gap: t.space.md,
-                  flexWrap: 'wrap',
-                }}
-              >
-                <div>
-                  <h3 style={{ margin: '0 0 4px', fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-                    Direct / Unknown impact
-                  </h3>
-                  <p style={{ margin: 0, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-                    Approximate share of all touchpoints and converted journeys dominated by direct or unknown channels.
-                  </p>
-                </div>
-                <div style={{ display: 'flex', gap: t.space.lg, flexWrap: 'wrap', alignItems: 'center' }}>
-                  <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
-                    <strong>{(directDiag.touchpoint_share * 100).toFixed(1)}%</strong>{' '}
-                    <span style={{ color: t.color.textSecondary }}>Direct/Unknown touchpoints</span>
-                  </div>
-                  <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
-                    <strong>{(directDiag.journeys_ending_direct_share * 100).toFixed(1)}%</strong>{' '}
-                    <span style={{ color: t.color.textSecondary }}>journeys ending on Direct</span>
-                  </div>
-                </div>
-              </div>
-            ) : null}
             {anomaliesQuery.data && anomaliesQuery.data.anomalies.length > 0 ? (
               <div
                 style={{

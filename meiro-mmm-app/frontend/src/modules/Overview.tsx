@@ -1731,7 +1731,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
 
         {/* C) What changed feed */}
         <SectionCard
-          title="What changed"
+          title="Alerts & Movers"
           subtitle="Top insights from alerts and largest KPI movers"
           actions={
             <button
