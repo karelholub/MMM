@@ -786,6 +786,10 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
   const totalCostPerVisit = totalVisits > 0 ? totalSpend / totalVisits : 0
   const totalRevenuePerVisit = totalVisits > 0 ? totalValue / totalVisits : 0
   const filteredTotalSpend = filteredCampaigns.reduce((s, c) => s + c.spend, 0)
+  const spendQuality = summaryQuery.data?.spend_quality ?? null
+  const spendSignalWeak = filteredTotalSpend < 50
+  const spendMostlyAllocated = (spendQuality?.allocated_share ?? 0) >= 0.9
+  const showSpendBasedCharts = !spendSignalWeak && !spendMostlyAllocated
   const kpis = [
     { label: 'Total Spend', value: formatCurrency(totalSpend), def: METRIC_DEFINITIONS['Total Spend'] },
     { label: 'Visits', value: totalVisits.toLocaleString(), def: METRIC_DEFINITIONS['Visits'] },
@@ -877,14 +881,16 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       topRevenueCampaign
         ? `${topRevenueCampaign.campaign_name || topRevenueCampaign.campaign} is the largest revenue campaign at ${formatCurrency(topRevenueCampaign.attributed_value)}.`
         : null,
-      topRoasCampaign
+      showSpendBasedCharts && topRoasCampaign
         ? `${topRoasCampaign.campaign_name || topRoasCampaign.campaign} is the most efficient visible campaign at ${Number(topRoasCampaign.roas || 0).toFixed(2)}× ROAS.`
         : null,
       lagRiskCampaign
         ? `${lagRiskCampaign.label} has the heaviest long-lag exposure, with ${((lagRiskCampaign.lag_buckets.over_7d / lagRiskCampaign.conversions) * 100).toFixed(1)}% of conversions taking more than 7 days.`
         : null,
-      focusedSegmentSummary && selectedSegment
+      focusedSegmentSummary && selectedSegment && showSpendBasedCharts
         ? `${selectedSegment.name} contributes ${focusedSegmentSummary.revenueShare?.toFixed(1) ?? '—'}% of campaign revenue and runs ${formatPercent(focusedSegmentSummary.roasDeltaPct)} vs workspace ROAS.`
+        : focusedSegmentSummary && selectedSegment
+        ? `${selectedSegment.name} contributes ${focusedSegmentSummary.revenueShare?.toFixed(1) ?? '—'}% of campaign revenue. Spend-based ROAS comparisons are muted because campaign spend is ${spendMostlyAllocated ? 'mostly allocated' : 'too weak in this slice'}.`
         : null,
     ].filter((item): item is string => Boolean(item))
     return { headline, items }
@@ -894,6 +900,8 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
     focusedSegmentSummary,
     lagQuery.data?.items,
     selectedSegment,
+    showSpendBasedCharts,
+    spendMostlyAllocated,
     summaryQuery.data?.totals?.previous?.revenue,
     totalValue,
   ])
@@ -1327,11 +1335,6 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       channel: campaign.channel,
       spendAllocatedShare: campaign.spend_source?.current?.allocated_share ?? 0,
     }))
-  const spendQuality = summaryQuery.data?.spend_quality ?? null
-  const spendSignalWeak = filteredTotalSpend < 50
-  const spendMostlyAllocated = (spendQuality?.allocated_share ?? 0) >= 0.9
-  const showSpendBasedCharts = !spendSignalWeak && !spendMostlyAllocated
-
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto' }}>
       {!!summaryQuery.data?.notes?.length && (
@@ -1459,16 +1462,6 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
                 note: `${focusedSegmentSummary.conversions.toLocaleString()} of ${totalConversions.toLocaleString()}`,
               },
               {
-                label: 'Spend share',
-                value: focusedSegmentSummary.spendShare != null ? `${focusedSegmentSummary.spendShare.toFixed(1)}%` : '—',
-                note: `${formatCurrency(focusedSegmentSummary.spend)} of ${formatCurrency(totalSpend)}`,
-              },
-              {
-                label: 'ROAS vs workspace',
-                value: focusedSegmentSummary.roas.toFixed(2),
-                note: `${formatPercent(focusedSegmentSummary.roasDeltaPct)} vs ${totalROAS.toFixed(2)} overall`,
-              },
-              {
                 label: 'CVR vs workspace',
                 value: `${(focusedSegmentSummary.cvr * 100).toFixed(2)}%`,
                 note: `${formatPercent(focusedSegmentSummary.cvrDeltaPct)} vs ${(totalCVR * 100).toFixed(2)}% overall`,
@@ -1484,6 +1477,28 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
                     ? `${focusedSegmentSummary.lagDeltaDays != null && focusedSegmentSummary.lagDeltaDays >= 0 ? '+' : ''}${focusedSegmentSummary.lagDeltaDays?.toFixed(1) ?? '0.0'}d vs ${focusedSegmentSummary.workspaceMedianLag.toFixed(1)}d overall`
                     : 'Lag baseline unavailable',
               },
+              ...(showSpendBasedCharts
+                ? [
+                    {
+                      label: 'Spend share',
+                      value: focusedSegmentSummary.spendShare != null ? `${focusedSegmentSummary.spendShare.toFixed(1)}%` : '—',
+                      note: `${formatCurrency(focusedSegmentSummary.spend)} of ${formatCurrency(totalSpend)}`,
+                    },
+                    {
+                      label: 'ROAS vs workspace',
+                      value: focusedSegmentSummary.roas.toFixed(2),
+                      note: `${formatPercent(focusedSegmentSummary.roasDeltaPct)} vs ${totalROAS.toFixed(2)} overall`,
+                    },
+                  ]
+                : [
+                    {
+                      label: 'Spend trust',
+                      value: spendMostlyAllocated ? 'Allocated only' : 'Too weak',
+                      note: spendMostlyAllocated
+                        ? 'Campaign spend is mostly allocated in this slice, so spend-share and ROAS comparisons are muted.'
+                        : 'Campaign spend is too small in this slice to support a stable spend-share or ROAS comparison.',
+                    },
+                  ]),
             ].map((item) => (
               <div
                 key={item.label}
