@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { DashboardPage, ContextSummaryStrip, SectionCard, AnalysisShareActions } from '../components/dashboard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
@@ -6,6 +6,14 @@ import DecisionStatusCard from '../components/DecisionStatusCard'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { apiGetJson } from '../lib/apiClient'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
+import {
+  isLocalAnalyticalSegment,
+  localSegmentCompatibleWithDimensions,
+  readLocalSegmentDefinition,
+  segmentOptionLabel,
+  type SegmentRegistryItem,
+  type SegmentRegistryResponse,
+} from '../lib/segments'
 import { tokens as t } from '../theme/tokens'
 
 interface AttributionTrustProps {
@@ -124,6 +132,12 @@ function formatNumber(value: number | null | undefined): string {
   return value.toLocaleString()
 }
 
+function formatSignedPercentPoints(value: number | null | undefined, digits = 1): string {
+  if (value == null || !Number.isFinite(value)) return '—'
+  const sign = value > 0 ? '+' : ''
+  return `${sign}${(value * 100).toFixed(digits)} pp`
+}
+
 function formatTimestamp(value?: string | null): string {
   if (!value) return '—'
   const parsed = new Date(value)
@@ -150,10 +164,28 @@ function mismatchLabel(liveCount: number | null, materializedCount: number | nul
 
 export default function AttributionTrust({ model, configId }: AttributionTrustProps) {
   const { globalDateFrom, globalDateTo, journeysSummary } = useWorkspaceContext()
+  const [selectedSegmentId, setSelectedSegmentId] = useState<string>(() => {
+    if (typeof window === 'undefined') return ''
+    try {
+      return window.localStorage.getItem('attribution-trust:selected-segment') || ''
+    } catch {
+      return ''
+    }
+  })
   const [showMethodPanel, setShowMethodPanel] = usePersistentToggle('attribution-trust:show-method', false)
   const [showReplayPanel, setShowReplayPanel] = usePersistentToggle('attribution-trust:show-replay', false)
   const [showTaxonomyPanel, setShowTaxonomyPanel] = usePersistentToggle('attribution-trust:show-taxonomy', false)
   const [showReconcilePanel, setShowReconcilePanel] = usePersistentToggle('attribution-trust:show-reconcile', true)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      if (selectedSegmentId) window.localStorage.setItem('attribution-trust:selected-segment', selectedSegmentId)
+      else window.localStorage.removeItem('attribution-trust:selected-segment')
+    } catch {
+      // Ignore persistence failures and keep the selector usable.
+    }
+  }, [selectedSegmentId])
 
   const dateTo = globalDateTo || new Date().toISOString().slice(0, 10)
   const dateFrom =
@@ -165,6 +197,14 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
     queryFn: async () =>
       apiGetJson<JourneySourceState>('/api/attribution/journeys/source-state', {
         fallbackMessage: 'Failed to load journey source state',
+      }),
+  })
+
+  const segmentRegistryQuery = useQuery<SegmentRegistryResponse>({
+    queryKey: ['attribution-trust', 'segment-registry'],
+    queryFn: async () =>
+      apiGetJson<SegmentRegistryResponse>('/api/segments/registry', {
+        fallbackMessage: 'Failed to load segment registry',
       }),
   })
 
@@ -232,6 +272,74 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
     enabled: !!dateFrom && !!dateTo,
   })
 
+  const localSegments = useMemo(
+    () => (segmentRegistryQuery.data?.items ?? []).filter(isLocalAnalyticalSegment),
+    [segmentRegistryQuery.data?.items],
+  )
+  const compatibleSegments = useMemo(
+    () => localSegments.filter((item) => localSegmentCompatibleWithDimensions(item, ['channel_group'])),
+    [localSegments],
+  )
+  const selectedSegment = useMemo<SegmentRegistryItem | null>(
+    () => compatibleSegments.find((item) => item.id === selectedSegmentId) ?? null,
+    [compatibleSegments, selectedSegmentId],
+  )
+  const selectedSegmentDefinition = useMemo(
+    () => readLocalSegmentDefinition(selectedSegment),
+    [selectedSegment],
+  )
+
+  const focusedChannelSummaryQuery = useQuery<ChannelSummaryResponse>({
+    queryKey: ['attribution-trust', 'focused-channel-summary', dateFrom, dateTo, selectedSegmentDefinition.channel_group || 'all'],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        date_from: dateFrom,
+        date_to: dateTo,
+        timezone: 'UTC',
+        compare: '0',
+      })
+      if (selectedSegmentDefinition.channel_group) params.append('channels', selectedSegmentDefinition.channel_group)
+      return apiGetJson<ChannelSummaryResponse>(`/api/performance/channel/summary?${params.toString()}`, {
+        fallbackMessage: 'Failed to load focused channel trust diagnostics',
+      })
+    },
+    enabled: !!selectedSegmentDefinition.channel_group && !!dateFrom && !!dateTo,
+  })
+
+  const focusedCampaignSummaryQuery = useQuery<CampaignSummaryResponse>({
+    queryKey: ['attribution-trust', 'focused-campaign-summary', dateFrom, dateTo, selectedSegmentDefinition.channel_group || 'all'],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        date_from: dateFrom,
+        date_to: dateTo,
+        timezone: 'UTC',
+        compare: '0',
+      })
+      if (selectedSegmentDefinition.channel_group) params.append('channels', selectedSegmentDefinition.channel_group)
+      return apiGetJson<CampaignSummaryResponse>(`/api/performance/campaign/summary?${params.toString()}`, {
+        fallbackMessage: 'Failed to load focused campaign trust diagnostics',
+      })
+    },
+    enabled: !!selectedSegmentDefinition.channel_group && !!dateFrom && !!dateTo,
+  })
+
+  const focusedPathsAnalysisQuery = useQuery<ConversionPathsAnalysis>({
+    queryKey: ['attribution-trust', 'focused-paths-analysis', dateFrom, dateTo, selectedSegmentDefinition.channel_group || 'all'],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        date_from: dateFrom,
+        date_to: dateTo,
+        direct_mode: 'include',
+        path_scope: 'converted',
+      })
+      if (selectedSegmentDefinition.channel_group) params.set('channel_group', selectedSegmentDefinition.channel_group)
+      return apiGetJson<ConversionPathsAnalysis>(`/api/conversion-paths/analysis?${params.toString()}`, {
+        fallbackMessage: 'Failed to load focused path diagnostics',
+      })
+    },
+    enabled: !!selectedSegmentDefinition.channel_group && !!dateFrom && !!dateTo,
+  })
+
   const readiness = journeysSummary?.readiness ?? channelSummaryQuery.data?.readiness ?? null
   const latestReplay = readiness?.details?.latest_event_replay ?? null
   const replayDiagnostics = latestReplay?.diagnostics ?? null
@@ -253,9 +361,72 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
   const materializedGap =
     liveJourneys != null && materializedJourneys != null ? materializedJourneys - liveJourneys : null
   const pathDiagnostics = pathsAnalysisQuery.data?.direct_unknown_diagnostics ?? null
+  const focusedMappingCoverage = focusedChannelSummaryQuery.data?.mapping_coverage ?? focusedCampaignSummaryQuery.data?.mapping_coverage ?? null
+  const focusedSpendQuality = focusedCampaignSummaryQuery.data?.spend_quality ?? null
+  const focusedPathDiagnostics = focusedPathsAnalysisQuery.data?.direct_unknown_diagnostics ?? null
+  const focusedMaterializedJourneys = focusedPathsAnalysisQuery.data?.total_journeys ?? null
+  const focusedTrustComparison = useMemo(() => {
+    if (!selectedSegment || !selectedSegmentDefinition.channel_group) return null
+    return {
+      shares: [
+        {
+          label: 'Path journey share',
+          value: materializedJourneys && focusedMaterializedJourneys != null ? focusedMaterializedJourneys / materializedJourneys : null,
+          note:
+            focusedMaterializedJourneys != null && materializedJourneys != null
+              ? `${formatNumber(focusedMaterializedJourneys)} of ${formatNumber(materializedJourneys)} materialized path journeys`
+              : 'Focused path slice unavailable',
+        },
+        {
+          label: 'Mapped value rate',
+          value: focusedMappingCoverage?.value_mapped_pct != null ? focusedMappingCoverage.value_mapped_pct / 100 : null,
+          note:
+            mappingCoverage?.value_mapped_pct != null
+              ? `${formatSignedPercentPoints(((focusedMappingCoverage?.value_mapped_pct ?? 0) - mappingCoverage.value_mapped_pct) / 100)} vs workspace`
+              : 'Workspace mapping baseline unavailable',
+        },
+        {
+          label: 'Mapped spend rate',
+          value: focusedMappingCoverage?.spend_mapped_pct != null ? focusedMappingCoverage.spend_mapped_pct / 100 : null,
+          note:
+            mappingCoverage?.spend_mapped_pct != null
+              ? `${formatSignedPercentPoints(((focusedMappingCoverage?.spend_mapped_pct ?? 0) - mappingCoverage.spend_mapped_pct) / 100)} vs workspace`
+              : 'Workspace mapping baseline unavailable',
+        },
+      ],
+      diagnostics: [
+        {
+          label: 'Direct / unknown touch share',
+          focused: focusedPathDiagnostics?.touchpoint_share ?? null,
+          baseline: pathDiagnostics?.touchpoint_share ?? null,
+        },
+        {
+          label: 'Journeys ending direct',
+          focused: focusedPathDiagnostics?.journeys_ending_direct_share ?? null,
+          baseline: pathDiagnostics?.journeys_ending_direct_share ?? null,
+        },
+      ],
+      spendQuality: focusedSpendQuality?.status || null,
+    }
+  }, [
+    focusedMappingCoverage?.spend_mapped_pct,
+    focusedMappingCoverage?.value_mapped_pct,
+    focusedMaterializedJourneys,
+    focusedPathDiagnostics?.journeys_ending_direct_share,
+    focusedPathDiagnostics?.touchpoint_share,
+    focusedSpendQuality?.status,
+    mappingCoverage?.spend_mapped_pct,
+    mappingCoverage?.value_mapped_pct,
+    materializedJourneys,
+    pathDiagnostics?.journeys_ending_direct_share,
+    pathDiagnostics?.touchpoint_share,
+    selectedSegment,
+    selectedSegmentDefinition.channel_group,
+  ])
 
   const summaryItems = [
     { label: 'Period', value: `${dateFrom} – ${dateTo}` },
+    { label: 'Focus segment', value: selectedSegment?.name || 'Workspace baseline' },
     { label: 'Journey source', value: formatSourceLabel(sourceStateQuery.data?.active_source) },
     {
       label: 'Freshness',
@@ -341,6 +512,7 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
             summaryTitle="Attribution trust brief"
             summaryLines={[
               `Period: ${dateFrom} – ${dateTo}`,
+              `Focus segment: ${selectedSegment?.name || 'Workspace baseline'}`,
               `Journey source: ${formatSourceLabel(sourceStateQuery.data?.active_source)}`,
               `Freshness: ${journeysSummary?.data_freshness_hours != null ? `${Math.round(Number(journeysSummary.data_freshness_hours))}h lag` : 'unknown'}`,
               `KPI coverage: ${formatPercent(readiness?.summary?.primary_kpi_coverage)}`,
@@ -363,8 +535,113 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
       isLoading={isLoading}
       isError={hasError}
       errorMessage={errorMessage}
+      filters={
+        <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', alignItems: 'center' }}>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+            Focus segment
+            <select
+              value={selectedSegmentId}
+              onChange={(e) => setSelectedSegmentId(e.target.value)}
+              style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, minWidth: 240 }}
+            >
+              <option value="">Workspace baseline</option>
+              {compatibleSegments.map((segment) => (
+                <option key={segment.id} value={segment.id}>
+                  {segmentOptionLabel(segment)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary, maxWidth: 360 }}>
+            Trust focus currently supports saved analytical segments with a channel-group rule. Source freshness and taxonomy unknown share remain workspace-wide diagnostics.
+          </div>
+        </div>
+      }
     >
       <ContextSummaryStrip items={summaryItems} />
+
+      {focusedTrustComparison ? (
+        <SectionCard
+          title={`Focused audience vs workspace: ${selectedSegment?.name}`}
+          subtitle="This compares the selected audience's attributable and path diagnostics against the full workspace baseline. Source freshness and taxonomy coverage stay global."
+        >
+          <div style={{ display: 'grid', gap: t.space.lg }}>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(min(190px, 100%), 1fr))',
+                gap: t.space.md,
+              }}
+            >
+              {focusedTrustComparison.shares.map((item) => (
+                <div
+                  key={item.label}
+                  style={{
+                    border: `1px solid ${t.color.borderLight}`,
+                    borderRadius: t.radius.md,
+                    background: t.color.bgSubtle,
+                    padding: t.space.md,
+                    display: 'grid',
+                    gap: 4,
+                  }}
+                >
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                  <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                    {formatPercent(item.value)}
+                  </div>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{item.note}</div>
+                </div>
+              ))}
+            </div>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))',
+                gap: t.space.md,
+              }}
+            >
+              {focusedTrustComparison.diagnostics.map((item) => {
+                const delta =
+                  item.focused != null && item.baseline != null ? item.focused - item.baseline : null
+                const positive = (delta ?? 0) >= 0
+                return (
+                  <div
+                    key={item.label}
+                    style={{
+                      border: `1px solid ${t.color.borderLight}`,
+                      borderRadius: t.radius.md,
+                      background: t.color.surface,
+                      padding: t.space.md,
+                      display: 'grid',
+                      gap: 4,
+                    }}
+                  >
+                    <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{item.label}</div>
+                    <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                      Segment <strong style={{ color: t.color.text }}>{formatPercent(item.focused)}</strong> · workspace{' '}
+                      <strong style={{ color: t.color.text }}>{formatPercent(item.baseline)}</strong>
+                    </div>
+                    <div
+                      style={{
+                        fontSize: t.font.sizeSm,
+                        fontWeight: t.font.weightSemibold,
+                        color: delta == null ? t.color.textSecondary : positive ? t.color.warning : t.color.success,
+                      }}
+                    >
+                      Δ {delta == null ? '—' : `${positive ? '+' : ''}${(delta * 100).toFixed(1)}pp`}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+            {focusedTrustComparison.spendQuality ? (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                Focused campaign spend quality: <strong style={{ color: t.color.text }}>{focusedTrustComparison.spendQuality.replace(/_/g, ' ')}</strong>
+              </div>
+            ) : null}
+          </div>
+        </SectionCard>
+      ) : null}
 
       {readiness && (readiness.status === 'blocked' || readiness.warnings.length > 0 || consistencyWarnings.length > 0) ? (
         <DecisionStatusCard
