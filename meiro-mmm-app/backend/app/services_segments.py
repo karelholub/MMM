@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import math
+import statistics
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import func
-from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
 from app.connectors import meiro_cdp
 from app.models_config_dq import (
@@ -17,28 +19,251 @@ from app.models_config_dq import (
 )
 
 
-ALLOWED_LOCAL_SEGMENT_KEYS = {"channel_group", "campaign_id", "device", "country"}
+LEGACY_LOCAL_SEGMENT_KEYS = {"channel_group", "campaign_id", "device", "country"}
+DIMENSION_FILTER_KEYS = {"channel_group", "campaign_id", "device", "country"}
+NUMERIC_RULE_FIELDS = {
+    "path_length",
+    "lag_days",
+    "net_revenue_total",
+    "gross_revenue_total",
+    "net_conversions_total",
+    "gross_conversions_total",
+}
+SEGMENT_FIELD_SPECS: Dict[str, Dict[str, Any]] = {
+    "channel_group": {"label": "Channel group", "kind": "dimension", "operators": {"eq"}},
+    "campaign_id": {"label": "Campaign", "kind": "dimension", "operators": {"eq"}},
+    "device": {"label": "Device", "kind": "dimension", "operators": {"eq"}},
+    "country": {"label": "Country", "kind": "dimension", "operators": {"eq"}},
+    "conversion_key": {"label": "Conversion KPI", "kind": "dimension", "operators": {"eq"}},
+    "last_touch_channel": {"label": "Last-touch channel", "kind": "dimension", "operators": {"eq"}},
+    "interaction_path_type": {"label": "Path type", "kind": "dimension", "operators": {"eq"}},
+    "path_length": {"label": "Path length", "kind": "numeric", "operators": {"gte", "lte"}},
+    "lag_days": {"label": "Lag (days)", "kind": "numeric", "operators": {"gte", "lte"}},
+    "net_revenue_total": {"label": "Net revenue", "kind": "numeric", "operators": {"gte", "lte"}},
+    "gross_revenue_total": {"label": "Gross revenue", "kind": "numeric", "operators": {"gte", "lte"}},
+    "net_conversions_total": {"label": "Net conversions", "kind": "numeric", "operators": {"gte", "lte"}},
+    "gross_conversions_total": {"label": "Gross conversions", "kind": "numeric", "operators": {"gte", "lte"}},
+}
 
 
 def _new_id() -> str:
     return str(uuid.uuid4())
 
 
-def _clean_definition(definition: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    cleaned: Dict[str, Any] = {}
+def _clean_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _coerce_numeric(value: Any) -> Optional[float]:
+    if value in (None, ""):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric):
+        return None
+    return numeric
+
+
+def _normalize_rule(raw_rule: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(raw_rule, dict):
+        return None
+    field = _clean_text(raw_rule.get("field"))
+    spec = SEGMENT_FIELD_SPECS.get(field)
+    if not spec:
+        return None
+    operator = _clean_text(raw_rule.get("op") or raw_rule.get("operator")).lower()
+    if not operator:
+        operator = "eq" if spec["kind"] == "dimension" else "gte"
+    if operator not in spec["operators"]:
+        return None
+    if spec["kind"] == "dimension":
+        value = _clean_text(raw_rule.get("value"))
+        if not value:
+            return None
+        return {"field": field, "op": operator, "value": value}
+    numeric_value = _coerce_numeric(raw_rule.get("value"))
+    if numeric_value is None:
+        return None
+    return {"field": field, "op": operator, "value": numeric_value}
+
+
+def normalize_local_segment_definition(definition: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     raw = definition or {}
-    for key in ALLOWED_LOCAL_SEGMENT_KEYS:
-        value = raw.get(key)
-        if value is None:
-            continue
-        normalized = str(value).strip()
-        if normalized:
-            cleaned[key] = normalized
-    return cleaned
+    rules: List[Dict[str, Any]] = []
+    if isinstance(raw.get("rules"), list):
+        for candidate in raw.get("rules") or []:
+            normalized = _normalize_rule(candidate)
+            if normalized is not None:
+                rules.append(normalized)
+    else:
+        for key in LEGACY_LOCAL_SEGMENT_KEYS:
+            value = raw.get(key)
+            normalized_value = _clean_text(value)
+            if normalized_value:
+                rules.append({"field": key, "op": "eq", "value": normalized_value})
+    match = _clean_text(raw.get("match")).lower()
+    if match not in {"all", "any"}:
+        match = "all"
+    return {
+        "version": "v2",
+        "match": match,
+        "rules": rules,
+    }
+
+
+def _infer_segment_family(definition: Dict[str, Any]) -> str:
+    fields = {str(rule.get("field")) for rule in definition.get("rules") or []}
+    if not fields:
+        return "empty"
+    if fields.issubset(DIMENSION_FILTER_KEYS):
+        return "dimension_slice"
+    if fields & {"lag_days"}:
+        return "lag_timing"
+    if fields & {"path_length", "interaction_path_type"}:
+        return "journey_behavior"
+    if fields & {"net_revenue_total", "gross_revenue_total", "net_conversions_total", "gross_conversions_total"}:
+        return "value_conversion"
+    return "mixed"
+
+
+def _format_rule_label(rule: Dict[str, Any]) -> str:
+    spec = SEGMENT_FIELD_SPECS.get(str(rule.get("field")))
+    if not spec:
+        return "Unknown rule"
+    field_label = spec["label"]
+    operator = str(rule.get("op") or "")
+    value = rule.get("value")
+    if str(rule.get("field")) == "lag_days":
+        suffix = "d"
+    else:
+        suffix = ""
+    operator_label = {"eq": "=", "gte": ">=", "lte": "<="}.get(operator, operator)
+    return f"{field_label} {operator_label} {value}{suffix}"
+
+
+def _build_criteria_label(definition: Dict[str, Any]) -> str:
+    rules = definition.get("rules") or []
+    if not rules:
+        return "No criteria"
+    joiner = " · ANY · " if definition.get("match") == "any" else " · "
+    return joiner.join(_format_rule_label(rule) for rule in rules)
+
+
+def _extract_auto_filter_definition(definition: Dict[str, Any]) -> Dict[str, str]:
+    extracted: Dict[str, str] = {}
+    for rule in definition.get("rules") or []:
+        field = str(rule.get("field") or "")
+        if field in DIMENSION_FILTER_KEYS and str(rule.get("op") or "") == "eq":
+            value = _clean_text(rule.get("value"))
+            if value:
+                extracted[field] = value
+    return extracted
+
+
+def _build_segment_compatibility(definition: Dict[str, Any]) -> Dict[str, Any]:
+    rules = definition.get("rules") or []
+    filter_keys = sorted(_extract_auto_filter_definition(definition).keys())
+    auto_filter_compatible = bool(rules) and all(
+        str(rule.get("field") or "") in DIMENSION_FILTER_KEYS and str(rule.get("op") or "") == "eq"
+        for rule in rules
+    )
+    return {
+        "filter_keys": filter_keys,
+        "auto_filter_compatible": auto_filter_compatible,
+        "advanced": any(
+            str(rule.get("field") or "") not in DIMENSION_FILTER_KEYS or str(rule.get("op") or "") != "eq"
+            for rule in rules
+        ),
+    }
+
+
+def _segment_rule_expression(rule: Dict[str, Any]) -> Any:
+    field = str(rule.get("field") or "")
+    operator = str(rule.get("op") or "")
+    value = rule.get("value")
+    if field == "channel_group":
+        column = JourneyDefinitionInstanceFact.channel_group
+    elif field == "campaign_id":
+        column = JourneyDefinitionInstanceFact.campaign_id
+    elif field == "device":
+        column = JourneyDefinitionInstanceFact.device
+    elif field == "country":
+        column = JourneyDefinitionInstanceFact.country
+    elif field == "conversion_key":
+        column = JourneyDefinitionInstanceFact.conversion_key
+    elif field == "last_touch_channel":
+        column = JourneyDefinitionInstanceFact.last_touch_channel
+    elif field == "interaction_path_type":
+        column = JourneyDefinitionInstanceFact.interaction_path_type
+    elif field == "path_length":
+        column = JourneyDefinitionInstanceFact.path_length
+    elif field == "lag_days":
+        column = JourneyDefinitionInstanceFact.time_to_convert_sec
+        numeric_value = float(value or 0) * 86400.0
+        return column >= numeric_value if operator == "gte" else column <= numeric_value
+    elif field == "net_revenue_total":
+        column = JourneyDefinitionInstanceFact.net_revenue_total
+    elif field == "gross_revenue_total":
+        column = JourneyDefinitionInstanceFact.gross_revenue_total
+    elif field == "net_conversions_total":
+        column = JourneyDefinitionInstanceFact.net_conversions_total
+    elif field == "gross_conversions_total":
+        column = JourneyDefinitionInstanceFact.gross_conversions_total
+    else:
+        return None
+    if operator == "eq":
+        return column == value
+    if operator == "gte":
+        return column >= value
+    if operator == "lte":
+        return column <= value
+    return None
+
+
+def _list_segment_matches(db: Session, definition: Dict[str, Any]) -> List[Tuple[Any, ...]]:
+    rules = definition.get("rules") or []
+    query = db.query(
+        JourneyDefinitionInstanceFact.profile_id,
+        JourneyDefinitionInstanceFact.path_length,
+        JourneyDefinitionInstanceFact.time_to_convert_sec,
+        JourneyDefinitionInstanceFact.net_conversions_total,
+        JourneyDefinitionInstanceFact.net_revenue_total,
+    )
+    expressions = [expr for expr in (_segment_rule_expression(rule) for rule in rules) if expr is not None]
+    if expressions:
+        if definition.get("match") == "any":
+            from sqlalchemy import or_
+
+            query = query.filter(or_(*expressions))
+        else:
+            query = query.filter(*expressions)
+    return list(query.all())
+
+
+def _build_segment_preview(db: Session, definition: Dict[str, Any]) -> Dict[str, Any]:
+    rows = _list_segment_matches(db, definition)
+    total_rows = int(db.query(func.count(JourneyDefinitionInstanceFact.id)).scalar() or 0)
+    profiles = {str(profile_id).strip() for profile_id, *_ in rows if str(profile_id or "").strip()}
+    lag_days = [float(value) / 86400.0 for _, _, value, _, _ in rows if value not in (None, "")]
+    path_lengths = [int(value) for _, value, _, _, _ in rows if value not in (None, "")]
+    conversions = sum(float(value or 0) for _, _, _, value, _ in rows)
+    revenue = sum(float(value or 0) for _, _, _, _, value in rows)
+    return {
+        "journey_rows": len(rows),
+        "share_of_rows": (len(rows) / total_rows) if total_rows else 0.0,
+        "profiles": len(profiles),
+        "conversions": round(conversions, 2),
+        "revenue": round(revenue, 2),
+        "median_lag_days": round(statistics.median(lag_days), 2) if lag_days else None,
+        "avg_path_length": round(sum(path_lengths) / len(path_lengths), 2) if path_lengths else None,
+    }
 
 
 def serialize_local_segment(row: LocalAnalyticalSegment) -> Dict[str, Any]:
-    definition = dict(row.definition_json or {})
+    definition = normalize_local_segment_definition(dict(row.definition_json or {}))
+    compatibility = _build_segment_compatibility(definition)
     return {
         "id": row.id,
         "workspace_id": row.workspace_id,
@@ -54,11 +279,20 @@ def serialize_local_segment(row: LocalAnalyticalSegment) -> Dict[str, Any]:
         "supports_hypotheses": True,
         "supports_experiments": True,
         "definition": definition,
-        "criteria_label": " · ".join(f"{key}={value}" for key, value in definition.items()) or "No criteria",
+        "definition_version": definition.get("version"),
+        "segment_family": _infer_segment_family(definition),
+        "criteria_label": _build_criteria_label(definition),
+        "compatibility": compatibility,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
         "archived_at": row.archived_at.isoformat() if row.archived_at else None,
     }
+
+
+def _serialize_local_segment_with_preview(db: Session, row: LocalAnalyticalSegment) -> Dict[str, Any]:
+    item = serialize_local_segment(row)
+    item["preview"] = _build_segment_preview(db, dict(item.get("definition") or {}))
+    return item
 
 
 def list_local_segments(
@@ -71,7 +305,10 @@ def list_local_segments(
     if not include_archived:
         query = query.filter(LocalAnalyticalSegment.status != "archived")
     rows = query.order_by(LocalAnalyticalSegment.created_at.desc()).all()
-    return [serialize_local_segment(row) for row in rows]
+    items = [serialize_local_segment(row) for row in rows]
+    for item in items:
+        item["preview"] = _build_segment_preview(db, dict(item.get("definition") or {}))
+    return items
 
 
 def create_local_segment(
@@ -83,13 +320,16 @@ def create_local_segment(
     description: Optional[str],
     definition: Dict[str, Any],
 ) -> Dict[str, Any]:
+    normalized_definition = normalize_local_segment_definition(definition)
+    if not normalized_definition.get("rules"):
+        raise ValueError("definition must include at least one valid rule")
     row = LocalAnalyticalSegment(
         id=_new_id(),
         workspace_id=workspace_id,
         owner_user_id=owner_user_id,
         name=name.strip(),
         description=(description or "").strip() or None,
-        definition_json=_clean_definition(definition),
+        definition_json=normalized_definition,
         status="active",
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
@@ -119,9 +359,12 @@ def update_local_segment(
     )
     if not row:
         return None
+    normalized_definition = normalize_local_segment_definition(definition)
+    if not normalized_definition.get("rules"):
+        raise ValueError("definition must include at least one valid rule")
     row.name = name.strip()
     row.description = (description or "").strip() or None
-    row.definition_json = _clean_definition(definition)
+    row.definition_json = normalized_definition
     row.updated_at = datetime.utcnow()
     db.add(row)
     db.commit()
@@ -182,6 +425,9 @@ def _normalize_meiro_segment(raw: Dict[str, Any], *, workspace_id: str) -> Dict[
         "supports_experiments": True,
         "definition": {"external_segment_id": str(segment_id or name)},
         "criteria_label": "Operational audience from Meiro Pipes",
+        "definition_version": "external",
+        "segment_family": "operational_external",
+        "compatibility": {"filter_keys": [], "auto_filter_compatible": False, "advanced": True},
         "size": int(count) if isinstance(count, (int, float)) else None,
         "raw": raw,
     }
@@ -430,4 +676,23 @@ def build_segment_context(db: Session) -> Dict[str, Any]:
         "campaigns": _top_segment_dimension_values(db, JourneyDefinitionInstanceFact.campaign_id),
         "devices": _top_segment_dimension_values(db, JourneyDefinitionInstanceFact.device),
         "countries": _top_segment_dimension_values(db, JourneyDefinitionInstanceFact.country),
+        "conversion_keys": _top_segment_dimension_values(db, JourneyDefinitionInstanceFact.conversion_key),
+        "last_touch_channels": _top_segment_dimension_values(db, JourneyDefinitionInstanceFact.last_touch_channel),
+        "path_types": _top_segment_dimension_values(db, JourneyDefinitionInstanceFact.interaction_path_type),
+        "suggested_rules": {
+            "lag_days": [
+                {"label": "Lag >= 1 day", "field": "lag_days", "op": "gte", "value": 1},
+                {"label": "Lag >= 3 days", "field": "lag_days", "op": "gte", "value": 3},
+                {"label": "Lag >= 7 days", "field": "lag_days", "op": "gte", "value": 7},
+            ],
+            "path_length": [
+                {"label": "Path length >= 3", "field": "path_length", "op": "gte", "value": 3},
+                {"label": "Path length >= 5", "field": "path_length", "op": "gte", "value": 5},
+                {"label": "Path length <= 2", "field": "path_length", "op": "lte", "value": 2},
+            ],
+            "value": [
+                {"label": "Net revenue >= 100", "field": "net_revenue_total", "op": "gte", "value": 100},
+                {"label": "Net conversions >= 2", "field": "net_conversions_total", "op": "gte", "value": 2},
+            ],
+        },
     }

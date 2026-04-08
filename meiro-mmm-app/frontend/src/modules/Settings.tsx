@@ -30,8 +30,10 @@ import { usePermissions } from '../hooks/usePermissions'
 import { navigateForRecommendedAction } from '../lib/recommendedActions'
 import { ApiError, apiGetJson, apiSendJson } from '../lib/apiClient'
 import {
+  formatSegmentPreview,
   isLocalAnalyticalSegment,
   segmentOptionLabel,
+  type LocalSegmentDefinitionV2,
   type SegmentContextResponse,
   type SegmentRegistryItem,
   type SegmentRegistryResponse,
@@ -1374,7 +1376,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       enabled: activeSection === 'nba',
     })
     const createSegmentMutation = useMutation({
-      mutationFn: async (payload: { name: string; description: string; definition: Record<string, string> }) =>
+      mutationFn: async (payload: { name: string; description: string; definition: LocalSegmentDefinitionV2 }) =>
         apiSendJson<SegmentRegistryItem>('/api/segments/local', 'POST', payload, {
           fallbackMessage: 'Failed to create analytical segment',
         }),
@@ -1386,7 +1388,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
       onError: (err) => setSegmentError((err as Error).message || 'Failed to create analytical segment'),
     })
     const updateSegmentMutation = useMutation({
-      mutationFn: async (payload: { id: string; name: string; description: string; definition: Record<string, string> }) =>
+      mutationFn: async (payload: { id: string; name: string; description: string; definition: LocalSegmentDefinitionV2 }) =>
         apiSendJson<SegmentRegistryItem>(`/api/segments/local/${payload.id}`, 'PUT', {
           name: payload.name,
           description: payload.description,
@@ -10725,6 +10727,8 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                       <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap', alignItems: 'center' }}>
                         <strong style={{ color: t.color.text }}>{item.name}</strong>
                         <span style={chipStyle('accent')}>Analysis-ready</span>
+                        {item.segment_family ? <span style={chipStyle('muted')}>{item.segment_family.replace(/_/g, ' ')}</span> : null}
+                        {item.compatibility?.advanced ? <span style={chipStyle('warning')}>Advanced rules</span> : null}
                         {item.status === 'archived' ? <span style={chipStyle('warning')}>Archived</span> : null}
                       </div>
                       <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
@@ -10732,6 +10736,16 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                       </div>
                       <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
                         {item.criteria_label || 'No criteria'}
+                      </div>
+                      {formatSegmentPreview(item) ? (
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                          {formatSegmentPreview(item)}
+                        </div>
+                      ) : null}
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                        {item.compatibility?.auto_filter_compatible
+                          ? `Filter-compatible with: ${(item.compatibility.filter_keys || []).join(', ')}`
+                          : 'Advanced analytical segment: visible in registry and hypotheses, but not auto-applied as a page filter unless rules map cleanly to page dimensions.'}
                       </div>
                     </div>
                     <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>

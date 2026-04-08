@@ -63,14 +63,17 @@ def create_router(
             raise HTTPException(status_code=400, detail="name is required")
         if not body.definition:
             raise HTTPException(status_code=400, detail="definition is required")
-        return create_local_segment(
-            db,
-            workspace_id=ctx.workspace_id,
-            owner_user_id=ctx.user_id,
-            name=body.name,
-            description=body.description,
-            definition=body.definition,
-        )
+        try:
+            return create_local_segment(
+                db,
+                workspace_id=ctx.workspace_id,
+                owner_user_id=ctx.user_id,
+                name=body.name,
+                description=body.description,
+                definition=body.definition,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.put("/api/segments/local/{segment_id}")
     def api_update_local_segment(
@@ -83,14 +86,17 @@ def create_router(
             raise HTTPException(status_code=400, detail="name is required")
         if not body.definition:
             raise HTTPException(status_code=400, detail="definition is required")
-        item = update_local_segment(
-            db,
-            segment_id=segment_id,
-            workspace_id=ctx.workspace_id,
-            name=body.name,
-            description=body.description,
-            definition=body.definition,
-        )
+        try:
+            item = update_local_segment(
+                db,
+                segment_id=segment_id,
+                workspace_id=ctx.workspace_id,
+                name=body.name,
+                description=body.description,
+                definition=body.definition,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not item:
             raise HTTPException(status_code=404, detail="Segment not found")
         return item

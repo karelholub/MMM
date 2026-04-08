@@ -65,11 +65,14 @@ def test_local_segment_crud_and_registry(client: TestClient, monkeypatch: pytest
     created = create_resp.json()
     assert created["name"] == "Mobile CZ paid"
     assert created["source"] == "local_analytical"
-    assert created["definition"] == {
-        "channel_group": "paid_search",
-        "device": "mobile",
-        "country": "cz",
+    assert created["definition"]["version"] == "v2"
+    assert created["definition"]["match"] == "all"
+    assert {rule["field"] for rule in created["definition"]["rules"]} == {
+        "channel_group",
+        "device",
+        "country",
     }
+    assert created["compatibility"]["auto_filter_compatible"] is True
     segment_id = created["id"]
 
     registry_resp = client.get("/api/segments/registry", headers=headers_view)
@@ -94,7 +97,10 @@ def test_local_segment_crud_and_registry(client: TestClient, monkeypatch: pytest
         },
     )
     assert update_resp.status_code == 200
-    assert update_resp.json()["definition"]["device"] == "desktop"
+    assert any(
+        rule["field"] == "device" and rule["value"] == "desktop"
+        for rule in update_resp.json()["definition"]["rules"]
+    )
 
     archive_resp = client.post(f"/api/segments/local/{segment_id}/archive", headers=headers_edit)
     assert archive_resp.status_code == 200
@@ -171,6 +177,9 @@ def test_segment_context_uses_observed_workspace_values(client: TestClient):
     assert {item["value"] for item in payload["campaigns"]} == {"brand_search", "promo_april"}
     assert {item["value"] for item in payload["devices"]} == {"mobile", "desktop"}
     assert {item["value"] for item in payload["countries"]} == {"cz", "de"}
+    assert {item["value"] for item in payload["conversion_keys"]} == {"purchase"}
+    assert {item["value"] for item in payload["last_touch_channels"]} == {"google_ads", "email"}
+    assert payload["suggested_rules"]["lag_days"][0]["field"] == "lag_days"
 
 
 def test_segment_registry_includes_webhook_derived_meiro_segments(client: TestClient, monkeypatch: pytest.MonkeyPatch):
@@ -223,3 +232,92 @@ def test_segment_registry_includes_webhook_derived_meiro_segments(client: TestCl
     assert set(vip["definition"]["ingestion_sources"]) == {"profiles_webhook", "raw_events_replay"}
     long_lag = next(item for item in payload["items"] if item["id"] == "meiro:long_lag")
     assert long_lag["size"] == 1
+
+
+def test_smart_segment_v2_preview_and_compatibility(client: TestClient):
+    db_gen = app.dependency_overrides[get_db]()
+    db = next(db_gen)
+    try:
+        db.add_all(
+            [
+                JourneyDefinitionInstanceFact(
+                    date=date(2026, 4, 4),
+                    journey_definition_id="def-1",
+                    conversion_id="conv-1",
+                    profile_id="p-1",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2026, 4, 4, 10, 0, tzinfo=timezone.utc),
+                    path_hash="h-1",
+                    steps_json=["paid_search", "email", "checkout"],
+                    path_length=3,
+                    channel_group="paid_search",
+                    last_touch_channel="email",
+                    campaign_id="brand_search",
+                    device="mobile",
+                    country="cz",
+                    interaction_path_type="multi_touch",
+                    time_to_convert_sec=4 * 86400,
+                    net_conversions_total=1,
+                    net_revenue_total=120,
+                ),
+                JourneyDefinitionInstanceFact(
+                    date=date(2026, 4, 5),
+                    journey_definition_id="def-1",
+                    conversion_id="conv-2",
+                    profile_id="p-2",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2026, 4, 5, 10, 0, tzinfo=timezone.utc),
+                    path_hash="h-2",
+                    steps_json=["direct", "checkout"],
+                    path_length=2,
+                    channel_group="direct",
+                    last_touch_channel="direct",
+                    campaign_id="brand_home",
+                    device="desktop",
+                    country="de",
+                    interaction_path_type="short_path",
+                    time_to_convert_sec=0.5 * 86400,
+                    net_conversions_total=1,
+                    net_revenue_total=40,
+                ),
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
+
+    response = client.post(
+        "/api/segments/local",
+        headers={"X-User-Role": "editor", "X-User-Id": "qa-editor"},
+        json={
+            "name": "Long-lag high-value journeys",
+            "description": "Smart analytical segment",
+            "definition": {
+                "version": "v2",
+                "match": "all",
+                "rules": [
+                    {"field": "lag_days", "op": "gte", "value": 3},
+                    {"field": "net_revenue_total", "op": "gte", "value": 100},
+                    {"field": "country", "op": "eq", "value": "cz"},
+                ],
+            },
+        },
+    )
+    assert response.status_code == 200
+    created = response.json()
+    registry_response = client.get("/api/segments/registry", headers={"X-User-Role": "viewer", "X-User-Id": "qa-viewer"})
+    assert registry_response.status_code == 200
+    payload = next(item for item in registry_response.json()["items"] if item["id"] == created["id"])
+    assert payload["segment_family"] == "lag_timing"
+    assert payload["compatibility"]["auto_filter_compatible"] is False
+    assert payload["compatibility"]["advanced"] is True
+    assert payload["preview"]["journey_rows"] == 1
+    assert payload["preview"]["profiles"] == 1
+    assert payload["preview"]["conversions"] == 1.0
+    assert payload["preview"]["revenue"] == 120.0
+    assert payload["preview"]["median_lag_days"] == 4.0
+    assert "Lag (days) >=" in payload["criteria_label"]
