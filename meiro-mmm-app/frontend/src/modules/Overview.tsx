@@ -835,8 +835,6 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
     highlights,
     orderedKpiTiles,
     compareSegment,
-    cvrRate,
-    conversionShare,
     segmentCompareQuery.data,
     segmentComparison,
     selectedSegment,
