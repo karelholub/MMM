@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import func
 
 from app.attribution_engine import run_attribution, run_attribution_campaign
-from app.main import SETTINGS, SessionLocal
+from app.main import EXPENSES, SETTINGS, SessionLocal
 from app.models_config_dq import ConversionPath, JourneyDefinition, JourneyPathDaily
 from app.services_conversions import (
     apply_model_config_to_journeys,
@@ -24,6 +24,12 @@ from app.services_overview import (
     get_overview_funnels,
     get_overview_summary,
     get_overview_trend_insights,
+)
+from app.services_performance_trends import (
+    build_campaign_aggregate_overlay,
+    build_campaign_summary_response,
+    build_channel_aggregate_overlay,
+    build_channel_summary_response,
 )
 from app.services_quality import load_config_and_meta
 
@@ -54,8 +60,9 @@ def _date_scoped_conversion_path_totals(
     *,
     date_from: str,
     date_to: str,
+    timezone: str = "UTC",
 ) -> Dict[str, float]:
-    dt_from, dt_to = _normalize_period_bounds(date_from, date_to)
+    dt_from, dt_to = _normalize_period_bounds(date_from, date_to, timezone)
     rows = (
         db.query(ConversionPath)
         .filter(ConversionPath.conversion_ts >= dt_from, ConversionPath.conversion_ts <= dt_to)
@@ -85,9 +92,10 @@ def _date_scoped_journey_path_daily_totals(
     *,
     date_from: str,
     date_to: str,
+    timezone: str = "UTC",
     journey_definition_id: Optional[str] = None,
 ) -> Dict[str, float]:
-    dt_from, dt_to = _normalize_period_bounds(date_from, date_to)
+    dt_from, dt_to = _normalize_period_bounds(date_from, date_to, timezone)
     query = db.query(
         func.sum(JourneyPathDaily.count_conversions),
         func.sum(JourneyPathDaily.gross_conversions_total),
@@ -114,6 +122,7 @@ def build_consistency_audit(
     *,
     date_from: str,
     date_to: str,
+    timezone: str = "UTC",
     model: str = "linear",
     config_id: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -144,10 +153,62 @@ def build_consistency_audit(
             **_performance_kwargs(model),
         )
 
-        overview_summary = get_overview_summary(db, date_from=date_from, date_to=date_to)
-        overview_drivers = get_overview_drivers(db, date_from=date_from, date_to=date_to)
-        overview_funnels = get_overview_funnels(db, date_from=date_from, date_to=date_to)
-        overview_trends = get_overview_trend_insights(db, date_from=date_from, date_to=date_to)
+        overview_summary = get_overview_summary(
+            db,
+            date_from=date_from,
+            date_to=date_to,
+            timezone=timezone,
+            expenses=EXPENSES,
+        )
+        overview_drivers = get_overview_drivers(
+            db,
+            date_from=date_from,
+            date_to=date_to,
+            timezone=timezone,
+            expenses=EXPENSES,
+        )
+        overview_funnels = get_overview_funnels(
+            db,
+            date_from=date_from,
+            date_to=date_to,
+            timezone=timezone,
+        )
+        overview_trends = get_overview_trend_insights(
+            db,
+            date_from=date_from,
+            date_to=date_to,
+            timezone=timezone,
+        )
+        channel_summary = build_channel_summary_response(
+            journeys=journeys,
+            expenses=EXPENSES,
+            date_from=date_from,
+            date_to=date_to,
+            timezone=timezone,
+            compare=False,
+            aggregate_overlay=build_channel_aggregate_overlay(
+                db,
+                date_from=date_from,
+                date_to=date_to,
+                timezone=timezone,
+                compare=False,
+            ),
+        )
+        campaign_summary = build_campaign_summary_response(
+            journeys=journeys,
+            expenses=EXPENSES,
+            date_from=date_from,
+            date_to=date_to,
+            timezone=timezone,
+            compare=False,
+            aggregate_overlay=build_campaign_aggregate_overlay(
+                db,
+                date_from=date_from,
+                date_to=date_to,
+                timezone=timezone,
+                compare=False,
+            ),
+        )
 
         overview_conversions = next(
             (tile["value"] for tile in overview_summary.get("kpi_tiles", []) if tile.get("kpi_key") == "conversions"),
@@ -173,21 +234,40 @@ def build_consistency_audit(
         funnels_gross_revenue = float((overview_funnels.get("summary") or {}).get("gross_revenue") or 0.0)
         funnels_net_revenue = float((overview_funnels.get("summary") or {}).get("net_revenue") or 0.0)
         trends_revenue = float((((overview_trends.get("decomposition") or {}).get("current") or {}).get("revenue") or 0.0))
+        overview_spend = float(
+            next(
+                (tile["value"] for tile in overview_summary.get("kpi_tiles", []) if tile.get("kpi_key") == "spend"),
+                0.0,
+            )
+            or 0.0
+        )
+        overview_visits = int(
+            next(
+                (tile["value"] for tile in overview_summary.get("kpi_tiles", []) if tile.get("kpi_key") == "visits"),
+                0,
+            )
+            or 0
+        )
+        channel_totals = ((channel_summary.get("totals") or {}).get("current") or {})
+        campaign_totals = ((campaign_summary.get("totals") or {}).get("current") or {})
 
         conversion_path_scoped = _date_scoped_conversion_path_totals(
             db,
             date_from=date_from,
             date_to=date_to,
+            timezone=timezone,
         )
         journey_path_daily_scoped = _date_scoped_journey_path_daily_totals(
             db,
             date_from=date_from,
             date_to=date_to,
+            timezone=timezone,
         )
         journey_path_daily_scoped_active_definition = _date_scoped_journey_path_daily_totals(
             db,
             date_from=date_from,
             date_to=date_to,
+            timezone=timezone,
             journey_definition_id=active_definition_id,
         )
 
@@ -252,6 +332,7 @@ def build_consistency_audit(
             "scope": {
                 "date_from": date_from,
                 "date_to": date_to,
+                "timezone": timezone,
                 "model": model,
                 "config_id": meta.get("config_id") if meta else None,
                 "conversion_key": conversion_key,
@@ -266,6 +347,8 @@ def build_consistency_audit(
                 "attribution_effective_conversions": float(attribution_result.get("effective_conversions", 0.0) or 0.0),
                 "campaign_total_conversions": int(campaign_result.get("total_conversions", 0) or 0),
                 "overview_conversions_tile": int(overview_conversions or 0),
+                "overview_spend_tile": round(overview_spend, 2),
+                "overview_visits_tile": overview_visits,
                 "overview_drivers_conversions": int(drivers_conversions),
                 "overview_funnels_conversions": funnels_conversions,
                 "overview_trends_conversions": trends_conversions,
@@ -274,6 +357,14 @@ def build_consistency_audit(
                 "overview_funnels_gross_revenue": round(funnels_gross_revenue, 2),
                 "overview_funnels_net_revenue": round(funnels_net_revenue, 2),
                 "overview_trends_revenue": round(trends_revenue, 2),
+                "channel_summary_spend": round(float(channel_totals.get("spend", 0.0) or 0.0), 2),
+                "channel_summary_visits": int(float(channel_totals.get("visits", 0.0) or 0.0)),
+                "channel_summary_conversions": int(float(channel_totals.get("conversions", 0.0) or 0.0)),
+                "channel_summary_revenue": round(float(channel_totals.get("revenue", 0.0) or 0.0), 2),
+                "campaign_summary_spend": round(float(campaign_totals.get("spend", 0.0) or 0.0), 2),
+                "campaign_summary_visits": int(float(campaign_totals.get("visits", 0.0) or 0.0)),
+                "campaign_summary_conversions": int(float(campaign_totals.get("conversions", 0.0) or 0.0)),
+                "campaign_summary_revenue": round(float(campaign_totals.get("revenue", 0.0) or 0.0), 2),
                 "conversion_paths_total_rows": int(conversion_path_total),
                 "conversion_paths_rows_with_conversion_key": int(conversion_path_converted),
                 "journey_path_daily_total_conversions": int(journey_path_daily_total),
@@ -338,6 +429,14 @@ def build_consistency_audit(
             "overview_funnels_revenue_matches_scoped_conversion_paths": round(funnels_gross_revenue, 2) == round(conversion_path_scoped["gross_revenue"], 2),
             "overview_funnels_net_revenue_matches_scoped_conversion_paths": round(funnels_net_revenue, 2) == round(conversion_path_scoped["net_revenue"], 2),
             "overview_trends_revenue_matches_scoped_conversion_paths": round(trends_revenue, 2) == round(conversion_path_scoped["gross_revenue"], 2),
+            "channel_summary_spend_matches_overview": round(float(channel_totals.get("spend", 0.0) or 0.0), 2) == round(overview_spend, 2),
+            "channel_summary_visits_matches_overview": int(float(channel_totals.get("visits", 0.0) or 0.0)) == int(overview_visits),
+            "channel_summary_conversions_matches_overview": int(float(channel_totals.get("conversions", 0.0) or 0.0)) == int(overview_conversions or 0),
+            "channel_summary_revenue_matches_overview": round(float(channel_totals.get("revenue", 0.0) or 0.0), 2) == round(overview_revenue, 2),
+            "campaign_summary_spend_matches_channel_summary": round(float(campaign_totals.get("spend", 0.0) or 0.0), 2) == round(float(channel_totals.get("spend", 0.0) or 0.0), 2),
+            "campaign_summary_visits_matches_channel_summary": int(float(campaign_totals.get("visits", 0.0) or 0.0)) == int(float(channel_totals.get("visits", 0.0) or 0.0)),
+            "campaign_summary_conversions_matches_channel_summary": int(float(campaign_totals.get("conversions", 0.0) or 0.0)) == int(float(channel_totals.get("conversions", 0.0) or 0.0)),
+            "campaign_summary_revenue_matches_channel_summary": round(float(campaign_totals.get("revenue", 0.0) or 0.0), 2) == round(float(channel_totals.get("revenue", 0.0) or 0.0), 2),
         }
         report["checks"] = checks
         if not active_definition_id and excluded_non_primary_definitions:
@@ -374,6 +473,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Audit metric consistency across overview, attribution, and path stores.")
     parser.add_argument("--date-from", default=default_from)
     parser.add_argument("--date-to", default=default_to)
+    parser.add_argument("--timezone", default="UTC")
     parser.add_argument("--model", default="linear")
     parser.add_argument("--config-id", default=None)
     parser.add_argument("--json", action="store_true", dest="as_json")
@@ -382,6 +482,7 @@ def main() -> int:
     report = build_consistency_audit(
         date_from=args.date_from,
         date_to=args.date_to,
+        timezone=args.timezone,
         model=args.model,
         config_id=args.config_id,
     )

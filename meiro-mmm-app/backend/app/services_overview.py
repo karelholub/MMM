@@ -1857,6 +1857,7 @@ def get_overview_drivers(
     period_span = dt_to - dt_from
     prev_to = dt_from - timedelta(microseconds=1)
     prev_from = prev_to - period_span
+    use_utc_daily_aggregates = (timezone or "UTC").upper() == "UTC"
     use_channel_group_filter = bool(str(channel_group or "").strip())
     current_conversion_ids = _filtered_conversion_ids_for_channel_group(
         db,
@@ -1872,14 +1873,18 @@ def get_overview_drivers(
         conversion_key=conversion_key,
         channel_group=channel_group,
     )
-    aggregate_campaign_rollups = _campaign_rollups_from_daily_path_aggregates(
-        db,
-        dt_from=dt_from,
-        dt_to=dt_to,
-        prev_from=prev_from,
-        prev_to=prev_to,
-        conversion_key=conversion_key,
-        channel_group=channel_group,
+    aggregate_campaign_rollups = (
+        _campaign_rollups_from_daily_path_aggregates(
+            db,
+            dt_from=dt_from,
+            dt_to=dt_to,
+            prev_from=prev_from,
+            prev_to=prev_to,
+            conversion_key=conversion_key,
+            channel_group=channel_group,
+        )
+        if use_utc_daily_aggregates
+        else None
     )
 
     expense_by_channel = _expense_by_channel(
@@ -1897,13 +1902,13 @@ def get_overview_drivers(
         allowed_channels=[channel_group] if use_channel_group_filter else None,
     )
 
-    fact_current_channel_rollups = None if use_channel_group_filter else _aggregate_channel_metrics_from_facts(
+    fact_current_channel_rollups = None if use_channel_group_filter or not use_utc_daily_aggregates else _aggregate_channel_metrics_from_facts(
         db,
         dt_from=dt_from,
         dt_to=dt_to,
         conversion_key=conversion_key,
     )
-    fact_prev_channel_rollups = None if use_channel_group_filter else _aggregate_channel_metrics_from_facts(
+    fact_prev_channel_rollups = None if use_channel_group_filter or not use_utc_daily_aggregates else _aggregate_channel_metrics_from_facts(
         db,
         dt_from=prev_from,
         dt_to=prev_to,
@@ -2155,10 +2160,12 @@ def _aggregate_channel_metrics(
     *,
     dt_from: datetime,
     dt_to: datetime,
+    timezone: str = "UTC",
     conversion_key: Optional[str] = None,
     conversion_ids: Optional[List[str]] = None,
 ) -> Dict[str, Dict[str, float]]:
-    fact_rollups = None if conversion_ids is not None else _aggregate_channel_metrics_from_facts(
+    use_utc_daily_aggregates = (timezone or "UTC").upper() == "UTC"
+    fact_rollups = None if conversion_ids is not None or not use_utc_daily_aggregates else _aggregate_channel_metrics_from_facts(
         db,
         dt_from=dt_from,
         dt_to=dt_to,
@@ -2203,10 +2210,12 @@ def _aggregate_daily_channel_revenue(
     *,
     dt_from: datetime,
     dt_to: datetime,
+    timezone: str = "UTC",
     conversion_key: Optional[str] = None,
     conversion_ids: Optional[List[str]] = None,
 ) -> Dict[str, Dict[str, float]]:
-    fact_rollups = None if conversion_ids is not None else _aggregate_daily_channel_revenue_from_facts(
+    use_utc_daily_aggregates = (timezone or "UTC").upper() == "UTC"
+    fact_rollups = None if conversion_ids is not None or not use_utc_daily_aggregates else _aggregate_daily_channel_revenue_from_facts(
         db,
         dt_from=dt_from,
         dt_to=dt_to,
@@ -2498,6 +2507,7 @@ def get_overview_trend_insights(
         db,
         dt_from=dt_from,
         dt_to=dt_to,
+        timezone=timezone,
         conversion_key=conversion_key,
         conversion_ids=current_conversion_ids if use_channel_group_filter else None,
     )
@@ -2505,6 +2515,7 @@ def get_overview_trend_insights(
         db,
         dt_from=prev_from,
         dt_to=prev_to,
+        timezone=timezone,
         conversion_key=conversion_key,
         conversion_ids=previous_conversion_ids if use_channel_group_filter else None,
     )
@@ -2565,6 +2576,7 @@ def get_overview_trend_insights(
         db,
         dt_from=momentum_prev_from,
         dt_to=dt_to,
+        timezone=timezone,
         conversion_key=conversion_key,
         conversion_ids=momentum_conversion_ids if use_channel_group_filter else None,
     )
