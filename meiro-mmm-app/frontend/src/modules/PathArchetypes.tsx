@@ -208,7 +208,7 @@ function exportArchetypesCSV(clusters: PathCluster[], meta: { period?: string; c
 }
 
 export default function PathArchetypes() {
-  const { journeysSummary: journeys, globalDateFrom, globalDateTo } = useWorkspaceContext()
+  const { journeysSummary: journeys, globalDateFrom, globalDateTo, selectedConfigId } = useWorkspaceContext()
   const [kMode, setKMode] = useState<'auto' | 'fixed'>('auto')
   const [kFixed, setKFixed] = useState(6)
   const [selectedId, setSelectedId] = useState<number | null>(null)
@@ -292,11 +292,12 @@ export default function PathArchetypes() {
   }, [compareSegmentId, selectedSegmentId])
 
   const archetypesQuery = useQuery<ArchetypesResponse>({
-    queryKey: ['path-archetypes', globalDateFrom, globalDateTo, kMode, kFixed, directMode, comparePrevious, selectedSegmentId],
+    queryKey: ['path-archetypes', globalDateFrom, globalDateTo, selectedConfigId ?? 'default', kMode, kFixed, directMode, comparePrevious, selectedSegmentId],
     queryFn: async () => {
       const params = new URLSearchParams()
       if (globalDateFrom) params.set('date_from', globalDateFrom)
       if (globalDateTo) params.set('date_to', globalDateTo)
+      if (selectedConfigId) params.set('config_id', selectedConfigId)
       params.set('k_mode', kMode)
       if (kMode === 'fixed') params.set('k', String(kFixed))
       params.set('direct_mode', directMode)
@@ -311,11 +312,12 @@ export default function PathArchetypes() {
     },
   })
   const baselineArchetypesQuery = useQuery<ArchetypesResponse>({
-    queryKey: ['path-archetypes-baseline', globalDateFrom, globalDateTo, kMode, kFixed, directMode, comparePrevious],
+    queryKey: ['path-archetypes-baseline', globalDateFrom, globalDateTo, selectedConfigId ?? 'default', kMode, kFixed, directMode, comparePrevious],
     queryFn: async () => {
       const params = new URLSearchParams()
       if (globalDateFrom) params.set('date_from', globalDateFrom)
       if (globalDateTo) params.set('date_to', globalDateTo)
+      if (selectedConfigId) params.set('config_id', selectedConfigId)
       params.set('k_mode', kMode)
       if (kMode === 'fixed') params.set('k', String(kFixed))
       params.set('direct_mode', directMode)
@@ -783,6 +785,10 @@ export default function PathArchetypes() {
           items={[
             { label: 'Source', value: 'Live attribution journeys' },
             { label: 'Selected period', value: periodLabel },
+            {
+              label: 'Config basis',
+              value: selectedConfigId ? `Live attribution · selected config ${selectedConfigId.slice(0, 8)}… applied` : 'Live attribution',
+            },
             { label: 'Conversion KPI', value: conversionLabel },
             { label: 'Focus segment', value: selectedSegment ? selectedSegment.name : 'All journeys' },
             { label: 'Direct handling', value: directMode },

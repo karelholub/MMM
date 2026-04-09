@@ -615,6 +615,10 @@ def build_consistency_audit(
                 + formatted
                 + "."
             )
+        if meta and meta.get("config_id") and converted_journeys_for_model == 0 and int(overview_conversions or 0) > 0:
+            report["notes"].append(
+                "The selected model config currently filters all live attribution journeys out of the tested scope, while workspace fact-based pages still show observed conversions. Treat live config-aware pages and workspace fact-based pages as different comparison groups until that contract is reconciled or labeled in the UI."
+            )
         report["notes"].append(
             "Lag parity checks are workspace-wide diagnostic-fact checks and compare channel vs campaign lag summaries on the same raw scope-diagnostic basis."
         )

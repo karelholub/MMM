@@ -369,6 +369,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
     globalDateTo,
     isLoadingSampleJourneys,
     loadSampleJourneys,
+    selectedConfigId,
   } = useWorkspaceContext()
   const [funnelTab, setFunnelTab] = useState<'conversions' | 'revenue' | 'speed'>('conversions')
   const [assistantCollapsed, setAssistantCollapsed] = useState(true)
@@ -1488,6 +1489,10 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
           items={[
             { label: 'Source', value: 'Workspace summary + journey health' },
             { label: 'Period', value: overviewPeriodLabel },
+            {
+              label: 'Config basis',
+              value: selectedConfigId ? `Workspace facts · selected config ${selectedConfigId.slice(0, 8)}… not applied` : 'Workspace facts',
+            },
             { label: 'Focus', value: focusSegmentLabel },
             { label: 'Freshness', value: freshnessLabel },
             { label: 'KPI coverage', value: readinessCoverageLabel },
@@ -1495,6 +1500,11 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
             { label: 'Lag posture', value: lagPostureLabel },
           ]}
         />
+        {selectedConfigId ? (
+          <div style={{ marginTop: -t.space.md, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+            Overview remains a workspace-fact view. Use live attribution pages to inspect the currently selected model config directly.
+          </div>
+        ) : null}
 
         <AnalysisNarrativePanel
           title="What changed"

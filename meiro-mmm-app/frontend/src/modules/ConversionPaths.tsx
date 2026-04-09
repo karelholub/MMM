@@ -330,7 +330,7 @@ function exportPathsCSV(
 
 export default function ConversionPaths() {
   const queryClient = useQueryClient()
-  const { journeysSummary: journeys, globalDateFrom, globalDateTo } = useWorkspaceContext()
+  const { journeysSummary: journeys, globalDateFrom, globalDateTo, selectedConfigId } = useWorkspaceContext()
   const [filters, setFilters] = useState<GlobalFiltersState>(() =>
     buildInitialFilters(globalDateFrom || journeys?.date_min, globalDateTo || journeys?.date_max),
   )
@@ -1282,6 +1282,10 @@ export default function ConversionPaths() {
                 { label: 'Data source', value: data?.source || '—' },
                 { label: 'Selected period', value: periodLabel },
                 {
+                  label: 'Config basis',
+                  value: selectedConfigId ? `Definition outputs · selected config ${selectedConfigId.slice(0, 8)}… not applied directly` : 'Definition outputs',
+                },
+                {
                   label: 'Materialized outputs through',
                   value: data?.date_to || '—',
                 },
@@ -1305,6 +1309,11 @@ export default function ConversionPaths() {
             {!canCompareToWorkspaceLiveJourneys && data ? (
               <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
                 Live-vs-materialized reconciliation is hidden for this view because direct mode, segment focus, page filters, or a non-default journey definition narrows the analysis away from the comparable workspace basis.
+              </div>
+            ) : null}
+            {selectedConfigId ? (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                Conversion Paths follows stored journey-definition outputs for the selected definition and period. The workspace-selected attribution config affects live attribution pages, but it does not retroactively re-scope these materialized path outputs.
               </div>
             ) : null}
             {buildJourneyPathsHref(selectedJourneyId) ? (
