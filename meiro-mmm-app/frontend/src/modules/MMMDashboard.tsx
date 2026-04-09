@@ -20,6 +20,7 @@ import { apiGetJson } from '../lib/apiClient'
 import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import SectionCard from '../components/dashboard/SectionCard'
+import AnalysisNarrativePanel from '../components/dashboard/AnalysisNarrativePanel'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import AnalysisShareActions from '../components/dashboard/AnalysisShareActions'
 import { buildSettingsHref } from '../lib/settingsLinks'
@@ -230,6 +231,50 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
     return [...contrib].sort((a, b) => b.mean_share - a.mean_share)[0] ?? null
   }, [contrib])
 
+  const reconciliationSummary = useMemo(() => {
+    if (!runMetadata?.attribution_model || !attributionWeekly?.series || !dataset.length) return null
+    const currentKpiKey = run?.config?.kpi || 'conversions'
+    const mmmByDate = new Map<string, number>()
+    dataset.forEach((row) => {
+      const date = (row.date as string)?.slice(0, 10)
+      if (!date) return
+      mmmByDate.set(date, Number(row[currentKpiKey]) || 0)
+    })
+    const pairs: Array<{ attr: number; mmm: number }> = []
+    attributionWeekly.series.forEach(({ date, attributed_value }) => {
+      const bucket = date.slice(0, 10)
+      const mmm = mmmByDate.get(bucket)
+      if (mmm !== undefined) pairs.push({ attr: attributed_value, mmm })
+    })
+    let correlation = 0
+    let meanAbsPctDiff = 0
+    if (pairs.length >= 2) {
+      const n = pairs.length
+      const sumA = pairs.reduce((sum, pair) => sum + pair.attr, 0)
+      const sumM = pairs.reduce((sum, pair) => sum + pair.mmm, 0)
+      const meanA = sumA / n
+      const meanM = sumM / n
+      let numerator = 0
+      let denominatorA = 0
+      let denominatorM = 0
+      pairs.forEach((pair) => {
+        numerator += (pair.attr - meanA) * (pair.mmm - meanM)
+        denominatorA += (pair.attr - meanA) ** 2
+        denominatorM += (pair.mmm - meanM) ** 2
+      })
+      const denominator = Math.sqrt(denominatorA * denominatorM)
+      correlation = denominator > 0 ? numerator / denominator : 0
+      meanAbsPctDiff =
+        pairs.reduce((sum, pair) => sum + (pair.mmm > 0 ? Math.abs(pair.attr - pair.mmm) / pair.mmm : 0), 0) / n
+    }
+    return {
+      pairCount: pairs.length,
+      correlation,
+      meanAbsPctDiff,
+      largeDivergence: meanAbsPctDiff > 0.25,
+    }
+  }, [attributionWeekly?.series, dataset, run?.config?.kpi, runMetadata?.attribution_model])
+
   const getKpiDisplayName = () => {
     const mode = run?.kpi_mode || run?.config?.kpi_mode || 'conversions'
     const map: Record<string, string> = {
@@ -239,6 +284,37 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
     }
     return map[mode] || 'MMM'
   }
+
+  const trustNarrative = useMemo(() => {
+    const headline = confidenceLevel === 'ok'
+      ? 'The current MMM run looks usable for directional budget decisions.'
+      : 'Use this MMM run directionally, but validate the fragile parts before acting on exact ROI values.'
+    const items = [
+      `Basis: this page uses the saved MMM run plus the linked dataset preview for ${datasetPeriodLabel}. ROI, contribution, and response curves all come from that run context.`,
+      weeks < 20
+        ? `History is short at ${weeks.toLocaleString()} weeks, so ranking channels is more reliable than trusting precise point estimates.`
+        : `The run covers ${weeks.toLocaleString()} modeled weeks across ${channelsModeled.toLocaleString()} channels.`,
+      confidenceReasons[0]
+        ? `Primary trust risk: ${confidenceReasons[0]}`
+        : 'No major convergence or fit red flags surfaced in the current model diagnostics.',
+      reconciliationSummary
+        ? reconciliationSummary.largeDivergence
+          ? `Attribution overlay check is diverging: overlapping weekly totals differ by ${(reconciliationSummary.meanAbsPctDiff * 100).toFixed(1)}% on average. Treat MMM and attribution as competing signals until data quality is reviewed.`
+          : `Attribution overlay check is broadly aligned: overlapping weekly totals differ by ${(reconciliationSummary.meanAbsPctDiff * 100).toFixed(1)}% on average.`
+        : runMetadata?.attribution_model
+          ? 'Attribution overlay is configured, but there are not enough overlapping dated points yet to reconcile it against the MMM KPI.'
+          : 'This run uses a direct KPI source, so there is no attribution-overlay reconciliation for this model.',
+    ]
+    return { headline, items }
+  }, [
+    channelsModeled,
+    confidenceLevel,
+    confidenceReasons,
+    datasetPeriodLabel,
+    reconciliationSummary,
+    runMetadata?.attribution_model,
+    weeks,
+  ])
 
   // Derived helpers for charts
   const kpiKey = run?.config?.kpi || 'sales'
@@ -350,6 +426,15 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
               ? `Top contribution channel: ${channelDisplay(topContributionChannel.channel)} (${(topContributionChannel.mean_share * 100).toFixed(1)}%)`
               : '',
           ]}
+        />
+      </div>
+
+      <div style={{ marginBottom: t.space.xl }}>
+        <AnalysisNarrativePanel
+          title="What to trust"
+          subtitle="A short readout of the current MMM data contract before you act on fit, contribution, or budget recommendations."
+          headline={trustNarrative.headline}
+          items={trustNarrative.items}
         />
       </div>
 
@@ -565,6 +650,59 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
       </div>
 
       <div style={{ marginBottom: t.space.xl }}>
+        <SectionCard
+          title="Reconciliation basis"
+          subtitle="How this MMM run lines up with other measurement layers in the app."
+        >
+          <div style={{ display: 'grid', gap: t.space.md }}>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              MMM diagnostics on this page are anchored to the selected run and its linked dataset preview. When attribution is available, the overlay compares overlapping dated totals only. It is a contract check, not a replacement for model fit.
+            </div>
+            <div
+              style={{
+                display: 'grid',
+                gap: t.space.sm,
+                gridTemplateColumns: 'repeat(auto-fit, minmax(min(180px, 100%), 1fr))',
+              }}
+            >
+              <div style={{ display: 'grid', gap: 2 }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>MMM run basis</div>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  <strong style={{ color: t.color.text }}>{weeks.toLocaleString()}</strong> dataset rows
+                </div>
+              </div>
+              <div style={{ display: 'grid', gap: 2 }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>KPI source</div>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  <strong style={{ color: t.color.text }}>
+                    {runMetadata?.attribution_model ? `Attribution (${runMetadata.attribution_model.replace(/_/g, ' ')})` : 'Direct'}
+                  </strong>
+                </div>
+              </div>
+              <div style={{ display: 'grid', gap: 2 }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Overlap used for reconcile</div>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  <strong style={{ color: t.color.text }}>{reconciliationSummary?.pairCount?.toLocaleString() ?? '—'}</strong> aligned time buckets
+                </div>
+              </div>
+              <div style={{ display: 'grid', gap: 2 }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Reconcile status</div>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  <strong style={{ color: t.color.text }}>
+                    {reconciliationSummary
+                      ? reconciliationSummary.largeDivergence
+                        ? 'Check mismatch'
+                        : 'Broadly aligned'
+                      : 'No overlay'}
+                  </strong>
+                </div>
+              </div>
+            </div>
+          </div>
+        </SectionCard>
+      </div>
+
+      <div style={{ marginBottom: t.space.xl }}>
         <CollapsiblePanel
           title="Model Trust & Context"
           subtitle="What changed, what to trust, and quick links into the supporting data."
@@ -660,82 +798,50 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
       </div>
 
       {/* Reconcile view: attributed vs MMM KPI (when KPI source is Attribution) */}
-      {runMetadata?.attribution_model && attributionWeekly?.series && dataset.length > 0 && (() => {
-        const kpiKey = run?.config?.kpi || 'conversions'
-        const mmmByDate = new Map<string, number>()
-        dataset.forEach((row) => {
-          const d = (row['date'] as string)?.slice(0, 10)
-          if (d) mmmByDate.set(d, (Number(row[kpiKey]) || 0))
-        })
-        const pairs: { attr: number; mmm: number }[] = []
-        attributionWeekly.series.forEach(({ date, attributed_value }) => {
-          const d = date.slice(0, 10)
-          const mmm = mmmByDate.get(d)
-          if (mmm !== undefined) pairs.push({ attr: attributed_value, mmm })
-        })
-        let correlation = 0
-        let meanAbsPctDiff = 0
-        if (pairs.length >= 2) {
-          const n = pairs.length
-          const sumA = pairs.reduce((s, p) => s + p.attr, 0)
-          const sumM = pairs.reduce((s, p) => s + p.mmm, 0)
-          const meanA = sumA / n
-          const meanM = sumM / n
-          let num = 0
-          let denA = 0
-          let denM = 0
-          pairs.forEach((p) => {
-            num += (p.attr - meanA) * (p.mmm - meanM)
-            denA += (p.attr - meanA) ** 2
-            denM += (p.mmm - meanM) ** 2
-          })
-          const den = Math.sqrt(denA * denM)
-          correlation = den > 0 ? num / den : 0
-          meanAbsPctDiff = pairs.reduce((s, p) => s + (p.mmm > 0 ? Math.abs(p.attr - p.mmm) / p.mmm : 0), 0) / n
-        }
-        const largeDivergence = meanAbsPctDiff > 0.25
-        return (
-          <div key="reconcile" style={{ marginBottom: t.space.xl }}
+      {reconciliationSummary && (
+        <div key="reconcile" style={{ marginBottom: t.space.xl }}>
+          <CollapsiblePanel
+            title="Reconcile: Attribution vs MMM"
+            subtitle={`Compare weekly attributed conversions vs MMM modeled KPI for ${runMetadata?.attribution_model ?? 'the selected attribution model'}.`}
+            open={showReconcilePanel}
+            onToggle={() => setShowReconcilePanel((value) => !value)}
           >
-            <CollapsiblePanel
-              title="Reconcile: Attribution vs MMM"
-              subtitle={`Compare weekly attributed conversions vs MMM modeled KPI for ${runMetadata.attribution_model}.`}
-              open={showReconcilePanel}
-              onToggle={() => setShowReconcilePanel((value) => !value)}
+            <div
+              style={{
+                padding: t.space.sm,
+                borderRadius: t.radius.sm,
+                border: `1px solid ${reconciliationSummary.largeDivergence ? t.color.warning : t.color.borderLight}`,
+                background: t.color.surface,
+              }}
             >
-              <div
-                style={{
-                  padding: t.space.sm,
-                  borderRadius: t.radius.sm,
-                  border: `1px solid ${largeDivergence ? t.color.warning : t.color.borderLight}`,
-                  background: t.color.surface,
-                }}
-              >
-                <div style={{ display: 'flex', gap: t.space.xl, flexWrap: 'wrap', marginBottom: t.space.sm }}>
-                  <span style={{ fontSize: t.font.sizeSm }}>Correlation: <strong style={{ fontVariantNumeric: 'tabular-nums' }}>{correlation.toFixed(3)}</strong></span>
-                  <span style={{ fontSize: t.font.sizeSm }}>Mean absolute % difference: <strong style={{ fontVariantNumeric: 'tabular-nums' }}>{(meanAbsPctDiff * 100).toFixed(1)}%</strong></span>
-                </div>
-                {largeDivergence ? (
-                  <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.warning }}>
-                    Large divergence detected. Check data quality and attribution setup.{' '}
-                    <button
-                      type="button"
-                      onClick={() => onOpenDataQuality?.()}
-                      style={{ background: 'none', border: 'none', color: t.color.accent, cursor: 'pointer', textDecoration: 'underline', padding: 0, fontSize: 'inherit' }}
-                    >
-                      Open Data Quality
-                    </button>
-                  </p>
-                ) : (
-                  <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                    MMM KPI totals and attribution totals are broadly aligned for this period.
-                  </p>
-                )}
+              <div style={{ marginBottom: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                Basis: overlapping dated totals between the linked MMM dataset preview and the selected attribution model. This check stays on the shared overlap only.
               </div>
-            </CollapsiblePanel>
-          </div>
-        )
-      })()}
+              <div style={{ display: 'flex', gap: t.space.xl, flexWrap: 'wrap', marginBottom: t.space.sm }}>
+                <span style={{ fontSize: t.font.sizeSm }}>Overlapping buckets: <strong style={{ fontVariantNumeric: 'tabular-nums' }}>{reconciliationSummary.pairCount.toLocaleString()}</strong></span>
+                <span style={{ fontSize: t.font.sizeSm }}>Correlation: <strong style={{ fontVariantNumeric: 'tabular-nums' }}>{reconciliationSummary.correlation.toFixed(3)}</strong></span>
+                <span style={{ fontSize: t.font.sizeSm }}>Mean absolute % difference: <strong style={{ fontVariantNumeric: 'tabular-nums' }}>{(reconciliationSummary.meanAbsPctDiff * 100).toFixed(1)}%</strong></span>
+              </div>
+              {reconciliationSummary.largeDivergence ? (
+                <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.warning }}>
+                  Large divergence detected. Check data quality and attribution setup.{' '}
+                  <button
+                    type="button"
+                    onClick={() => onOpenDataQuality?.()}
+                    style={{ background: 'none', border: 'none', color: t.color.accent, cursor: 'pointer', textDecoration: 'underline', padding: 0, fontSize: 'inherit' }}
+                  >
+                    Open Data Quality
+                  </button>
+                </p>
+              ) : (
+                <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  MMM KPI totals and attribution totals are broadly aligned for this period.
+                </p>
+              )}
+            </div>
+          </CollapsiblePanel>
+        </div>
+      )}
 
       <style>{`@media (max-width: 900px) { .mmm-charts { grid-template-columns: 1fr !important; } }`}</style>
       <div
