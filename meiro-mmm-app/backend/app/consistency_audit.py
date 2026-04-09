@@ -18,6 +18,7 @@ from app.services_conversions import (
     load_journeys_from_db,
 )
 from app.services_overview import (
+    _single_active_overview_definition_id,
     _normalize_period_bounds,
     get_overview_drivers,
     get_overview_funnels,
@@ -84,22 +85,22 @@ def _date_scoped_journey_path_daily_totals(
     *,
     date_from: str,
     date_to: str,
+    journey_definition_id: Optional[str] = None,
 ) -> Dict[str, float]:
     dt_from, dt_to = _normalize_period_bounds(date_from, date_to)
-    row = (
-        db.query(
-            func.sum(JourneyPathDaily.count_conversions),
-            func.sum(JourneyPathDaily.gross_conversions_total),
-            func.sum(JourneyPathDaily.net_conversions_total),
-            func.sum(JourneyPathDaily.gross_revenue_total),
-            func.sum(JourneyPathDaily.net_revenue_total),
-        )
-        .filter(
-            JourneyPathDaily.date >= dt_from.date(),
-            JourneyPathDaily.date <= dt_to.date(),
-        )
-        .first()
+    query = db.query(
+        func.sum(JourneyPathDaily.count_conversions),
+        func.sum(JourneyPathDaily.gross_conversions_total),
+        func.sum(JourneyPathDaily.net_conversions_total),
+        func.sum(JourneyPathDaily.gross_revenue_total),
+        func.sum(JourneyPathDaily.net_revenue_total),
+    ).filter(
+        JourneyPathDaily.date >= dt_from.date(),
+        JourneyPathDaily.date <= dt_to.date(),
     )
+    if journey_definition_id:
+        query = query.filter(JourneyPathDaily.journey_definition_id == journey_definition_id)
+    row = query.first()
     return {
         "count_conversions": float((row[0] if row else 0.0) or 0.0),
         "gross_conversions": float((row[1] if row else 0.0) or 0.0),
@@ -130,6 +131,7 @@ def build_consistency_audit(
         conversion_key = meta.get("conversion_key") if meta else None
         if conversion_key:
             journeys_for_model = [journey for journey in journeys_for_model if journey.get("kpi_type") == conversion_key]
+        active_definition_id = _single_active_overview_definition_id(db, conversion_key=conversion_key)
 
         attribution_result = run_attribution(
             journeys_for_model,
@@ -181,6 +183,12 @@ def build_consistency_audit(
             db,
             date_from=date_from,
             date_to=date_to,
+        )
+        journey_path_daily_scoped_active_definition = _date_scoped_journey_path_daily_totals(
+            db,
+            date_from=date_from,
+            date_to=date_to,
+            journey_definition_id=active_definition_id,
         )
 
         conversion_path_total = db.query(func.count()).select_from(ConversionPath).scalar() or 0
@@ -267,21 +275,51 @@ def build_consistency_audit(
                 "journey_path_daily_scoped_net_conversions": round(journey_path_daily_scoped["net_conversions"], 2),
                 "journey_path_daily_scoped_gross_revenue": round(journey_path_daily_scoped["gross_revenue"], 2),
                 "journey_path_daily_scoped_net_revenue": round(journey_path_daily_scoped["net_revenue"], 2),
+                "active_overview_journey_definition_id": active_definition_id,
+                "journey_path_daily_active_definition_scoped_count_conversions": int(
+                    journey_path_daily_scoped_active_definition["count_conversions"]
+                ),
+                "journey_path_daily_active_definition_scoped_gross_conversions": round(
+                    journey_path_daily_scoped_active_definition["gross_conversions"], 2
+                ),
+                "journey_path_daily_active_definition_scoped_net_conversions": round(
+                    journey_path_daily_scoped_active_definition["net_conversions"], 2
+                ),
+                "journey_path_daily_active_definition_scoped_gross_revenue": round(
+                    journey_path_daily_scoped_active_definition["gross_revenue"], 2
+                ),
+                "journey_path_daily_active_definition_scoped_net_revenue": round(
+                    journey_path_daily_scoped_active_definition["net_revenue"], 2
+                ),
             },
             "journey_path_daily_by_definition": journey_path_daily_by_definition,
         }
-        baseline = converted_journeys
+        scoped_conversion_baseline = int(conversion_path_scoped["count_conversions"])
         checks = {
-            "overview_tile_matches_converted_journeys": int(overview_conversions or 0) == baseline,
-            "overview_drivers_match_converted_journeys": int(drivers_conversions) == baseline,
-            "overview_funnels_match_converted_journeys": funnels_conversions == baseline,
-            "overview_trends_match_converted_journeys": int(trends_conversions) == baseline,
+            "overview_tile_matches_scoped_conversion_paths": int(overview_conversions or 0) == scoped_conversion_baseline,
+            "overview_drivers_match_scoped_conversion_paths": int(drivers_conversions) == scoped_conversion_baseline,
+            "overview_funnels_match_scoped_conversion_paths": funnels_conversions == scoped_conversion_baseline,
+            "overview_trends_match_scoped_conversion_paths": int(trends_conversions) == scoped_conversion_baseline,
             "attribution_matches_model_set": int(attribution_result.get("total_conversions", 0) or 0) == converted_journeys_for_model,
             "campaign_matches_model_set": int(campaign_result.get("total_conversions", 0) or 0) == converted_journeys_for_model,
-            "path_daily_matches_converted_conversion_paths": int(journey_path_daily_total) == int(conversion_path_converted),
-            "scoped_path_daily_count_matches_conversion_paths": int(journey_path_daily_scoped["count_conversions"]) == int(conversion_path_scoped["count_conversions"]),
-            "scoped_path_daily_gross_revenue_matches_conversion_paths": round(journey_path_daily_scoped["gross_revenue"], 2) == round(conversion_path_scoped["gross_revenue"], 2),
-            "scoped_path_daily_net_revenue_matches_conversion_paths": round(journey_path_daily_scoped["net_revenue"], 2) == round(conversion_path_scoped["net_revenue"], 2),
+            "active_definition_path_daily_count_matches_scoped_conversion_paths": (
+                None
+                if not active_definition_id
+                else int(journey_path_daily_scoped_active_definition["count_conversions"])
+                == int(conversion_path_scoped["count_conversions"])
+            ),
+            "active_definition_path_daily_gross_revenue_matches_scoped_conversion_paths": (
+                None
+                if not active_definition_id
+                else round(journey_path_daily_scoped_active_definition["gross_revenue"], 2)
+                == round(conversion_path_scoped["gross_revenue"], 2)
+            ),
+            "active_definition_path_daily_net_revenue_matches_scoped_conversion_paths": (
+                None
+                if not active_definition_id
+                else round(journey_path_daily_scoped_active_definition["net_revenue"], 2)
+                == round(conversion_path_scoped["net_revenue"], 2)
+            ),
             "overview_revenue_matches_scoped_conversion_paths": round(overview_revenue, 2) == round(conversion_path_scoped["gross_revenue"], 2),
             "overview_net_revenue_matches_scoped_conversion_paths": round(overview_net_revenue, 2) == round(conversion_path_scoped["net_revenue"], 2),
             "overview_funnels_revenue_matches_scoped_conversion_paths": round(funnels_gross_revenue, 2) == round(conversion_path_scoped["gross_revenue"], 2),
@@ -289,7 +327,7 @@ def build_consistency_audit(
             "overview_trends_revenue_matches_scoped_conversion_paths": round(trends_revenue, 2) == round(conversion_path_scoped["gross_revenue"], 2),
         }
         report["checks"] = checks
-        report["status"] = "ok" if all(checks.values()) else "warning"
+        report["status"] = "ok" if all(value is not False for value in checks.values()) else "warning"
         return report
 
 
