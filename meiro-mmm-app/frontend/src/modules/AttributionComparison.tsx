@@ -233,7 +233,7 @@ function summarizeSensitivityRisk(preview?: AttributionPreviewResult | null): st
 }
 
 export default function AttributionComparison({ selectedModel, onSelectModel }: AttributionComparisonProps) {
-  const { journeysSummary, globalDateFrom, globalDateTo } = useWorkspaceContext()
+  const { journeysSummary, globalDateFrom, globalDateTo, selectedConfigId } = useWorkspaceContext()
   const [sortBy, setSortBy] = useState<'channel' | string>('channel')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [comparisonMode, setComparisonMode] = useState<'absolute' | 'delta'>('absolute')
@@ -520,6 +520,10 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
 
   const anyResult: ModelResult | undefined = models.length ? results[models[0]] : undefined
   const configMeta = anyResult?.config ?? null
+  const resultsConfigId = configMeta?.config_id ?? null
+  const configMismatch =
+    Boolean(selectedConfigId) &&
+    (!resultsConfigId || resultsConfigId !== selectedConfigId)
   const conversionKey = configMeta?.conversion_key ?? journeysSummary?.primary_kpi_id ?? null
   const configVersion = configMeta?.config_version ?? null
   const readiness = journeysSummary?.readiness ?? null
@@ -821,6 +825,14 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
           items={[
             { label: 'Source', value: 'Live attribution results' },
             { label: 'Period', value: periodLabel },
+            {
+              label: 'Config basis',
+              value: resultsConfigId
+                ? `Live attribution · config ${resultsConfigId.slice(0, 8)}… applied`
+                : selectedConfigId
+                  ? `Live attribution · waiting for config ${selectedConfigId.slice(0, 8)}…`
+                  : 'Live attribution · default active config',
+            },
             { label: 'Conversion', value: conversionKey ? `Conversion: ${conversionKey}` : 'Conversion: N/A' },
             { label: 'Freshness', value: freshnessLabel },
             { label: 'Coverage', value: coverageLabel },
@@ -829,6 +841,11 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
             { label: 'Sensitivity risk', value: summarizeSensitivityRisk(sensitivityQuery.data?.current) },
           ]}
         />
+        {configMismatch ? (
+          <div style={{ marginTop: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+            The workspace is currently set to config <strong>{selectedConfigId?.slice(0, 8)}…</strong>, but the visible attribution results still reflect config <strong>{resultsConfigId?.slice(0, 8) ?? '—'}…</strong>. A rerun is in progress or still needed before this page fully matches the selected config.
+          </div>
+        ) : null}
       </div>
 
       <div style={{ marginBottom: t.space.lg }}>

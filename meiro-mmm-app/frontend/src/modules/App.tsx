@@ -278,14 +278,20 @@ export default function App() {
     }),
     onSuccess: () => {
       journeysQuery.refetch()
-      runAllMutation.mutate()
+      runAllMutation.mutate(selectedConfigId)
     },
   })
 
   const runAllMutation = useMutation({
-    mutationFn: async () => apiSendJson<any>('/api/attribution/run-all', 'POST', undefined, {
-      fallbackMessage: 'Failed to run models',
-    }),
+    mutationFn: async (configId: string | null = null) =>
+      apiSendJson<any>(
+        '/api/attribution/run-all',
+        'POST',
+        configId ? { config_id: configId } : undefined,
+        {
+          fallbackMessage: 'Failed to run models',
+        },
+      ),
   })
 
   const activateJourneySourceMutation = useMutation({
@@ -293,7 +299,7 @@ export default function App() {
       apiSendJson('/api/attribution/journeys/activate-source', 'POST', { source }, { fallbackMessage: 'Failed to activate source' }),
     onSuccess: () => {
       journeysQuery.refetch()
-      runAllMutation.mutate()
+      runAllMutation.mutate(selectedConfigId)
       journeySourceStateQuery.refetch()
     },
   })
@@ -343,10 +349,13 @@ export default function App() {
   })
 
   useEffect(() => {
-    if (journeysQuery.data?.loaded && !runAllMutation.data && !runAllMutation.isPending) {
-      runAllMutation.mutate()
+    if (!journeysQuery.data?.loaded || runAllMutation.isPending) return
+    const requestedConfigId = runAllMutation.variables ?? null
+    const effectiveSelectedConfigId = selectedConfigId ?? null
+    if (!runAllMutation.data || requestedConfigId !== effectiveSelectedConfigId) {
+      runAllMutation.mutate(effectiveSelectedConfigId)
     }
-  }, [journeysQuery.data?.loaded])
+  }, [journeysQuery.data?.loaded, runAllMutation.data, runAllMutation.isPending, runAllMutation.variables, selectedConfigId])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -525,8 +534,8 @@ export default function App() {
   }, [])
   const onJourneysImported = useCallback(() => {
     void journeysQuery.refetch()
-    runAllMutation.mutate()
-  }, [])
+    runAllMutation.mutate(selectedConfigId)
+  }, [selectedConfigId])
   const onMmmMappingComplete = useCallback(
     (mapping: { dataset_id: string; columns: { kpi: string; spend_channels: string[]; covariates?: string[] } }) => {
       setPendingMmmMapping(mapping)
@@ -584,7 +593,7 @@ export default function App() {
         },
         isRunningAttribution: runAllMutation.isPending,
         isLoadingSampleJourneys: loadSampleMutation.isPending,
-        runAllAttribution: () => runAllMutation.mutate(),
+        runAllAttribution: () => runAllMutation.mutate(selectedConfigId),
         loadSampleJourneys: () => loadSampleMutation.mutate(),
       }}
     >
@@ -640,7 +649,7 @@ export default function App() {
           onModelChange={setSelectedModel}
           onConfigChange={setSelectedConfigId}
           onLoadSample={() => loadSampleMutation.mutate()}
-          onRunModels={() => runAllMutation.mutate()}
+          onRunModels={() => runAllMutation.mutate(selectedConfigId)}
           onPeriodChange={(next) => {
             if (!isIsoDateOnly(next.dateFrom) || !isIsoDateOnly(next.dateTo) || next.dateFrom > next.dateTo) return
             setGlobalDateRange(next)

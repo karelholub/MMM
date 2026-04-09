@@ -1022,7 +1022,7 @@ export default function Journeys({
   funnelBuilderEnabled,
 }: JourneysProps) {
   const queryClient = useQueryClient()
-  const { journeysSummary, attributionModel, setAttributionModel, globalDateFrom, globalDateTo } = useWorkspaceContext()
+  const { journeysSummary, attributionModel, setAttributionModel, globalDateFrom, globalDateTo, selectedConfigId } = useWorkspaceContext()
   const user = useMemo(() => getUserContext(), [])
   const featureDisabled = !featureEnabled || !hasPermission
 
@@ -3290,6 +3290,11 @@ export default function Journeys({
             <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
               Journeys applies saved local segments either as exact filters or as analytical lenses, depending on what the segment definition can truthfully support on this page.
             </div>
+            {selectedConfigId ? (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                The selected attribution config <strong>{selectedConfigId.slice(0, 8)}…</strong> does not directly re-scope stored journey-definition outputs on this page. Treat it as workspace context for related live attribution pages, not as a filter on the journey tables below.
+              </div>
+            ) : null}
 
             <GlobalFilterBar
               value={filters}
