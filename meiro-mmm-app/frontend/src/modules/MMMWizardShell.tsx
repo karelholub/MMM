@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, UseMutationResult, UseQueryResult } from '@tanstack/react-query'
 import { tokens } from '../theme/tokens'
 import MMMDataSourceStep from './MMMDataSourceStep'
@@ -82,6 +82,8 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
 
   const [kpiMode, setKpiMode] = useState<KpiMode>('sales')
   const [currentStep, setCurrentStep] = useState<StepKey>('data_source')
+  const analysisSectionRef = useRef<HTMLDivElement | null>(null)
+  const budgetSectionRef = useRef<HTMLDivElement | null>(null)
   const recentRunsQuery = useQuery<MMMRunSummary[]>({
     queryKey: ['mmm-runs'],
     queryFn: async () => apiGetJson<MMMRunSummary[]>('/api/models', { fallbackMessage: 'Failed to load MMM runs' }),
@@ -175,6 +177,29 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
 
   const formatRunDate = (value?: string | null) =>
     value ? new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—'
+
+  const jumpToMmmView = (view: 'analysis' | 'budget') => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search)
+      params.set('mmm_view', view)
+      window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}${window.location.hash}`)
+    }
+    window.requestAnimationFrame(() => {
+      const node = view === 'budget' ? budgetSectionRef.current : analysisSectionRef.current
+      node?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }
+
+  useEffect(() => {
+    if (!mmmRunId || typeof window === 'undefined') return
+    const view = new URLSearchParams(window.location.search).get('mmm_view')
+    if (view !== 'budget' && view !== 'analysis') return
+    const timer = window.setTimeout(() => {
+      const node = view === 'budget' ? budgetSectionRef.current : analysisSectionRef.current
+      node?.scrollIntoView({ behavior: 'auto', block: 'start' })
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [mmmRunId])
 
   const renderStepContent = () => {
     if (mmmRunId) {
@@ -342,20 +367,24 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
             <> · KPI source: <strong>Direct</strong> (independent of attribution)</>
           )}
         </div>
-        <MMMDashboard
-          runId={mmmRunId!}
-          datasetId={mmmDatasetId ?? ''}
-          runMetadata={{ attribution_model: runData?.attribution_model, attribution_config_id: runData?.attribution_config_id }}
-          onOpenDataQuality={onOpenDataQuality}
-        />
+        <div ref={analysisSectionRef}>
+          <MMMDashboard
+            runId={mmmRunId!}
+            datasetId={mmmDatasetId ?? ''}
+            runMetadata={{ attribution_model: runData?.attribution_model, attribution_config_id: runData?.attribution_config_id }}
+            onOpenDataQuality={onOpenDataQuality}
+          />
+        </div>
         {(mmmRunQuery.data as any)?.roi?.length > 0 &&
           (mmmRunQuery.data as any)?.contrib?.length > 0 && (
-            <BudgetOptimizer
-              roiData={(mmmRunQuery.data as any).roi}
-              contribData={(mmmRunQuery.data as any).contrib}
-              runId={mmmRunId}
-              datasetId={mmmDatasetId}
-            />
+            <div ref={budgetSectionRef}>
+              <BudgetOptimizer
+                roiData={(mmmRunQuery.data as any).roi}
+                contribData={(mmmRunQuery.data as any).contrib}
+                runId={mmmRunId}
+                datasetId={mmmDatasetId}
+              />
+            </div>
           )}
       </div>
     )
@@ -593,18 +622,13 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
                       ? t.color.danger
                       : t.color.warning
                 return (
-                  <button
+                  <div
                     key={run.run_id}
-                    type="button"
-                    onClick={() => run.dataset_id && onMmmSelectRun(run.run_id, run.dataset_id)}
-                    disabled={!run.dataset_id}
                     style={{
-                      textAlign: 'left',
                       padding: t.space.md,
                       borderRadius: t.radius.md,
                       border: `1px solid ${isSelected ? t.color.accent : t.color.borderLight}`,
                       background: isSelected ? t.color.accentMuted : t.color.surface,
-                      cursor: run.dataset_id ? 'pointer' : 'not-allowed',
                       display: 'grid',
                       gap: 6,
                     }}
@@ -625,10 +649,49 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
                       {run.r2 != null ? ` • R² ${run.r2.toFixed(3)}` : ''}
                       {run.dataset_id ? ` • dataset ${run.dataset_id.slice(0, 8)}…` : ''}
                     </div>
-                    <div style={{ fontSize: t.font.sizeXs, color: t.color.accent }}>
-                      {isSelected ? 'Current MMM run' : 'Open results'}
+                    <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!run.dataset_id) return
+                          onMmmSelectRun(run.run_id, run.dataset_id)
+                          jumpToMmmView('analysis')
+                        }}
+                        disabled={!run.dataset_id}
+                        style={{
+                          padding: `${t.space.xs}px ${t.space.sm}px`,
+                          borderRadius: t.radius.sm,
+                          border: `1px solid ${t.color.borderLight}`,
+                          background: t.color.bg,
+                          color: t.color.accent,
+                          fontSize: t.font.sizeXs,
+                          cursor: run.dataset_id ? 'pointer' : 'not-allowed',
+                        }}
+                      >
+                        {isSelected ? 'Current analysis' : 'Open analysis'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!run.dataset_id) return
+                          onMmmSelectRun(run.run_id, run.dataset_id)
+                          jumpToMmmView('budget')
+                        }}
+                        disabled={!run.dataset_id || run.status !== 'finished'}
+                        style={{
+                          padding: `${t.space.xs}px ${t.space.sm}px`,
+                          borderRadius: t.radius.sm,
+                          border: `1px solid ${t.color.borderLight}`,
+                          background: t.color.bg,
+                          color: run.status === 'finished' ? t.color.textSecondary : t.color.textMuted,
+                          fontSize: t.font.sizeXs,
+                          cursor: run.dataset_id && run.status === 'finished' ? 'pointer' : 'not-allowed',
+                        }}
+                      >
+                        {isSelected ? 'Current budget' : 'Open budget actions'}
+                      </button>
                     </div>
-                  </button>
+                  </div>
                 )
               })}
             </div>
