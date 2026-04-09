@@ -268,11 +268,11 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
     return (
       <div>
         <SectionHeader
-          title="MMM results"
+          title="MMM analysis"
           subtitle={
             primaryKpiLabel
-              ? `ROI and contributions for ${primaryKpiLabel}.`
-              : 'Bayesian MMM results: channel ROI, contribution share, and time series.'
+              ? `Review modeled channel impact on ${primaryKpiLabel} and move directly into budget actions.`
+              : 'Review model fit, contribution, and budget actions inside the shared workspace flow.'
           }
           trailing={
             <button

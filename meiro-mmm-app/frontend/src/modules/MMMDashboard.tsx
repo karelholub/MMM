@@ -20,6 +20,7 @@ import { apiGetJson } from '../lib/apiClient'
 import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
+import AnalysisShareActions from '../components/dashboard/AnalysisShareActions'
 import { buildSettingsHref } from '../lib/settingsLinks'
 
 interface MMMDashboardProps {
@@ -218,6 +219,16 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
   if (hasNegativeRoi) confidenceReasons.push('Some channels have negative ROI.')
   confidenceReasons.push(...diagnosticsIssues)
 
+  const topRoiChannel = useMemo(() => {
+    if (!roi?.length) return null
+    return [...roi].sort((a, b) => b.roi - a.roi)[0] ?? null
+  }, [roi])
+
+  const topContributionChannel = useMemo(() => {
+    if (!contrib?.length) return null
+    return [...contrib].sort((a, b) => b.mean_share - a.mean_share)[0] ?? null
+  }, [contrib])
+
   const getKpiDisplayName = () => {
     const mode = run?.kpi_mode || run?.config?.kpi_mode || 'conversions'
     const map: Record<string, string> = {
@@ -317,6 +328,25 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
             { label: 'Total spend', value: formatCurrency(totalSpend) },
             { label: 'Weeks', value: weeks.toLocaleString() },
             { label: 'Confidence', value: confidenceLabel, valueColor: confidenceLevel === 'ok' ? t.color.success : t.color.warning },
+          ]}
+        />
+      </div>
+
+      <div style={{ marginBottom: t.space.xl }}>
+        <AnalysisShareActions
+          fileStem="mmm-dashboard"
+          summaryTitle="MMM dashboard"
+          summaryLines={[
+            `Dataset period: ${datasetPeriodLabel}`,
+            `Total spend: ${formatCurrency(totalSpend)}`,
+            `Modeled weeks: ${weeks.toLocaleString()}`,
+            `Channels modeled: ${channelsModeled.toLocaleString()}`,
+            `Model fit (R²): ${r2 !== null ? r2.toFixed(3) : 'Unavailable'}`,
+            `Confidence: ${confidenceLabel}`,
+            topRoiChannel ? `Top ROI channel: ${channelDisplay(topRoiChannel.channel)} (${topRoiChannel.roi.toFixed(2)}x)` : '',
+            topContributionChannel
+              ? `Top contribution channel: ${channelDisplay(topContributionChannel.channel)} (${(topContributionChannel.mean_share * 100).toFixed(1)}%)`
+              : '',
           ]}
         />
       </div>
@@ -576,8 +606,7 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
               <button
                 type="button"
                 onClick={() => {
-                  if (!datasetId) return
-                  window.open(`/api/datasets/${datasetId}?preview_only=false`, '_blank', 'noopener,noreferrer')
+                  window.location.assign('/?page=datasources')
                 }}
                 style={{
                   padding: `${t.space.xs}px ${t.space.sm}px`,
@@ -586,10 +615,10 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
                   background: 'transparent',
                   border: 'none',
                   textAlign: 'left',
-                  cursor: datasetId ? 'pointer' : 'not-allowed',
+                  cursor: 'pointer',
                 }}
               >
-                View dataset
+                Open data sources
               </button>
               <button
                 type="button"
