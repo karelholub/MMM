@@ -304,20 +304,21 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
 
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto' }}>
-      <h1
-        style={{
-          margin: 0,
-          fontSize: t.font.size2xl,
-          fontWeight: t.font.weightBold,
-          color: t.color.text,
-          letterSpacing: '-0.02em',
-        }}
-      >
-        {getKpiDisplayName()} Dashboard
-      </h1>
-      <p style={{ margin: `${t.space.xs}px 0 ${t.space.md}px`, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-        MMM results tuned for decisions: model fit, channel impact, and caveats.
-      </p>
+      <div style={{ marginBottom: t.space.md }}>
+        <div
+          style={{
+            margin: 0,
+            fontSize: t.font.sizeLg,
+            fontWeight: t.font.weightSemibold,
+            color: t.color.text,
+          }}
+        >
+          Model readout
+        </div>
+        <p style={{ margin: `${t.space.xs}px 0 0`, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+          Decision-grade model fit, channel impact, and reconciliation signals for {getKpiDisplayName().toLowerCase()}.
+        </p>
+      </div>
 
       <div style={{ marginBottom: t.space.md }}>
         <ContextSummaryStrip
