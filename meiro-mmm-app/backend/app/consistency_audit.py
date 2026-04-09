@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+import pandas as pd
 from sqlalchemy import func
 
 from app.attribution_engine import run_attribution, run_attribution_campaign
@@ -25,6 +26,8 @@ from app.services_overview import (
     get_overview_summary,
     get_overview_trend_insights,
 )
+from app.services_conversion_paths_adapter import build_conversion_paths_analysis_from_daily
+from app.services_performance_diagnostics import build_scope_diagnostics
 from app.services_performance_lag import build_scope_lag_summary
 from app.services_performance_trends import (
     build_campaign_aggregate_overlay,
@@ -54,6 +57,51 @@ def _performance_kwargs(model: str) -> Dict[str, Any]:
         kwargs["first_pct"] = SETTINGS.attribution.position_first_pct
         kwargs["last_pct"] = SETTINGS.attribution.position_last_pct
     return kwargs
+
+
+def _filter_journeys_to_window(
+    journeys: List[Dict[str, Any]],
+    *,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    if not date_from and not date_to:
+        return journeys
+    start = pd.to_datetime(date_from).to_pydatetime() if date_from else None
+    end = pd.to_datetime(date_to).to_pydatetime() if date_to else None
+    filtered: List[Dict[str, Any]] = []
+    for journey in journeys or []:
+        touchpoints = journey.get("touchpoints") or []
+        conversions = journey.get("conversions") or []
+        conv_ts = None
+        if conversions and isinstance(conversions[0], dict):
+            conv_raw = conversions[0].get("ts") or conversions[0].get("timestamp")
+            if conv_raw:
+                parsed = pd.to_datetime(conv_raw, utc=True, errors="coerce")
+                if not pd.isna(parsed):
+                    conv_ts = parsed.to_pydatetime()
+        if conv_ts is None:
+            tp_times = []
+            for tp in touchpoints:
+                if not isinstance(tp, dict):
+                    continue
+                raw = tp.get("ts") or tp.get("timestamp")
+                if not raw:
+                    continue
+                parsed = pd.to_datetime(raw, utc=True, errors="coerce")
+                if pd.isna(parsed):
+                    continue
+                tp_times.append(parsed.to_pydatetime())
+            conv_ts = max(tp_times) if tp_times else None
+        if conv_ts is None:
+            continue
+        conv_day = conv_ts.date()
+        if start and conv_day < start.date():
+            continue
+        if end and conv_day > end.date():
+            continue
+        filtered.append(journey)
+    return filtered
 
 
 def _date_scoped_conversion_path_totals(
@@ -117,6 +165,20 @@ def _date_scoped_journey_path_daily_totals(
         "gross_revenue": float((row[3] if row else 0.0) or 0.0),
         "net_revenue": float((row[4] if row else 0.0) or 0.0),
     }
+
+
+def _role_totals_from_diagnostics(diags: Dict[str, Dict[str, Any]]) -> Dict[str, int]:
+    totals = {
+        "first_touch_conversions": 0,
+        "assist_conversions": 0,
+        "last_touch_conversions": 0,
+    }
+    for diag in (diags or {}).values():
+        roles = diag.get("roles") or {}
+        totals["first_touch_conversions"] += int(roles.get("first_touch_conversions") or 0)
+        totals["assist_conversions"] += int(roles.get("assist_conversions") or 0)
+        totals["last_touch_conversions"] += int(roles.get("last_touch_conversions") or 0)
+    return totals
 
 
 def build_consistency_audit(
@@ -224,6 +286,33 @@ def build_consistency_audit(
             date_to=date_to,
             conversion_key=None,
         )
+        channel_scope_diagnostics = build_scope_diagnostics(
+            db=db,
+            scope_type="channel",
+            date_from=date_from,
+            date_to=date_to,
+            conversion_key=None,
+        )
+        campaign_scope_diagnostics = build_scope_diagnostics(
+            db=db,
+            scope_type="campaign",
+            date_from=date_from,
+            date_to=date_to,
+            conversion_key=None,
+        )
+        conversion_paths_analysis = build_conversion_paths_analysis_from_daily(
+            db,
+            definition_id=active_definition_id,
+            date_from=datetime.fromisoformat(date_from).date() if date_from else None,
+            date_to=datetime.fromisoformat(date_to).date() if date_to else None,
+            direct_mode="include",
+            path_scope="converted",
+        )
+        live_journeys_for_archetypes = _filter_journeys_to_window(
+            journeys_for_model,
+            date_from=date_from,
+            date_to=date_to,
+        )
 
         overview_conversions = next(
             (tile["value"] for tile in overview_summary.get("kpi_tiles", []) if tile.get("kpi_key") == "conversions"),
@@ -275,6 +364,8 @@ def build_consistency_audit(
             "assist_conversions": sum(int(item.get("role_mix", {}).get("assist_conversions") or 0) for item in campaign_lag_summary.get("items", [])),
             "last_touch_conversions": sum(int(item.get("role_mix", {}).get("last_touch_conversions") or 0) for item in campaign_lag_summary.get("items", [])),
         }
+        channel_diagnostic_role_totals = _role_totals_from_diagnostics(channel_scope_diagnostics)
+        campaign_diagnostic_role_totals = _role_totals_from_diagnostics(campaign_scope_diagnostics)
 
         conversion_path_scoped = _date_scoped_conversion_path_totals(
             db,
@@ -404,6 +495,12 @@ def build_consistency_audit(
                 "campaign_lag_first_touch_conversions": campaign_lag_role_totals["first_touch_conversions"],
                 "campaign_lag_assist_conversions": campaign_lag_role_totals["assist_conversions"],
                 "campaign_lag_last_touch_conversions": campaign_lag_role_totals["last_touch_conversions"],
+                "channel_scope_diagnostics_first_touch_conversions": channel_diagnostic_role_totals["first_touch_conversions"],
+                "channel_scope_diagnostics_assist_conversions": channel_diagnostic_role_totals["assist_conversions"],
+                "channel_scope_diagnostics_last_touch_conversions": channel_diagnostic_role_totals["last_touch_conversions"],
+                "campaign_scope_diagnostics_first_touch_conversions": campaign_diagnostic_role_totals["first_touch_conversions"],
+                "campaign_scope_diagnostics_assist_conversions": campaign_diagnostic_role_totals["assist_conversions"],
+                "campaign_scope_diagnostics_last_touch_conversions": campaign_diagnostic_role_totals["last_touch_conversions"],
                 "conversion_paths_total_rows": int(conversion_path_total),
                 "conversion_paths_rows_with_conversion_key": int(conversion_path_converted),
                 "journey_path_daily_total_conversions": int(journey_path_daily_total),
@@ -433,6 +530,10 @@ def build_consistency_audit(
                 "journey_path_daily_active_definition_scoped_net_revenue": round(
                     journey_path_daily_scoped_active_definition["net_revenue"], 2
                 ),
+                "conversion_paths_analysis_source": conversion_paths_analysis.get("source"),
+                "conversion_paths_analysis_definition_id": conversion_paths_analysis.get("journey_definition_id"),
+                "conversion_paths_analysis_total_journeys": int(conversion_paths_analysis.get("total_journeys") or 0),
+                "path_archetypes_live_journeys_in_window": len(live_journeys_for_archetypes),
             },
             "journey_path_daily_by_definition": journey_path_daily_by_definition,
             "notes": [],
@@ -483,6 +584,10 @@ def build_consistency_audit(
             "channel_lag_first_touch_totals_match_campaign_lag": channel_lag_role_totals["first_touch_conversions"] == campaign_lag_role_totals["first_touch_conversions"],
             "channel_lag_assist_totals_match_campaign_lag": channel_lag_role_totals["assist_conversions"] == campaign_lag_role_totals["assist_conversions"],
             "channel_lag_last_touch_totals_match_campaign_lag": channel_lag_role_totals["last_touch_conversions"] == campaign_lag_role_totals["last_touch_conversions"],
+            "channel_scope_diagnostics_role_parity_applicable": None,
+            "campaign_scope_diagnostics_role_parity_applicable": None,
+            "conversion_paths_analysis_source_is_supported": conversion_paths_analysis.get("source") in {"journey_paths_daily", "journey_definition_facts"},
+            "path_analysis_cross_page_count_parity_applicable": None,
         }
         report["checks"] = checks
         if not active_definition_id and excluded_non_primary_definitions:
@@ -513,6 +618,18 @@ def build_consistency_audit(
         report["notes"].append(
             "Lag parity checks are workspace-wide diagnostic-fact checks and compare channel vs campaign lag summaries on the same raw scope-diagnostic basis."
         )
+        report["notes"].append(
+            "Scope diagnostics and lag summaries intentionally use different row-window contracts: scope diagnostics includes journeys overlapping the selected window, while lag summaries include conversions whose conversion_ts falls inside the window. Their role totals are reported for context but not enforced as hard parity checks."
+        )
+        report["notes"].append(
+            "Conversion Paths and Path Archetypes intentionally use different bases: Conversion Paths reads selected journey-definition outputs "
+            f"({conversion_paths_analysis.get('source') or 'unknown source'}) while Path Archetypes clusters live attribution journeys "
+            f"({len(live_journeys_for_archetypes)} journeys in the selected window after model-config filtering). Cross-page path count parity is therefore documented, not enforced as a hard equality check."
+        )
+        if conversion_paths_analysis.get("source") == "journey_definition_facts":
+            report["notes"].append(
+                "Conversion Paths is currently falling back to journey_definition_facts instead of journey_paths_daily for the selected period, so materialized-path parity should be treated as lower-confidence until daily outputs are present."
+            )
         report["status"] = "ok" if all(value is not False for value in checks.values()) else "warning"
         return report
 
