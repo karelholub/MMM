@@ -95,6 +95,11 @@ function parseInitialPage(pathname: string, search: string = ''): AppPage {
   return 'overview'
 }
 
+function readOptionalSearchParam(search: string, key: string): string | null {
+  const value = new URLSearchParams(search).get(key)
+  return value && value.trim() ? value.trim() : null
+}
+
 function pageToPathname(page: AppPage): string {
   if (page === 'analytics_journeys') return '/analytics/journeys'
   return '/'
@@ -120,8 +125,14 @@ export default function App() {
   const [pendingSettingsNav, setPendingSettingsNav] = useState<AppPage | null>(null)
   const [showSettingsGuard, setShowSettingsGuard] = useState(false)
   const [selectedModel, setSelectedModel] = useState('linear')
-  const [mmmRunId, setMmmRunId] = useState<string | null>(null)
-  const [mmmDatasetId, setMmmDatasetId] = useState<string | null>(null)
+  const [mmmRunId, setMmmRunId] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null
+    return readOptionalSearchParam(window.location.search, 'mmm_run_id')
+  })
+  const [mmmDatasetId, setMmmDatasetId] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null
+    return readOptionalSearchParam(window.location.search, 'mmm_dataset_id')
+  })
   const [pendingMmmMapping, setPendingMmmMapping] = useState<{ dataset_id: string; columns: { kpi: string; spend_channels: string[]; covariates?: string[] } } | null>(null)
   const [selectedConfigId, setSelectedConfigId] = useState<string | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
@@ -342,6 +353,8 @@ export default function App() {
     const onPopState = () => {
       setPage(parseInitialPage(window.location.pathname, window.location.search))
       const params = new URLSearchParams(window.location.search)
+      setMmmRunId(readOptionalSearchParam(window.location.search, 'mmm_run_id'))
+      setMmmDatasetId(readOptionalSearchParam(window.location.search, 'mmm_dataset_id'))
       const dateFrom = params.get('date_from')
       const dateTo = params.get('date_to')
       if (isIsoDateOnly(dateFrom) && isIsoDateOnly(dateTo) && dateFrom <= dateTo) {
@@ -398,6 +411,22 @@ export default function App() {
     const next = `${window.location.pathname}?${params.toString()}${window.location.hash}`
     window.history.replaceState({}, '', next)
   }, [globalDateRange.dateFrom, globalDateRange.dateTo])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    if (mmmRunId && mmmDatasetId) {
+      params.set('mmm_run_id', mmmRunId)
+      params.set('mmm_dataset_id', mmmDatasetId)
+    } else {
+      params.delete('mmm_run_id')
+      params.delete('mmm_dataset_id')
+    }
+    const next = `${window.location.pathname}?${params.toString()}${window.location.hash}`
+    if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== next) {
+      window.history.replaceState({}, '', next)
+    }
+  }, [mmmRunId, mmmDatasetId])
 
   const isMobileHeader = viewportWidth < 768
   const periodReady = !!(isIsoDateOnly(globalDateRange.dateFrom) && isIsoDateOnly(globalDateRange.dateTo))
@@ -487,10 +516,12 @@ export default function App() {
   const handleMmmStartOver = useCallback(() => {
     setMmmRunId(null)
     setMmmDatasetId(null)
+    setPendingMmmMapping(null)
   }, [])
   const onMmmSelectRun = useCallback((runId: string, datasetId: string) => {
     setMmmRunId(runId)
     setMmmDatasetId(datasetId)
+    setPage('mmm')
   }, [])
   const onJourneysImported = useCallback(() => {
     void journeysQuery.refetch()
