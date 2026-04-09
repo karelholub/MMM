@@ -397,14 +397,17 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
     if (!selectedSegment) return null
     const segmentSummary = segmentAnalysisQuery.data?.summary
     const segmentRows = segmentSummary?.journey_rows ?? null
+    const focusedPathRows = selectedSegmentAutoCompatible ? focusedMaterializedJourneys : segmentRows
     return {
       shares: [
         {
           label: 'Path journey share',
-          value: materializedJourneys && segmentRows != null ? segmentRows / materializedJourneys : null,
+          value: materializedJourneys && focusedPathRows != null ? focusedPathRows / materializedJourneys : null,
           note:
-            segmentRows != null && materializedJourneys != null
-              ? `${formatNumber(segmentRows)} matched rows vs ${formatNumber(materializedJourneys)} materialized path journeys`
+            focusedPathRows != null && materializedJourneys != null
+              ? selectedSegmentAutoCompatible
+                ? `${formatNumber(focusedPathRows)} focused path journeys vs ${formatNumber(materializedJourneys)} workspace path journeys`
+                : `${formatNumber(focusedPathRows)} matched rows vs ${formatNumber(materializedJourneys)} materialized path journeys`
               : 'Focused segment slice unavailable',
         },
         {
