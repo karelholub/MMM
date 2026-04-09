@@ -1,4 +1,6 @@
 import { tokens } from '../theme/tokens'
+import ContextSummaryStrip from './dashboard/ContextSummaryStrip'
+import { buildSettingsHref } from '../lib/settingsLinks'
 
 export type KpiMode = 'sales' | 'attribution'
 
@@ -24,126 +26,85 @@ export function MMMContextBar({
   activeConfigLabel,
 }: MMMContextBarProps) {
   const t = tokens
-
-  const pillStyle: React.CSSProperties = {
-    padding: `${t.space.xs}px ${t.space.sm + 2}px`,
-    borderRadius: 999,
-    fontSize: t.font.sizeSm,
-    backgroundColor: t.color.surface,
-    border: `1px solid ${t.color.borderLight}`,
-    color: t.color.textSecondary,
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: t.space.xs,
-  }
+  const targetLabel = kpiMode === 'sales' ? 'Total sales' : 'Marketing-driven conversions'
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: t.space.md,
-        alignItems: 'center',
-        padding: `${t.space.sm}px ${t.space.md}px`,
-        background: t.color.surface,
-        border: `1px solid ${t.color.borderLight}`,
-        borderRadius: t.radius.sm,
-        marginBottom: t.space.xl,
-        fontSize: t.font.sizeSm,
-        color: t.color.textSecondary,
-      }}
-    >
-      {/* Period */}
-      <div style={pillStyle} title="Measurement period for MMM runs">
-        <span style={{ fontWeight: t.font.weightMedium, color: t.color.text }}>Period</span>
-        <span style={{ color: t.color.textSecondary }}>{periodLabel}</span>
-        {periodReadOnly && (
-          <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>(read-only)</span>
-        )}
-      </div>
-
-      {/* KPI / Target */}
-      <div style={pillStyle} title="Target KPI for MMM (sales vs marketing-driven conversions)">
-        <span style={{ fontWeight: t.font.weightMedium, color: t.color.text }}>Target</span>
-        {onKpiModeChange ? (
-          <select
-            value={kpiMode}
-            onChange={(e) => onKpiModeChange(e.target.value as KpiMode)}
-            style={{
-              marginLeft: t.space.xs,
-              padding: '2px 8px',
-              fontSize: t.font.sizeSm,
-              borderRadius: t.radius.sm,
-              border: `1px solid ${t.color.border}`,
-              background: t.color.surface,
-              color: t.color.text,
-              cursor: 'pointer',
-            }}
-          >
-            <option value="sales">Total sales</option>
-            <option value="attribution">Marketing-driven conversions</option>
-          </select>
-        ) : (
-          <span style={{ color: t.color.textSecondary }}>
-            {kpiMode === 'sales' ? 'Total sales' : 'Marketing-driven conversions'}
-          </span>
-        )}
-      </div>
-
-      {/* Currency */}
-      <div style={pillStyle} title="Currency used for spend and ROI">
-        <span style={{ fontWeight: t.font.weightMedium, color: t.color.text }}>Currency</span>
-        <span style={{ color: t.color.textSecondary }}>{currencyCode}</span>
-        {currencyReadOnly && (
-          <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>(read-only)</span>
-        )}
-      </div>
-
-      {/* Data quality / sources link */}
-      <button
-        type="button"
-        onClick={onOpenDataQuality}
-        style={{
-          ...pillStyle,
-          borderStyle: 'dashed',
-          borderColor: t.color.border,
-          backgroundColor: 'transparent',
-          cursor: onOpenDataQuality ? 'pointer' : 'default',
-          color: t.color.accent,
-        }}
-      >
-        <span>Data quality &amp; sources</span>
-        <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>MMM inputs</span>
-      </button>
-
-      {/* Active config / version */}
-      {activeConfigLabel && (
-        <div
+    <div style={{ display: 'grid', gap: t.space.md }}>
+      <ContextSummaryStrip
+        minItemWidth={180}
+        items={[
+          {
+            label: 'Period',
+            value: `${periodLabel}${periodReadOnly ? ' (read-only)' : ''}`,
+          },
+          {
+            label: 'Target',
+            value: onKpiModeChange ? (
+              <select
+                value={kpiMode}
+                onChange={(e) => onKpiModeChange(e.target.value as KpiMode)}
+                style={{
+                  padding: '2px 8px',
+                  fontSize: t.font.sizeSm,
+                  borderRadius: t.radius.sm,
+                  border: `1px solid ${t.color.border}`,
+                  background: t.color.surface,
+                  color: t.color.text,
+                  cursor: 'pointer',
+                }}
+              >
+                <option value="sales">Total sales</option>
+                <option value="attribution">Marketing-driven conversions</option>
+              </select>
+            ) : (
+              targetLabel
+            ),
+          },
+          {
+            label: 'Currency',
+            value: `${currencyCode}${currencyReadOnly ? ' (read-only)' : ''}`,
+          },
+          ...(activeConfigLabel
+            ? [
+                {
+                  label: 'Active config',
+                  value: activeConfigLabel,
+                },
+              ]
+            : []),
+        ]}
+      />
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: t.space.sm, alignItems: 'center' }}>
+        <button
+          type="button"
+          onClick={onOpenDataQuality}
           style={{
-            marginLeft: 'auto',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: t.space.xs,
-            fontSize: t.font.sizeXs,
-            color: t.color.textMuted,
+            padding: `${t.space.sm}px ${t.space.md}px`,
+            borderRadius: t.radius.sm,
+            border: `1px solid ${t.color.border}`,
+            background: t.color.surface,
+            color: t.color.text,
+            fontSize: t.font.sizeSm,
+            cursor: onOpenDataQuality ? 'pointer' : 'default',
           }}
         >
-          <span style={{ textTransform: 'uppercase', letterSpacing: '0.06em' }}>Config</span>
-          <span
-            style={{
-              padding: '2px 8px',
-              borderRadius: 999,
-              backgroundColor: t.color.bg,
-              border: `1px solid ${t.color.borderLight}`,
-              color: t.color.textSecondary,
-              fontWeight: t.font.weightMedium,
-            }}
-          >
-            {activeConfigLabel}
-          </span>
-        </div>
-      )}
+          Open data quality
+        </button>
+        <a
+          href={buildSettingsHref('mmm')}
+          style={{
+            padding: `${t.space.sm}px ${t.space.md}px`,
+            borderRadius: t.radius.sm,
+            border: `1px solid ${t.color.border}`,
+            background: t.color.surface,
+            color: t.color.text,
+            fontSize: t.font.sizeSm,
+            textDecoration: 'none',
+          }}
+        >
+          Open MMM settings
+        </a>
+      </div>
     </div>
   )
 }
-
