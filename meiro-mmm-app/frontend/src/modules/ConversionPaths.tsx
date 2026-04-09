@@ -1081,133 +1081,6 @@ export default function ConversionPaths() {
     <DashboardPage
       title="Conversion Paths"
       description="Top paths, next steps, and path quality for the selected journey definition."
-      filters={
-        <div style={{ display: 'grid', gap: t.space.sm }}>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: t.space.sm, alignItems: 'center' }}>
-            <select
-              value={selectedJourneyId}
-              onChange={(e) => setSelectedJourneyId(e.target.value)}
-              style={{ minWidth: 220, padding: '6px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.borderLight}`, background: t.color.surface, color: t.color.text, fontSize: t.font.sizeSm }}
-            >
-              {!journeyOptions.length && <option value="">No journey definitions</option>}
-              {journeyOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-            <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-              Path analysis uses observed workspace values for the selected journey definition and date window. Saved local segments apply as analytical slices here.
-            </div>
-          </div>
-          <GlobalFilterBar
-            value={filters}
-            onChange={handleFiltersChange}
-            channels={journeyFilterOptions.channels}
-            campaigns={journeyFilterOptions.campaigns}
-            devices={journeyFilterOptions.devices}
-            geos={journeyFilterOptions.geos}
-            segments={journeyFilterOptions.segments}
-            showSegment
-          />
-          <div style={{ display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: t.space.sm }}>
-            {selectedLocalSegment ? (
-              <label style={{ display: 'grid', gap: 6, minWidth: 240, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                <span>Compare with</span>
-                <select
-                  value={compareSegmentId}
-                  onChange={(event) => setCompareSegmentId(event.target.value)}
-                  style={{
-                    padding: '8px 10px',
-                    borderRadius: t.radius.sm,
-                    border: `1px solid ${t.color.border}`,
-                    background: t.color.surface,
-                    color: t.color.text,
-                    fontSize: t.font.sizeSm,
-                  }}
-                >
-                  <option value="">No paired comparison</option>
-                  {localAnalyticalSegments
-                    .filter((segment) => segment.id !== selectedLocalSegment.id)
-                    .map((segment) => (
-                      <option key={segment.id} value={segment.id}>
-                        {segmentOptionLabel(segment)}
-                      </option>
-                    ))}
-                </select>
-              </label>
-            ) : null}
-            <a
-              href={buildSettingsHref('segments')}
-              style={{
-                border: `1px solid ${t.color.border}`,
-                background: 'transparent',
-                borderRadius: t.radius.sm,
-                padding: '8px 12px',
-                textDecoration: 'none',
-                color: t.color.text,
-                fontSize: t.font.sizeSm,
-              }}
-            >
-              Manage segments
-            </a>
-            <button
-              type="button"
-              disabled={!canSaveCurrentFilterSegment}
-              onClick={() => {
-                setSaveSegmentError(null)
-                setShowSaveSegmentModal(true)
-              }}
-              style={{
-                border: `1px solid ${t.color.border}`,
-                background: 'transparent',
-                borderRadius: t.radius.sm,
-                padding: '8px 12px',
-                cursor: canSaveCurrentFilterSegment ? 'pointer' : 'default',
-                opacity: canSaveCurrentFilterSegment ? 1 : 0.6,
-              }}
-            >
-              Save local segment
-            </button>
-          </div>
-        </div>
-      }
-      actions={
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: t.space.sm, alignItems: 'center' }}>
-          <button
-            type="button"
-            onClick={() => setDirectMode((m) => (m === 'include' ? 'exclude' : 'include'))}
-            style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.full, padding: '6px 10px', fontSize: t.font.sizeXs, backgroundColor: t.color.bg, cursor: 'pointer' }}
-            title="View filter only; underlying attribution models are unchanged."
-          >
-            {directMode === 'include' ? 'Include Direct' : 'Exclude Direct'}
-          </button>
-          {journeys && journeys.non_converted > 0 ? (
-            <button
-              type="button"
-              onClick={() => setPathScope((s) => (s === 'converted' ? 'all' : 'converted'))}
-              style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.full, padding: '6px 10px', fontSize: t.font.sizeXs, backgroundColor: t.color.bg, cursor: 'pointer' }}
-              title="Include non-converted journeys in path statistics."
-            >
-              {pathScope === 'converted' ? 'Converted only' : 'Converted + non-converted'}
-            </button>
-          ) : null}
-          <button
-            type="button"
-            onClick={() => setShowContext((v) => !v)}
-            style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.full, padding: '6px 10px', fontSize: t.font.sizeXs, backgroundColor: showContext ? t.color.accentMuted : t.color.surface, color: t.color.accent, cursor: 'pointer' }}
-          >
-            {showContext ? 'Hide context' : 'Show context'}
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowDiagnostics((v) => !v)}
-            style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.full, padding: '6px 10px', fontSize: t.font.sizeXs, backgroundColor: showDiagnostics ? t.color.warningMuted : t.color.surface, color: t.color.warning, cursor: 'pointer' }}
-          >
-            {showDiagnostics ? 'Hide diagnostics' : 'Show diagnostics'}
-          </button>
-        </div>
-      }
       isLoading={dashboardLoading}
       isError={Boolean(dashboardError)}
       errorMessage={dashboardError}
@@ -1229,6 +1102,174 @@ export default function ConversionPaths() {
       }
     >
       <div style={{ maxWidth: 1400, margin: '0 auto', display: 'grid', gap: t.space.xl }}>
+        <SectionCard
+          title="Analysis controls"
+          subtitle="Choose the journey definition, workspace slice, and analytical audience before reviewing paths."
+        >
+          <div style={{ display: 'grid', gap: t.space.lg }}>
+            <div
+              style={{
+                display: 'grid',
+                gap: t.space.md,
+                gridTemplateColumns: 'minmax(260px, 360px) minmax(0, 1fr)',
+                alignItems: 'start',
+              }}
+            >
+              <label style={{ display: 'grid', gap: 6, minWidth: 0 }}>
+                <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  Journey definition
+                </span>
+                <select
+                  value={selectedJourneyId}
+                  onChange={(e) => setSelectedJourneyId(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '8px 10px',
+                    borderRadius: t.radius.sm,
+                    border: `1px solid ${t.color.borderLight}`,
+                    background: t.color.surface,
+                    color: t.color.text,
+                    fontSize: t.font.sizeSm,
+                  }}
+                >
+                  {!journeyOptions.length && <option value="">No journey definitions</option>}
+                  {journeyOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div style={{ display: 'grid', gap: 6, alignContent: 'start' }}>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  Path analysis uses observed workspace values for the selected journey definition and date window. Saved local segments apply as analytical slices here.
+                </div>
+                {dimensionsQuery.data?.summary?.journey_rows != null ? (
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                    {dimensionsQuery.data.summary.journey_rows.toLocaleString()} observed rows available for the current definition and date window.
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <GlobalFilterBar
+              value={filters}
+              onChange={handleFiltersChange}
+              channels={journeyFilterOptions.channels}
+              campaigns={journeyFilterOptions.campaigns}
+              devices={journeyFilterOptions.devices}
+              geos={journeyFilterOptions.geos}
+              segments={journeyFilterOptions.segments}
+              showSegment
+            />
+
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: t.space.sm,
+                alignItems: 'end',
+                justifyContent: 'space-between',
+              }}
+            >
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: t.space.sm, alignItems: 'center' }}>
+                <button
+                  type="button"
+                  onClick={() => setDirectMode((m) => (m === 'include' ? 'exclude' : 'include'))}
+                  style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.full, padding: '6px 10px', fontSize: t.font.sizeXs, backgroundColor: t.color.bg, cursor: 'pointer' }}
+                  title="View filter only; underlying attribution models are unchanged."
+                >
+                  {directMode === 'include' ? 'Include Direct' : 'Exclude Direct'}
+                </button>
+                {journeys && journeys.non_converted > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => setPathScope((s) => (s === 'converted' ? 'all' : 'converted'))}
+                    style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.full, padding: '6px 10px', fontSize: t.font.sizeXs, backgroundColor: t.color.bg, cursor: 'pointer' }}
+                    title="Include non-converted journeys in path statistics."
+                  >
+                    {pathScope === 'converted' ? 'Converted only' : 'Converted + non-converted'}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => setShowContext((v) => !v)}
+                  style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.full, padding: '6px 10px', fontSize: t.font.sizeXs, backgroundColor: showContext ? t.color.accentMuted : t.color.surface, color: t.color.accent, cursor: 'pointer' }}
+                >
+                  {showContext ? 'Hide context' : 'Show context'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowDiagnostics((v) => !v)}
+                  style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.full, padding: '6px 10px', fontSize: t.font.sizeXs, backgroundColor: showDiagnostics ? t.color.warningMuted : t.color.surface, color: t.color.warning, cursor: 'pointer' }}
+                >
+                  {showDiagnostics ? 'Hide diagnostics' : 'Show diagnostics'}
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: t.space.sm, alignItems: 'end', justifyContent: 'flex-end' }}>
+                {selectedLocalSegment ? (
+                  <label style={{ display: 'grid', gap: 6, minWidth: 240, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    <span>Compare with</span>
+                    <select
+                      value={compareSegmentId}
+                      onChange={(event) => setCompareSegmentId(event.target.value)}
+                      style={{
+                        padding: '8px 10px',
+                        borderRadius: t.radius.sm,
+                        border: `1px solid ${t.color.border}`,
+                        background: t.color.surface,
+                        color: t.color.text,
+                        fontSize: t.font.sizeSm,
+                      }}
+                    >
+                      <option value="">No paired comparison</option>
+                      {localAnalyticalSegments
+                        .filter((segment) => segment.id !== selectedLocalSegment.id)
+                        .map((segment) => (
+                          <option key={segment.id} value={segment.id}>
+                            {segmentOptionLabel(segment)}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                ) : null}
+                <a
+                  href={buildSettingsHref('segments')}
+                  style={{
+                    border: `1px solid ${t.color.border}`,
+                    background: 'transparent',
+                    borderRadius: t.radius.sm,
+                    padding: '8px 12px',
+                    textDecoration: 'none',
+                    color: t.color.text,
+                    fontSize: t.font.sizeSm,
+                  }}
+                >
+                  Manage segments
+                </a>
+                <button
+                  type="button"
+                  disabled={!canSaveCurrentFilterSegment}
+                  onClick={() => {
+                    setSaveSegmentError(null)
+                    setShowSaveSegmentModal(true)
+                  }}
+                  style={{
+                    border: `1px solid ${t.color.border}`,
+                    background: 'transparent',
+                    borderRadius: t.radius.sm,
+                    padding: '8px 12px',
+                    cursor: canSaveCurrentFilterSegment ? 'pointer' : 'default',
+                    opacity: canSaveCurrentFilterSegment ? 1 : 0.6,
+                  }}
+                >
+                  Save local segment
+                </button>
+              </div>
+            </div>
+          </div>
+        </SectionCard>
         <SectionCard
           title="Analysis context"
           subtitle="Which definition, source, and time coverage this page is actually using."
