@@ -549,112 +549,136 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
     <DashboardPage
       title="Attribution Roles"
       description="Who starts demand, who assists it, and who closes it."
-      actions={
-        <>
-          <AnalysisShareActions
-            fileStem="attribution-roles"
-            summaryTitle="Attribution roles brief"
-            summaryLines={[
-              `Period: ${dateFrom} – ${dateTo}`,
-              `Scope: ${scope === 'channels' ? 'Channels' : 'Campaigns'}`,
-              `Metric: ${metric === 'conversions' ? 'Conversions' : 'Revenue'}`,
-              `Ranked by: ${ROLE_LABELS[focusRole]}`,
-              `Focus segment: ${selectedSegment?.name || 'Workspace baseline'}`,
-              `Top ${ROLE_LABELS[focusRole].toLowerCase()}: ${topFocusedEntity ? `${topFocusedEntity.label} (${metric === 'conversions' ? formatNumber(readRoleValue(topFocusedEntity, focusRole, metric)) : formatCurrency(readRoleValue(topFocusedEntity, focusRole, metric))})` : 'No ranked entity in the current slice'}`,
-            ]}
-          />
-          <a href={comparisonHref} style={actionButtonStyle}>
-            Open model comparison
-          </a>
-          <a href={trustHref} style={actionButtonStyle}>
-            Open attribution trust
-          </a>
-          <a href={journeysHref} style={actionButtonStyle}>
-            Open journeys
-          </a>
-        </>
-      }
       isLoading={isLoading}
       isError={isError}
       errorMessage={errorMessage}
       isEmpty={!isLoading && !isError && entities.length === 0}
-      filters={
-        <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', alignItems: 'center' }}>
-          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
-            Scope
-            <select
-              value={scope}
-              onChange={(e) => setScope(e.target.value as ScopeKey)}
-              style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+    >
+      <div style={{ display: 'grid', gap: t.space.xl }}>
+        <SectionCard
+          title="Analysis controls"
+          subtitle="Choose the role view, audience slice, and handoff actions before reviewing introducers, assisters, and closers."
+        >
+          <div style={{ display: 'grid', gap: t.space.lg }}>
+            <div
+              style={{
+                display: 'grid',
+                gap: t.space.md,
+                gridTemplateColumns: 'repeat(auto-fit, minmax(min(180px, 100%), 1fr))',
+                alignItems: 'end',
+              }}
             >
-              <option value="channels">Channels</option>
-              <option value="campaigns">Campaigns</option>
-            </select>
-          </label>
-          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
-            Metric
-            <select
-              value={metric}
-              onChange={(e) => setMetric(e.target.value as MetricKey)}
-              style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
-            >
-              <option value="conversions">Conversions</option>
-              <option value="revenue">Revenue</option>
-            </select>
-          </label>
-          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
-            Ranked by
-            <select
-              value={focusRole}
-              onChange={(e) => setFocusRole(e.target.value as RoleKey)}
-              style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
-            >
-              <option value="first">Introducer</option>
-              <option value="assist">Assister</option>
-              <option value="last">Closer</option>
-            </select>
-          </label>
-          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
-            Focus segment
-            <select
-              value={selectedSegmentId}
-              onChange={(e) => setSelectedSegmentId(e.target.value)}
-              style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, minWidth: 240 }}
-            >
-              <option value="">Workspace baseline</option>
-              {localSegments.map((segment) => (
-                <option key={segment.id} value={segment.id}>
-                  {segmentOptionLabel(segment)}
-                </option>
-              ))}
-            </select>
-          </label>
-          {selectedSegment ? (
-            <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
-              Compare with
-              <select
-                value={compareSegmentId}
-                onChange={(e) => setCompareSegmentId(e.target.value)}
-                style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, minWidth: 240 }}
-              >
-                <option value="">No paired comparison</option>
-                {localSegments
-                  .filter((segment) => segment.id !== selectedSegment.id)
-                  .map((segment) => (
+              <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                Scope
+                <select
+                  value={scope}
+                  onChange={(e) => setScope(e.target.value as ScopeKey)}
+                  style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                >
+                  <option value="channels">Channels</option>
+                  <option value="campaigns">Campaigns</option>
+                </select>
+              </label>
+              <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                Metric
+                <select
+                  value={metric}
+                  onChange={(e) => setMetric(e.target.value as MetricKey)}
+                  style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                >
+                  <option value="conversions">Conversions</option>
+                  <option value="revenue">Revenue</option>
+                </select>
+              </label>
+              <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                Ranked by
+                <select
+                  value={focusRole}
+                  onChange={(e) => setFocusRole(e.target.value as RoleKey)}
+                  style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                >
+                  <option value="first">Introducer</option>
+                  <option value="assist">Assister</option>
+                  <option value="last">Closer</option>
+                </select>
+              </label>
+              <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                Focus segment
+                <select
+                  value={selectedSegmentId}
+                  onChange={(e) => setSelectedSegmentId(e.target.value)}
+                  style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, minWidth: 0 }}
+                >
+                  <option value="">Workspace baseline</option>
+                  {localSegments.map((segment) => (
                     <option key={segment.id} value={segment.id}>
                       {segmentOptionLabel(segment)}
                     </option>
                   ))}
-              </select>
-            </label>
-          ) : null}
-          <a href={buildSettingsHref('segments')} style={{ color: t.color.accent, textDecoration: 'none', fontSize: t.font.sizeSm }}>
-            Manage segments
-          </a>
-        </div>
-      }
-    >
-      <div style={{ display: 'grid', gap: t.space.xl }}>
+                </select>
+              </label>
+              {selectedSegment ? (
+                <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
+                  Compare with
+                  <select
+                    value={compareSegmentId}
+                    onChange={(e) => setCompareSegmentId(e.target.value)}
+                    style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, minWidth: 0 }}
+                  >
+                    <option value="">No paired comparison</option>
+                    {localSegments
+                      .filter((segment) => segment.id !== selectedSegment.id)
+                      .map((segment) => (
+                        <option key={segment.id} value={segment.id}>
+                          {segmentOptionLabel(segment)}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              ) : null}
+            </div>
+
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: t.space.sm,
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: t.space.sm, alignItems: 'center' }}>
+                <a href={buildSettingsHref('segments')} style={{ color: t.color.accent, textDecoration: 'none', fontSize: t.font.sizeSm }}>
+                  Manage segments
+                </a>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: t.space.sm, alignItems: 'center', justifyContent: 'flex-end' }}>
+                <AnalysisShareActions
+                  fileStem="attribution-roles"
+                  summaryTitle="Attribution roles brief"
+                  summaryLines={[
+                    `Period: ${dateFrom} – ${dateTo}`,
+                    `Scope: ${scope === 'channels' ? 'Channels' : 'Campaigns'}`,
+                    `Metric: ${metric === 'conversions' ? 'Conversions' : 'Revenue'}`,
+                    `Ranked by: ${ROLE_LABELS[focusRole]}`,
+                    `Focus segment: ${selectedSegment?.name || 'Workspace baseline'}`,
+                    `Top ${ROLE_LABELS[focusRole].toLowerCase()}: ${topFocusedEntity ? `${topFocusedEntity.label} (${metric === 'conversions' ? formatNumber(readRoleValue(topFocusedEntity, focusRole, metric)) : formatCurrency(readRoleValue(topFocusedEntity, focusRole, metric))})` : 'No ranked entity in the current slice'}`,
+                  ]}
+                />
+                <a href={comparisonHref} style={actionButtonStyle}>
+                  Open model comparison
+                </a>
+                <a href={trustHref} style={actionButtonStyle}>
+                  Open attribution trust
+                </a>
+                <a href={journeysHref} style={actionButtonStyle}>
+                  Open journeys
+                </a>
+              </div>
+            </div>
+          </div>
+        </SectionCard>
+
         <ContextSummaryStrip items={summaryItems} minItemWidth={180} />
 
         <SegmentOverlapNotice selectedSegment={selectedSegment} />
