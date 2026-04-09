@@ -201,7 +201,11 @@ def build_consistency_audit(
         )
         journey_path_daily_total = db.query(func.sum(JourneyPathDaily.count_conversions)).scalar() or 0
         journey_path_daily_by_definition = []
-        for definition_id, name in db.query(JourneyDefinition.id, JourneyDefinition.name).all():
+        for definition_id, name, definition_conversion_key in db.query(
+            JourneyDefinition.id,
+            JourneyDefinition.name,
+            JourneyDefinition.conversion_kpi_id,
+        ).all():
             total = (
                 db.query(func.sum(JourneyPathDaily.count_conversions))
                 .filter(JourneyPathDaily.journey_definition_id == definition_id)
@@ -231,8 +235,16 @@ def build_consistency_audit(
                         ),
                         2,
                     ),
+                    "conversion_kpi_id": definition_conversion_key,
                 }
             )
+        excluded_non_primary_definitions = [
+            item
+            for item in journey_path_daily_by_definition
+            if item["count_conversions"] > 0
+            and item["journey_definition_id"] != active_definition_id
+            and (conversion_key is None or item.get("conversion_kpi_id") != conversion_key)
+        ]
 
         converted_journeys = _converted_journey_count(journeys)
         converted_journeys_for_model = _converted_journey_count(journeys_for_model)
@@ -293,6 +305,7 @@ def build_consistency_audit(
                 ),
             },
             "journey_path_daily_by_definition": journey_path_daily_by_definition,
+            "notes": [],
         }
         scoped_conversion_baseline = int(conversion_path_scoped["count_conversions"])
         checks = {
@@ -327,6 +340,31 @@ def build_consistency_audit(
             "overview_trends_revenue_matches_scoped_conversion_paths": round(trends_revenue, 2) == round(conversion_path_scoped["gross_revenue"], 2),
         }
         report["checks"] = checks
+        if not active_definition_id and excluded_non_primary_definitions:
+            report["notes"].append(
+                "No single active overview journey definition matched the scoped conversion key; definition-level path checks were skipped."
+            )
+        if active_definition_id and excluded_non_primary_definitions:
+            formatted = ", ".join(
+                f"{item['journey_definition_name']} ({item['count_conversions']} conversions)"
+                for item in excluded_non_primary_definitions
+            )
+            report["notes"].append(
+                "Non-primary journey definitions with conversions remain in path-daily storage and are excluded from the scoped overview baseline: "
+                + formatted
+                + "."
+            )
+        elif not active_definition_id and journey_path_daily_by_definition:
+            formatted = ", ".join(
+                f"{item['journey_definition_name']} ({item['count_conversions']} conversions)"
+                for item in journey_path_daily_by_definition
+                if item["count_conversions"] > 0
+            )
+            report["notes"].append(
+                "Journey path-daily storage contains multiple active definition scopes, so scoped overview reconciliation falls back to conversion-path rows instead of a single journey-definition baseline: "
+                + formatted
+                + "."
+            )
         report["status"] = "ok" if all(value is not False for value in checks.values()) else "warning"
         return report
 
