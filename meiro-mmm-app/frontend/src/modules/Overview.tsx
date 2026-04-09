@@ -683,20 +683,14 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
   )
   const segmentComparison = useMemo(() => {
     if (!selectedSegment || !baselineSummary) return null
+    const readBaseline = (key: string) => Number(baselineTileMap[key]?.value ?? 0)
     if (!selectedSegmentAutoCompatible) {
       const summary = segmentAnalysisQuery.data?.summary
       if (!summary) return null
-      const readBaseline = (key: string) => Number(baselineTileMap[key]?.value ?? 0)
-      const workspaceVisits = readBaseline('visits')
       const workspaceConversions = readBaseline('conversions')
       const workspaceRevenue = readBaseline('revenue')
-      const segmentVisits = summary.journey_rows ?? 0
       const segmentConversions = Number(summary.conversions ?? 0)
       const segmentRevenue = Number(summary.revenue ?? 0)
-      const segmentCvr = segmentVisits > 0 ? segmentConversions / segmentVisits : null
-      const workspaceCvr = workspaceVisits > 0 ? workspaceConversions / workspaceVisits : null
-      const segmentRevenuePerJourney = segmentVisits > 0 ? segmentRevenue / segmentVisits : null
-      const workspaceRevenuePerJourney = workspaceVisits > 0 ? workspaceRevenue / workspaceVisits : null
       return {
         shares: [
           { label: 'Journey share', value: summary.share_of_rows ?? null },
@@ -704,24 +698,12 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
           { label: 'Revenue share', value: workspaceRevenue > 0 ? segmentRevenue / workspaceRevenue : null },
         ],
         rates: [
-          { label: 'CVR', segment: segmentCvr, baseline: workspaceCvr, delta: segmentCvr != null && workspaceCvr != null ? segmentCvr - workspaceCvr : null, percent: true },
           { label: 'Median lag', segment: summary.median_lag_days ?? null, baseline: baselineMedianLag, delta: summary.median_lag_days != null && baselineMedianLag != null ? summary.median_lag_days - baselineMedianLag : null, percent: false, suffix: 'd' },
           { label: 'Average path length', segment: summary.avg_path_length ?? null, baseline: null, delta: null, percent: false, suffix: 'x' },
-          {
-            label: 'Revenue / journey row',
-            segment: segmentRevenuePerJourney,
-            baseline: workspaceRevenuePerJourney,
-            delta:
-              segmentRevenuePerJourney != null && workspaceRevenuePerJourney != null
-                ? segmentRevenuePerJourney - workspaceRevenuePerJourney
-                : null,
-            percent: false,
-          },
         ],
       }
     }
     const readValue = (key: string) => Number(selectedTileMap[key]?.value ?? 0)
-    const readBaseline = (key: string) => Number(baselineTileMap[key]?.value ?? 0)
     const segmentSpend = readValue('spend')
     const segmentVisits = readValue('visits')
     const segmentConversions = readValue('conversions')
@@ -798,8 +780,10 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
             ? 'Visits'
             : 'Spend'
       : null
+    const journeyShare = segmentComparison?.shares.find((item) => item.label === 'Journey share')?.value ?? null
     const conversionShare = segmentComparison?.shares.find((item) => item.label === 'Conversion share')?.value ?? null
     const cvrRate = segmentComparison?.rates.find((item) => item.label === 'CVR')?.segment ?? null
+    const medianLagRate = segmentComparison?.rates.find((item) => item.label === 'Median lag')?.segment ?? null
     const headline =
       biggestTileDelta?.delta_pct != null && tileLabel
         ? `${tileLabel} ${biggestTileDelta.delta_pct >= 0 ? 'rose' : 'fell'} ${Math.abs(biggestTileDelta.delta_pct).toFixed(1)}% ${baselineLabel}.`
@@ -817,11 +801,11 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
         : funnelMedianLag != null
           ? `Median time to convert is ${funnelMedianLag.toFixed(1)} days in the current visible slice.`
           : null,
-      selectedSegment && segmentComparison
+      selectedSegment && segmentComparison && selectedSegmentAutoCompatible
         ? `${selectedSegment.name} contributes ${formatPercent(conversionShare)} of visible conversions and runs at ${formatPercent(cvrRate)} CVR.`
         : null,
-      selectedSegment && !selectedSegmentAutoCompatible && segmentAnalysisQuery.data?.summary
-        ? `This advanced audience matches ${(segmentAnalysisQuery.data.summary.journey_rows ?? 0).toLocaleString()} journey rows with ${segmentAnalysisQuery.data.summary.median_lag_days != null ? `${segmentAnalysisQuery.data.summary.median_lag_days}d` : 'unknown'} median lag.`
+      selectedSegment && segmentComparison && !selectedSegmentAutoCompatible && segmentAnalysisQuery.data?.summary
+        ? `${selectedSegment.name} matches ${formatPercent(journeyShare)} of visible journey rows and ${formatPercent(conversionShare)} of visible conversions, with ${medianLagRate != null ? `${medianLagRate.toFixed(1)}d` : 'unknown'} median lag.`
         : null,
       selectedSegment && compareSegment && segmentCompareQuery.data
         ? `${selectedSegment.name} vs ${compareSegment.name}: ${segmentCompareQuery.data.overlap.relationship.replace(/_/g, ' ')} with ${(segmentCompareQuery.data.overlap.jaccard * 100).toFixed(0)}% similarity. Revenue delta is ${segmentCompareQuery.data.deltas.revenue == null ? '—' : `${segmentCompareQuery.data.deltas.revenue >= 0 ? '+' : ''}${formatCurrency(Math.abs(segmentCompareQuery.data.deltas.revenue))}`}.`
