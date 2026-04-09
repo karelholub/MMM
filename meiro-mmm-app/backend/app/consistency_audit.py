@@ -25,6 +25,7 @@ from app.services_overview import (
     get_overview_summary,
     get_overview_trend_insights,
 )
+from app.services_performance_lag import build_scope_lag_summary
 from app.services_performance_trends import (
     build_campaign_aggregate_overlay,
     build_campaign_summary_response,
@@ -209,6 +210,20 @@ def build_consistency_audit(
                 compare=False,
             ),
         )
+        channel_lag_summary = build_scope_lag_summary(
+            db,
+            scope_type="channel",
+            date_from=date_from,
+            date_to=date_to,
+            conversion_key=None,
+        )
+        campaign_lag_summary = build_scope_lag_summary(
+            db,
+            scope_type="campaign",
+            date_from=date_from,
+            date_to=date_to,
+            conversion_key=None,
+        )
 
         overview_conversions = next(
             (tile["value"] for tile in overview_summary.get("kpi_tiles", []) if tile.get("kpi_key") == "conversions"),
@@ -250,6 +265,16 @@ def build_consistency_audit(
         )
         channel_totals = ((channel_summary.get("totals") or {}).get("current") or {})
         campaign_totals = ((campaign_summary.get("totals") or {}).get("current") or {})
+        channel_lag_role_totals = {
+            "first_touch_conversions": sum(int(item.get("role_mix", {}).get("first_touch_conversions") or 0) for item in channel_lag_summary.get("items", [])),
+            "assist_conversions": sum(int(item.get("role_mix", {}).get("assist_conversions") or 0) for item in channel_lag_summary.get("items", [])),
+            "last_touch_conversions": sum(int(item.get("role_mix", {}).get("last_touch_conversions") or 0) for item in channel_lag_summary.get("items", [])),
+        }
+        campaign_lag_role_totals = {
+            "first_touch_conversions": sum(int(item.get("role_mix", {}).get("first_touch_conversions") or 0) for item in campaign_lag_summary.get("items", [])),
+            "assist_conversions": sum(int(item.get("role_mix", {}).get("assist_conversions") or 0) for item in campaign_lag_summary.get("items", [])),
+            "last_touch_conversions": sum(int(item.get("role_mix", {}).get("last_touch_conversions") or 0) for item in campaign_lag_summary.get("items", [])),
+        }
 
         conversion_path_scoped = _date_scoped_conversion_path_totals(
             db,
@@ -365,6 +390,20 @@ def build_consistency_audit(
                 "campaign_summary_visits": int(float(campaign_totals.get("visits", 0.0) or 0.0)),
                 "campaign_summary_conversions": int(float(campaign_totals.get("conversions", 0.0) or 0.0)),
                 "campaign_summary_revenue": round(float(campaign_totals.get("revenue", 0.0) or 0.0), 2),
+                "channel_lag_scope_rows": int(channel_lag_summary.get("summary", {}).get("conversions") or 0),
+                "channel_lag_median_days_from_first_touch": channel_lag_summary.get("summary", {}).get("median_days_from_first_touch"),
+                "channel_lag_p90_days_from_first_touch": channel_lag_summary.get("summary", {}).get("p90_days_from_first_touch"),
+                "channel_lag_long_lag_share_over_7d": channel_lag_summary.get("summary", {}).get("long_lag_share_over_7d"),
+                "channel_lag_first_touch_conversions": channel_lag_role_totals["first_touch_conversions"],
+                "channel_lag_assist_conversions": channel_lag_role_totals["assist_conversions"],
+                "channel_lag_last_touch_conversions": channel_lag_role_totals["last_touch_conversions"],
+                "campaign_lag_scope_rows": int(campaign_lag_summary.get("summary", {}).get("conversions") or 0),
+                "campaign_lag_median_days_from_first_touch": campaign_lag_summary.get("summary", {}).get("median_days_from_first_touch"),
+                "campaign_lag_p90_days_from_first_touch": campaign_lag_summary.get("summary", {}).get("p90_days_from_first_touch"),
+                "campaign_lag_long_lag_share_over_7d": campaign_lag_summary.get("summary", {}).get("long_lag_share_over_7d"),
+                "campaign_lag_first_touch_conversions": campaign_lag_role_totals["first_touch_conversions"],
+                "campaign_lag_assist_conversions": campaign_lag_role_totals["assist_conversions"],
+                "campaign_lag_last_touch_conversions": campaign_lag_role_totals["last_touch_conversions"],
                 "conversion_paths_total_rows": int(conversion_path_total),
                 "conversion_paths_rows_with_conversion_key": int(conversion_path_converted),
                 "journey_path_daily_total_conversions": int(journey_path_daily_total),
@@ -437,6 +476,13 @@ def build_consistency_audit(
             "campaign_summary_visits_matches_channel_summary": int(float(campaign_totals.get("visits", 0.0) or 0.0)) == int(float(channel_totals.get("visits", 0.0) or 0.0)),
             "campaign_summary_conversions_matches_channel_summary": int(float(campaign_totals.get("conversions", 0.0) or 0.0)) == int(float(channel_totals.get("conversions", 0.0) or 0.0)),
             "campaign_summary_revenue_matches_channel_summary": round(float(campaign_totals.get("revenue", 0.0) or 0.0), 2) == round(float(channel_totals.get("revenue", 0.0) or 0.0), 2),
+            "channel_lag_scope_rows_match_campaign_lag": int(channel_lag_summary.get("summary", {}).get("conversions") or 0) == int(campaign_lag_summary.get("summary", {}).get("conversions") or 0),
+            "channel_lag_median_matches_campaign_lag": channel_lag_summary.get("summary", {}).get("median_days_from_first_touch") == campaign_lag_summary.get("summary", {}).get("median_days_from_first_touch"),
+            "channel_lag_p90_matches_campaign_lag": channel_lag_summary.get("summary", {}).get("p90_days_from_first_touch") == campaign_lag_summary.get("summary", {}).get("p90_days_from_first_touch"),
+            "channel_lag_long_share_matches_campaign_lag": channel_lag_summary.get("summary", {}).get("long_lag_share_over_7d") == campaign_lag_summary.get("summary", {}).get("long_lag_share_over_7d"),
+            "channel_lag_first_touch_totals_match_campaign_lag": channel_lag_role_totals["first_touch_conversions"] == campaign_lag_role_totals["first_touch_conversions"],
+            "channel_lag_assist_totals_match_campaign_lag": channel_lag_role_totals["assist_conversions"] == campaign_lag_role_totals["assist_conversions"],
+            "channel_lag_last_touch_totals_match_campaign_lag": channel_lag_role_totals["last_touch_conversions"] == campaign_lag_role_totals["last_touch_conversions"],
         }
         report["checks"] = checks
         if not active_definition_id and excluded_non_primary_definitions:
@@ -464,6 +510,9 @@ def build_consistency_audit(
                 + formatted
                 + "."
             )
+        report["notes"].append(
+            "Lag parity checks are workspace-wide diagnostic-fact checks and compare channel vs campaign lag summaries on the same raw scope-diagnostic basis."
+        )
         report["status"] = "ok" if all(value is not False for value in checks.values()) else "warning"
         return report
 
