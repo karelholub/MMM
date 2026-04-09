@@ -7,6 +7,7 @@ import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import AnalysisShareActions from '../components/dashboard/AnalysisShareActions'
 import SectionCard from '../components/dashboard/SectionCard'
+import AnalysisNarrativePanel from '../components/dashboard/AnalysisNarrativePanel'
 import { navigateForRecommendedAction } from '../lib/recommendedActions'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import {
@@ -354,6 +355,15 @@ export default function BudgetOptimizer({
 
   const channelList = useMemo(() => roiData.map((r) => r.channel), [roiData])
 
+  const datasetDateCoverage = useMemo(() => {
+    const dates = dataset
+      .map((row) => String(row.date ?? '').slice(0, 10))
+      .filter((value) => value.length === 10)
+      .sort()
+    if (!dates.length) return 'No dated preview rows'
+    return `${dates[0]} – ${dates[dates.length - 1]}`
+  }, [dataset])
+
   const baselineSpendByChannel = useMemo(() => {
     const out: Record<string, number> = {}
     const chs = channelList
@@ -576,6 +586,44 @@ export default function BudgetOptimizer({
 
   const topRecommendation = recommendationsQuery.data?.recommendations?.[0] ?? null
 
+  const budgetTrustNarrative = useMemo(() => {
+    const modeledPeriods = recommendationsQuery.data?.summary.periods ?? 0
+    const savedScenarioCount = savedScenariosQuery.data?.total ?? 0
+    const realizationCount = realizationQuery.data?.total ?? 0
+    const hasLargeExtrapolation = extrapolationWarnings.length > 0
+    const headline = topRecommendation
+      ? hasLargeExtrapolation
+        ? 'Budget guidance is usable, but the active scenario is stretching beyond observed spend history.'
+        : 'Budget guidance is grounded in the active MMM run and is strongest when you stay inside observed spend ranges.'
+      : 'Budget guidance is not ready yet because there is no active recommendation for this run.'
+
+    const items = [
+      `Basis: this workspace uses the selected MMM run plus ${dataset.length.toLocaleString()} linked dataset preview rows across ${datasetDateCoverage}.`,
+      modeledPeriods > 0
+        ? `Recommendation engine basis: ${modeledPeriods.toLocaleString()} modeled periods across ${channelList.length.toLocaleString()} channels.`
+        : 'Recommendation engine basis is still unavailable, so treat this page as setup and manual planning only.',
+      topRecommendation
+        ? `Current top recommendation is ${topRecommendation.confidence.band.toLowerCase()} confidence with ${topRecommendation.risk.extrapolation.toLowerCase()} extrapolation risk.`
+        : 'No top recommendation is available yet, so manual budget editing should be treated as exploratory only.',
+      hasLargeExtrapolation
+        ? `Primary trust risk: ${extrapolationWarnings.length.toLocaleString()} channel scenario${extrapolationWarnings.length === 1 ? '' : 's'} exceed observed spend ranges.`
+        : 'Current scenario stays inside observed historical spend ranges, so the optimizer is not extrapolating aggressively.',
+      savedScenarioCount > 0 || realizationCount > 0
+        ? `Continuity: ${savedScenarioCount.toLocaleString()} saved scenario${savedScenarioCount === 1 ? '' : 's'} and ${realizationCount.toLocaleString()} rollout record${realizationCount === 1 ? '' : 's'} are available for this run.`
+        : 'Continuity: no saved scenarios or rollout records exist yet for this run.',
+    ]
+    return { headline, items }
+  }, [
+    channelList.length,
+    dataset.length,
+    datasetDateCoverage,
+    extrapolationWarnings.length,
+    realizationQuery.data?.total,
+    recommendationsQuery.data?.summary.periods,
+    savedScenariosQuery.data?.total,
+    topRecommendation,
+  ])
+
   const applyRecommendation = (recommendation: BudgetRecommendationItem) => {
     const next = channelList.reduce((acc, ch) => ({ ...acc, [ch]: 1.0 }), {} as Record<string, number>)
     recommendation.actions.forEach((action) => {
@@ -661,6 +709,60 @@ export default function BudgetOptimizer({
       </div>
 
       <div style={{ marginBottom: t.space.xl }}>
+        <AnalysisNarrativePanel
+          title="What to trust"
+          subtitle="A short readout of what the budget workspace is using before you act on recommendations or rollout proposals."
+          headline={budgetTrustNarrative.headline}
+          items={budgetTrustNarrative.items}
+        />
+      </div>
+
+      <div style={{ marginBottom: t.space.xl }}>
+        <SectionCard
+          title="Reconciliation basis"
+          subtitle="What this budget workspace is anchored to, and what counts as a reusable prior result."
+        >
+          <div style={{ display: 'grid', gap: t.space.md }}>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Budget actions here are derived from the active MMM run and its linked dataset preview. Saved scenarios and rollout realization stay tied to that run, so reopening prior work preserves the same model basis instead of forcing a new run setup.
+            </div>
+            <div
+              style={{
+                display: 'grid',
+                gap: t.space.sm,
+                gridTemplateColumns: 'repeat(auto-fit, minmax(min(180px, 100%), 1fr))',
+              }}
+            >
+              <div style={{ display: 'grid', gap: 2 }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>MMM run</div>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  <strong style={{ color: t.color.text }}>{runId ? `${runId.slice(0, 8)}…` : '—'}</strong>
+                </div>
+              </div>
+              <div style={{ display: 'grid', gap: 2 }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Dataset coverage</div>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  <strong style={{ color: t.color.text }}>{datasetDateCoverage}</strong>
+                </div>
+              </div>
+              <div style={{ display: 'grid', gap: 2 }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Saved scenarios</div>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  <strong style={{ color: t.color.text }}>{(savedScenariosQuery.data?.total ?? 0).toLocaleString()}</strong>
+                </div>
+              </div>
+              <div style={{ display: 'grid', gap: 2 }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Rollout tracking</div>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  <strong style={{ color: t.color.text }}>{(realizationQuery.data?.total ?? 0).toLocaleString()}</strong> tracked realization {((realizationQuery.data?.total ?? 0) === 1) ? 'record' : 'records'}
+                </div>
+              </div>
+            </div>
+          </div>
+        </SectionCard>
+      </div>
+
+      <div style={{ marginBottom: t.space.xl }}>
         <CollapsiblePanel
           title="Model & Dataset Context"
           subtitle="What data this optimizer uses and how much trust to place in range-bound recommendations."
@@ -679,6 +781,10 @@ export default function BudgetOptimizer({
             <div>
               Channels considered: <strong style={{ color: t.color.text }}>{channelList.length.toLocaleString()}</strong>
               {' · '}modeled periods <strong style={{ color: t.color.text }}>{(recommendationsQuery.data?.summary.periods ?? 0).toLocaleString()}</strong>
+            </div>
+            <div>
+              Saved scenarios: <strong style={{ color: t.color.text }}>{(savedScenariosQuery.data?.total ?? 0).toLocaleString()}</strong>
+              {' · '}rollout records <strong style={{ color: t.color.text }}>{(realizationQuery.data?.total ?? 0).toLocaleString()}</strong>
             </div>
             <div>
               Trust layer: recommendations are strongest inside the observed spend range. Extrapolation warnings appear when the scenario pushes outside those historical bounds.
