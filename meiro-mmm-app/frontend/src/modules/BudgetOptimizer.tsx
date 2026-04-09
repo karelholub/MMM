@@ -6,6 +6,7 @@ import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import AnalysisShareActions from '../components/dashboard/AnalysisShareActions'
+import SectionCard from '../components/dashboard/SectionCard'
 import { navigateForRecommendedAction } from '../lib/recommendedActions'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import {
@@ -613,19 +614,18 @@ export default function BudgetOptimizer({
     <div
       style={{
         marginTop: t.space.xxl,
-        backgroundColor: t.color.surface,
-        padding: t.space.xl,
-        borderRadius: t.radius.lg,
-        border: `1px solid ${t.color.borderLight}`,
-        boxShadow: t.shadowSm,
+        display: 'grid',
+        gap: t.space.xl,
       }}
     >
+      <div>
       <h2 style={{ marginTop: 0, marginBottom: t.space.sm, fontSize: t.font.sizeXl, fontWeight: t.font.weightBold, color: t.color.text }}>
         Budget actions
       </h2>
       <p style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary, marginBottom: t.space.xl }}>
         Turn MMM output into a budget plan. Start from the model-backed recommendation, then refine the allocation against observed spend ranges and rollout guardrails.
       </p>
+      </div>
 
       <div style={{ marginBottom: t.space.lg }}>
         <ContextSummaryStrip
@@ -687,41 +687,10 @@ export default function BudgetOptimizer({
         </CollapsiblePanel>
       </div>
 
-      <div
-        style={{
-          display: 'grid',
-          gap: t.space.lg,
-          marginBottom: t.space.xl,
-          padding: t.space.lg,
-          borderRadius: t.radius.md,
-          backgroundColor: t.color.bg,
-          border: `1px solid ${t.color.borderLight}`,
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            gap: t.space.md,
-            alignItems: 'flex-start',
-            flexWrap: 'wrap',
-          }}
-        >
-          <div style={{ maxWidth: 720 }}>
-            <h3
-              style={{
-                margin: `0 0 ${t.space.xs}px`,
-                fontSize: t.font.sizeLg,
-                fontWeight: t.font.weightSemibold,
-                color: t.color.text,
-              }}
-            >
-              Recommended budget actions
-            </h3>
-            <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-              Start with the model-backed plan, then refine only when the business constraint needs a custom allocation.
-            </p>
-          </div>
+      <SectionCard
+        title="Recommended budget actions"
+        subtitle="Start with the model-backed plan, then refine only when the business constraint needs a custom allocation."
+        actions={
           <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', alignItems: 'center' }}>
             <select
               value={recommendationObjective}
@@ -760,8 +729,8 @@ export default function BudgetOptimizer({
               {saveScenarioMutation.isPending ? 'Saving…' : 'Save scenario'}
             </button>
           </div>
-        </div>
-
+        }
+      >
         {recommendationsQuery.data?.decision && (
           <DecisionStatusCard
             title="Budget recommendation status"
@@ -1072,25 +1041,52 @@ export default function BudgetOptimizer({
             No recommendation available for this run yet.
           </div>
         )}
-      </div>
+      </SectionCard>
 
-      {/* Optimizer context: baseline spend + total budget control */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: '1fr auto',
-          gap: t.space.xl,
-          marginBottom: t.space.xl,
-          padding: t.space.lg,
-          borderRadius: t.radius.md,
-          backgroundColor: t.color.bg,
-          border: `1px solid ${t.color.borderLight}`,
-        }}
+      <SectionCard
+        title="Custom allocation"
+        subtitle="Adjust channel budgets manually against the modeled baseline and rollout constraints."
+        actions={
+          <div>
+            <div style={{ margin: `0 0 ${t.space.sm}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+              Total budget
+            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: t.space.sm, marginBottom: t.space.xs, cursor: 'pointer', fontSize: t.font.sizeSm }}>
+              <input
+                type="radio"
+                checked={totalBudgetMode === 'constant'}
+                onChange={() => setTotalBudgetMode('constant')}
+              />
+              Keep total constant
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: t.space.sm, cursor: 'pointer', fontSize: t.font.sizeSm }}>
+              <input
+                type="radio"
+                checked={totalBudgetMode === 'change'}
+                onChange={() => setTotalBudgetMode('change')}
+              />
+              Change total by %
+            </label>
+            {totalBudgetMode === 'change' && (
+              <div style={{ marginTop: t.space.sm, display: 'flex', alignItems: 'center', gap: t.space.sm }}>
+                <input
+                  type="range"
+                  min={-50}
+                  max={100}
+                  step={5}
+                  value={totalBudgetChangePct}
+                  onChange={(e) => setTotalBudgetChangePct(Number(e.target.value))}
+                  style={{ width: 120 }}
+                />
+                <span style={{ fontSize: t.font.sizeSm, fontVariantNumeric: 'tabular-nums' }}>
+                  {totalBudgetChangePct >= 0 ? '+' : ''}{totalBudgetChangePct}%
+                </span>
+              </div>
+            )}
+          </div>
+        }
       >
         <div>
-          <h3 style={{ margin: `0 0 ${t.space.sm}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-            Custom allocation
-          </h3>
           <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, marginBottom: t.space.sm }}>
             Adjust channel budgets manually against the modeled baseline and rollout constraints.
           </div>
@@ -1115,61 +1111,14 @@ export default function BudgetOptimizer({
             </span>
           </div>
         </div>
-        <div>
-          <h3 style={{ margin: `0 0 ${t.space.sm}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-            Total budget
-          </h3>
-          <label style={{ display: 'flex', alignItems: 'center', gap: t.space.sm, marginBottom: t.space.xs, cursor: 'pointer', fontSize: t.font.sizeSm }}>
-            <input
-              type="radio"
-              checked={totalBudgetMode === 'constant'}
-              onChange={() => setTotalBudgetMode('constant')}
-            />
-            Keep total constant (default)
-          </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: t.space.sm, cursor: 'pointer', fontSize: t.font.sizeSm }}>
-            <input
-              type="radio"
-              checked={totalBudgetMode === 'change'}
-              onChange={() => setTotalBudgetMode('change')}
-            />
-            Change total by %
-          </label>
-          {totalBudgetMode === 'change' && (
-            <div style={{ marginTop: t.space.sm, display: 'flex', alignItems: 'center', gap: t.space.sm }}>
-              <input
-                type="range"
-                min={-50}
-                max={100}
-                step={5}
-                value={totalBudgetChangePct}
-                onChange={(e) => setTotalBudgetChangePct(Number(e.target.value))}
-                style={{ width: 120 }}
-              />
-              <span style={{ fontSize: t.font.sizeSm, fontVariantNumeric: 'tabular-nums' }}>
-                {totalBudgetChangePct >= 0 ? '+' : ''}{totalBudgetChangePct}%
-              </span>
-            </div>
-          )}
-        </div>
-      </div>
+      </SectionCard>
 
-      {/* Optional constraints: min/max, lock */}
-      <div style={{ marginBottom: t.space.xl }}>
-        <h3 style={{ margin: `0 0 ${t.space.sm}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-          Scenario guardrails
-        </h3>
-        <p style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, marginBottom: t.space.sm }}>
-          Set allowed spend ranges per channel and lock any channel that must remain at baseline.
-        </p>
-      </div>
-
-      {/* Enterprise sliders: baseline spend, new spend, delta, Reset per row */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: t.space.xl }}>
-        <div>
-          <h3 style={{ margin: `0 0 ${t.space.md}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-            Spend by channel
-          </h3>
+        <SectionCard
+          title="Scenario guardrails"
+          subtitle="Set allowed spend ranges per channel and lock channels that must remain at baseline."
+          overflow="auto"
+        >
           {channelList.map((ch, idx) => {
             const mult = constraints[ch]?.locked ? 1.0 : (multipliers[ch] ?? 1.0)
             const baseSpend = baselineSpendByChannel[ch] ?? 0
@@ -1260,22 +1209,30 @@ export default function BudgetOptimizer({
               </div>
             )
           })}
-        </div>
+        </SectionCard>
 
-        {/* Predicted impact */}
-        <div>
-          <div
-            style={{
-              padding: t.space.lg,
-              borderRadius: t.radius.md,
-              border: `1px solid ${t.color.borderLight}`,
-              backgroundColor: t.color.bg,
-              marginBottom: t.space.lg,
-            }}
-          >
-            <h3 style={{ margin: `0 0 ${t.space.md}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-              Predicted impact
-            </h3>
+        <SectionCard
+          title="Predicted impact"
+          subtitle="Read the indexed KPI impact of the current allocation before running a backend scenario check."
+          actions={
+            <button
+              type="button"
+              onClick={handleRunWhatIf}
+              disabled={isWhatIfLoading || !runId}
+              style={{
+                padding: `${t.space.sm}px ${t.space.lg}px`,
+                fontSize: t.font.sizeSm,
+                color: t.color.accent,
+                background: 'transparent',
+                border: `1px solid ${t.color.accent}`,
+                borderRadius: t.radius.sm,
+                cursor: runId && !isWhatIfLoading ? 'pointer' : 'not-allowed',
+              }}
+            >
+              {isWhatIfLoading ? 'Running…' : 'Run scenario check'}
+            </button>
+          }
+        >
             <div style={{ marginBottom: t.space.sm }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
                 <span style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Predicted KPI</span>
@@ -1336,25 +1293,6 @@ export default function BudgetOptimizer({
                 <strong>Extrapolation warning:</strong> Prediction uses spend outside the range observed in the dataset for: {extrapolationWarnings.join('; ')}. Results may be less reliable.
               </div>
             )}
-          </div>
-
-          <button
-            type="button"
-            onClick={handleRunWhatIf}
-            disabled={isWhatIfLoading || !runId}
-            style={{
-              padding: `${t.space.sm}px ${t.space.lg}px`,
-              fontSize: t.font.sizeSm,
-              color: t.color.accent,
-              background: 'transparent',
-              border: `1px solid ${t.color.accent}`,
-              borderRadius: t.radius.sm,
-              cursor: runId && !isWhatIfLoading ? 'pointer' : 'not-allowed',
-              marginBottom: t.space.lg,
-            }}
-          >
-            {isWhatIfLoading ? 'Running…' : 'Run scenario check'}
-          </button>
 
           {whatIfResult && (
             <div
@@ -1369,38 +1307,73 @@ export default function BudgetOptimizer({
               <div style={{ marginBottom: t.space.sm }}>Backend what-if: baseline KPI {whatIfResult.baseline.total_kpi.toFixed(2)} → scenario {whatIfResult.scenario.total_kpi.toFixed(2)} ({whatIfResult.lift.percent >= 0 ? '+' : ''}{whatIfResult.lift.percent.toFixed(1)}%)</div>
             </div>
           )}
-        </div>
+        </SectionCard>
       </div>
 
-      {/* Suggest optimal mix */}
-      <div style={{ marginTop: t.space.xl, marginBottom: t.space.xl }}>
-        <button
-          type="button"
-          onClick={handleSuggestOptimal}
-          disabled={isOptimizing || !runId}
-          style={{
-            padding: `${t.space.md}px ${t.space.xl}px`,
-            fontSize: t.font.sizeSm,
-            fontWeight: t.font.weightMedium,
-            color: '#fff',
-            background: runId && !isOptimizing ? t.color.accent : t.color.textMuted,
-            border: 'none',
-            borderRadius: t.radius.sm,
-            cursor: runId && !isOptimizing ? 'pointer' : 'not-allowed',
-          }}
-        >
-          {isOptimizing ? 'Optimizing…' : 'Suggest model-guided reallocation'}
-        </button>
-      </div>
-
-      {optimalMix != null && (
+      <SectionCard
+        title="Model-guided reallocation"
+        subtitle="Let the optimizer propose a bounded reallocation within the active scenario guardrails."
+        actions={
+          <button
+            type="button"
+            onClick={handleSuggestOptimal}
+            disabled={isOptimizing || !runId}
+            style={{
+              padding: `${t.space.md}px ${t.space.xl}px`,
+              fontSize: t.font.sizeSm,
+              fontWeight: t.font.weightMedium,
+              color: '#fff',
+              background: runId && !isOptimizing ? t.color.accent : t.color.textMuted,
+              border: 'none',
+              borderRadius: t.radius.sm,
+              cursor: runId && !isOptimizing ? 'pointer' : 'not-allowed',
+            }}
+          >
+            {isOptimizing ? 'Optimizing…' : 'Suggest model-guided reallocation'}
+          </button>
+        }
+        footer={
+          <div style={{ display: 'flex', gap: t.space.md, flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={handleExportScenario}
+              style={{
+                padding: `${t.space.sm}px ${t.space.lg}px`,
+                fontSize: t.font.sizeSm,
+                color: t.color.accent,
+                background: 'transparent',
+                border: `1px solid ${t.color.accent}`,
+                borderRadius: t.radius.sm,
+                cursor: 'pointer',
+              }}
+            >
+              Export scenario
+            </button>
+            <button
+              type="button"
+              onClick={handleResetAll}
+              style={{
+                padding: `${t.space.sm}px ${t.space.lg}px`,
+                fontSize: t.font.sizeSm,
+                color: t.color.textSecondary,
+                background: 'transparent',
+                border: `1px solid ${t.color.border}`,
+                borderRadius: t.radius.sm,
+                cursor: 'pointer',
+              }}
+            >
+              Reset to baseline
+            </button>
+          </div>
+        }
+      >
+      {optimalMix != null ? (
         <div
           style={{
             padding: t.space.xl,
             borderRadius: t.radius.md,
             border: `2px solid ${(optimalUplift ?? 0) > 0 ? t.color.success : t.color.border}`,
             backgroundColor: (optimalUplift ?? 0) > 0 ? t.color.successMuted : t.color.bg,
-            marginBottom: t.space.xl,
           }}
         >
           <h3 style={{ margin: `0 0 ${t.space.sm}px`, fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
@@ -1456,45 +1429,16 @@ export default function BudgetOptimizer({
               borderRadius: t.radius.sm,
               cursor: 'pointer',
             }}
-          >
-            Apply recommendation
-          </button>
+            >
+              Apply recommendation
+            </button>
+        </div>
+      ) : (
+        <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+          Run the optimizer to generate a model-guided reallocation that respects the active budget mode and channel guardrails.
         </div>
       )}
-
-      {/* Actions: Export + Reset */}
-      <div style={{ display: 'flex', gap: t.space.md, flexWrap: 'wrap' }}>
-        <button
-          type="button"
-          onClick={handleExportScenario}
-          style={{
-            padding: `${t.space.sm}px ${t.space.lg}px`,
-            fontSize: t.font.sizeSm,
-            color: t.color.accent,
-            background: 'transparent',
-            border: `1px solid ${t.color.accent}`,
-            borderRadius: t.radius.sm,
-            cursor: 'pointer',
-          }}
-        >
-          Export scenario
-        </button>
-        <button
-          type="button"
-          onClick={handleResetAll}
-          style={{
-            padding: `${t.space.sm}px ${t.space.lg}px`,
-            fontSize: t.font.sizeSm,
-            color: t.color.textSecondary,
-            background: 'transparent',
-            border: `1px solid ${t.color.border}`,
-            borderRadius: t.radius.sm,
-            cursor: 'pointer',
-          }}
-        >
-          Reset to baseline
-        </button>
-      </div>
+      </SectionCard>
     </div>
   )
 }
