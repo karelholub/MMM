@@ -3236,88 +3236,6 @@ export default function Journeys({
       <DashboardPage
         title="Journeys"
         description="Customer journey paths + attribution overlay"
-        filters={
-          <div style={{ display: 'grid', gap: t.space.sm }}>
-            <GlobalFilterBar
-              value={filters}
-              onChange={handleFiltersChange}
-              channels={journeyFilterOptions.channels}
-              campaigns={journeyFilterOptions.campaigns}
-              devices={journeyFilterOptions.devices}
-              geos={journeyFilterOptions.geos}
-              segments={journeyFilterOptions.segments}
-              showSegment
-            />
-            <div style={{ display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: t.space.sm }}>
-              {selectedLocalSegment ? (
-                <label
-                  style={{
-                    display: 'grid',
-                    gap: 6,
-                    minWidth: 240,
-                    fontSize: t.font.sizeSm,
-                    color: t.color.textSecondary,
-                  }}
-                >
-                  <span>Compare with</span>
-                  <select
-                    value={compareSegmentId}
-                    onChange={(event) => setCompareSegmentId(event.target.value)}
-                    style={{
-                      padding: '8px 10px',
-                      borderRadius: t.radius.sm,
-                      border: `1px solid ${t.color.border}`,
-                      background: t.color.surface,
-                      color: t.color.text,
-                      fontSize: t.font.sizeSm,
-                    }}
-                  >
-                    <option value="">No paired comparison</option>
-                    {localAnalyticalSegments
-                      .filter((segment) => segment.id !== selectedLocalSegment.id)
-                      .map((segment) => (
-                        <option key={segment.id} value={segment.id}>
-                          {segmentOptionLabel(segment)}
-                        </option>
-                      ))}
-                  </select>
-                </label>
-              ) : null}
-              <a
-                href={buildSettingsHref('segments')}
-                style={{
-                  border: `1px solid ${t.color.border}`,
-                  background: 'transparent',
-                  borderRadius: t.radius.sm,
-                  padding: '8px 12px',
-                  textDecoration: 'none',
-                  color: t.color.text,
-                  fontSize: t.font.sizeSm,
-                }}
-              >
-                Manage segments
-              </a>
-              <button
-                type="button"
-                disabled={!canSaveCurrentFilterSegment}
-                onClick={() => {
-                  setSaveSegmentError(null)
-                  setShowSaveSegmentModal(true)
-                }}
-                style={{
-                  border: `1px solid ${t.color.border}`,
-                  background: 'transparent',
-                  borderRadius: t.radius.sm,
-                  padding: '8px 12px',
-                  cursor: canSaveCurrentFilterSegment ? 'pointer' : 'default',
-                  opacity: canSaveCurrentFilterSegment ? 1 : 0.6,
-                }}
-              >
-                Save local segment
-              </button>
-            </div>
-          </div>
-        }
         isEmpty={featureDisabled}
         emptyState={
           <SectionCard
@@ -3364,6 +3282,108 @@ export default function Journeys({
             }
           }
         `}</style>
+        <SectionCard
+          title="Analysis controls"
+          subtitle="Choose the date range, acquisition filters, and audience slice before reviewing journey definitions and workspace tabs."
+        >
+          <div style={{ display: 'grid', gap: t.space.lg }}>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Journeys applies saved local segments either as exact filters or as analytical lenses, depending on what the segment definition can truthfully support on this page.
+            </div>
+
+            <GlobalFilterBar
+              value={filters}
+              onChange={handleFiltersChange}
+              channels={journeyFilterOptions.channels}
+              campaigns={journeyFilterOptions.campaigns}
+              devices={journeyFilterOptions.devices}
+              geos={journeyFilterOptions.geos}
+              segments={journeyFilterOptions.segments}
+              showSegment
+            />
+
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: t.space.sm,
+                alignItems: 'end',
+                justifyContent: 'space-between',
+              }}
+            >
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: t.space.sm, alignItems: 'end' }}>
+                {selectedLocalSegment ? (
+                  <label
+                    style={{
+                      display: 'grid',
+                      gap: 6,
+                      minWidth: 240,
+                      fontSize: t.font.sizeSm,
+                      color: t.color.textSecondary,
+                    }}
+                  >
+                    <span>Compare with</span>
+                    <select
+                      value={compareSegmentId}
+                      onChange={(event) => setCompareSegmentId(event.target.value)}
+                      style={{
+                        padding: '8px 10px',
+                        borderRadius: t.radius.sm,
+                        border: `1px solid ${t.color.border}`,
+                        background: t.color.surface,
+                        color: t.color.text,
+                        fontSize: t.font.sizeSm,
+                      }}
+                    >
+                      <option value="">No paired comparison</option>
+                      {localAnalyticalSegments
+                        .filter((segment) => segment.id !== selectedLocalSegment.id)
+                        .map((segment) => (
+                          <option key={segment.id} value={segment.id}>
+                            {segmentOptionLabel(segment)}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                ) : null}
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: t.space.sm }}>
+                <a
+                  href={buildSettingsHref('segments')}
+                  style={{
+                    border: `1px solid ${t.color.border}`,
+                    background: 'transparent',
+                    borderRadius: t.radius.sm,
+                    padding: '8px 12px',
+                    textDecoration: 'none',
+                    color: t.color.text,
+                    fontSize: t.font.sizeSm,
+                  }}
+                >
+                  Manage segments
+                </a>
+                <button
+                  type="button"
+                  disabled={!canSaveCurrentFilterSegment}
+                  onClick={() => {
+                    setSaveSegmentError(null)
+                    setShowSaveSegmentModal(true)
+                  }}
+                  style={{
+                    border: `1px solid ${t.color.border}`,
+                    background: 'transparent',
+                    borderRadius: t.radius.sm,
+                    padding: '8px 12px',
+                    cursor: canSaveCurrentFilterSegment ? 'pointer' : 'default',
+                    opacity: canSaveCurrentFilterSegment ? 1 : 0.6,
+                  }}
+                >
+                  Save local segment
+                </button>
+              </div>
+            </div>
+          </div>
+        </SectionCard>
         <SectionCard
           title="Journey definition"
           subtitle="Select an existing journey or create a new one for this workspace."
