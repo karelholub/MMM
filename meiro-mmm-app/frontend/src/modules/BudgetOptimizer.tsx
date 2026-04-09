@@ -5,6 +5,7 @@ import { apiGetJson, apiSendJson } from '../lib/apiClient'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import DecisionStatusCard from '../components/DecisionStatusCard'
+import AnalysisShareActions from '../components/dashboard/AnalysisShareActions'
 import { navigateForRecommendedAction } from '../lib/recommendedActions'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import {
@@ -645,6 +646,21 @@ export default function BudgetOptimizer({
       </div>
 
       <div style={{ marginBottom: t.space.xl }}>
+        <AnalysisShareActions
+          fileStem="mmm-budget-actions"
+          summaryTitle="MMM budget actions"
+          summaryLines={[
+            `Objective: ${recommendationObjective.replace(/_/g, ' ')}`,
+            `Baseline spend: ${formatCurrency(totalBaselineSpend)}`,
+            `Channels considered: ${channelList.length.toLocaleString()}`,
+            `Observed rows: ${dataset.length.toLocaleString()}`,
+            `Current predicted uplift: ${upliftPercent >= 0 ? '+' : ''}${upliftPercent.toFixed(1)}%`,
+            topRecommendation ? `Top recommendation: ${topRecommendation.title}` : 'Top recommendation: unavailable',
+          ]}
+        />
+      </div>
+
+      <div style={{ marginBottom: t.space.xl }}>
         <CollapsiblePanel
           title="Model & Dataset Context"
           subtitle="What data this optimizer uses and how much trust to place in range-bound recommendations."
@@ -700,10 +716,10 @@ export default function BudgetOptimizer({
                 color: t.color.text,
               }}
             >
-              Recommendation Center
+              Recommended budget actions
             </h3>
             <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-              Start with the model-backed recommendation, then adjust manually if you need a custom scenario.
+              Start with the model-backed plan, then refine only when the business constraint needs a custom allocation.
             </p>
           </div>
           <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -1073,10 +1089,10 @@ export default function BudgetOptimizer({
       >
         <div>
           <h3 style={{ margin: `0 0 ${t.space.sm}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-            Manual scenario builder
+            Custom allocation
           </h3>
           <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, marginBottom: t.space.sm }}>
-            Start from the recommended plan above or build a custom allocation here.
+            Adjust channel budgets manually against the modeled baseline and rollout constraints.
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: t.space.sm, alignItems: 'center' }}>
             {channelList.map((ch) => (
@@ -1141,10 +1157,10 @@ export default function BudgetOptimizer({
       {/* Optional constraints: min/max, lock */}
       <div style={{ marginBottom: t.space.xl }}>
         <h3 style={{ margin: `0 0 ${t.space.sm}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-          Optional constraints
+          Scenario guardrails
         </h3>
         <p style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, marginBottom: t.space.sm }}>
-          Min/max: multiplier bounds per channel. Lock: keeps this channel at current spend (multiplier 1.0) so the optimizer cannot change it.
+          Set allowed spend ranges per channel and lock any channel that must remain at baseline.
         </p>
       </div>
 
@@ -1337,7 +1353,7 @@ export default function BudgetOptimizer({
               marginBottom: t.space.lg,
             }}
           >
-            {isWhatIfLoading ? 'Running…' : 'Run backend what-if'}
+            {isWhatIfLoading ? 'Running…' : 'Run scenario check'}
           </button>
 
           {whatIfResult && (
@@ -1373,7 +1389,7 @@ export default function BudgetOptimizer({
             cursor: runId && !isOptimizing ? 'pointer' : 'not-allowed',
           }}
         >
-          {isOptimizing ? 'Optimizing…' : 'Suggest optimal mix'}
+          {isOptimizing ? 'Optimizing…' : 'Suggest model-guided reallocation'}
         </button>
       </div>
 
@@ -1388,7 +1404,7 @@ export default function BudgetOptimizer({
           }}
         >
           <h3 style={{ margin: `0 0 ${t.space.sm}px`, fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-            Recommended allocation
+            Recommended reallocation
           </h3>
           {optimizationMessage && (
             <p style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary, marginBottom: t.space.md }}>
