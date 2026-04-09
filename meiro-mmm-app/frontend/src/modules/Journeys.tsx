@@ -106,6 +106,11 @@ interface JourneyDefinitionAuditItem {
   created_at?: string | null
 }
 
+interface LifecycleMetricItem {
+  label: string
+  value: string
+}
+
 interface JourneyPathRow {
   path_hash: string
   path_steps: string[] | string
@@ -707,7 +712,59 @@ function formatLifecycleTimestamp(value?: string | null): string {
 function formatLifecycleAction(value?: string | null): string {
   const normalized = String(value || '').trim().toLowerCase()
   if (!normalized) return 'Unknown'
+  if (normalized === 'rebuild') return 'Rebuilt outputs'
+  if (normalized === 'create') return 'Created definition'
+  if (normalized === 'update') return 'Updated definition'
+  if (normalized === 'archive') return 'Archived definition'
+  if (normalized === 'restore') return 'Restored definition'
+  if (normalized === 'duplicate') return 'Duplicated definition'
   return normalized.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
+function formatLifecycleAuditActor(action?: string | null, actor?: string | null): string {
+  const normalizedAction = String(action || '').trim().toLowerCase()
+  const normalizedActor = String(actor || '').trim()
+  if (!normalizedActor) return 'Unknown'
+  if (normalizedAction === 'rebuild' && /^[A-Za-z0-9_-]{20,}$/.test(normalizedActor)) return 'System job'
+  return normalizedActor
+}
+
+function extractLifecycleMetrics(diff?: Record<string, unknown> | null): LifecycleMetricItem[] {
+  if (!diff || typeof diff !== 'object') return []
+  const metrics = (diff.metrics && typeof diff.metrics === 'object' ? diff.metrics : null) as Record<string, unknown> | null
+  if (!metrics) return []
+  const numberValue = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : null)
+  const items: Array<[string, number | null]> = [
+    ['Source rows', numberValue(metrics.source_rows_processed)],
+    ['Journey rows', numberValue(metrics.definition_rows_written)],
+    ['Paths written', numberValue(metrics.path_rows_written)],
+    ['Transitions', numberValue(metrics.transition_rows_written)],
+    ['Examples', numberValue(metrics.example_rows_written)],
+    ['Source days', numberValue(metrics.source_days)],
+    ['Effective reprocess days', numberValue(metrics.effective_reprocess_days)],
+  ]
+  return items
+    .filter(([, value]) => value != null)
+    .map(([label, value]) => ({ label, value: Number(value).toLocaleString() }))
+}
+
+function buildLifecycleSummary(diff?: Record<string, unknown> | null): string | null {
+  if (!diff || typeof diff !== 'object') return null
+  const metrics = (diff.metrics && typeof diff.metrics === 'object' ? diff.metrics : null) as Record<string, unknown> | null
+  const reprocessDays = typeof diff.reprocess_days === 'number' ? diff.reprocess_days : null
+  if (metrics) {
+    const sourceRows = typeof metrics.source_rows_processed === 'number' ? metrics.source_rows_processed : null
+    const pathRows = typeof metrics.path_rows_written === 'number' ? metrics.path_rows_written : null
+    const sourceDays = typeof metrics.source_days === 'number' ? metrics.source_days : null
+    const parts = [
+      sourceRows != null ? `${sourceRows.toLocaleString()} source rows processed` : null,
+      pathRows != null ? `${pathRows.toLocaleString()} path rows written` : null,
+      sourceDays != null ? `${sourceDays.toLocaleString()} source days covered` : null,
+    ].filter(Boolean)
+    if (parts.length) return parts.join(' • ')
+  }
+  if (reprocessDays != null) return `${reprocessDays.toLocaleString()} reprocess days requested`
+  return null
 }
 
 function buildIncrementalityHref(experimentId: number): string {
@@ -3744,19 +3801,63 @@ export default function Journeys({
                                 borderLeft: `2px solid ${t.color.border}`,
                                 paddingLeft: t.space.sm,
                                 display: 'grid',
-                                gap: 2,
+                                gap: 6,
                               }}
                             >
-                              <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
-                                {formatLifecycleAction(entry.action)} by {formatLifecycleActor(entry.actor)}
+                              <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, flexWrap: 'wrap', alignItems: 'baseline' }}>
+                                <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>
+                                  {formatLifecycleAction(entry.action)}
+                                </div>
+                                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                                  {formatLifecycleTimestamp(entry.created_at)}
+                                </div>
                               </div>
-                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
-                                {formatLifecycleTimestamp(entry.created_at)}
+                              <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                                Performed by {formatLifecycleAuditActor(entry.action, entry.actor)}
                               </div>
+                              {buildLifecycleSummary(entry.diff_json) ? (
+                                <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                                  {buildLifecycleSummary(entry.diff_json)}
+                                </div>
+                              ) : null}
+                              {extractLifecycleMetrics(entry.diff_json).length ? (
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: t.space.xs }}>
+                                  {extractLifecycleMetrics(entry.diff_json).map((metric) => (
+                                    <div
+                                      key={`${entry.id}:${metric.label}`}
+                                      style={{
+                                        display: 'grid',
+                                        gap: 2,
+                                        padding: `${t.space.xs}px ${t.space.sm}px`,
+                                        borderRadius: t.radius.sm,
+                                        border: `1px solid ${t.color.borderLight}`,
+                                        background: t.color.bg,
+                                        minWidth: 96,
+                                      }}
+                                    >
+                                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{metric.label}</div>
+                                      <div style={{ fontSize: t.font.sizeXs, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                                        {metric.value}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
                               {entry.diff_json ? (
-                                <pre
+                                <details>
+                                  <summary
+                                    style={{
+                                      cursor: 'pointer',
+                                      fontSize: t.font.sizeXs,
+                                      color: t.color.textMuted,
+                                      userSelect: 'none',
+                                    }}
+                                  >
+                                    Technical details
+                                  </summary>
+                                  <pre
                                   style={{
-                                    margin: 0,
+                                    margin: `${t.space.xs}px 0 0`,
                                     fontSize: t.font.sizeXs,
                                     color: t.color.textSecondary,
                                     whiteSpace: 'pre-wrap',
@@ -3767,6 +3868,7 @@ export default function Journeys({
                                 >
                                   {JSON.stringify(entry.diff_json, null, 2)}
                                 </pre>
+                                </details>
                               ) : null}
                             </div>
                           ))}

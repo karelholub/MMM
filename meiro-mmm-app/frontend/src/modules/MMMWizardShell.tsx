@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { UseMutationResult, UseQueryResult } from '@tanstack/react-query'
+import { useQuery, UseMutationResult, UseQueryResult } from '@tanstack/react-query'
 import { tokens } from '../theme/tokens'
 import MMMDataSourceStep from './MMMDataSourceStep'
 import MMMRunConfigStep from './MMMRunConfigStep'
@@ -8,6 +8,7 @@ import BudgetOptimizer from './BudgetOptimizer'
 import { MMMContextBar, KpiMode } from '../components/MMMContextBar'
 import DashboardPage from '../components/dashboard/DashboardPage'
 import SectionCard from '../components/dashboard/SectionCard'
+import { apiGetJson } from '../lib/apiClient'
 
 type StepKey = 'data_source' | 'mapping' | 'model_run' | 'results' | 'optimize'
 
@@ -49,6 +50,17 @@ interface PersistedState {
   kpiMode: KpiMode
 }
 
+interface MMMRunSummary {
+  run_id: string
+  status: string
+  created_at: string | null
+  updated_at: string | null
+  dataset_id: string | null
+  kpi: string | null
+  n_channels: number
+  r2?: number
+}
+
 const STORAGE_KEY = 'mmm-wizard-state-v1'
 
 export default function MMMWizardShell(props: MMMWizardShellProps) {
@@ -70,6 +82,10 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
 
   const [kpiMode, setKpiMode] = useState<KpiMode>('sales')
   const [currentStep, setCurrentStep] = useState<StepKey>('data_source')
+  const recentRunsQuery = useQuery<MMMRunSummary[]>({
+    queryKey: ['mmm-runs'],
+    queryFn: async () => apiGetJson<MMMRunSummary[]>('/api/models', { fallbackMessage: 'Failed to load MMM runs' }),
+  })
 
   // Load persisted per-session state
   useEffect(() => {
@@ -79,10 +95,13 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
       const parsed = JSON.parse(raw) as PersistedState
       if (parsed.currentStep) setCurrentStep(parsed.currentStep)
       if (parsed.kpiMode) setKpiMode(parsed.kpiMode)
+      if (!mmmRunId && parsed.lastRunId && parsed.lastDatasetId) {
+        onMmmSelectRun(parsed.lastRunId, parsed.lastDatasetId)
+      }
     } catch {
       // ignore
     }
-  }, [])
+  }, [mmmRunId, onMmmSelectRun])
 
   // Persist when key pieces change
   useEffect(() => {
@@ -140,6 +159,22 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
     }
     return undefined
   }, [mmmRunId, mmmRunQuery.data, runStatus])
+
+  const recentRuns = useMemo(
+    () =>
+      (recentRunsQuery.data ?? [])
+        .slice()
+        .sort((a, b) => {
+          const aTime = new Date(a.updated_at || a.created_at || 0).getTime()
+          const bTime = new Date(b.updated_at || b.created_at || 0).getTime()
+          return bTime - aTime
+        })
+        .slice(0, 5),
+    [recentRunsQuery.data],
+  )
+
+  const formatRunDate = (value?: string | null) =>
+    value ? new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—'
 
   const renderStepContent = () => {
     if (mmmRunId) {
@@ -517,6 +552,87 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
               </button>
             </div>
           </div>
+        </SectionCard>
+
+        <SectionCard
+          title="Recent MMM runs"
+          subtitle="Reopen prior MMM results and budget work directly from the shared workspace."
+          actions={
+            <button
+              type="button"
+              onClick={() => recentRunsQuery.refetch()}
+              style={{
+                padding: `${t.space.sm}px ${t.space.md}px`,
+                fontSize: t.font.sizeSm,
+                fontWeight: t.font.weightMedium,
+                color: t.color.textSecondary,
+                background: 'transparent',
+                border: `1px solid ${t.color.border}`,
+                borderRadius: t.radius.sm,
+                cursor: 'pointer',
+              }}
+            >
+              Refresh runs
+            </button>
+          }
+        >
+          {recentRunsQuery.isLoading ? (
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading MMM runs…</div>
+          ) : !recentRuns.length ? (
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              No prior runs yet. Once a model finishes, it will be reopenable here without starting a new setup flow.
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: t.space.md }}>
+              {recentRuns.map((run) => {
+                const isSelected = run.run_id === mmmRunId
+                const statusColor =
+                  run.status === 'finished'
+                    ? t.color.success
+                    : run.status === 'error'
+                      ? t.color.danger
+                      : t.color.warning
+                return (
+                  <button
+                    key={run.run_id}
+                    type="button"
+                    onClick={() => run.dataset_id && onMmmSelectRun(run.run_id, run.dataset_id)}
+                    disabled={!run.dataset_id}
+                    style={{
+                      textAlign: 'left',
+                      padding: t.space.md,
+                      borderRadius: t.radius.md,
+                      border: `1px solid ${isSelected ? t.color.accent : t.color.borderLight}`,
+                      background: isSelected ? t.color.accentMuted : t.color.surface,
+                      cursor: run.dataset_id ? 'pointer' : 'not-allowed',
+                      display: 'grid',
+                      gap: 6,
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'baseline' }}>
+                      <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                        {run.kpi || 'MMM run'}
+                      </div>
+                      <div style={{ fontSize: t.font.sizeXs, fontWeight: t.font.weightSemibold, color: statusColor, textTransform: 'capitalize' }}>
+                        {run.status}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                      {formatRunDate(run.updated_at || run.created_at)}
+                    </div>
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                      {run.n_channels.toLocaleString()} channels
+                      {run.r2 != null ? ` • R² ${run.r2.toFixed(3)}` : ''}
+                      {run.dataset_id ? ` • dataset ${run.dataset_id.slice(0, 8)}…` : ''}
+                    </div>
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.accent }}>
+                      {isSelected ? 'Current MMM run' : 'Open results'}
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          )}
         </SectionCard>
 
         {renderStepContent()}
