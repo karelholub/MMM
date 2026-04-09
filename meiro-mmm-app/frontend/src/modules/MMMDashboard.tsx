@@ -19,6 +19,7 @@ import { tokens } from '../theme/tokens'
 import { apiGetJson } from '../lib/apiClient'
 import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
+import SectionCard from '../components/dashboard/SectionCard'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import AnalysisShareActions from '../components/dashboard/AnalysisShareActions'
 import { buildSettingsHref } from '../lib/settingsLinks'
@@ -352,25 +353,27 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
         />
       </div>
 
-      {/* Platform-style KPI tiles */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-          gap: t.space.md,
-          marginBottom: t.space.md,
-        }}
-      >
-        {/* Model fit */}
-        <div
-          style={{
-            background: t.color.surface,
-            border: `1px solid ${t.color.borderLight}`,
-            borderRadius: t.radius.md,
-            padding: `${t.space.lg}px ${t.space.xl}px`,
-            boxShadow: t.shadowSm,
-          }}
+      <div style={{ marginBottom: t.space.xl }}>
+        <SectionCard
+          title="Model health"
+          subtitle="Fit, calibration, observation count, and modeling stability in one place."
         >
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+              gap: t.space.md,
+            }}
+          >
+            <div
+              style={{
+                background: t.color.surface,
+                border: `1px solid ${t.color.borderLight}`,
+                borderRadius: t.radius.md,
+                padding: `${t.space.lg}px ${t.space.xl}px`,
+                boxShadow: t.shadowSm,
+              }}
+            >
           <div
             style={{
               fontSize: t.font.sizeXs,
@@ -399,19 +402,18 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
               ? 'Very high fit on short history – treat ROI with care.'
               : 'Higher is better; 0.7–0.9 is typical for stable MMM.'}
           </div>
-        </div>
+            </div>
 
-        {/* Calibration / holdout error – only if available */}
-        {run?.calibration_mape != null && (
-          <div
-            style={{
-              background: t.color.surface,
-              border: `1px solid ${t.color.borderLight}`,
-              borderRadius: t.radius.md,
-              padding: `${t.space.lg}px ${t.space.xl}px`,
-              boxShadow: t.shadowSm,
-            }}
-          >
+            {run?.calibration_mape != null && (
+              <div
+                style={{
+                  background: t.color.surface,
+                  border: `1px solid ${t.color.borderLight}`,
+                  borderRadius: t.radius.md,
+                  padding: `${t.space.lg}px ${t.space.xl}px`,
+                  boxShadow: t.shadowSm,
+                }}
+              >
             <div
               style={{
                 fontSize: t.font.sizeXs,
@@ -438,19 +440,18 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
             <div style={{ marginTop: 4, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
               Lower is better; &lt;20% is usually strong calibration.
             </div>
-          </div>
-        )}
+              </div>
+            )}
 
-        {/* Data points */}
-        <div
-          style={{
-            background: t.color.surface,
-            border: `1px solid ${t.color.borderLight}`,
-            borderRadius: t.radius.md,
-            padding: `${t.space.lg}px ${t.space.xl}px`,
-            boxShadow: t.shadowSm,
-          }}
-        >
+            <div
+              style={{
+                background: t.color.surface,
+                border: `1px solid ${t.color.borderLight}`,
+                borderRadius: t.radius.md,
+                padding: `${t.space.lg}px ${t.space.xl}px`,
+                boxShadow: t.shadowSm,
+              }}
+            >
           <div
             style={{
               fontSize: t.font.sizeXs,
@@ -477,18 +478,17 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
           <div style={{ marginTop: 4, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
             More history increases stability; aim for 26+ weeks.
           </div>
-        </div>
+            </div>
 
-        {/* Channels modeled */}
-        <div
-          style={{
-            background: t.color.surface,
-            border: `1px solid ${t.color.borderLight}`,
-            borderRadius: t.radius.md,
-            padding: `${t.space.lg}px ${t.space.xl}px`,
-            boxShadow: t.shadowSm,
-          }}
-        >
+            <div
+              style={{
+                background: t.color.surface,
+                border: `1px solid ${t.color.borderLight}`,
+                borderRadius: t.radius.md,
+                padding: `${t.space.lg}px ${t.space.xl}px`,
+                boxShadow: t.shadowSm,
+              }}
+            >
           <div
             style={{
               fontSize: t.font.sizeXs,
@@ -515,18 +515,17 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
           <div style={{ marginTop: 4, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
             Too many channels vs weeks can overfit.
           </div>
-        </div>
+            </div>
 
-        {/* Confidence / diagnostics badge */}
-        <div
-          style={{
-            background: t.color.surface,
-            border: `1px solid ${confidenceLevel === 'ok' ? t.color.successMuted : t.color.warning}`,
-            borderRadius: t.radius.md,
-            padding: `${t.space.lg}px ${t.space.xl}px`,
-            boxShadow: t.shadowSm,
-          }}
-        >
+            <div
+              style={{
+                background: t.color.surface,
+                border: `1px solid ${confidenceLevel === 'ok' ? t.color.successMuted : t.color.warning}`,
+                borderRadius: t.radius.md,
+                padding: `${t.space.lg}px ${t.space.xl}px`,
+                boxShadow: t.shadowSm,
+              }}
+            >
           <div
             style={{
               fontSize: t.font.sizeXs,
@@ -560,7 +559,9 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
               ? 'No major red flags detected. Check data health section for details.'
               : confidenceReasons[0]}
           </div>
-        </div>
+            </div>
+          </div>
+        </SectionCard>
       </div>
 
       <div style={{ marginBottom: t.space.xl }}>
@@ -736,7 +737,6 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
         )
       })()}
 
-      {/* Charts */}
       <style>{`@media (max-width: 900px) { .mmm-charts { grid-template-columns: 1fr !important; } }`}</style>
       <div
         className="mmm-charts"
@@ -748,26 +748,10 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
         }}
       >
         {dataset.length > 0 && (
-          <div
-            style={{
-              background: t.color.surface,
-              border: `1px solid ${t.color.borderLight}`,
-              borderRadius: t.radius.lg,
-              padding: t.space.xl,
-              boxShadow: t.shadowSm,
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: t.space.sm }}>
-              <h3
-                style={{
-                  margin: 0,
-                  fontSize: t.font.sizeMd,
-                  fontWeight: t.font.weightSemibold,
-                  color: t.color.text,
-                }}
-              >
-                KPI vs spend over time
-              </h3>
+          <SectionCard
+            title="KPI vs spend over time"
+            subtitle="Compare modeled KPI movement against visible channel spend inputs week by week."
+            actions={
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: t.space.xs, alignItems: 'center' }}>
                 <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Channels shown:</span>
                 {spendChannels.map((ch, idx) => {
@@ -810,7 +794,8 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
                   )
                 })}
               </div>
-            </div>
+            }
+          >
             <ResponsiveContainer width="100%" height={300}>
               <LineChart data={dataset} margin={{ top: 8, right: 16, left: 8 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
@@ -853,29 +838,14 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
                 />
               </LineChart>
             </ResponsiveContainer>
-          </div>
+          </SectionCard>
         )}
 
         {dataset.length > 0 && (
-          <div
-            style={{
-              background: t.color.surface,
-              border: `1px solid ${t.color.borderLight}`,
-              borderRadius: t.radius.lg,
-              padding: t.space.xl,
-              boxShadow: t.shadowSm,
-            }}
+          <SectionCard
+            title="Spend by channel"
+            subtitle="Stacked spend view for the modeled channels across the selected dataset window."
           >
-            <h3
-              style={{
-                margin: `0 0 ${t.space.lg}px`,
-                fontSize: t.font.sizeMd,
-                fontWeight: t.font.weightSemibold,
-                color: t.color.text,
-              }}
-            >
-              Spend by channel (stacked)
-            </h3>
             <ResponsiveContainer width="100%" height={300}>
               <AreaChart data={dataset} margin={{ top: 8, right: 16, left: 8 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
@@ -896,32 +866,16 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
                 ))}
               </AreaChart>
             </ResponsiveContainer>
-          </div>
+          </SectionCard>
         )}
       </div>
 
-      {/* Contribution over time (stacked area for top channels) */}
       {contributionOverTime.length > 0 && (
-        <div
-          style={{
-            background: t.color.surface,
-            border: `1px solid ${t.color.borderLight}`,
-            borderRadius: t.radius.lg,
-            padding: t.space.xl,
-            marginBottom: t.space.xl,
-            boxShadow: t.shadowSm,
-          }}
-        >
-          <h3
-            style={{
-              margin: `0 0 ${t.space.lg}px`,
-              fontSize: t.font.sizeMd,
-              fontWeight: t.font.weightSemibold,
-              color: t.color.text,
-            }}
+        <div style={{ marginBottom: t.space.xl }}>
+          <SectionCard
+            title="Contribution over time"
+            subtitle="Modeled KPI contribution for the top channels by share."
           >
-            Contribution over time (top channels)
-          </h3>
           <ResponsiveContainer width="100%" height={280}>
             <AreaChart data={contributionOverTime} margin={{ top: 8, right: 16, left: 8 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
@@ -942,121 +896,80 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
               ))}
             </AreaChart>
           </ResponsiveContainer>
+          </SectionCard>
         </div>
       )}
 
-      {/* ROI by Channel */}
-      {roi && roi.length > 0 && (
-        <div
-          style={{
-            background: t.color.surface,
-            border: `1px solid ${t.color.borderLight}`,
-            borderRadius: t.radius.lg,
-            padding: t.space.xl,
-            marginBottom: t.space.xl,
-            boxShadow: t.shadowSm,
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: t.space.sm }}>
-            <h3
-              style={{
-                margin: 0,
-                fontSize: t.font.sizeMd,
-                fontWeight: t.font.weightSemibold,
-                color: t.color.text,
-              }}
-            >
-              ROI by channel
-            </h3>
-            <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Point estimates (no uncertainty interval yet).</span>
-          </div>
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={roi} margin={{ top: 8, right: 16, left: 8 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
-              <XAxis
-                dataKey="channel"
-                tick={{ fontSize: t.font.sizeSm, fill: t.color.text }}
-                tickFormatter={(v) => channelDisplay(String(v))}
-              />
-              <YAxis
-                tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }}
-                domain={[-2, 'auto']}
-              />
-              <Tooltip contentStyle={{ fontSize: t.font.sizeSm, borderRadius: t.radius.sm }} />
-              <Bar dataKey="roi" name="ROI" radius={[4, 4, 0, 0]}>
-                {roi.map((_: { channel: string }, i: number) => (
-                  <Cell key={i} fill={t.color.chart[i % t.color.chart.length]} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-
-      {/* Channel Contribution */}
-      {contrib && contrib.length > 0 && (
-        <div
-          style={{
-            background: t.color.surface,
-            border: `1px solid ${t.color.borderLight}`,
-            borderRadius: t.radius.lg,
-            padding: t.space.xl,
-            marginBottom: t.space.xl,
-            boxShadow: t.shadowSm,
-          }}
-        >
-          <h3
-            style={{
-              margin: `0 0 ${t.space.lg}px`,
-              fontSize: t.font.sizeMd,
-              fontWeight: t.font.weightSemibold,
-              color: t.color.text,
-            }}
+      <div
+        className="mmm-charts"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: t.space.xl,
+          marginBottom: t.space.xl,
+        }}
+      >
+        {roi && roi.length > 0 && (
+          <SectionCard
+            title="ROI by channel"
+            subtitle="Point estimates for modeled return at the current fitted spend pattern."
           >
-            Channel contribution share
-          </h3>
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={contrib} margin={{ top: 8, right: 16, left: 8 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
-              <XAxis
-                dataKey="channel"
-                tick={{ fontSize: t.font.sizeSm, fill: t.color.text }}
-                tickFormatter={(v) => channelDisplay(String(v))}
-              />
-              <YAxis tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }} tickFormatter={(v) => `${(v * 100).toFixed(0)}%`} />
-              <Tooltip formatter={(value: number) => `${(value * 100).toFixed(1)}%`} contentStyle={{ fontSize: t.font.sizeSm, borderRadius: t.radius.sm }} />
-              <Bar dataKey="mean_share" name="Contribution" radius={[4, 4, 0, 0]}>
-                {contrib.map((_: { channel: string }, i: number) => (
-                  <Cell key={i} fill={t.color.chart[(i + 2) % t.color.chart.length]} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      )}
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={roi} margin={{ top: 8, right: 16, left: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
+                <XAxis
+                  dataKey="channel"
+                  tick={{ fontSize: t.font.sizeSm, fill: t.color.text }}
+                  tickFormatter={(v) => channelDisplay(String(v))}
+                />
+                <YAxis
+                  tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }}
+                  domain={[-2, 'auto']}
+                />
+                <Tooltip contentStyle={{ fontSize: t.font.sizeSm, borderRadius: t.radius.sm }} />
+                <Bar dataKey="roi" name="ROI" radius={[4, 4, 0, 0]}>
+                  {roi.map((_: { channel: string }, i: number) => (
+                    <Cell key={i} fill={t.color.chart[i % t.color.chart.length]} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </SectionCard>
+        )}
 
-      {/* Response curves for top channels */}
+        {contrib && contrib.length > 0 && (
+          <SectionCard
+            title="Channel contribution share"
+            subtitle="Share of modeled KPI credited to each channel across the selected run."
+          >
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={contrib} margin={{ top: 8, right: 16, left: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
+                <XAxis
+                  dataKey="channel"
+                  tick={{ fontSize: t.font.sizeSm, fill: t.color.text }}
+                  tickFormatter={(v) => channelDisplay(String(v))}
+                />
+                <YAxis tick={{ fontSize: t.font.sizeSm, fill: t.color.textSecondary }} tickFormatter={(v) => `${(v * 100).toFixed(0)}%`} />
+                <Tooltip formatter={(value: number) => `${(value * 100).toFixed(1)}%`} contentStyle={{ fontSize: t.font.sizeSm, borderRadius: t.radius.sm }} />
+                <Bar dataKey="mean_share" name="Contribution" radius={[4, 4, 0, 0]}>
+                  {contrib.map((_: { channel: string }, i: number) => (
+                    <Cell key={i} fill={t.color.chart[(i + 2) % t.color.chart.length]} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </SectionCard>
+        )}
+      </div>
+
       {responseCurves.length > 0 && (
-        <div
-          style={{
-            background: t.color.surface,
-            border: `1px solid ${t.color.borderLight}`,
-            borderRadius: t.radius.lg,
-            padding: t.space.xl,
-            marginBottom: t.space.xl,
-            boxShadow: t.shadowSm,
-          }}
-        >
-          <h3
-            style={{
-              margin: `0 0 ${t.space.lg}px`,
-              fontSize: t.font.sizeMd,
-              fontWeight: t.font.weightSemibold,
-              color: t.color.text,
-            }}
+        <div style={{ marginBottom: t.space.xl }}>
+          <SectionCard
+            title="Response curves"
+            subtitle="Relative saturation shape for the highest-ROI channels. Use for prioritization, not exact forecasting."
+            footer="Curves are smoothed approximations based on current spend and ROI. Use them to compare relative saturation, not exact levels."
           >
-            Response curves (top channels)
-          </h3>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: t.space.lg }}>
             {responseCurves.map((curve) => (
               <div key={curve.channel}>
@@ -1099,27 +1012,15 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
               </div>
             ))}
           </div>
-          <p style={{ marginTop: t.space.sm, fontSize: t.font.sizeXs, color: t.color.textMuted }}>
-            Curves are smoothed approximations based on current spend and ROI. Use them to compare relative saturation, not exact levels.
-          </p>
+          </SectionCard>
         </div>
       )}
 
-      {/* Summary + ROI/Contrib table + export */}
-      <div
-        style={{
-          background: t.color.surface,
-          border: `1px solid ${t.color.borderLight}`,
-          borderRadius: t.radius.lg,
-          padding: t.space.xl,
-          boxShadow: t.shadowSm,
-        }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: t.space.lg, flexWrap: 'wrap', gap: t.space.md }}>
-          <h3 style={{ margin: 0, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-            Summary & channel metrics
-          </h3>
-          {roi?.length && contrib?.length ? (
+      <SectionCard
+        title="Summary & channel metrics"
+        subtitle="Unified spend, contribution, and efficiency view for the modeled channels."
+        actions={
+          roi?.length && contrib?.length ? (
             <button
               type="button"
               onClick={() => exportRoiCSV(roi, contrib)}
@@ -1136,8 +1037,10 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
             >
               Export CSV
             </button>
-          ) : null}
-        </div>
+          ) : null
+        }
+        overflow="auto"
+      >
         <div
           style={{
             display: 'grid',
@@ -1183,7 +1086,7 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
         </div>
 
         {roi && roi.length > 0 && contrib && contrib.length > 0 && (
-          <div style={{ overflowX: 'auto' }}>
+          <div>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: t.font.sizeSm }}>
               <thead>
                 <tr style={{ borderBottom: `2px solid ${t.color.border}` }}>
@@ -1375,7 +1278,7 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
             </table>
           </div>
         )}
-      </div>
+      </SectionCard>
     </div>
   )
 }
