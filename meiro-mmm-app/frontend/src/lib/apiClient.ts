@@ -37,7 +37,7 @@ export function getUserContext(): { role: string; userId: string } {
   }
 }
 
-export function authHeaders(): Record<string, string> {
+function authHeaders(): Record<string, string> {
   const { role, userId } = getUserContext()
   const headers: Record<string, string> = {}
   if (role) headers['X-User-Role'] = role
@@ -68,7 +68,7 @@ function mergeHeaders(
   return headers
 }
 
-export async function parseApiError(res: Response, fallbackMessage: string): Promise<Error> {
+async function parseApiError(res: Response, fallbackMessage: string): Promise<Error> {
   let detailPayload: unknown = undefined
   let message = fallbackMessage
   let code: string | undefined

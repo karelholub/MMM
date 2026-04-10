@@ -1,7 +1,7 @@
 import { ReactNode } from 'react'
 import { tokens as t } from '../../theme/tokens'
 
-export interface SectionCardProps {
+interface SectionCardProps {
   title: string
   subtitle?: string
   actions?: ReactNode

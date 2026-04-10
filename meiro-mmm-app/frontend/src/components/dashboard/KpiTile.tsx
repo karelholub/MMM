@@ -2,7 +2,7 @@ import { memo } from 'react'
 import TrendPanel, { type KpiSeriesPoint } from './TrendPanel'
 import { tokens as t } from '../../theme/tokens'
 
-export interface KpiTileProps {
+interface KpiTileProps {
   label: string
   value: string
   deltaPct?: number | null
@@ -21,7 +21,7 @@ export interface KpiTileProps {
   formatTooltipValue?: (value: number) => string
 }
 
-export const KpiTile = memo(function KpiTile({
+const KpiTile = memo(function KpiTile({
   label,
   value,
   deltaPct,

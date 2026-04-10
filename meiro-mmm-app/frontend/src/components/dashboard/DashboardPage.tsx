@@ -232,7 +232,7 @@ function AlertsBell({ alerts }: { alerts: DashboardAlert[] }) {
   )
 }
 
-export function DashboardPage({
+function DashboardPage({
   title,
   description,
   dateRange,

@@ -17,7 +17,6 @@ import json
 import logging
 import math
 from collections import defaultdict
-from itertools import combinations
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -649,9 +648,6 @@ def compute_channel_performance(
     list of channel performance dicts
     """
     channels = attribution_result.get("channels", [])
-    total_conversions = attribution_result.get("total_conversions", 0)
-    total_value = attribution_result.get("total_value", 0)
-
     performance = []
     for ch_data in channels:
         ch = ch_data["channel"]

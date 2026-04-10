@@ -1372,8 +1372,6 @@ def _compute_quarantine_reasons(journey: Dict[str, Any], ingest_cfg: Dict[str, A
     reasons: List[Dict[str, str]] = []
     touchpoints = journey.get("touchpoints") or []
     conversions = journey.get("conversions") or []
-    parser_meta = ((journey.get("meta") or {}).get("parser") or {}) if isinstance(journey, dict) else {}
-
     if not touchpoints:
         reasons.append(_reason_code(code="missing_touchpoints", severity="error", message="Journey has no touchpoints"))
     if not conversions:

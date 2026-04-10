@@ -1,4 +1,4 @@
-export type AppPageKey =
+type AppPageKey =
   | 'overview'
   | 'alerts'
   | 'dashboard'
@@ -18,7 +18,7 @@ export type AppPageKey =
   | 'analytics_journeys'
   | 'datasets'
 
-export type PermissionCheckContext = {
+type PermissionCheckContext = {
   rbacEnabled: boolean
   hasPermission: (key: string) => boolean
   hasAnyPermission: (keys: string[]) => boolean

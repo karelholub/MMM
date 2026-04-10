@@ -1,4 +1,4 @@
-export type SettingsSectionKey =
+type SettingsSectionKey =
   | 'attribution'
   | 'segments'
   | 'kpi'

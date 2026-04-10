@@ -18,14 +18,14 @@ export interface AnalyticsTableColumn<T> {
   cellStyle?: CSSProperties | ((row: T, index: number) => CSSProperties | undefined)
 }
 
-export interface AnalyticsTablePreset {
+interface AnalyticsTablePreset {
   key: string
   label: ReactNode
   hiddenColumnKeys?: string[]
   visibleColumnKeys?: string[]
 }
 
-export interface AnalyticsTableProps<T> {
+interface AnalyticsTableProps<T> {
   columns: AnalyticsTableColumn<T>[]
   rows: T[]
   rowKey: (row: T, index: number) => string

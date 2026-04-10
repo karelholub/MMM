@@ -1,7 +1,7 @@
 import { ReactNode } from 'react'
 import { tokens as t } from '../../theme/tokens'
 
-export interface InsightRowProps {
+interface InsightRowProps {
   icon?: ReactNode
   message: string
   severity?: 'info' | 'warning' | 'critical' | string

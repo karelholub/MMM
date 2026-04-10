@@ -58,7 +58,7 @@ export const NAV_ITEMS: NavItem[] = [
   { key: 'settings', label: 'Settings', section: 'Admin', icon: 'ST', breadcrumb: 'Admin / Settings' },
 ]
 
-export const ATTRIBUTION_MODELS = [
+const ATTRIBUTION_MODELS = [
   { id: 'last_touch', label: 'Last Touch' },
   { id: 'first_touch', label: 'First Touch' },
   { id: 'linear', label: 'Linear' },

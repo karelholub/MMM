@@ -1,6 +1,6 @@
 import { apiGetJson, apiSendJson, withQuery } from '../lib/apiClient'
 
-export interface DataSourceRecord {
+interface DataSourceRecord {
   id: string
   workspace_id: string
   category: 'warehouse' | 'ad_platform' | 'cdp'

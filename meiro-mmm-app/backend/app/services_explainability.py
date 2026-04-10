@@ -13,19 +13,14 @@ Features:
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional
 
-import numpy as np
-import pandas as pd
 from sqlalchemy.orm import Session
 
 from .models_config_dq import (
     ModelConfig as ORMModelConfig,
     ModelConfigAudit,
-    AttributionQualitySnapshot,
-    DQSnapshot,
 )
 from .services_metrics import derive_efficiency
 from .services_quality import get_latest_quality_for_scope
@@ -454,8 +449,7 @@ def explain_campaign_performance(
     """
     channels = attribution_result.get("channels", [])
     total_conversions = attribution_result.get("total_conversions", 0)
-    total_value = attribution_result.get("total_value", 0.0)
-    
+
     # Find campaign in results
     campaign_data = next(
         (ch for ch in channels if ch.get("channel") == campaign_id),

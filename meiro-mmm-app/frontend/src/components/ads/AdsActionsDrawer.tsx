@@ -12,7 +12,7 @@ import {
 } from '../../connectors/adsManagerConnector'
 import { buildJourneyHypothesisHref } from '../../lib/journeyLinks'
 
-export interface AdsActionsDrawerProps {
+interface AdsActionsDrawerProps {
   open: boolean
   onClose: () => void
   provider: AdsProviderKey

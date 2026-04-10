@@ -25,7 +25,6 @@ from app.utils.meiro_config import (
     append_auto_replay_history,
     append_webhook_archive_entry,
     append_webhook_event,
-    get_event_archive_entries,
     get_event_archive_status,
     get_last_test_at,
     get_mapping,
@@ -34,7 +33,6 @@ from app.utils.meiro_config import (
     get_auto_replay_history,
     get_pull_config,
     query_webhook_archive_entries,
-    get_webhook_archive_entries,
     get_webhook_archive_status,
     get_webhook_events,
     get_webhook_last_received_at,
@@ -2138,7 +2136,6 @@ def create_router(
         top_currency_fields = _top_items(currency_field_counts, n=5)
         top_sources = _top_items(source_counts, n=15)
         top_mediums = _top_items(medium_counts, n=15)
-        top_campaigns = _top_items(campaign_counts, n=15)
         top_source_medium_pairs = _top_items(source_medium_pair_counts, n=20)
         top_touchpoint_attrs = _top_items(touchpoint_attr_counts, n=5)
         top_channel_field_paths = _top_items(channel_field_path_counts, n=5)

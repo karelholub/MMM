@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { tokens as t } from '../../theme/tokens'
 
-export interface ContextSummaryItem {
+interface ContextSummaryItem {
   label: string
   value: ReactNode
   valueColor?: string

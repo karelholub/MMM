@@ -18,7 +18,6 @@ from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
-from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from .models_config_dq import (

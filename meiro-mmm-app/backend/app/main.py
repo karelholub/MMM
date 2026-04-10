@@ -1,28 +1,22 @@
-from fastapi import FastAPI, BackgroundTasks, UploadFile, File, Form, HTTPException, Query, Body, Request, Header, Depends
+from fastapi import FastAPI, HTTPException, Query, Body, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse, Response, JSONResponse
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any
 from contextlib import asynccontextmanager, contextmanager
-import pandas as pd
 from pathlib import Path
-import io
 import json
 import os
-import re
 import time
 import uuid
 import hashlib
 import secrets
-import requests
 import logging
 import threading
-from datetime import date, datetime, timedelta, timezone
-from sqlalchemy import func
+from datetime import date, datetime, timedelta
 
 logger = logging.getLogger(__name__)
-from app.utils.token_store import save_token, get_token, delete_token, get_all_connected_platforms
-from app.utils.encrypt import encrypt, decrypt
+from app.utils.token_store import get_token, delete_token, get_all_connected_platforms
 from app.utils import datasource_config as ds_config
 from app.utils.taxonomy import load_taxonomy
 from app.utils.kpi_config import load_kpi_config, save_kpi_config, KpiConfig, KpiDefinition
@@ -32,17 +26,7 @@ from app.models_config_dq import (
     ModelConfig as ORMModelConfig,
     ModelConfigAudit,
     ModelConfigStatus,
-    ConversionPath,
-    JourneySettingsVersion as ORMJourneySettingsVersion,
-    JourneySettingsStatus,
-    AuthSession as ORMAuthSession,
-    User as ORMUser,
-    Workspace as ORMWorkspace,
-    WorkspaceMembership,
     Role as ORMRole,
-    Permission as ORMPermission,
-    RolePermission as ORMRolePermission,
-    Invitation as ORMInvitation,
     SecurityAuditLog as ORMSecurityAuditLog,
     DQSnapshot,
     DQAlertRule,
@@ -97,15 +81,11 @@ from app.services_journey_settings import (
     build_journey_settings_validation_report,
     create_journey_settings_draft,
     ensure_active_journey_settings,
-    get_active_journey_settings,
     get_journey_settings_version,
-    invalidate_active_journey_settings_cache,
     list_journey_settings_versions,
     update_journey_settings_draft,
-    validate_journey_settings,
 )
 from app.services_access_control import ensure_access_control_seed_data, DEFAULT_WORKSPACE_ID
-from app.services_access_control import PERMISSIONS as RBAC_PERMISSIONS
 from app.services_auth import SESSION_COOKIE_NAME, resolve_auth_context, verify_csrf
 from app.core.permissions import (
     PermissionContext,
@@ -124,7 +104,6 @@ from app.services_conversions import (
 from app.services_journey_ingestion import (
     MEIRO_PARSER_VERSION,
     canonicalize_meiro_profiles,
-    detect_schema,
     extract_customer_ids_from_meiro_events,
     rebuild_profiles_from_meiro_events,
     validate_and_normalize,
@@ -139,9 +118,7 @@ from app.services_journey_definitions import (
     ensure_default_journey_definition,
     get_journey_definition,
 )
-from app.services_journey_aggregates import run_daily_journey_aggregates
 from app.services_rebuild_jobs import (
-    purge_journey_definition_outputs,
     rebuild_journey_definition_outputs,
 )
 from app.services_journeys_health import (
@@ -161,30 +138,16 @@ from app.modules.attribution.schemas import LoadSampleRequest
 from app.modules.ads_connectors.router import create_router as create_ads_connectors_router
 from app.modules.ads_connectors import service as ads_connectors_service
 from app.modules.ads_governance.router import create_router as create_ads_governance_router
-from app.modules.ads_governance.schemas import (
-    AdsChangeRequestApplyPayload,
-    AdsChangeRequestCreatePayload,
-    AdsChangeRequestRejectPayload,
-)
 from app.modules.config_management.router import create_router as create_config_management_router
 from app.modules.data_sources.router import create_router as create_data_sources_router
 from app.modules.meiro_integration.router import create_router as create_meiro_integration_router
 from app.modules.mmm.router import create_router as create_mmm_router
 from app.modules.segments.router import create_router as create_segments_router
 from app.modules.mmm import service as mmm_service
-from app.modules.mmm.schemas import BuildFromPlatformRequest, ModelConfig, OptimizeRequest, ValidateMappingRequest
-from app.modules.admin_access.schemas import (
-    AdminInvitationCreatePayload,
-    AdminMembershipUpdatePayload,
-    AdminRoleCreatePayload,
-    AdminRoleUpdatePayload,
-    AdminUserUpdatePayload,
-    InvitationAcceptPayload,
-)
+from app.modules.mmm.schemas import ModelConfig
 from app.modules.settings.schemas import (
     AdsGovernanceSettings,
     AttributionSettings,
-    FeatureFlags,
     KpiConfigModel,
     KpiDefinitionModel,
     MMMSettings,
@@ -219,7 +182,7 @@ from app.services_ads_ops import (
     list_change_requests as ads_list_change_requests,
     reject_change_request as ads_reject_change_request,
 )
-from app.models_overview_alerts import AlertEvent, AlertRule, NotificationChannel, UserNotificationPref
+from app.models_overview_alerts import AlertEvent
 from app.services_overview import get_overview_alerts
 from app.services_performance_helpers import (
     build_performance_query_context as _build_performance_query_context,
@@ -251,11 +214,7 @@ from app.services_incrementality import (
     build_experiment_design_recommendation,
     build_experiment_setup_context,
     create_experiment_record,
-    record_exposure,
     record_exposures_batch,
-    record_outcome,
-    record_outcomes_batch,
-    compute_experiment_results,
     estimate_sample_size,
     run_nightly_report,
     get_experiment_time_series,
@@ -267,28 +226,17 @@ from app.services_incrementality import (
 from app.mmm_engine import fit_model as mmm_fit_model, engine_info
 from app.connectors import meiro_cdp
 from app.utils.meiro_config import (
-    append_webhook_event,
-    append_webhook_archive_entry,
     get_last_test_at,
-    get_webhook_events,
-    get_webhook_archive_entries,
     get_webhook_archive_status,
     get_webhook_last_received_at,
     get_webhook_received_count,
     get_webhook_secret,
     get_mapping,
     get_mapping_state,
-    save_mapping,
     get_pull_config,
-    save_pull_config,
-    rotate_webhook_secret,
-    rebuild_profiles_from_webhook_archive,
-    set_webhook_received,
-    update_mapping_approval,
 )
 from app.attribution_engine import (
     run_attribution,
-    run_all_models as run_all_attribution,
     run_attribution_campaign,
     compute_channel_performance,
     analyze_paths,
@@ -2559,10 +2507,6 @@ app.include_router(
             definition_id=definition_id,
             reprocess_days=reprocess_days,
         ),
-        purge_journey_definition_outputs_fn=lambda db, definition_id: purge_journey_definition_outputs(
-            db,
-            definition_id=definition_id,
-        ),
     )
 )
 
@@ -2706,7 +2650,6 @@ app.include_router(
         model_config_cls=ORMModelConfig,
         model_config_audit_cls=ModelConfigAudit,
         model_config_status_obj=ModelConfigStatus,
-        journey_settings_version_cls=ORMJourneySettingsVersion,
         create_draft_config_fn=create_draft_config,
         clone_config_fn=clone_config,
         update_draft_config_fn=update_draft_config,
@@ -2724,7 +2667,6 @@ app.include_router(
         update_journey_settings_draft_fn=update_journey_settings_draft,
         archive_journey_settings_version_fn=archive_journey_settings_version,
         ensure_active_journey_settings_fn=ensure_active_journey_settings,
-        validate_journey_settings_fn=validate_journey_settings,
         build_journey_settings_validation_report_fn=build_journey_settings_validation_report,
         build_journey_settings_impact_preview_fn=build_journey_settings_impact_preview,
         build_journey_settings_context_fn=build_journey_settings_context,
@@ -3472,10 +3414,6 @@ def explainability_summary(
     # Feature importance: share of attributed value in current period + direction of change
     feature_importance: List[FeatureImportanceItem] = []
     if scope in ("channel", "campaign") and curr_res.get("channels"):
-        total_curr = float(curr_res.get("total_value", 0.0) or 0.0)
-        delta_val_total = 0.0
-        if drivers and drivers[0].metric == "attributed_value":
-            delta_val_total = drivers[0].delta
         contrib_by_id = {c["id"]: c for c in contrib_deltas}
         for ch in curr_res.get("channels", []):
             cid = ch.get("channel")

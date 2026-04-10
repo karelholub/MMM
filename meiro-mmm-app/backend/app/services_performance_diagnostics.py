@@ -2,17 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set
 
 from sqlalchemy.orm import Session
 
 from app.models_config_dq import ConversionPath, ConversionScopeDiagnosticFact, JourneyInstanceFact, JourneyRoleFact, JourneyStepFact
-from app.services_conversions import (
-    conversion_path_is_converted,
-    conversion_path_payload,
-    conversion_path_revenue_value,
-    conversion_path_touchpoints,
-)
+from app.services_conversions import conversion_path_is_converted, conversion_path_revenue_value, conversion_path_touchpoints
 from app.services_journey_aggregates import (
     STEP_ADD_TO_CART,
     STEP_CHECKOUT,
@@ -416,7 +411,6 @@ def build_scope_diagnostics(
         end=end,
         conversion_key=conversion_key,
     ):
-        payload = conversion_path_payload(row)
         touchpoints = conversion_path_touchpoints(row)
         if not touchpoints:
             continue

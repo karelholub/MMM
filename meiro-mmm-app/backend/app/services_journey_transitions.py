@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime, time as dt_time, timedelta
-from typing import Any, Dict, List, Optional, Set, Tuple
+from datetime import date
+from typing import Any, Dict, Optional, Set, Tuple
 
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .models_config_dq import JourneyDefinition

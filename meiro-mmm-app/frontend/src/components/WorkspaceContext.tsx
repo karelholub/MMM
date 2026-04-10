@@ -63,7 +63,7 @@ export interface JourneysSummary {
   consistency_warnings?: string[]
 }
 
-export interface WorkspaceContextValue {
+interface WorkspaceContextValue {
   // Attribution model + config (global for workspace)
   attributionModel: string
   setAttributionModel: (model: string) => void

@@ -234,7 +234,6 @@ def _expense_by_channel(
     expenses: Any,
     date_from: Optional[str],
     date_to: Optional[str],
-    currency_filter: Optional[str],
     allowed_channels: Optional[List[str]] = None,
 ) -> Dict[str, float]:
     """Aggregate expenses by channel. expenses: dict[id -> ExpenseEntry] or list of dicts."""
@@ -1891,14 +1890,12 @@ def get_overview_drivers(
         expenses or {},
         date_from,
         date_to,
-        None,
         allowed_channels=[channel_group] if use_channel_group_filter else None,
     )
     prev_expense = _expense_by_channel(
         expenses or {},
         prev_from.strftime("%Y-%m-%d"),
         prev_to.strftime("%Y-%m-%d"),
-        None,
         allowed_channels=[channel_group] if use_channel_group_filter else None,
     )
 

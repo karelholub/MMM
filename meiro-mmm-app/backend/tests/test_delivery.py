@@ -2,7 +2,7 @@
 Integration tests for alert notification delivery: idempotency, templates, realtime trigger, digest.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from unittest.mock import patch
 
 import pytest
@@ -14,7 +14,6 @@ from app.models_overview_alerts import (
     AlertEvent,
     AlertRule,
     NotificationChannel,
-    NotificationDelivery,
     UserNotificationPref,
 )
 from app.services_delivery import (

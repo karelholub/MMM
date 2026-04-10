@@ -71,7 +71,6 @@ def create_router(
     validate_conversion_kpi_id_fn: Callable[[Optional[str]], Optional[str]],
     get_settings_obj: Callable[[], Any],
     rebuild_journey_definition_outputs_fn: Callable[..., dict],
-    purge_journey_definition_outputs_fn: Callable[..., dict],
 ) -> APIRouter:
     router = APIRouter(tags=["journeys"])
 

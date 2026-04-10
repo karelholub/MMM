@@ -172,7 +172,6 @@ def build_scope_diagnostic_fact_rows(
             revenue_value = float(journey.get("conversion_value") or 0.0)
 
     converted = bool(journey.get("converted")) or bool(journey.get("conversions"))
-    interaction_type = _classify_journey_interaction(journey)
     outcome = journey_outcome_summary(journey)
     if not converted and float(outcome.get("gross_conversions", 0.0) or 0.0) > 0.0:
         converted = True

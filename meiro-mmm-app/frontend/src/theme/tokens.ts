@@ -58,4 +58,4 @@ export const tokens = {
   shadowLg: '0 10px 20px rgba(15, 23, 42, 0.08)',
 } as const
 
-export type Tokens = typeof tokens
+type Tokens = typeof tokens

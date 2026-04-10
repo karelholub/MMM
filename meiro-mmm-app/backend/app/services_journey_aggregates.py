@@ -8,7 +8,7 @@ import math
 import time
 from collections import defaultdict
 from datetime import date, datetime, time as dt_time, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -38,7 +38,6 @@ from .services_canonical_facts import (
     load_preferred_journey_rows,
 )
 from .services_journey_definition_facts import build_journey_definition_instance_fact, iter_definition_instance_rows
-from .services_journey_instance_facts import load_journey_instance_sequences
 from .services_journey_transition_facts import iter_journey_transition_rows
 from .services_visit_facts import iter_touchpoint_visit_rows
 

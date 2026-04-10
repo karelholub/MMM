@@ -6,7 +6,7 @@ import { apiGetJson, apiSendJson } from '../lib/apiClient'
 
 const t = tokens
 
-export type DataSourceType = 'platform' | 'csv'
+type DataSourceType = 'platform' | 'csv'
 
 interface PlatformOptions {
   spend_channels: string[]

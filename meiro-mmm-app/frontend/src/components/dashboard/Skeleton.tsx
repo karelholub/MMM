@@ -1,13 +1,13 @@
 import { tokens as t } from '../../theme/tokens'
 
-export interface SkeletonProps {
+interface SkeletonProps {
   width?: number | string
   height?: number | string
   borderRadius?: number
   style?: React.CSSProperties
 }
 
-export default function Skeleton({
+function Skeleton({
   width = '100%',
   height = 16,
   borderRadius = t.radius.sm,

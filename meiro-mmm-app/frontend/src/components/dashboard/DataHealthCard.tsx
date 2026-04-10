@@ -1,12 +1,12 @@
 import { tokens as t } from '../../theme/tokens'
 
-export interface FreshnessData {
+interface FreshnessData {
   last_touchpoint_ts?: string | null
   last_conversion_ts?: string | null
   ingest_lag_minutes?: number | null
 }
 
-export interface DataHealthCardProps {
+interface DataHealthCardProps {
   freshness?: FreshnessData | null
   /** Optional link handlers (e.g. navigate to page) */
   onOpenDataSources?: () => void

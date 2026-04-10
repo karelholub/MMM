@@ -5,7 +5,7 @@ import { apiGetJson, apiSendJson } from '../../lib/apiClient'
 import AdsActionsDrawer from '../../components/ads/AdsActionsDrawer'
 import { type AdsProviderKey } from '../../connectors/adsManagerConnector'
 
-export interface AlertDetail {
+interface AlertDetail {
   id: number
   rule_id: number
   rule_name: string | null

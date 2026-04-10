@@ -4,7 +4,6 @@ Deterministic: fixed timestamps and seeded data where needed.
 """
 
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import create_engine
@@ -18,7 +17,6 @@ from app.services_alerts_engine import (
     make_fingerprint,
     period_id_for_schedule,
     _zscore,
-    get_kpi_series_for_baseline,
     get_current_kpi_from_paths_and_expenses,
     evaluate_anomaly_kpi,
     evaluate_data_freshness,

@@ -2,7 +2,7 @@ import io
 import json
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict
 
 import pandas as pd
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException

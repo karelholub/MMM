@@ -8,7 +8,7 @@ Fallback: Ridge regression when pymc-marketing is not installed.
 import logging
 import numpy as np
 import pandas as pd
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,6 @@ try:
         GeometricAdstock,
         LogisticSaturation,
     )
-    import pymc as pm
     import arviz as az
 
     PYMC_AVAILABLE = True

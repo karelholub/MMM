@@ -205,7 +205,7 @@ def get_current_kpi_from_paths_and_expenses(
             canonical_revenue += float(row.gross_revenue_total or 0.0)
         return canonical_revenue
     if kpi_key == "spend" and expenses is not None:
-        by_ch = _expense_by_channel(expenses, date_from, date_to, None)
+        by_ch = _expense_by_channel(expenses, date_from, date_to)
         return sum(by_ch.values())
     return None
 
@@ -442,7 +442,7 @@ def evaluate_pipeline_health(
     conv_count, total_revenue, _ = _conversions_and_revenue_from_paths(db, dt_from, dt_to, None)
     spend = 0.0
     if expenses is not None:
-        by_ch = _expense_by_channel(expenses, date_from, date_to, None)
+        by_ch = _expense_by_channel(expenses, date_from, date_to)
         spend = sum(by_ch.values())
 
     period_id = period_id_for_schedule(now, rule.schedule or "daily")

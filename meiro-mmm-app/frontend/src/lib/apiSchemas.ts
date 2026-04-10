@@ -1,4 +1,4 @@
-export type SortDirection = 'asc' | 'desc'
+type SortDirection = 'asc' | 'desc'
 
 export interface PaginatedResponse<T> {
   items: T[]
@@ -7,7 +7,7 @@ export interface PaginatedResponse<T> {
   per_page: number
 }
 
-export interface ListQueryOptions {
+interface ListQueryOptions {
   page?: number
   perPage?: number
   pageSize?: number
@@ -18,7 +18,7 @@ export interface ListQueryOptions {
   domain?: string
 }
 
-export function clampPageSize(value: number | undefined, max: number, fallback: number): number {
+function clampPageSize(value: number | undefined, max: number, fallback: number): number {
   if (!Number.isFinite(value)) return fallback
   const asInt = Math.floor(Number(value))
   if (asInt < 1) return 1

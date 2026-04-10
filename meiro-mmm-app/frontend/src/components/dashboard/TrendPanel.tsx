@@ -10,14 +10,14 @@ import {
 } from 'recharts'
 import { tokens as t } from '../../theme/tokens'
 
-export type TrendGrain = 'auto' | 'daily' | 'weekly'
+type TrendGrain = 'auto' | 'daily' | 'weekly'
 
-export interface TrendPoint {
+interface TrendPoint {
   ts: string
   value: number | null
 }
 
-export interface TrendMetric {
+interface TrendMetric {
   key: string
   label: string
   current: TrendPoint[]
@@ -472,4 +472,4 @@ export default function TrendPanel({
   )
 }
 
-export type { TrendPanelProps, TrendMetric as KpiSeriesMetric, TrendPoint as KpiSeriesPoint }
+export type { TrendPoint as KpiSeriesPoint }

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.models_config_dq import ConversionTaxonomyTouchpointFact
 from app.services_canonical_facts import count_canonical_conversions
-from app.services_taxonomy import compute_taxonomy_coverage, compute_unknown_share, map_to_channel
+from app.services_taxonomy import compute_taxonomy_coverage, compute_unknown_share
 from app.utils.taxonomy import Taxonomy, load_taxonomy
 
 

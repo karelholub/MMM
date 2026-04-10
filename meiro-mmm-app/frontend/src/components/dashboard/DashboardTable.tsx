@@ -1,7 +1,7 @@
 import { ChangeEvent, ReactNode } from 'react'
 import { tokens as t } from '../../theme/tokens'
 
-export interface DashboardTableProps {
+interface DashboardTableProps {
   children: ReactNode
   search?: {
     value: string

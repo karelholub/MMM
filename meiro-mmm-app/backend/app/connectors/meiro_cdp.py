@@ -17,7 +17,7 @@ token store (same mechanism as OAuth tokens for Meta/Google/LinkedIn).
 
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -119,7 +119,7 @@ def test_connection(api_base_url: str, api_key: str) -> Dict[str, Any]:
     Returns {"ok": True, "version": "..."} on success.
     """
     try:
-        data = _get(f"{api_base_url.rstrip('/')}/api/v1/attributes", api_key, params={"limit": 1})
+        _get(f"{api_base_url.rstrip('/')}/api/v1/attributes", api_key, params={"limit": 1})
         return {"ok": True, "message": "Connection successful"}
     except requests.RequestException as exc:
         return {"ok": False, "message": str(exc)}
@@ -322,7 +322,6 @@ def build_journeys_from_events(
     timestamp_attr: str = "timestamp",
     channel_attr: str = "channel",
     conversion_selector: str = "purchase",
-    session_gap_minutes: int = 30,
     dedup_interval_minutes: int = 5,
     dedup_mode: str = "balanced",
     channel_mapping: Optional[Dict[str, str]] = None,
@@ -365,7 +364,6 @@ def build_journeys_from_events(
         touchpoints = []
         last_ts = None
         last_identity = None
-        gap_sec = session_gap_minutes * 60
         dedup_sec = dedup_interval_minutes * 60
 
         for e in events:

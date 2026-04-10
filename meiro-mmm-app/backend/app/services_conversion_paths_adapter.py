@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -520,7 +520,6 @@ def build_conversion_path_details_from_daily(
     if not target:
         raise ValueError("Path not found for selected filters")
 
-    total = float(analysis.get("total_journeys") or 0)
     steps = [s for s in str(path).split(" > ") if s]
 
     # Prefix-based step drop-off estimate from aggregate rows

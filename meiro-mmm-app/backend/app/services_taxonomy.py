@@ -19,13 +19,13 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
 from .models_config_dq import ConversionTaxonomyTouchpointFact, DQSnapshot
 from .services_canonical_facts import count_canonical_conversions
-from .utils.taxonomy import Taxonomy, ChannelRule, infer_source_medium_from_referrer, load_taxonomy, save_taxonomy
+from .utils.taxonomy import Taxonomy, infer_source_medium_from_referrer, load_taxonomy
 
 logger = logging.getLogger(__name__)
 

@@ -1,7 +1,7 @@
 """Stored OAuth/datasource credentials (admin-configured). Fallback when env vars are not set."""
 import json
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 
 from .encrypt import encrypt, decrypt
 

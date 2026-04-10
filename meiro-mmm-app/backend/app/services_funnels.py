@@ -15,7 +15,6 @@ from .models_config_dq import (
     JourneyDefinition,
 )
 from .services_canonical_facts import load_preferred_journey_rows
-from .services_conversions import conversion_path_payload
 from .services_journey_steps import STEP_ORGANIC_LANDING, STEP_PAID_LANDING, map_touchpoint_step
 from .services_journey_transition_outputs import list_transition_breakdowns_from_outputs, list_transition_edges_from_outputs
 
@@ -338,14 +337,12 @@ def _compute_results_from_raw(
     by_device: Dict[str, int] = {}
     by_channel: Dict[str, int] = {}
 
-    used_canonical = False
     for row in _iter_filtered_canonical_sequences(
         db,
         journey_definition=journey_definition,
         date_from=date_from,
         date_to=date_to,
     ):
-        used_canonical = True
         if not _passes_sequence_filters(
             row,
             device=device,

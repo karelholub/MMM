@@ -82,7 +82,7 @@ export function getDefaultFormValues(ruleType: RuleType = 'anomaly_kpi'): AlertR
   }
 }
 
-export interface ValidationError {
+interface ValidationError {
   field: string
   message: string
 }

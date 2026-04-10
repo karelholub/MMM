@@ -4,7 +4,7 @@ export type AdsProviderKey = 'google_ads' | 'meta_ads' | 'linkedin_ads'
 export type AdsEntityType = 'campaign' | 'adset' | 'adgroup'
 export type AdsActionType = 'pause' | 'enable' | 'update_budget'
 
-export interface AdsEntityItem {
+interface AdsEntityItem {
   id: string
   provider: AdsProviderKey
   account_id: string
@@ -15,12 +15,12 @@ export interface AdsEntityItem {
   last_seen_ts?: string | null
 }
 
-export interface AdsEntityListResponse {
+interface AdsEntityListResponse {
   items: AdsEntityItem[]
   total: number
 }
 
-export interface AdsStateResponse {
+interface AdsStateResponse {
   provider: AdsProviderKey
   account_id: string
   entity_type: AdsEntityType
@@ -34,7 +34,7 @@ export interface AdsStateResponse {
   error?: { code?: string; message?: string } | null
 }
 
-export interface AdsChangeRequest {
+interface AdsChangeRequest {
   id: string
   provider: AdsProviderKey
   account_id: string
@@ -52,12 +52,12 @@ export interface AdsChangeRequest {
   updated_at?: string | null
 }
 
-export interface AdsChangeRequestListResponse {
+interface AdsChangeRequestListResponse {
   items: AdsChangeRequest[]
   total: number
 }
 
-export interface BudgetRecommendationTargetInput {
+interface BudgetRecommendationTargetInput {
   channel: string
   provider: AdsProviderKey
   entity_id: string
@@ -67,14 +67,14 @@ export interface BudgetRecommendationTargetInput {
   reason?: string | null
 }
 
-export interface BudgetRecommendationCreateResponse {
+interface BudgetRecommendationCreateResponse {
   items: AdsChangeRequest[]
   skipped: Array<Record<string, unknown>>
   total: number
   skipped_total: number
 }
 
-export interface AdsAuditItem {
+interface AdsAuditItem {
   id: string
   actor_user_id: string
   provider: AdsProviderKey
@@ -86,7 +86,7 @@ export interface AdsAuditItem {
   created_at?: string | null
 }
 
-export interface AdsAuditListResponse {
+interface AdsAuditListResponse {
   items: AdsAuditItem[]
   total: number
 }
@@ -159,30 +159,8 @@ export async function approveAdsChangeRequest(requestId: string): Promise<AdsCha
   })
 }
 
-export async function rejectAdsChangeRequest(requestId: string, reason?: string): Promise<AdsChangeRequest> {
-  return apiSendJson(`/api/ads/change-requests/${requestId}/reject`, 'POST', { reason: reason || undefined }, {
-    fallbackMessage: 'Failed to reject request',
-  })
-}
-
 export async function applyAdsChangeRequest(requestId: string, adminOverride?: boolean): Promise<AdsChangeRequest> {
   return apiSendJson(`/api/ads/change-requests/${requestId}/apply`, 'POST', { admin_override: !!adminOverride }, {
     fallbackMessage: 'Failed to apply request',
   })
-}
-
-export async function listAdsChangeRequests(params?: { status?: string; provider?: string; limit?: number }): Promise<AdsChangeRequestListResponse> {
-  return apiGetJson(withQuery('/api/ads/change-requests', {
-    status: params?.status,
-    provider: params?.provider,
-    limit: params?.limit,
-  }), { fallbackMessage: 'Failed to load ads change requests' })
-}
-
-export async function listAdsAudit(params?: { provider?: string; entityId?: string; limit?: number }): Promise<AdsAuditListResponse> {
-  return apiGetJson(withQuery('/api/ads/audit', {
-    provider: params?.provider,
-    entity_id: params?.entityId,
-    limit: params?.limit,
-  }), { fallbackMessage: 'Failed to load ads audit log' })
 }

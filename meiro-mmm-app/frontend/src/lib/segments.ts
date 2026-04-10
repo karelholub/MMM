@@ -205,7 +205,7 @@ export function buildSegmentComparisonHref(primarySegmentId: string, otherSegmen
   })
 }
 
-export interface SegmentFilterState {
+interface SegmentFilterState {
   channel: string
   campaign: string
   device: string
@@ -268,7 +268,7 @@ export function isLocalAnalyticalSegment(item: SegmentRegistryItem): boolean {
   return item.source === 'local_analytical'
 }
 
-export function isOperationalSegment(item: SegmentRegistryItem): boolean {
+function isOperationalSegment(item: SegmentRegistryItem): boolean {
   return item.source === 'meiro_pipes'
 }
 
@@ -284,7 +284,7 @@ export function readLocalSegmentDefinition(item: SegmentRegistryItem | null | un
   return extracted
 }
 
-export function localSegmentDefinedKeys(item: SegmentRegistryItem | null | undefined): string[] {
+function localSegmentDefinedKeys(item: SegmentRegistryItem | null | undefined): string[] {
   const definition = readLocalSegmentDefinition(item)
   return Object.entries(definition)
     .filter(([, value]) => Boolean(value))

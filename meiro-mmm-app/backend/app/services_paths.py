@@ -714,7 +714,6 @@ def compute_path_archetypes(
         actions: List[Dict[str, Any]] = []
         if len(rep_steps) >= 2:
             prefix_steps = rep_steps[:-1]
-            prefix = " > ".join(prefix_steps)
             support_counts: Counter[str] = Counter()
             for _, row in df_j_with_cluster[df_j_with_cluster["cluster"] == cl].iterrows():
                 ch_list = row.get("channels") or []
