@@ -44,6 +44,12 @@ from .services_metrics import delta_pct, journey_outcome_summary
 def _parse_dt(s: Optional[str]):
     if not s:
         return None
+
+
+def _overview_delta_pct(current: float, previous: float) -> Optional[float]:
+    if previous == 0:
+        return None
+    return round((current - previous) / previous * 100.0, 1)
     try:
         dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
         if dt.tzinfo is None:
@@ -1589,11 +1595,6 @@ def get_overview_summary(
     total_revenue = current_paths["revenue_total"]
     prev_revenue = prev_paths["revenue_total"]
 
-    def _delta_pct(curr: float, prev: float) -> Optional[float]:
-        if prev == 0:
-            return 100.0 if curr > 0 else None
-        return round((curr - prev) / prev * 100.0, 1)
-
     freshness = get_freshness(db, import_runs_get_last_successful)
     lag_min = freshness.get("ingest_lag_minutes")
     conv_map_current = current_paths["conversions_map"]
@@ -1677,7 +1678,7 @@ def get_overview_summary(
         series_prev: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
         delta_abs = round(value - prev_value, 2)
-        delta_pct = _delta_pct(float(value), float(prev_value))
+        delta_pct = _overview_delta_pct(float(value), float(prev_value))
         return {
             "kpi_key": kpi_key,
             "value": round(value, 2) if kpi_key not in {"conversions", "visits"} else int(value),
@@ -2094,10 +2095,10 @@ def get_overview_drivers(
             "visits": visits,
             "conversions": conv,
             "revenue": round(rev, 2),
-            "delta_spend_pct": delta_pct(spend, prev_spend),
-            "delta_visits_pct": delta_pct(float(visits), float(prev_visits)),
-            "delta_conversions_pct": delta_pct(float(conv), float(prev_conv)),
-            "delta_revenue_pct": delta_pct(rev, prev_rev),
+            "delta_spend_pct": _overview_delta_pct(spend, prev_spend),
+            "delta_visits_pct": _overview_delta_pct(float(visits), float(prev_visits)),
+            "delta_conversions_pct": _overview_delta_pct(float(conv), float(prev_conv)),
+            "delta_revenue_pct": _overview_delta_pct(rev, prev_rev),
             "outcomes": ch_outcomes.get(ch, _empty_outcomes()),
         })
     by_channel.sort(key=lambda x: -x["revenue"])
@@ -2121,7 +2122,7 @@ def get_overview_drivers(
             "campaign": c,
             "revenue": round(camp_rev[c], 2),
             "conversions": camp_conv.get(c, 0),
-            "delta_revenue_pct": delta_pct(camp_rev.get(c, 0), prev_camp_rev.get(c, 0)),
+            "delta_revenue_pct": _overview_delta_pct(camp_rev.get(c, 0), prev_camp_rev.get(c, 0)),
             "outcomes": camp_outcomes.get(c, _empty_outcomes()),
         }
         for c in campaigns_sorted
@@ -2600,7 +2601,7 @@ def get_overview_trend_insights(
                 "current_revenue": round(current_total, 2),
                 "previous_revenue": round(previous_total, 2),
                 "delta_revenue": round(delta_value, 2),
-                "delta_revenue_pct": round(delta_pct(current_total, previous_total), 1) if delta_pct(current_total, previous_total) is not None else None,
+                "delta_revenue_pct": _overview_delta_pct(current_total, previous_total),
                 "sparkline": sparkline,
             }
         )

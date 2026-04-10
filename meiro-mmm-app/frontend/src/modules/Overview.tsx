@@ -363,6 +363,10 @@ function daysInPeriod(fromIso?: string, toIso?: string): number {
   return Math.max(1, days)
 }
 
+function hasObservedBaseline(value: number | null | undefined): boolean {
+  return value != null && Number.isFinite(value) && Math.abs(value) > 1e-9
+}
+
 // --- Overview ---
 export default function Overview({ lastPage, onNavigate, onConnectDataSources }: OverviewProps) {
   const {
@@ -373,7 +377,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
     selectedConfigId,
   } = useWorkspaceContext()
   const [funnelTab, setFunnelTab] = useState<'conversions' | 'revenue' | 'speed'>('conversions')
-  const [assistantCollapsed, setAssistantCollapsed] = useState(true)
+  const [assistantCollapsed, setAssistantCollapsed] = useState(false)
   const [showWorkspaceSignals, setShowWorkspaceSignals] = usePersistentToggle('overview:show-workspace-signals', false)
   const [selectedSegmentId, setSelectedSegmentId] = useState('')
   const [compareSegmentId, setCompareSegmentId] = useState('')
@@ -766,6 +770,23 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
   const orderedKpiTiles = tileOrder
     .map((key) => kpiTiles.find((k) => k.kpi_key === key))
     .filter((k): k is KpiTileResponse => Boolean(k))
+  const hasValidComparisonBaseline = useMemo(
+    () => orderedKpiTiles.some((tile) => tile.delta_pct != null && Number.isFinite(tile.delta_pct)),
+    [orderedKpiTiles],
+  )
+  const hasSpendData = useMemo(() => {
+    if ((selectedTileMap.spend?.value ?? 0) > 0) return true
+    return byChannel.some((row) => Number(row.spend || 0) > 0)
+  }, [byChannel, selectedTileMap])
+  const canExplainTrendDecomposition = useMemo(() => {
+    const previous = trendInsights?.decomposition.previous
+    if (!previous) return false
+    return (
+      hasObservedBaseline(previous.revenue) &&
+      hasObservedBaseline(previous.visits) &&
+      hasObservedBaseline(previous.conversions)
+    )
+  }, [trendInsights?.decomposition.previous])
   const overviewNarrative = useMemo(() => {
     const biggestTileDelta = [...orderedKpiTiles]
       .filter((tile) => tile.delta_pct != null && Number.isFinite(tile.delta_pct))
@@ -789,13 +810,15 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
     const headline =
       biggestTileDelta?.delta_pct != null && tileLabel
         ? `${tileLabel} ${biggestTileDelta.delta_pct >= 0 ? 'rose' : 'fell'} ${Math.abs(biggestTileDelta.delta_pct).toFixed(1)}% ${baselineLabel}.`
-        : 'This period is loaded, but no strong period-over-period movement stands out yet.'
+        : hasValidComparisonBaseline
+          ? 'This period is loaded, but no strong period-over-period movement stands out yet.'
+          : `Insufficient prior-period data for a reliable ${baselineLabel.replace(/^vs /, '')} comparison.`
     const items = [
       highlights[0]?.message ? `Top signal: ${highlights[0].message}` : null,
-      strongestMomentum
+      strongestMomentum && strongestMomentum.delta_revenue_pct != null
         ? `${strongestMomentum.channel} is the strongest rising revenue driver with ${formatCurrency(strongestMomentum.delta_revenue)} change vs the previous period.`
         : null,
-      weakestMomentum
+      weakestMomentum && weakestMomentum.delta_revenue_pct != null
         ? `${weakestMomentum.channel} is the strongest falling revenue driver with ${formatCurrency(Math.abs(weakestMomentum.delta_revenue))} reversal vs the previous period.`
         : null,
       lagDelta != null
@@ -818,6 +841,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
     baselineLabel,
     baselineMedianLag,
     funnelMedianLag,
+    hasValidComparisonBaseline,
     highlights,
     orderedKpiTiles,
     compareSegment,
@@ -868,7 +892,9 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
       render: (row) =>
         row.delta_revenue_pct != null
           ? `${row.delta_revenue_pct >= 0 ? '▲' : '▼'} ${Math.abs(row.delta_revenue_pct).toFixed(1)}%`
-          : '—',
+          : row.revenue > 0 || row.visits > 0 || row.conversions > 0
+            ? 'No prior data'
+            : '—',
     },
   ]
   const campaignColumns: AnalyticsTableColumn<(typeof byCampaign)[number]>[] = [
@@ -892,7 +918,9 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
       render: (row) =>
         row.delta_revenue_pct != null
           ? `${row.delta_revenue_pct >= 0 ? '▲' : '▼'} ${Math.abs(row.delta_revenue_pct).toFixed(1)}%`
-          : '—',
+          : row.revenue > 0 || row.conversions > 0
+            ? 'No prior data'
+            : '—',
     },
   ]
   const mixShiftRows = trendInsights?.mix_shift ?? []
@@ -984,7 +1012,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
           `KPI coverage: ${readinessCoverageLabel}`,
           `Journeys loaded: ${journeysLoadedLabel}`,
           `Lag posture: ${lagPostureLabel}`,
-          `Highlights: ${highlights.slice(0, 3).map((item) => item.message).join(' · ') || 'No major highlights in the current slice.'}`,
+          `Highlights: ${highlights.slice(0, 3).map((item) => item.message).join(' · ') || (hasValidComparisonBaseline ? 'No major highlights in the current slice.' : 'Prior-period comparison data is insufficient for ranked change highlights.')}`,
         ]}
       />
       {lastPage && lastPage !== 'overview' && (
@@ -1142,7 +1170,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
             title="Workspace Assistant"
             subtitle={
               assistantCollapsed
-                ? `Hidden by default. ${overviewAttentionQueue.length} ranked next ${overviewAttentionQueue.length === 1 ? 'step' : 'steps'} available.`
+                ? 'Collapsed. Open when you want ranked next steps across taxonomy, KPI, journeys, Meiro, and data sources.'
                 : 'Ranked next steps across taxonomy, KPI, journeys, Meiro, and data sources.'
             }
             actions={
@@ -1172,10 +1200,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
                 }}
               >
                 <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                  The assistant is still available, but collapsed so the KPI and performance sections stay primary.
-                </div>
-                <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
-                  Top pending item: <strong>{overviewAttentionQueue[0]?.label ?? 'Recommended follow-up available'}</strong>
+                  Open the assistant when you want ranked follow-ups, recommended actions, and workflow shortcuts for this workspace.
                 </div>
               </div>
             ) : (
@@ -1786,10 +1811,14 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
 
         {/* D) Drivers: top channels + optional campaigns */}
         <div style={{ display: 'grid', gap: t.space.xl, gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))' }}>
-          <SectionCard
-            title="Top channels"
-            subtitle="Spend, visits, conversions, revenue and period-over-period delta"
-            overflow="auto"
+        <SectionCard
+          title="Top channels"
+          subtitle={
+            hasSpendData
+              ? 'Spend, visits, conversions, revenue and period-over-period delta'
+              : 'Visits, conversions, revenue, and period-over-period delta'
+          }
+          overflow="auto"
             actions={
               <button
                 type="button"
@@ -1807,6 +1836,33 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
               </button>
             }
           >
+            {!hasSpendData ? (
+              <div
+                style={{
+                  marginBottom: t.space.md,
+                  fontSize: t.font.sizeSm,
+                  color: t.color.textSecondary,
+                }}
+              >
+                Spend data is not connected for this period. Open{' '}
+                <button
+                  type="button"
+                  onClick={onConnectDataSources}
+                  style={{
+                    border: 'none',
+                    background: 'transparent',
+                    padding: 0,
+                    color: t.color.accent,
+                    cursor: 'pointer',
+                    fontSize: 'inherit',
+                    fontWeight: t.font.weightSemibold,
+                  }}
+                >
+                  Data Sources
+                </button>{' '}
+                to add spend inputs.
+              </div>
+            ) : null}
             <AnalyticsTable
               columns={channelColumns}
               rows={byChannel.slice(0, 10)}
@@ -1824,11 +1880,13 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
                   label: 'Overview',
                   visibleColumnKeys: ['channel', 'visits', 'conversions', 'revenue', 'delta'],
                 },
-                {
+                ...(hasSpendData
+                  ? [{
                   key: 'efficiency',
                   label: 'Spend',
                   visibleColumnKeys: ['channel', 'spend', 'revenue', 'delta'],
-                },
+                }]
+                  : []),
               ]}
               defaultPresetKey="overview"
               emptyState="No channel data for this period."
@@ -2098,12 +2156,21 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
 
         <div style={{ display: 'grid', gap: t.space.xl, gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))' }}>
           <SectionCard
-            title="Trend decomposition"
-            subtitle="Why revenue moved vs the previous period"
-          >
+          title="Trend decomposition"
+          subtitle="Why revenue moved vs the previous period"
+        >
             {trendsQuery.isError ? (
               <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>
                 {(trendsQuery.error as Error)?.message ?? 'Failed to load decomposition.'}
+              </div>
+            ) : !canExplainTrendDecomposition ? (
+              <div style={{ display: 'grid', gap: t.space.sm }}>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  Previous-period data is insufficient for a reliable decomposition. The current window is loaded, but the app is intentionally not attributing the revenue change to traffic, CVR, value, or mix without a usable baseline.
+                </div>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textMuted }}>
+                  Current period revenue: <strong style={{ color: t.color.text }}>{formatCurrency(trendInsights?.decomposition.current.revenue ?? 0)}</strong>
+                </div>
               </div>
             ) : (
               <div style={{ display: 'grid', gap: t.space.md }}>
