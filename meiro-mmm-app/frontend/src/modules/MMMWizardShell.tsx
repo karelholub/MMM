@@ -443,7 +443,7 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
       <div style={{ maxWidth: 1400, margin: '0 auto', display: 'grid', gap: t.space.xl }}>
         <SectionCard
           title="Model context"
-          subtitle="MMM now follows the same workspace shell, trust language, and action model as the rest of the app."
+          subtitle="Weekly MMM setup, KPI mode, and active config context for the current run."
         >
           <MMMContextBar
             periodLabel="Weekly (MMM model frequency: W)"
@@ -459,7 +459,7 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
 
         <SectionCard
           title="Workflow"
-          subtitle="Prepare the dataset, run the model, review results, and move into optimization without leaving the shared workspace flow."
+          subtitle="Prepare the dataset, run the model, review results, and move into budget decisions."
         >
           <div style={{ display: 'grid', gap: t.space.lg }}>
             <div
