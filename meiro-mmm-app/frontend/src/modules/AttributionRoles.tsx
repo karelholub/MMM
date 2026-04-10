@@ -781,6 +781,17 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
             subtitle="Direct audience-to-audience comparison for role behavior, lag, and overlap."
           >
             <div style={{ display: 'grid', gap: t.space.lg }}>
+              <SegmentComparisonContextNote
+                mode={selectedSegmentAutoCompatible ? 'exact_filter' : 'analytical_lens'}
+                pageLabel={scope === 'campaigns' ? 'campaign role comparison rows' : 'channel role comparison rows'}
+                basisLabel="matched journey-instance rows and derived role entities for the compared audiences"
+                primaryLabel={selectedSegment.name}
+                primaryRows={segmentCompareQuery.data.primary_summary.journey_rows}
+                otherLabel={compareSegment.name}
+                otherRows={segmentCompareQuery.data.other_summary.journey_rows}
+                baselineRows={segmentCompareQuery.data.baseline_summary.journey_rows}
+                overlapRows={segmentCompareQuery.data.overlap.overlap_rows}
+              />
               <div
                 style={{
                   display: 'grid',
@@ -850,6 +861,11 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
                   </div>
                 </div>
               </div>
+              {!selectedSegmentAutoCompatible ? (
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  This is an <strong>analytical-lens</strong> comparison. Treat the role deltas as directional audience evidence from matched rows, not as a literal filter replacement for the page-wide role totals.
+                </div>
+              ) : null}
               <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
                 <a
                   href={buildIncrementalityPlannerHref({

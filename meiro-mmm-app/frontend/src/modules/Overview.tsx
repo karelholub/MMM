@@ -1378,6 +1378,17 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
             subtitle={`How ${selectedSegment.name} compares directly with ${compareSegment.name} in the same period.`}
           >
             <div style={{ display: 'grid', gap: t.space.lg }}>
+              <SegmentComparisonContextNote
+                mode={selectedSegmentAutoCompatible ? 'exact_filter' : 'analytical_lens'}
+                pageLabel="overview comparison rows"
+                basisLabel="matched journey-instance rows used for the compared audiences"
+                primaryLabel={selectedSegment.name}
+                primaryRows={segmentCompareQuery.data.primary_summary.journey_rows}
+                otherLabel={compareSegment.name}
+                otherRows={segmentCompareQuery.data.other_summary.journey_rows}
+                baselineRows={segmentCompareQuery.data.baseline_summary.journey_rows}
+                overlapRows={segmentCompareQuery.data.overlap.overlap_rows}
+              />
               <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
                 <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bgSubtle, display: 'grid', gap: 4 }}>
                   <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Relationship</div>
@@ -1444,6 +1455,11 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
                   </div>
                 ))}
               </div>
+              {!selectedSegmentAutoCompatible ? (
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  This is an <strong>analytical-lens</strong> comparison. Read the deltas directionally from matched audience rows, not as a literal replacement for the page-wide workspace totals.
+                </div>
+              ) : null}
               <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
                 <a
                   href={buildIncrementalityPlannerHref({

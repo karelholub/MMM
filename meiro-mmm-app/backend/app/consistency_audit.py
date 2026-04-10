@@ -205,6 +205,39 @@ def _surface_basis_registry(
     }
 
 
+def _audience_mode_registry() -> Dict[str, Dict[str, Any]]:
+    return {
+        "overview": {
+            "exact_filter_mode": "directly comparable to workspace baseline within the same page scope",
+            "analytical_lens_mode": "directional comparison based on matched journey-instance rows",
+        },
+        "attribution_comparison": {
+            "exact_filter_mode": "directly comparable within visible live-attribution rows",
+            "analytical_lens_mode": "directional comparison based on matched journey-instance rows; not a literal page filter",
+        },
+        "attribution_roles": {
+            "exact_filter_mode": "directly comparable within visible live role entities",
+            "analytical_lens_mode": "directional comparison based on matched journey-instance rows and derived role entities",
+        },
+        "attribution_trust": {
+            "exact_filter_mode": "directly comparable only for cards backed by focused materialized path rows",
+            "analytical_lens_mode": "directional comparison based on matched journey-instance rows alongside workspace reconciliation",
+        },
+        "journeys": {
+            "exact_filter_mode": "exact page filtering when the segment is definition-compatible",
+            "analytical_lens_mode": "directional comparison only; stored outputs are not fully re-scoped",
+        },
+        "conversion_paths": {
+            "exact_filter_mode": "directly comparable within materialized journey-definition outputs",
+            "analytical_lens_mode": "not supported as a direct page filter",
+        },
+        "path_archetypes": {
+            "exact_filter_mode": "directly comparable within live clustered journeys",
+            "analytical_lens_mode": "not supported as a direct page filter",
+        },
+    }
+
+
 def _date_scoped_journey_path_daily_totals(
     db: Any,
     *,
@@ -530,6 +563,7 @@ def build_consistency_audit(
                 conversion_paths_source=conversion_paths_analysis.get("source"),
                 live_path_journeys=len(live_journeys_for_archetypes),
             ),
+            "audience_modes": _audience_mode_registry(),
             "counts": {
                 "journeys_loaded": len(journeys),
                 "journeys_converted": converted_journeys,
@@ -746,6 +780,9 @@ def main() -> int:
         print("surfaces:")
         for key, value in report["surfaces"].items():
             print(f"  {key}: {value['basis_type']} ({value['config_behavior']})")
+        print("audience_modes:")
+        for key, value in report["audience_modes"].items():
+            print(f"  {key}: exact={value['exact_filter_mode']} | lens={value['analytical_lens_mode']}")
         if report["journey_path_daily_by_definition"]:
             print("journey_path_daily_by_definition:")
             for item in report["journey_path_daily_by_definition"]:

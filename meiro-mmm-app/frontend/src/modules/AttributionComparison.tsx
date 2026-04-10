@@ -1077,6 +1077,9 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
             <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
               Path types: {(segmentAnalysisQuery.data.distributions.path_types ?? []).slice(0, 3).map((item) => item.value).join(', ') || '—'}
             </div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              This advanced audience stays as an <strong>analytical lens</strong>. Use it to interpret directional differences, not as a literal replacement for the visible channel table totals.
+            </div>
           </div>
         </div>
       ) : null}
