@@ -101,3 +101,46 @@ def test_auto_replay_history_is_persisted(monkeypatch, tmp_path):
 
     history = meiro_config.get_auto_replay_history(limit=10)
     assert [item["status"] for item in history] == ["blocked", "success"]
+
+
+def test_webhook_updates_preserve_pull_config(monkeypatch, tmp_path):
+    config_path = tmp_path / "meiro_config.json"
+    monkeypatch.setattr(meiro_config, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
+
+    meiro_config.save_pull_config(
+        {
+            "primary_ingest_source": "events",
+            "replay_archive_source": "events",
+            "replay_mode": "last_n",
+        }
+    )
+
+    meiro_config.set_webhook_received(count_delta=3, last_received_at="2026-04-10T09:00:00Z")
+    meiro_config.append_webhook_event({"received_at": "2026-04-10T09:00:00Z", "outcome": "stored"})
+    meiro_config.append_auto_replay_history({"at": "2026-04-10T09:01:00Z", "status": "success"})
+
+    cfg = meiro_config.get_pull_config()
+    assert cfg["primary_ingest_source"] == "events"
+    assert cfg["replay_archive_source"] == "events"
+    persisted = meiro_config._load()
+    assert persisted["pull_config"]["primary_ingest_source"] == "events"
+
+
+def test_load_recovers_from_backup_when_primary_config_is_invalid(monkeypatch, tmp_path):
+    config_path = tmp_path / "meiro_config.json"
+    monkeypatch.setattr(meiro_config, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
+
+    meiro_config.save_pull_config(
+        {
+            "primary_ingest_source": "events",
+            "replay_archive_source": "events",
+        }
+    )
+
+    config_path.write_text("{invalid json")
+
+    cfg = meiro_config.get_pull_config()
+    assert cfg["primary_ingest_source"] == "events"
+    assert cfg["replay_archive_source"] == "events"

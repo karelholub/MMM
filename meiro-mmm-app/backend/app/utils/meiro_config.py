@@ -1,10 +1,11 @@
 """Meiro integration config: metadata, mapping, webhook stats."""
 import json
 import secrets
+import threading
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 # Store in app/data/ alongside other meiro files
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -12,20 +13,56 @@ CONFIG_PATH = DATA_DIR / "meiro_config.json"
 WEBHOOK_ARCHIVE_PATH = DATA_DIR / "meiro_webhook_archive.jsonl"
 EVENT_ARCHIVE_PATH = DATA_DIR / "meiro_event_archive.jsonl"
 MEIRO_CDP_PLATFORM = "meiro_cdp"
+_CONFIG_LOCK = threading.RLock()
+
+
+def _backup_path() -> Path:
+    return CONFIG_PATH.with_name(f"{CONFIG_PATH.stem}.bak{CONFIG_PATH.suffix}")
+
+
+def _read_json_file(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        parsed = json.loads(path.read_text())
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _write_json_file(path: Path, data: Dict[str, Any]) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f"{path.name}.tmp")
+    payload = json.dumps(data, indent=2)
+    tmp_path.write_text(payload)
+    tmp_path.replace(path)
+
+
+def _mutate(mutator: Callable[[Dict[str, Any]], None]) -> Dict[str, Any]:
+    with _CONFIG_LOCK:
+        current = _read_json_file(CONFIG_PATH)
+        next_data = dict(current)
+        mutator(next_data)
+        _write_json_file(CONFIG_PATH, next_data)
+        _write_json_file(_backup_path(), next_data)
+        return next_data
 
 
 def _load() -> Dict[str, Any]:
-    if not CONFIG_PATH.exists():
-        return {}
-    try:
-        return json.loads(CONFIG_PATH.read_text())
-    except Exception:
-        return {}
+    with _CONFIG_LOCK:
+        current = _read_json_file(CONFIG_PATH)
+        if current:
+            return current
+        backup = _read_json_file(_backup_path())
+        if backup and not CONFIG_PATH.exists():
+            _write_json_file(CONFIG_PATH, backup)
+        return backup
 
 
 def _save(data: Dict[str, Any]) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(json.dumps(data, indent=2))
+    with _CONFIG_LOCK:
+        _write_json_file(CONFIG_PATH, data)
+        _write_json_file(_backup_path(), data)
 
 
 def get_last_test_at() -> Optional[str]:
@@ -33,9 +70,7 @@ def get_last_test_at() -> Optional[str]:
 
 
 def set_last_test_at(iso: str) -> None:
-    d = _load()
-    d["last_test_at"] = iso
-    _save(d)
+    _mutate(lambda d: d.__setitem__("last_test_at", iso))
 
 
 def get_webhook_secret() -> Optional[str]:
@@ -44,9 +79,7 @@ def get_webhook_secret() -> Optional[str]:
 
 def rotate_webhook_secret() -> str:
     secret = secrets.token_urlsafe(32)
-    d = _load()
-    d["webhook_secret"] = secret
-    _save(d)
+    _mutate(lambda d: d.__setitem__("webhook_secret", secret))
     return secret
 
 
@@ -60,24 +93,24 @@ def get_webhook_received_count() -> int:
 
 def set_webhook_received(count_delta: int = 1, last_received_at: Optional[str] = None) -> None:
     import datetime
-    d = _load()
-    d["webhook_received_count"] = d.get("webhook_received_count", 0) + count_delta
-    if last_received_at:
-        d["webhook_last_received_at"] = last_received_at
-    else:
-        d["webhook_last_received_at"] = datetime.datetime.utcnow().isoformat() + "Z"
-    _save(d)
+    def apply(d: Dict[str, Any]) -> None:
+        d["webhook_received_count"] = d.get("webhook_received_count", 0) + count_delta
+        if last_received_at:
+            d["webhook_last_received_at"] = last_received_at
+        else:
+            d["webhook_last_received_at"] = datetime.datetime.utcnow().isoformat() + "Z"
+    _mutate(apply)
 
 
 def append_webhook_event(entry: Dict[str, Any], max_items: int = 100) -> None:
-    d = _load()
-    events = d.get("webhook_events")
-    if not isinstance(events, list):
-        events = []
-    events.append(entry)
-    keep = max(1, min(1000, int(max_items)))
-    d["webhook_events"] = events[-keep:]
-    _save(d)
+    def apply(d: Dict[str, Any]) -> None:
+        events = d.get("webhook_events")
+        if not isinstance(events, list):
+            events = []
+        events.append(entry)
+        keep = max(1, min(1000, int(max_items)))
+        d["webhook_events"] = events[-keep:]
+    _mutate(apply)
 
 
 def get_webhook_events(limit: int = 100) -> list[Dict[str, Any]]:
@@ -305,47 +338,47 @@ def get_mapping() -> Dict[str, Any]:
 
 
 def save_mapping(mapping: Dict[str, Any]) -> None:
-    d = _load()
-    existing = d.get("mapping", {})
-    history = []
-    approval = {"status": "approved", "note": None, "updated_at": None}
-    version = 0
-    if isinstance(existing, dict) and isinstance(existing.get("config"), dict):
-        history = list(existing.get("history") or [])
-        approval_raw = existing.get("approval")
-        if isinstance(approval_raw, dict):
-            approval.update({
-                "status": approval_raw.get("status") or approval["status"],
-                "note": approval_raw.get("note"),
-                "updated_at": approval_raw.get("updated_at"),
-            })
-        try:
-            version = int(existing.get("version") or 0)
-        except Exception:
-            version = 0
-        previous = existing.get("config")
-    else:
-        previous = existing if isinstance(existing, dict) else {}
-    now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    if previous != mapping:
-        history.append(
-            {
-                "at": now_iso,
-                "action": "mapping_saved",
-                "mapping": mapping,
-            }
-        )
-        history = history[-50:]
-        version += 1
-    approval["status"] = "approved"
-    approval["updated_at"] = now_iso
-    d["mapping"] = {
-        "config": mapping,
-        "approval": approval,
-        "history": history,
-        "version": max(version, 1),
-    }
-    _save(d)
+    def apply(d: Dict[str, Any]) -> None:
+        existing = d.get("mapping", {})
+        history = []
+        approval = {"status": "approved", "note": None, "updated_at": None}
+        version = 0
+        if isinstance(existing, dict) and isinstance(existing.get("config"), dict):
+            history = list(existing.get("history") or [])
+            approval_raw = existing.get("approval")
+            if isinstance(approval_raw, dict):
+                approval.update({
+                    "status": approval_raw.get("status") or approval["status"],
+                    "note": approval_raw.get("note"),
+                    "updated_at": approval_raw.get("updated_at"),
+                })
+            try:
+                version = int(existing.get("version") or 0)
+            except Exception:
+                version = 0
+            previous = existing.get("config")
+        else:
+            previous = existing if isinstance(existing, dict) else {}
+        now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        if previous != mapping:
+            history.append(
+                {
+                    "at": now_iso,
+                    "action": "mapping_saved",
+                    "mapping": mapping,
+                }
+            )
+            history = history[-50:]
+            version += 1
+        approval["status"] = "approved"
+        approval["updated_at"] = now_iso
+        d["mapping"] = {
+            "config": mapping,
+            "approval": approval,
+            "history": history,
+            "version": max(version, 1),
+        }
+    _mutate(apply)
 
 
 def get_mapping_state() -> Dict[str, Any]:
@@ -373,7 +406,6 @@ def get_mapping_state() -> Dict[str, Any]:
 
 
 def update_mapping_approval(status: str, note: Optional[str] = None) -> Dict[str, Any]:
-    d = _load()
     state = get_mapping_state()
     normalized_status = status.strip().lower() if isinstance(status, str) else ""
     if normalized_status not in {"approved", "rejected", "unreviewed"}:
@@ -388,17 +420,18 @@ def update_mapping_approval(status: str, note: Optional[str] = None) -> Dict[str
             "note": note,
         }
     )
-    d["mapping"] = {
-        "config": state.get("mapping", {}),
-        "approval": {
-            "status": normalized_status,
-            "note": note,
-            "updated_at": now_iso,
-        },
-        "history": history[-50:],
-        "version": state.get("version") or 0,
-    }
-    _save(d)
+    def apply(d: Dict[str, Any]) -> None:
+        d["mapping"] = {
+            "config": state.get("mapping", {}),
+            "approval": {
+                "status": normalized_status,
+                "note": note,
+                "updated_at": now_iso,
+            },
+            "history": history[-50:],
+            "version": state.get("version") or 0,
+        }
+    _mutate(apply)
     return get_mapping_state()
 
 
@@ -427,22 +460,23 @@ def get_auto_replay_state() -> Dict[str, Any]:
 def update_auto_replay_state(patch: Dict[str, Any]) -> Dict[str, Any]:
     current = get_auto_replay_state()
     merged = {**current, **(patch if isinstance(patch, dict) else {})}
-    d = _load()
-    d["auto_replay_state"] = merged
-    _save(d)
+    _mutate(lambda d: d.__setitem__("auto_replay_state", merged))
     return get_auto_replay_state()
 
 
 def append_auto_replay_history(entry: Dict[str, Any], max_items: int = 100) -> list[Dict[str, Any]]:
-    d = _load()
-    history = d.get("auto_replay_history")
-    if not isinstance(history, list):
-        history = []
-    history.append(entry)
-    keep = max(1, min(1000, int(max_items)))
-    d["auto_replay_history"] = history[-keep:]
-    _save(d)
-    return list(reversed(d["auto_replay_history"]))
+    final_history: list[Dict[str, Any]] = []
+    def apply(d: Dict[str, Any]) -> None:
+        nonlocal final_history
+        history = d.get("auto_replay_history")
+        if not isinstance(history, list):
+            history = []
+        history.append(entry)
+        keep = max(1, min(1000, int(max_items)))
+        d["auto_replay_history"] = history[-keep:]
+        final_history = list(d["auto_replay_history"])
+    _mutate(apply)
+    return list(reversed(final_history))
 
 
 def get_auto_replay_history(limit: int = 25) -> list[Dict[str, Any]]:
@@ -613,8 +647,8 @@ def get_pull_config() -> Dict[str, Any]:
 
 
 def save_pull_config(pull_config: Dict[str, Any]) -> None:
-    d = _load()
-    current = get_pull_config()
-    merged = {**current, **(pull_config if isinstance(pull_config, dict) else {})}
-    d["pull_config"] = _normalize_pull_config(merged)
-    _save(d)
+    def apply(d: Dict[str, Any]) -> None:
+        current = _normalize_pull_config(d.get("pull_config", {}))
+        merged = {**current, **(pull_config if isinstance(pull_config, dict) else {})}
+        d["pull_config"] = _normalize_pull_config(merged)
+    _mutate(apply)
