@@ -682,10 +682,10 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
           : `${selectedSegment.name} is an advanced analytical audience. Attribution totals stay workspace-wide, and this page adds an audience lens instead of pretending the model output can be exactly sliced by one channel rule.`
         : null,
       selectedSegment && compareSegment && segmentCompareQuery.data
-        ? `${selectedSegment.name} vs ${compareSegment.name}: ${segmentCompareQuery.data.overlap.relationship.replace(/_/g, ' ')} with ${(segmentCompareQuery.data.overlap.jaccard * 100).toFixed(0)}% similarity. Revenue delta is ${segmentCompareQuery.data.deltas.revenue == null ? 'unknown' : `${segmentCompareQuery.data.deltas.revenue >= 0 ? '+' : ''}${formatCurrency(Math.abs(segmentCompareQuery.data.deltas.revenue))}`}.`
+        ? `${selectedSegment.name} vs ${compareSegment.name}: ${segmentCompareQuery.data.overlap.relationship.replace(/_/g, ' ')} with ${(segmentCompareQuery.data.overlap.jaccard * 100).toFixed(0)}% similarity. Revenue delta is ${segmentCompareQuery.data.deltas.revenue == null ? 'unavailable' : `${segmentCompareQuery.data.deltas.revenue >= 0 ? '+' : ''}${formatCurrency(Math.abs(segmentCompareQuery.data.deltas.revenue))}`}.`
         : null,
       selectedSegment && !selectedSegmentAutoCompatible && segmentAnalysisQuery.data?.summary
-        ? `The audience currently matches ${(segmentAnalysisQuery.data.summary.journey_rows ?? 0).toLocaleString()} journey rows with ${segmentAnalysisQuery.data.summary.median_lag_days != null ? `${segmentAnalysisQuery.data.summary.median_lag_days}d` : 'unknown'} median lag.`
+        ? `The audience currently matches ${(segmentAnalysisQuery.data.summary.journey_rows ?? 0).toLocaleString()} journey rows with ${segmentAnalysisQuery.data.summary.median_lag_days != null ? `${segmentAnalysisQuery.data.summary.median_lag_days}d` : 'unavailable'} median lag.`
         : null,
     ].filter((item): item is string => Boolean(item))
     return { headline, items }
@@ -759,7 +759,7 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
           No attribution results
         </h3>
         <p style={{ margin: 0, fontSize: t.font.sizeMd, color: t.color.textSecondary }}>
-          Run models first: load journeys and click &quot;Re-run All Models&quot; in the header.
+          Load journeys, then use <strong>Re-run attribution models</strong> from the sticky workspace header to generate live comparison results for this page.
         </p>
         {latestEventReplayDiagnostics ? (
           <div style={{ marginTop: t.space.md, display: 'grid', gap: t.space.sm }}>

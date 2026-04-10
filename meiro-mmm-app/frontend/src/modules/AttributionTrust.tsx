@@ -610,7 +610,7 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
               `Period: ${dateFrom} – ${dateTo}`,
               `Focus segment: ${selectedSegment?.name || 'Workspace baseline'}`,
               `Journey source: ${formatSourceLabel(sourceStateQuery.data?.active_source)}`,
-              `Freshness: ${journeysSummary?.data_freshness_hours != null ? `${Math.round(Number(journeysSummary.data_freshness_hours))}h lag` : 'unknown'}`,
+              `Freshness: ${journeysSummary?.data_freshness_hours != null ? `${Math.round(Number(journeysSummary.data_freshness_hours))}h lag` : 'unavailable'}`,
               `KPI coverage: ${formatPercent(readiness?.summary?.primary_kpi_coverage)}`,
               `Unknown taxonomy share: ${formatPercent(taxonomyUnknownQuery.data?.unknown_share)}`,
               `Live vs materialized journeys: ${liveJourneys != null && materializedJourneys != null ? `${formatNumber(liveJourneys)} vs ${formatNumber(materializedJourneys)}` : 'unavailable'}`,
@@ -1057,7 +1057,7 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
             {materializedGap != null ? ` Gap: ${materializedGap > 0 ? '+' : ''}${formatNumber(materializedGap)} journeys.` : ''}
           </div>
           <div>
-            Materialized paths are sourced from <strong style={{ color: t.color.text }}>{pathsAnalysisQuery.data?.source || 'unknown source'}</strong>
+            Materialized paths are sourced from <strong style={{ color: t.color.text }}>{pathsAnalysisQuery.data?.source || 'source unavailable'}</strong>
             {pathsAnalysisQuery.data?.date_to ? ` and currently cover outputs through ${pathsAnalysisQuery.data.date_to.slice(0, 10)}.` : '.'}
           </div>
           <div>
