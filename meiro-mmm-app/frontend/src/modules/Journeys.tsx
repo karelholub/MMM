@@ -834,15 +834,24 @@ function FlowSankeyTooltip({
   if (!active || !payload?.length) return null
   const raw = payload[0]?.payload
   if (!raw) return null
+  const linkPayload = (raw as { payload?: unknown }).payload as
+    | {
+        source?: { fullName?: string; name?: string } | number
+        target?: { fullName?: string; name?: string } | number
+        value?: number
+      }
+    | undefined
   const sourceLabel =
     raw.sourceLabel ||
     (typeof raw.source === 'object' ? raw.source?.fullName || raw.source?.name : '') ||
+    (typeof linkPayload?.source === 'object' ? linkPayload.source?.fullName || linkPayload.source?.name : '') ||
     'Unknown'
   const targetLabel =
     raw.targetLabel ||
     (typeof raw.target === 'object' ? raw.target?.fullName || raw.target?.name : '') ||
+    (typeof linkPayload?.target === 'object' ? linkPayload.target?.fullName || linkPayload.target?.name : '') ||
     'Unknown'
-  const value = Number(raw.value ?? payload[0]?.value ?? 0)
+  const value = Number(raw.value ?? linkPayload?.value ?? payload[0]?.value ?? 0)
   return (
     <div
       style={{
