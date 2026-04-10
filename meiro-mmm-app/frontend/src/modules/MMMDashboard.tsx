@@ -815,7 +815,7 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
               }}
             >
               <div style={{ marginBottom: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                Basis: overlapping dated totals between the linked MMM dataset preview and the selected attribution model. This check stays on the shared overlap only.
+                This check stays on overlapping dated totals only; use the Reconciliation basis card above for the underlying contract.
               </div>
               <div style={{ display: 'flex', gap: t.space.xl, flexWrap: 'wrap', marginBottom: t.space.sm }}>
                 <span style={{ fontSize: t.font.sizeSm }}>Overlapping buckets: <strong style={{ fontVariantNumeric: 'tabular-nums' }}>{reconciliationSummary.pairCount.toLocaleString()}</strong></span>

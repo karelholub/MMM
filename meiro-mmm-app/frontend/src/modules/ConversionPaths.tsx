@@ -1530,7 +1530,6 @@ export default function ConversionPaths() {
                 warnings={journeys.readiness.warnings.slice(0, 3)}
               />
             ) : null}
-            <ExplainabilityPanel scope="paths" />
             <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
               <strong style={{ color: t.color.text }}>Current settings:</strong>{' '}
               {data?.config?.time_window
@@ -1543,9 +1542,7 @@ export default function ConversionPaths() {
                     .join(' · ')
                 : 'Read-only attribution defaults'}
             </div>
-            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-              The analysis context above carries the time contract for this page: selected period, materialized outputs through date, and lifecycle freshness for the chosen journey definition.
-            </div>
+            <ExplainabilityPanel scope="paths" />
           </div>
         </CollapsiblePanel>
 
