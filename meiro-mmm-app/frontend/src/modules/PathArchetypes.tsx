@@ -798,6 +798,9 @@ export default function PathArchetypes() {
             },
           ]}
         />
+        <div style={{ marginTop: tkn.space.sm, fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+          Path Archetypes is a <strong>live config-aware</strong> clustering view. It is directly comparable to Attribution Comparison and Attribution Roles, but not to materialized journey-definition pages unless those pages explicitly say they share the same basis.
+        </div>
       </div>
       {segmentComparison ? (
         <div style={{ marginBottom: tkn.space.lg }}>

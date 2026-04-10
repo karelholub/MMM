@@ -681,6 +681,9 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
         </SectionCard>
 
         <ContextSummaryStrip items={summaryItems} minItemWidth={180} />
+        <div style={{ marginTop: -t.space.md, marginBottom: t.space.lg, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+          Attribution Roles is a <strong>live config-aware</strong> view built from live attribution journeys and derived role entities. It is directly comparable to Attribution Comparison and Path Archetypes, but only directionally comparable to workspace-fact or materialized-output pages.
+        </div>
 
         <SegmentOverlapNotice selectedSegment={selectedSegment} />
 
