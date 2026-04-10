@@ -25,7 +25,7 @@ import { buildSettingsHref } from '../lib/settingsLinks'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
-import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn, SectionCard } from '../components/dashboard'
+import { AnalyticsTable, AnalyticsToolbar, ContextSummaryStrip, type AnalyticsTableColumn, SectionCard } from '../components/dashboard'
 import AnalysisNarrativePanel from '../components/dashboard/AnalysisNarrativePanel'
 import SegmentComparisonContextNote from '../components/segments/SegmentComparisonContextNote'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
@@ -717,6 +717,21 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     trendQuery.data?.meta?.conversion_key ||
     summaryQuery.data?.config?.conversion_key ||
     'All conversions'
+  const measurementWindowLabel = summaryQuery.data?.config?.time_window
+    ? [
+        summaryQuery.data.config.time_window.click_lookback_days != null
+          ? `Click ${summaryQuery.data.config.time_window.click_lookback_days}d`
+          : null,
+        summaryQuery.data.config.time_window.impression_lookback_days != null
+          ? `Impr. ${summaryQuery.data.config.time_window.impression_lookback_days}d`
+          : null,
+        summaryQuery.data.config.time_window.session_timeout_minutes != null
+          ? `Session ${summaryQuery.data.config.time_window.session_timeout_minutes}m`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : 'Not configured'
 
   const exp = explainabilityQuery.data
   const revDriver = exp?.drivers?.find((d) => d.metric === 'attributed_value')
@@ -1098,30 +1113,6 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
             justifyContent: 'flex-end',
           }}
         >
-          <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-            <strong>Period:</strong> {periodLabel}
-          </div>
-          <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-            <strong>Conversion:</strong> {conversionLabel} (read‑only)
-          </div>
-          {summaryQuery.data?.config?.time_window && (
-            <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-              <strong>Config:</strong>{' '}
-              {[
-                summaryQuery.data.config.time_window.click_lookback_days != null
-                  ? `Click ${summaryQuery.data.config.time_window.click_lookback_days}d`
-                  : null,
-                summaryQuery.data.config.time_window.impression_lookback_days != null
-                  ? `Impr. ${summaryQuery.data.config.time_window.impression_lookback_days}d`
-                  : null,
-                summaryQuery.data.config.time_window.session_timeout_minutes != null
-                  ? `Session ${summaryQuery.data.config.time_window.session_timeout_minutes}m`
-                  : null,
-              ]
-                .filter(Boolean)
-                .join(' · ')}
-            </div>
-          )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: t.font.sizeXs }}>
             <span style={{ color: t.color.textSecondary }}>Direct handling:</span>
             <button
@@ -1169,6 +1160,22 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
             Why?
           </button>
         </div>
+      </div>
+      <div style={{ marginBottom: t.space.md }}>
+        <ContextSummaryStrip
+          items={[
+            { label: 'Source', value: 'Config-aware performance summary' },
+            { label: 'Period', value: periodLabel },
+            { label: 'Conversion', value: `${conversionLabel} (read-only)` },
+            {
+              label: 'Config basis',
+              value: configId ? `Selected config ${configId.slice(0, 8)}… applied` : 'Default active config',
+            },
+            { label: 'Direct handling', value: directMode === 'include' ? 'Include Direct' : 'Exclude Direct' },
+            { label: 'Compare previous', value: comparePrevious ? 'Enabled' : 'Disabled' },
+            { label: 'Measurement window', value: measurementWindowLabel },
+          ]}
+        />
       </div>
       {!!summaryQuery.data?.notes?.length && (
         <div style={{ marginBottom: t.space.md, display: 'grid', gap: t.space.xs }}>

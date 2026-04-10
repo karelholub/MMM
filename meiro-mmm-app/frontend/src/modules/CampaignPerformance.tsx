@@ -16,6 +16,7 @@ import DecisionStatusCard from '../components/DecisionStatusCard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import AnalysisNarrativePanel from '../components/dashboard/AnalysisNarrativePanel'
 import SurfaceBasisNotice from '../components/dashboard/SurfaceBasisNotice'
+import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import SegmentComparisonContextNote from '../components/segments/SegmentComparisonContextNote'
 import { getAdsDeepLink, type AdsProviderKey } from '../connectors/adsManagerConnector'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
@@ -793,6 +794,9 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
   const spendSignalWeak = filteredTotalSpend < 50
   const spendMostlyAllocated = (spendQuality?.allocated_share ?? 0) >= 0.9
   const showSpendBasedCharts = !spendSignalWeak && !spendMostlyAllocated
+  const measurementWindowLabel = summaryQuery.data?.config?.time_window
+    ? `Click ${summaryQuery.data.config.time_window.click_lookback_days ?? '—'}d · Impression ${summaryQuery.data.config.time_window.impression_lookback_days ?? '—'}d · Session ${summaryQuery.data.config.time_window.session_timeout_minutes ?? '—'}m`
+    : 'Not configured'
   const kpis = [
     { label: 'Total Spend', value: formatCurrency(totalSpend), def: METRIC_DEFINITIONS['Total Spend'] },
     { label: 'Visits', value: totalVisits.toLocaleString(), def: METRIC_DEFINITIONS['Visits'] },
@@ -1768,6 +1772,23 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
             <>Measurement windows not configured for this model.</>
           )}
         </div>
+      </div>
+
+      <div style={{ marginBottom: t.space.lg }}>
+        <ContextSummaryStrip
+          items={[
+            { label: 'Source', value: 'Config-aware performance summary' },
+            { label: 'Period', value: `${trendDateRange.dateFrom} – ${trendDateRange.dateTo}` },
+            { label: 'Conversion', value: conversionKey || 'All conversions' },
+            {
+              label: 'Config basis',
+              value: configId ? `Selected config ${configId.slice(0, 8)}… applied` : 'Default active config',
+            },
+            { label: 'Direct handling', value: directMode === 'include' ? 'Include Direct' : 'Exclude Direct' },
+            { label: 'Compare previous', value: comparePrevious ? 'Enabled' : 'Disabled' },
+            { label: 'Measurement window', value: measurementWindowLabel },
+          ]}
+        />
       </div>
 
       {/* KPI strip + mapping coverage */}

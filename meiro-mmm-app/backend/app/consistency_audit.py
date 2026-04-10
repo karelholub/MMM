@@ -174,6 +174,20 @@ def _surface_basis_registry(
             "selected_config": config_label,
             "conversion_key": conversion_key,
         },
+        "channel_performance": {
+            "basis_type": "mixed_config_aware_and_workspace_diagnostics",
+            "config_behavior": "selected config applies to summary and trend panels; lag remains workspace diagnostic facts",
+            "primary_source": "config-aware performance summaries + workspace lag diagnostics",
+            "selected_config": config_label,
+            "conversion_key": conversion_key,
+        },
+        "campaign_performance": {
+            "basis_type": "mixed_config_aware_and_workspace_diagnostics",
+            "config_behavior": "selected config applies to summary and trend panels; lag remains workspace diagnostic facts",
+            "primary_source": "config-aware performance summaries + workspace lag diagnostics",
+            "selected_config": config_label,
+            "conversion_key": conversion_key,
+        },
         "journeys": {
             "basis_type": "materialized_definition_outputs",
             "config_behavior": "selected config is workspace context only",
@@ -731,6 +745,9 @@ def build_consistency_audit(
             )
         report["notes"].append(
             "Lag parity checks are workspace-wide diagnostic-fact checks and compare channel vs campaign lag summaries on the same raw scope-diagnostic basis."
+        )
+        report["notes"].append(
+            "Channel Performance and Campaign Performance are mixed-basis pages: summary and trend panels now follow the selected model config, while lag panels still read workspace diagnostic facts because lag storage is not config-scoped."
         )
         report["notes"].append(
             "Scope diagnostics and lag summaries intentionally use different row-window contracts: scope diagnostics includes journeys overlapping the selected window, while lag summaries include conversions whose conversion_ts falls inside the window. Their role totals are reported for context but not enforced as hard parity checks."
