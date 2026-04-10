@@ -1764,6 +1764,37 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
             )
           })}
         </div>
+        {!hasSpendData ? (
+          <div
+            style={{
+              marginTop: -t.space.md,
+              padding: `${t.space.sm}px ${t.space.md}px`,
+              borderRadius: t.radius.md,
+              border: `1px solid ${t.color.borderLight}`,
+              background: t.color.bg,
+              fontSize: t.font.sizeSm,
+              color: t.color.textSecondary,
+            }}
+          >
+            Spend data is not connected for the selected period, so spend comparisons are intentionally muted. Open{' '}
+            <button
+              type="button"
+              onClick={onConnectDataSources}
+              style={{
+                border: 'none',
+                background: 'transparent',
+                padding: 0,
+                color: t.color.accent,
+                cursor: 'pointer',
+                fontSize: 'inherit',
+                fontWeight: t.font.weightSemibold,
+              }}
+            >
+              Data Sources
+            </button>{' '}
+            to add spend inputs.
+          </div>
+        ) : null}
 
         {/* C) What changed feed */}
         <SectionCard
