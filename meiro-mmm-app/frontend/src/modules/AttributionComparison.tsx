@@ -7,6 +7,7 @@ import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import AnalysisShareActions from '../components/dashboard/AnalysisShareActions'
 import AnalysisNarrativePanel from '../components/dashboard/AnalysisNarrativePanel'
+import SurfaceBasisNotice from '../components/dashboard/SurfaceBasisNotice'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import { type LagInsightsResponse } from '../components/performance/LagInsightsPanel'
 import SegmentComparisonContextNote from '../components/segments/SegmentComparisonContextNote'
@@ -841,13 +842,13 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
             { label: 'Sensitivity risk', value: summarizeSensitivityRisk(sensitivityQuery.data?.current) },
           ]}
         />
-        <div style={{ marginTop: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+        <SurfaceBasisNotice marginTop={t.space.sm}>
           This page is a <strong>live config-aware</strong> view. Compare it directly with other live attribution pages such as Attribution Roles and Path Archetypes. Compare it only directionally with workspace-fact or materialized-output pages like Overview, Journeys, and Conversion Paths.
-        </div>
+        </SurfaceBasisNotice>
         {configMismatch ? (
-          <div style={{ marginTop: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+          <SurfaceBasisNotice marginTop={t.space.sm}>
             The workspace is currently set to config <strong>{selectedConfigId?.slice(0, 8)}…</strong>, but the visible attribution results still reflect config <strong>{resultsConfigId?.slice(0, 8) ?? '—'}…</strong>. A rerun is in progress or still needed before this page fully matches the selected config.
-          </div>
+          </SurfaceBasisNotice>
         ) : null}
       </div>
 

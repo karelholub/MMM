@@ -4,6 +4,7 @@ import { tokens as t } from '../theme/tokens'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
+import SurfaceBasisNotice from '../components/dashboard/SurfaceBasisNotice'
 import SegmentComparisonContextNote from '../components/segments/SegmentComparisonContextNote'
 import SegmentOverlapNotice from '../components/segments/SegmentOverlapNotice'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
@@ -798,9 +799,9 @@ export default function PathArchetypes() {
             },
           ]}
         />
-        <div style={{ marginTop: tkn.space.sm, fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
+        <SurfaceBasisNotice marginTop={tkn.space.sm}>
           Path Archetypes is a <strong>live config-aware</strong> clustering view. It is directly comparable to Attribution Comparison and Attribution Roles, but not to materialized journey-definition pages unless those pages explicitly say they share the same basis.
-        </div>
+        </SurfaceBasisNotice>
       </div>
       {segmentComparison ? (
         <div style={{ marginBottom: tkn.space.lg }}>

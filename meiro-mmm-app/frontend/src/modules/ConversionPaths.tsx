@@ -7,6 +7,7 @@ import SectionCard from '../components/dashboard/SectionCard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import AnalysisNarrativePanel from '../components/dashboard/AnalysisNarrativePanel'
+import SurfaceBasisNotice from '../components/dashboard/SurfaceBasisNotice'
 import GlobalFilterBar, { type GlobalFiltersState } from '../components/dashboard/GlobalFilterBar'
 import SaveLocalSegmentDialog from '../components/segments/SaveLocalSegmentDialog'
 import SegmentComparisonContextNote from '../components/segments/SegmentComparisonContextNote'
@@ -1307,14 +1308,14 @@ export default function ConversionPaths() {
               </div>
             ) : null}
             {!canCompareToWorkspaceLiveJourneys && data ? (
-              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              <SurfaceBasisNotice>
                 Live-vs-materialized reconciliation is hidden for this view because direct mode, segment focus, page filters, or a non-default journey definition narrows the analysis away from the comparable workspace basis.
-              </div>
+              </SurfaceBasisNotice>
             ) : null}
             {selectedConfigId ? (
-              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              <SurfaceBasisNotice>
                 Conversion Paths follows stored journey-definition outputs for the selected definition and period. The workspace-selected attribution config affects live attribution pages, but it does not retroactively re-scope these materialized path outputs.
-              </div>
+              </SurfaceBasisNotice>
             ) : null}
             {buildJourneyPathsHref(selectedJourneyId) ? (
               <div>

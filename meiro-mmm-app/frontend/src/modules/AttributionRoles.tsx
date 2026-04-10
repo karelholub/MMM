@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { DashboardPage, ContextSummaryStrip, SectionCard, AnalysisShareActions, AnalysisNarrativePanel } from '../components/dashboard'
+import { DashboardPage, ContextSummaryStrip, SectionCard, AnalysisShareActions, AnalysisNarrativePanel, SurfaceBasisNotice } from '../components/dashboard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
@@ -681,9 +681,9 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
         </SectionCard>
 
         <ContextSummaryStrip items={summaryItems} minItemWidth={180} />
-        <div style={{ marginTop: -t.space.md, marginBottom: t.space.lg, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+        <SurfaceBasisNotice marginTop={-t.space.md} marginBottom={t.space.lg}>
           Attribution Roles is a <strong>live config-aware</strong> view built from live attribution journeys and derived role entities. It is directly comparable to Attribution Comparison and Path Archetypes, but only directionally comparable to workspace-fact or materialized-output pages.
-        </div>
+        </SurfaceBasisNotice>
 
         <SegmentOverlapNotice selectedSegment={selectedSegment} />
 

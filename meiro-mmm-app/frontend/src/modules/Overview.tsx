@@ -29,6 +29,7 @@ import {
   ContextSummaryStrip,
   AnalysisShareActions,
   AnalysisNarrativePanel,
+  SurfaceBasisNotice,
 } from '../components/dashboard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
@@ -1517,9 +1518,9 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
           ]}
         />
         {selectedConfigId ? (
-          <div style={{ marginTop: -t.space.md, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+          <SurfaceBasisNotice marginTop={-t.space.md}>
             Overview remains a workspace-fact view. Use live attribution pages to inspect the currently selected model config directly.
-          </div>
+          </SurfaceBasisNotice>
         ) : null}
 
         <AnalysisNarrativePanel
