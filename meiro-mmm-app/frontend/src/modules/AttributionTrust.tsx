@@ -752,6 +752,11 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
                 Focused campaign spend quality: <strong style={{ color: t.color.text }}>{focusedTrustComparison.spendQuality.replace(/_/g, ' ')}</strong>
               </div>
             ) : null}
+            {!selectedSegmentAutoCompatible ? (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                This is an <strong>analytical-lens</strong> comparison. Path and attributable deltas come from matched audience rows, while freshness and taxonomy diagnostics remain workspace-wide context.
+              </div>
+            ) : null}
           </div>
         </SectionCard>
       ) : null}

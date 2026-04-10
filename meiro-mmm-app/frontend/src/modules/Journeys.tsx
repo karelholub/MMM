@@ -4094,7 +4094,7 @@ export default function Journeys({
               }}
             >
               <SegmentComparisonContextNote
-                mode="exact_filter"
+                mode={selectedLocalSegmentAutoCompatible ? 'exact_filter' : 'analytical_lens'}
                 pageLabel="journey rows"
                 basisLabel="matched journey-definition instance rows"
                 primaryLabel={selectedLocalSegment.name}
@@ -4237,6 +4237,11 @@ export default function Journeys({
                   </div>
                 ))}
               </div>
+              {!selectedLocalSegmentAutoCompatible ? (
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  This is an <strong>analytical-lens</strong> comparison. Read the deltas directionally from matched audience rows, not as a literal replacement for the full journey-definition totals on this page.
+                </div>
+              ) : null}
               <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
                 <a
                   href={buildIncrementalityPlannerHref({
