@@ -820,11 +820,29 @@ function FlowSankeyTooltip({
   payload,
 }: {
   active?: boolean
-  payload?: Array<{ payload?: { sourceLabel?: string; targetLabel?: string; value?: number } }>
+  payload?: Array<{
+    value?: number
+    payload?: {
+      sourceLabel?: string
+      targetLabel?: string
+      value?: number
+      source?: { fullName?: string; name?: string } | number
+      target?: { fullName?: string; name?: string } | number
+    }
+  }>
 }) {
   if (!active || !payload?.length) return null
   const raw = payload[0]?.payload
   if (!raw) return null
+  const sourceLabel =
+    raw.sourceLabel ||
+    (typeof raw.source === 'object' ? raw.source?.fullName || raw.source?.name : '') ||
+    'Unknown'
+  const targetLabel =
+    raw.targetLabel ||
+    (typeof raw.target === 'object' ? raw.target?.fullName || raw.target?.name : '') ||
+    'Unknown'
+  const value = Number(raw.value ?? payload[0]?.value ?? 0)
   return (
     <div
       style={{
@@ -838,10 +856,10 @@ function FlowSankeyTooltip({
       }}
     >
       <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>
-        {(raw.sourceLabel || 'Unknown')} → {(raw.targetLabel || 'Unknown')}
+        {sourceLabel} → {targetLabel}
       </div>
       <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-        {Number(raw.value || 0).toLocaleString()} transitions
+        {value.toLocaleString()} transitions
       </div>
     </div>
   )
@@ -6082,15 +6100,15 @@ export default function Journeys({
                     >
                       {flowSankeyData ? (
                         <div style={{ display: 'grid', gap: t.space.sm }}>
-                          <div style={{ width: '100%', height: 420, minWidth: 0 }}>
+                          <div style={{ width: '100%', height: 360, minWidth: 0 }}>
                             <ResponsiveContainer width="100%" height="100%">
                               <Sankey
                                 data={{ nodes: flowSankeyData.nodes, links: flowSankeyData.links }}
-                                nodePadding={28}
-                                nodeWidth={14}
+                                nodePadding={20}
+                                nodeWidth={12}
                                 iterations={32}
-                                margin={{ top: 12, right: 24, bottom: 12, left: 24 }}
-                                link={{ stroke: t.color.accent, strokeOpacity: 0.25 }}
+                                margin={{ top: 10, right: 20, bottom: 10, left: 20 }}
+                                link={{ stroke: t.color.accent, strokeOpacity: 0.18 }}
                                 node={{ stroke: t.color.borderLight, fill: t.color.accent }}
                               >
                                 <Tooltip content={<FlowSankeyTooltip />} />
