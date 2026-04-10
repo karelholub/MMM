@@ -5464,7 +5464,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                 style={{
                   display: 'grid',
                   gap: t.space.md,
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(min(280px, 100%), 1fr))',
                 }}
               >
                 <label style={{ display: 'grid', gap: 6 }}>
@@ -5612,7 +5612,8 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                 style={{
                   display: 'grid',
                   gap: t.space.md,
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(min(280px, 100%), 1fr))',
+                  alignItems: 'start',
                 }}
               >
                 <label style={{ display: 'grid', gap: 6 }}>
@@ -5648,10 +5649,17 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                   )}
                 </label>
 
-                <div style={{ display: 'grid', gap: t.space.sm }}>
+                <div style={{ display: 'grid', gap: t.space.sm, minWidth: 0 }}>
                   <span style={labelStyle}>Position-based weights</span>
-                  <div style={{ display: 'flex', gap: t.space.sm }}>
-                    <div style={{ flex: 1, display: 'grid', gap: 4 }}>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gap: t.space.sm,
+                      gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                      minWidth: 0,
+                    }}
+                  >
+                    <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
                       <input
                         type="number"
                         min={0}
@@ -5680,7 +5688,7 @@ const SettingsPage = forwardRef<SettingsPageHandle, SettingsPageProps>(
                         </span>
                       )}
                     </div>
-                    <div style={{ flex: 1, display: 'grid', gap: 4 }}>
+                    <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
                       <input
                         type="number"
                         min={0}
