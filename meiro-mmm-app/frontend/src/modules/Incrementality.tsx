@@ -1133,11 +1133,6 @@ export default function IncrementalityPage() {
             <div>
               Setup options are derived from observed journeys in the selected window and KPI definitions from Settings. Unsupported channels stay out of the planner by default.
             </div>
-            {selectedConfigId ? (
-              <div>
-                The selected config is tracked on created experiments, but this planner still reads workspace-observed channels and KPI history rather than a config-filtered attribution slice.
-              </div>
-            ) : null}
             <div>
               Current planner scope: <strong style={{ color: tkn.color.text }}>{plannerPeriodLabel}</strong>
               {' · '}journeys <strong style={{ color: tkn.color.text }}>{(setupContext?.summary.journeys ?? 0).toLocaleString()}</strong>

@@ -1310,9 +1310,13 @@ export default function ConversionPaths() {
             {!canCompareToWorkspaceLiveJourneys && data ? (
               <SurfaceBasisNotice>
                 Live-vs-materialized reconciliation is hidden for this view because direct mode, segment focus, page filters, or a non-default journey definition narrows the analysis away from the comparable workspace basis.
+                {selectedConfigId ? (
+                  <>
+                    {' '}Conversion Paths still follows stored journey-definition outputs for the selected definition and period, so the workspace-selected attribution config does not retroactively re-scope these materialized path outputs.
+                  </>
+                ) : null}
               </SurfaceBasisNotice>
-            ) : null}
-            {selectedConfigId ? (
+            ) : selectedConfigId ? (
               <SurfaceBasisNotice>
                 Conversion Paths follows stored journey-definition outputs for the selected definition and period. The workspace-selected attribution config affects live attribution pages, but it does not retroactively re-scope these materialized path outputs.
               </SurfaceBasisNotice>
