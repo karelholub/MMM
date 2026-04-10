@@ -209,6 +209,26 @@ function clampLabel(label: string, max = 24): string {
   return `${label.slice(0, Math.max(0, max - 1))}…`
 }
 
+function pathChip(label: string) {
+  return (
+    <span
+      key={label}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        padding: '4px 8px',
+        borderRadius: tokens.radius.full,
+        border: `1px solid ${tokens.color.borderLight}`,
+        background: tokens.color.bg,
+        fontSize: tokens.font.sizeXs,
+        color: tokens.color.text,
+      }}
+    >
+      {label}
+    </span>
+  )
+}
+
 function medianOf(values: Array<number | null | undefined>): number | null {
   const valid = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
   if (!valid.length) return null
@@ -229,11 +249,29 @@ function SankeyFlowTooltip({
   payload,
 }: {
   active?: boolean
-  payload?: Array<{ payload?: { sourceLabel?: string; targetLabel?: string; value?: number } }>
+  payload?: Array<{
+    value?: number
+    payload?: {
+      sourceLabel?: string
+      targetLabel?: string
+      value?: number
+      source?: { fullName?: string; name?: string } | number
+      target?: { fullName?: string; name?: string } | number
+    }
+  }>
 }) {
   if (!active || !payload?.length) return null
   const raw = payload[0]?.payload
   if (!raw) return null
+  const sourceLabel =
+    raw.sourceLabel ||
+    (typeof raw.source === 'object' ? raw.source?.fullName || raw.source?.name : '') ||
+    'Unknown'
+  const targetLabel =
+    raw.targetLabel ||
+    (typeof raw.target === 'object' ? raw.target?.fullName || raw.target?.name : '') ||
+    'Unknown'
+  const value = Number(raw.value ?? payload[0]?.value ?? 0)
   return (
     <div
       style={{
@@ -247,10 +285,10 @@ function SankeyFlowTooltip({
       }}
     >
       <div style={{ fontSize: tokens.font.sizeSm, color: tokens.color.text, fontWeight: tokens.font.weightMedium }}>
-        {(raw.sourceLabel || 'Unknown')} → {(raw.targetLabel || 'Unknown')}
+        {sourceLabel} → {targetLabel}
       </div>
       <div style={{ fontSize: tokens.font.sizeXs, color: tokens.color.textSecondary }}>
-        {Number(raw.value || 0).toLocaleString()} journeys
+        {value.toLocaleString()} journeys
       </div>
     </div>
   )
@@ -694,15 +732,20 @@ export default function ConversionPaths() {
     if (!family.length) return null
 
     const nodeIndex = new Map<string, number>()
-    const nodes: Array<{ name: string; fullName: string }> = []
+    const nodes: Array<{ name: string; fullName: string; stage: number }> = []
     const linkMap = new Map<string, { source: number; target: number; value: number; sourceLabel: string; targetLabel: string }>()
+    const stageLabels = new Map<number, Set<string>>()
 
-    const ensureNode = (label: string) => {
-      const existing = nodeIndex.get(label)
+    const ensureNode = (stage: number, label: string) => {
+      const key = `${stage}__${label}`
+      const existing = nodeIndex.get(key)
       if (existing != null) return existing
       const index = nodes.length
-      nodes.push({ name: clampLabel(label, 22), fullName: label })
-      nodeIndex.set(label, index)
+      nodes.push({ name: clampLabel(label, 22), fullName: label, stage })
+      nodeIndex.set(key, index)
+      const currentStageLabels = stageLabels.get(stage) ?? new Set<string>()
+      currentStageLabels.add(label)
+      stageLabels.set(stage, currentStageLabels)
       return index
     }
 
@@ -711,9 +754,9 @@ export default function ConversionPaths() {
       for (let index = 0; index < steps.length - 1; index += 1) {
         const sourceLabel = steps[index]
         const targetLabel = steps[index + 1]
-        const source = ensureNode(sourceLabel)
-        const target = ensureNode(targetLabel)
-        const key = `${sourceLabel}__${targetLabel}`
+        const source = ensureNode(index, sourceLabel)
+        const target = ensureNode(index + 1, targetLabel)
+        const key = `${index}__${sourceLabel}__${targetLabel}`
         const current = linkMap.get(key) || { source, target, value: 0, sourceLabel, targetLabel }
         current.value += item.count
         linkMap.set(key, current)
@@ -723,7 +766,15 @@ export default function ConversionPaths() {
     const links = [...linkMap.values()].sort((a, b) => b.value - a.value)
     if (!links.length) return null
     const totalJourneys = family.reduce((sum, item) => sum + item.count, 0)
-    return { nodes, links, totalJourneys, variants: Math.max(0, family.length - 1) }
+    const branchingStages = [...stageLabels.values()].filter((labels) => labels.size > 1).length
+    return {
+      nodes,
+      links,
+      totalJourneys,
+      variants: Math.max(0, family.length - 1),
+      isLinearFamily: branchingStages === 0,
+      orderedStages: normalizePathInput(selectedPath).split(' > ').map((step) => step.trim()).filter(Boolean),
+    }
   }, [selectedPath, selectedPathDetails])
   const visiblePathLagMedian = useMemo(
     () => medianOf(filteredAndSortedPaths.map((path) => path.avg_time_to_convert_days)),
@@ -2417,26 +2468,47 @@ export default function ConversionPaths() {
                     }}
                   >
                     <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-                      Sankey view of this selected path plus {selectedPathFlowData.variants.toLocaleString()} similar variants, covering{' '}
-                      <strong style={{ color: t.color.text }}>{selectedPathFlowData.totalJourneys.toLocaleString()}</strong> journeys.
+                      {selectedPathFlowData.isLinearFamily
+                        ? <>This selected path plus {selectedPathFlowData.variants.toLocaleString()} similar variants follow the same broad stage order across <strong style={{ color: t.color.text }}>{selectedPathFlowData.totalJourneys.toLocaleString()}</strong> journeys.</>
+                        : <>Sankey view of this selected path plus {selectedPathFlowData.variants.toLocaleString()} similar variants, covering <strong style={{ color: t.color.text }}>{selectedPathFlowData.totalJourneys.toLocaleString()}</strong> journeys.</>}
                     </div>
-                    <div style={{ width: '100%', height: 260, minWidth: 0 }}>
-                      <ResponsiveContainer width="100%" height="100%">
-                        <Sankey
-                          data={{ nodes: selectedPathFlowData.nodes, links: selectedPathFlowData.links }}
-                          nodePadding={22}
-                          nodeWidth={12}
-                          iterations={28}
-                          margin={{ top: 8, right: 16, bottom: 8, left: 16 }}
-                          link={{ stroke: t.color.accent, strokeOpacity: 0.28 }}
-                          node={{ stroke: t.color.borderLight, fill: t.color.accent }}
-                        >
-                          <Tooltip content={<SankeyFlowTooltip />} />
-                        </Sankey>
-                      </ResponsiveContainer>
-                    </div>
+                    {selectedPathFlowData.isLinearFamily ? (
+                      <div style={{ display: 'grid', gap: t.space.sm }}>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          {selectedPathFlowData.orderedStages.map((step, index) => (
+                            <div key={`${step}-${index}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                              {pathChip(step)}
+                              {index < selectedPathFlowData.orderedStages.length - 1 ? (
+                                <span style={{ fontSize: t.font.sizeSm, color: t.color.textMuted }}>→</span>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                          This family is effectively linear, so the simplified stage view is more readable than a full Sankey block.
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ width: '100%', height: 220, minWidth: 0 }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <Sankey
+                            data={{ nodes: selectedPathFlowData.nodes, links: selectedPathFlowData.links }}
+                            nodePadding={18}
+                            nodeWidth={10}
+                            iterations={28}
+                            margin={{ top: 8, right: 20, bottom: 8, left: 20 }}
+                            link={{ stroke: t.color.accent, strokeOpacity: 0.2 }}
+                            node={{ stroke: t.color.borderLight, fill: t.color.accent }}
+                          >
+                            <Tooltip content={<SankeyFlowTooltip />} />
+                          </Sankey>
+                        </ResponsiveContainer>
+                      </div>
+                    )}
                     <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
-                      Use this to spot dominant splits and where similar path variants diverge before conversion.
+                      {selectedPathFlowData.isLinearFamily
+                        ? 'Use the step breakdown and similar variants list below to inspect where volume differs inside the same broad journey shape.'
+                        : 'Use this to spot dominant splits and where similar path variants diverge before conversion.'}
                     </div>
                   </div>
                 </div>
