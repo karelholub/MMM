@@ -472,6 +472,12 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
 
   const summaryItems = [
     { label: 'Period', value: `${dateFrom} – ${dateTo}` },
+    {
+      label: 'Config basis',
+      value: configId
+        ? `Mixed basis · live attribution uses ${configId.slice(0, 8)}…, path outputs stay workspace-level`
+        : 'Mixed basis · live attribution + workspace path outputs',
+    },
     { label: 'Focus segment', value: selectedSegment?.name || 'Workspace baseline' },
     { label: 'Journey source', value: formatSourceLabel(sourceStateQuery.data?.active_source) },
     {
@@ -914,7 +920,10 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
         open={showMethodPanel}
         onToggle={() => setShowMethodPanel((prev) => !prev)}
       >
-        <div style={{ display: 'grid', gap: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+      <div style={{ display: 'grid', gap: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+          <div>
+            This page intentionally mixes two bases: config-aware live attribution diagnostics and stored workspace path outputs. Use it to understand trust and divergence, not to assume every card is filtered by the selected config in the same way.
+          </div>
           <div>
             Mapping coverage and taxonomy coverage answer different questions: mapping coverage is how much spend or value can be assigned cleanly into modeled entities, while taxonomy coverage is how much source/medium traffic can be classified into channels at all.
           </div>

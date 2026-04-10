@@ -136,6 +136,75 @@ def _date_scoped_conversion_path_totals(
     return totals
 
 
+def _surface_basis_registry(
+    *,
+    config_id: Optional[str],
+    conversion_key: Optional[str],
+    active_definition_id: Optional[str],
+    conversion_paths_source: Optional[str],
+    live_path_journeys: int,
+) -> Dict[str, Dict[str, Any]]:
+    config_label = config_id or "default active"
+    return {
+        "overview": {
+            "basis_type": "workspace_facts",
+            "config_behavior": "selected config is context only; not applied retroactively",
+            "primary_source": "canonical workspace facts",
+            "selected_config": config_label,
+            "conversion_key": conversion_key,
+        },
+        "attribution_comparison": {
+            "basis_type": "live_attribution_config_aware",
+            "config_behavior": "selected config applied to live attribution journeys",
+            "primary_source": "live attribution results",
+            "selected_config": config_label,
+            "conversion_key": conversion_key,
+        },
+        "attribution_roles": {
+            "basis_type": "live_attribution_config_aware",
+            "config_behavior": "selected config applied to live attribution role entities",
+            "primary_source": "live attribution journeys and derived role entities",
+            "selected_config": config_label,
+            "conversion_key": conversion_key,
+        },
+        "attribution_trust": {
+            "basis_type": "mixed_live_and_materialized",
+            "config_behavior": "selected config affects live attribution diagnostics but not stored path outputs",
+            "primary_source": "live attribution diagnostics + materialized path outputs",
+            "selected_config": config_label,
+            "conversion_key": conversion_key,
+        },
+        "journeys": {
+            "basis_type": "materialized_definition_outputs",
+            "config_behavior": "selected config is workspace context only",
+            "primary_source": "stored journey-definition outputs",
+            "selected_config": config_label,
+            "journey_definition_id": active_definition_id,
+        },
+        "conversion_paths": {
+            "basis_type": "materialized_definition_outputs",
+            "config_behavior": "selected config is workspace context only",
+            "primary_source": conversion_paths_source or "journey_paths_daily",
+            "selected_config": config_label,
+            "journey_definition_id": active_definition_id,
+        },
+        "path_archetypes": {
+            "basis_type": "live_attribution_config_aware",
+            "config_behavior": "selected config applied before live archetype clustering",
+            "primary_source": "live attribution journeys",
+            "selected_config": config_label,
+            "conversion_key": conversion_key,
+            "live_journeys_in_window": live_path_journeys,
+        },
+        "mmm_dashboard": {
+            "basis_type": "mmm_model_run",
+            "config_behavior": "uses saved MMM run inputs, not live attribution config directly",
+            "primary_source": "saved MMM model outputs",
+            "selected_config": config_label,
+        },
+    }
+
+
 def _date_scoped_journey_path_daily_totals(
     db: Any,
     *,
@@ -454,6 +523,13 @@ def build_consistency_audit(
                 "conversion_key": conversion_key,
                 "min_journey_quality_score": int(getattr(SETTINGS.attribution, "min_journey_quality_score", 0) or 0),
             },
+            "surfaces": _surface_basis_registry(
+                config_id=meta.get("config_id") if meta else config_id,
+                conversion_key=conversion_key,
+                active_definition_id=active_definition_id,
+                conversion_paths_source=conversion_paths_analysis.get("source"),
+                live_path_journeys=len(live_journeys_for_archetypes),
+            ),
             "counts": {
                 "journeys_loaded": len(journeys),
                 "journeys_converted": converted_journeys,
@@ -667,6 +743,9 @@ def main() -> int:
         print("checks:")
         for key, value in report["checks"].items():
             print(f"  {key}: {'PASS' if value else 'FAIL'}")
+        print("surfaces:")
+        for key, value in report["surfaces"].items():
+            print(f"  {key}: {value['basis_type']} ({value['config_behavior']})")
         if report["journey_path_daily_by_definition"]:
             print("journey_path_daily_by_definition:")
             for item in report["journey_path_daily_by_definition"]:
