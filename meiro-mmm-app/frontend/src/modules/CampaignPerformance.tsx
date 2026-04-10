@@ -613,6 +613,18 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
 
   const channelsList = useMemo(() => Array.from(new Set(campaigns.map((c) => c.channel))).sort(), [campaigns])
   const latestEventReplayDiagnostics = summaryQuery.data?.readiness?.details?.latest_event_replay?.diagnostics
+  const diagnosticRoleConversions = useMemo(
+    () =>
+      campaigns.reduce(
+        (sum, row) => sum + row.first_touch_conversions + row.assist_conversions + row.last_touch_conversions,
+        0,
+      ),
+    [campaigns],
+  )
+  const diagnosticFunnelConvertedJourneys = useMemo(
+    () => campaigns.reduce((sum, row) => sum + row.converted_journeys, 0),
+    [campaigns],
+  )
 
   useEffect(() => {
     if (!selectedSegmentId) return
@@ -797,6 +809,11 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
   const measurementWindowLabel = summaryQuery.data?.config?.time_window
     ? `Click ${summaryQuery.data.config.time_window.click_lookback_days ?? '—'}d · Impression ${summaryQuery.data.config.time_window.impression_lookback_days ?? '—'}d · Session ${summaryQuery.data.config.time_window.session_timeout_minutes ?? '—'}m`
     : 'Not configured'
+  const lagSummaryConversions = lagQuery.data?.summary?.conversions ?? 0
+  const mixedBasisActivityWarning =
+    Boolean(configId) &&
+    totalConversions <= 0 &&
+    (diagnosticRoleConversions > 0 || diagnosticFunnelConvertedJourneys > 0 || lagSummaryConversions > 0)
   const kpis = [
     { label: 'Total Spend', value: formatCurrency(totalSpend), def: METRIC_DEFINITIONS['Total Spend'] },
     { label: 'Visits', value: totalVisits.toLocaleString(), def: METRIC_DEFINITIONS['Visits'] },
@@ -1790,6 +1807,11 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
           ]}
         />
       </div>
+      {mixedBasisActivityWarning ? (
+        <SurfaceBasisNotice marginBottom={t.space.md}>
+          The selected config <strong>{configId?.slice(0, 8)}…</strong> currently yields no config-scoped campaign conversions in the KPI totals above, but supporting role, funnel, or lag diagnostics still show <strong>workspace-period activity</strong>. Read those lower panels as diagnostic context, not as proof that the selected config produced visible campaign conversions in this slice.
+        </SurfaceBasisNotice>
+      ) : null}
 
       {/* KPI strip + mapping coverage */}
       <div

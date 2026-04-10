@@ -596,6 +596,18 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
   )
   const latestEventReplay = summaryQuery.data?.readiness?.details?.latest_event_replay
   const latestEventReplayDiagnostics = latestEventReplay?.diagnostics
+  const diagnosticRoleConversions = useMemo(
+    () =>
+      channelRows.reduce(
+        (sum, row) => sum + row.first_touch_conversions + row.assist_conversions + row.last_touch_conversions,
+        0,
+      ),
+    [channelRows],
+  )
+  const diagnosticFunnelConvertedJourneys = useMemo(
+    () => channelRows.reduce((sum, row) => sum + row.converted_journeys, 0),
+    [channelRows],
+  )
 
   useEffect(() => {
     if (!filteredForCharts.length) return
@@ -706,6 +718,11 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
   const spendSignalWeak = totalSpend < 50
   const spendAllocatedOnly = (spendQuality?.status || '') === 'allocated_only'
   const showSpendConfidentSummary = !spendSignalWeak && !spendAllocatedOnly && totalSpend > 0
+  const lagSummaryConversions = lagQuery.data?.summary?.conversions ?? 0
+  const mixedBasisActivityWarning =
+    Boolean(configId) &&
+    totalConversions <= 0 &&
+    (diagnosticRoleConversions > 0 || diagnosticFunnelConvertedJourneys > 0 || lagSummaryConversions > 0)
 
   const periodLabel =
     globalDateFrom && globalDateTo
@@ -1177,6 +1194,11 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
           ]}
         />
       </div>
+      {mixedBasisActivityWarning ? (
+        <SurfaceBasisNotice marginBottom={t.space.md}>
+          The selected config <strong>{configId?.slice(0, 8)}…</strong> currently yields no config-scoped channel conversions in the KPI totals above, but supporting role, funnel, or lag diagnostics still show <strong>workspace-period activity</strong>. Read those lower panels as diagnostic context, not as proof that the selected config produced visible channel conversions in this slice.
+        </SurfaceBasisNotice>
+      ) : null}
       {!!summaryQuery.data?.notes?.length && (
         <div style={{ marginBottom: t.space.md, display: 'grid', gap: t.space.xs }}>
           {summaryQuery.data.notes.map((note, idx) => (
