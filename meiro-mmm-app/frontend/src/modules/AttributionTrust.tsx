@@ -890,17 +890,13 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
         </SectionCard>
 
         <SectionCard
-          title="Config & KPI application"
-          subtitle="Which model/config context you are viewing and how the KPI resolved in the current summaries."
+          title="KPI resolution"
+          subtitle="How the current summaries resolved the conversion key for this workspace."
         >
           <div style={{ display: 'grid', gap: t.space.sm }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.md, flexWrap: 'wrap' }}>
               <span style={{ color: t.color.textSecondary }}>Selected model</span>
               <strong>{model}</strong>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.md, flexWrap: 'wrap' }}>
-              <span style={{ color: t.color.textSecondary }}>Selected config</span>
-              <strong>{configId || 'Default active'}</strong>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.md, flexWrap: 'wrap' }}>
               <span style={{ color: t.color.textSecondary }}>Workspace KPI</span>
@@ -921,7 +917,7 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
 
       <CollapsiblePanel
         title="Method & context"
-        subtitle="How to interpret this workspace and why numbers can disagree across pages."
+        subtitle="How to interpret mapping, taxonomy, and direct/unknown diagnostics on this page."
         open={showMethodPanel}
         onToggle={() => setShowMethodPanel((prev) => !prev)}
       >

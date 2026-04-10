@@ -704,8 +704,8 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
 
       <div style={{ marginBottom: t.space.xl }}>
         <CollapsiblePanel
-          title="Model Trust & Context"
-          subtitle="What changed, what to trust, and quick links into the supporting data."
+          title="Supporting links & caveats"
+          subtitle="Secondary cautions and navigation into the source surfaces behind this run."
           open={showTrustPanel}
           onToggle={() => setShowTrustPanel((value) => !value)}
         >
@@ -725,9 +725,9 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
                   <li>Many channels compared to weeks – consider grouping smaller channels together.</li>
                 )}
                 {confidenceReasons.length === 0 && weeks >= 20 && !hasNegativeRoi && !manyParamsFewPoints && (
-                  <li>Model looks healthy; treat ROI and contribution as decision-grade for budget allocation.</li>
+                  <li>No extra caveats beyond the trust summary above.</li>
                 )}
-                {confidenceReasons.slice(0, 3).map((reason) => (
+                {confidenceReasons.slice(1, 3).map((reason) => (
                   <li key={reason}>{reason}</li>
                 ))}
               </ul>
