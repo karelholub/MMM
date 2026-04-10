@@ -7,6 +7,7 @@ import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { buildSettingsHref } from '../lib/settingsLinks'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
+import SurfaceBasisNotice from '../components/dashboard/SurfaceBasisNotice'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import {
   buildSegmentReference,
@@ -1086,12 +1087,24 @@ export default function IncrementalityPage() {
           items={[
             { label: 'Source', value: 'Observed journeys + KPI settings' },
             { label: 'Planner period', value: plannerPeriodLabel },
+            {
+              label: 'Config basis',
+              value: selectedConfigId
+                ? `Selected config ${selectedConfigId.slice(0, 8)}… saved into new experiments, not used to scope planner context`
+                : 'Planner context uses workspace journeys',
+            },
             { label: 'Observed channels', value: (setupContext?.summary.observed_channels ?? 0).toLocaleString() },
             { label: 'KPIs', value: (setupContext?.kpis.length ?? 0).toLocaleString() },
             { label: 'Freshness', value: plannerFreshnessLabel },
           ]}
         />
       </div>
+
+      {selectedConfigId ? (
+        <SurfaceBasisNotice marginBottom={tkn.space.lg}>
+          Incrementality planner context is currently a <strong>workspace-fact</strong> setup view. The selected config <strong>{selectedConfigId.slice(0, 8)}…</strong> is saved into new experiments for provenance, but it does not re-scope the observed planner channels and KPI baseline on this page.
+        </SurfaceBasisNotice>
+      ) : null}
 
       {plannerPrefillSummary ? (
         <div
@@ -1120,6 +1133,11 @@ export default function IncrementalityPage() {
             <div>
               Setup options are derived from observed journeys in the selected window and KPI definitions from Settings. Unsupported channels stay out of the planner by default.
             </div>
+            {selectedConfigId ? (
+              <div>
+                The selected config is tracked on created experiments, but this planner still reads workspace-observed channels and KPI history rather than a config-filtered attribution slice.
+              </div>
+            ) : null}
             <div>
               Current planner scope: <strong style={{ color: tkn.color.text }}>{plannerPeriodLabel}</strong>
               {' · '}journeys <strong style={{ color: tkn.color.text }}>{(setupContext?.summary.journeys ?? 0).toLocaleString()}</strong>
