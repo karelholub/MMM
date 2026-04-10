@@ -907,34 +907,6 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
           </SectionCard>
         ) : null}
 
-        {selectedSegment && !selectedSegmentAutoCompatible && segmentAnalysisQuery.data ? (
-          <SectionCard
-            title={`Advanced audience lens: ${selectedSegment.name}`}
-            subtitle="This segment is not a simple page filter, so the role view is computed from matched conversions directly instead of channel/campaign filter shortcuts."
-          >
-            <div style={{ display: 'grid', gap: t.space.md, gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
-              <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bgSubtle }}>
-                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Matched journey rows</div>
-                <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-                  {(segmentAnalysisQuery.data.summary.journey_rows ?? 0).toLocaleString()}
-                </div>
-              </div>
-              <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bgSubtle }}>
-                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Role-volume share</div>
-                <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-                  {formatPercent(roleVolumeShare)}
-                </div>
-              </div>
-              <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bgSubtle }}>
-                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Median lag</div>
-                <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-                  {segmentAnalysisQuery.data.summary.median_lag_days != null ? `${segmentAnalysisQuery.data.summary.median_lag_days}d` : '—'}
-                </div>
-              </div>
-            </div>
-          </SectionCard>
-        ) : null}
-
         <CollapsiblePanel
           title="How to read roles"
           subtitle="Role metrics describe where an entity appears in converting paths, not how much selected-model credit it gets."

@@ -4117,9 +4117,6 @@ export default function Journeys({
                   <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
                     Audience comparison: {selectedLocalSegment.name} vs {compareLocalSegment.name}
                   </div>
-                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary, maxWidth: 760 }}>
-                    Compare saved analytical audiences directly before drilling into paths, flow, experiments, or hypotheses.
-                  </div>
                 </div>
               </div>
               <div
