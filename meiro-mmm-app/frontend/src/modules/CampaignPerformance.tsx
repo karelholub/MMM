@@ -15,6 +15,7 @@ import AdsActionsDrawer from '../components/ads/AdsActionsDrawer'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import AnalysisNarrativePanel from '../components/dashboard/AnalysisNarrativePanel'
+import SurfaceBasisNotice from '../components/dashboard/SurfaceBasisNotice'
 import SegmentComparisonContextNote from '../components/segments/SegmentComparisonContextNote'
 import { getAdsDeepLink, type AdsProviderKey } from '../connectors/adsManagerConnector'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
@@ -413,7 +414,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
   }, [globalDateFrom, globalDateTo])
 
   const trendQuery = useQuery<CampaignTrendV2Response>({
-    queryKey: ['campaign-performance-trend-v2', trendDateRange.dateFrom, trendDateRange.dateTo, trendKpi, trendGrain, comparePrevious, conversionKey || 'all'],
+    queryKey: ['campaign-performance-trend-v2', trendDateRange.dateFrom, trendDateRange.dateTo, trendKpi, trendGrain, comparePrevious, conversionKey || 'all', configId ?? 'default'],
     queryFn: async () => {
       const params = new URLSearchParams({
         date_from: trendDateRange.dateFrom,
@@ -424,6 +425,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
         grain: trendGrain,
         compare: comparePrevious ? '1' : '0',
       })
+      if (configId) params.set('model_id', configId)
       return apiGetJson<CampaignTrendV2Response>(`/api/performance/campaign/trend?${params.toString()}`, {
         fallbackMessage: 'Failed to fetch campaign trends',
       })
@@ -433,7 +435,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
   })
 
   const summaryQuery = useQuery<CampaignSummaryResponse>({
-    queryKey: ['campaign-summary-v1', trendDateRange.dateFrom, trendDateRange.dateTo, comparePrevious, conversionKey || 'all'],
+    queryKey: ['campaign-summary-v1', trendDateRange.dateFrom, trendDateRange.dateTo, comparePrevious, conversionKey || 'all', configId ?? 'default'],
     queryFn: async () => {
       const params = new URLSearchParams({
         date_from: trendDateRange.dateFrom,
@@ -441,6 +443,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
         timezone: 'UTC',
         compare: comparePrevious ? '1' : '0',
       })
+      if (configId) params.set('model_id', configId)
       if (conversionKey) params.set('conversion_key', conversionKey)
       return apiGetJson<CampaignSummaryResponse>(`/api/performance/campaign/summary?${params.toString()}`, {
         fallbackMessage: 'Failed to fetch campaign summary',
@@ -1996,6 +1999,11 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       </div>
 
       <div style={{ marginBottom: t.space.lg }}>
+        {configId ? (
+          <SurfaceBasisNotice marginBottom={t.space.sm}>
+            Campaign summary and trend panels are using the selected config <strong>{configId.slice(0, 8)}…</strong>. The lag panel below still reflects workspace diagnostic facts for the selected period, so treat lag as supporting context rather than a config-scoped breakdown.
+          </SurfaceBasisNotice>
+        ) : null}
         <CollapsiblePanel
           title="Conversion Lag Analysis"
           subtitle="How quickly campaigns tend to convert after first touch and after the final touch."

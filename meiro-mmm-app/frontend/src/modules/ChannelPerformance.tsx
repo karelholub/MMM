@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import ConfidenceBadge, { Confidence } from '../components/ConfidenceBadge'
 import ExplainabilityPanel from '../components/ExplainabilityPanel'
+import SurfaceBasisNotice from '../components/dashboard/SurfaceBasisNotice'
 import TrendPanel from '../components/dashboard/TrendPanel'
 import {
   BarChart,
@@ -385,7 +386,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     return { dateFrom, dateTo, fromJourneys: !!(globalDateFrom && globalDateTo) }
   }, [globalDateFrom, globalDateTo])
   const trendQuery = useQuery<ChannelTrendResponse>({
-    queryKey: ['channel-trend-panel', trendKpi, trendGrain, comparePrevious, trendChannelsParam],
+    queryKey: ['channel-trend-panel', trendKpi, trendGrain, comparePrevious, trendChannelsParam, configId ?? 'default'],
     queryFn: async () => {
       const params = new URLSearchParams({
         date_from: trendDateRange.dateFrom,
@@ -395,6 +396,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
         grain: trendGrain,
         compare: comparePrevious ? '1' : '0',
       })
+      if (configId) params.set('model_id', configId)
       selectedTrendChannels.forEach((ch) => params.append('channels', ch))
       return apiGetJson<ChannelTrendResponse>(`/api/performance/channel/trend?${params.toString()}`, {
         fallbackMessage: 'Failed to load channel trend',
@@ -405,7 +407,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
   })
 
   const summaryQuery = useQuery<ChannelSummaryResponse>({
-    queryKey: ['channel-summary-panel', trendDateRange.dateFrom, trendDateRange.dateTo, comparePrevious, trendChannelsParam],
+    queryKey: ['channel-summary-panel', trendDateRange.dateFrom, trendDateRange.dateTo, comparePrevious, trendChannelsParam, configId ?? 'default'],
     queryFn: async () => {
       const params = new URLSearchParams({
         date_from: trendDateRange.dateFrom,
@@ -413,6 +415,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
         timezone: 'UTC',
         compare: comparePrevious ? '1' : '0',
       })
+      if (configId) params.set('model_id', configId)
       selectedTrendChannels.forEach((ch) => params.append('channels', ch))
       return apiGetJson<ChannelSummaryResponse>(`/api/performance/channel/summary?${params.toString()}`, {
         fallbackMessage: 'Failed to load channel summary',
@@ -1323,6 +1326,11 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
       </div>
 
       <div style={{ marginBottom: t.space.lg }}>
+        {configId ? (
+          <SurfaceBasisNotice marginBottom={t.space.sm}>
+            Channel summary and trend panels are using the selected config <strong>{configId.slice(0, 8)}…</strong>. The lag panel below still reflects workspace diagnostic facts for the selected period, so read lag directionally rather than as a config-scoped view.
+          </SurfaceBasisNotice>
+        ) : null}
         <CollapsiblePanel
           title="Conversion Lag Analysis"
           subtitle="How quickly each channel tends to convert after first touch and last touch."
