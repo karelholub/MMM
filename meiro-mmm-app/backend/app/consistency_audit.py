@@ -188,6 +188,13 @@ def _surface_basis_registry(
             "selected_config": config_label,
             "conversion_key": conversion_key,
         },
+        "incrementality": {
+            "basis_type": "workspace_facts_with_config_provenance",
+            "config_behavior": "selected config is stored on new experiments for provenance, but planner setup context remains workspace-observed",
+            "primary_source": "observed journeys + KPI settings",
+            "selected_config": config_label,
+            "conversion_key": conversion_key,
+        },
         "journeys": {
             "basis_type": "materialized_definition_outputs",
             "config_behavior": "selected config is workspace context only",
@@ -748,6 +755,9 @@ def build_consistency_audit(
         )
         report["notes"].append(
             "Channel Performance and Campaign Performance are mixed-basis pages: summary and trend panels now follow the selected model config, while lag panels still read workspace diagnostic facts because lag storage is not config-scoped."
+        )
+        report["notes"].append(
+            "Incrementality is a workspace-observed planning surface: the selected config is recorded on new experiments for provenance, but the planner channel and KPI baseline remain derived from workspace journey observations."
         )
         report["notes"].append(
             "Scope diagnostics and lag summaries intentionally use different row-window contracts: scope diagnostics includes journeys overlapping the selected window, while lag summaries include conversions whose conversion_ts falls inside the window. Their role totals are reported for context but not enforced as hard parity checks."

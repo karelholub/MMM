@@ -4,6 +4,7 @@ import { ResponsiveContainer, Sankey, Tooltip } from 'recharts'
 import DashboardPage from '../components/dashboard/DashboardPage'
 import SectionCard from '../components/dashboard/SectionCard'
 import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn } from '../components/dashboard'
+import SurfaceBasisNotice from '../components/dashboard/SurfaceBasisNotice'
 import GlobalFilterBar, { GlobalFiltersState } from '../components/dashboard/GlobalFilterBar'
 import SaveLocalSegmentDialog from '../components/segments/SaveLocalSegmentDialog'
 import SegmentComparisonContextNote from '../components/segments/SegmentComparisonContextNote'
@@ -3291,9 +3292,9 @@ export default function Journeys({
               Journeys applies saved local segments either as exact filters or as analytical lenses, depending on what the segment definition can truthfully support on this page.
             </div>
             {selectedConfigId ? (
-              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              <SurfaceBasisNotice>
                 The selected attribution config <strong>{selectedConfigId.slice(0, 8)}…</strong> does not directly re-scope stored journey-definition outputs on this page. Treat it as workspace context for related live attribution pages, not as a filter on the journey tables below.
-              </div>
+              </SurfaceBasisNotice>
             ) : null}
 
             <GlobalFilterBar

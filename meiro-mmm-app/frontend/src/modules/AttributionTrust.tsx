@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { DashboardPage, ContextSummaryStrip, SectionCard, AnalysisShareActions, AnalysisNarrativePanel } from '../components/dashboard'
+import { DashboardPage, ContextSummaryStrip, SectionCard, AnalysisShareActions, AnalysisNarrativePanel, SurfaceBasisNotice } from '../components/dashboard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import DecisionStatusCard from '../components/DecisionStatusCard'
 import SegmentComparisonContextNote from '../components/segments/SegmentComparisonContextNote'
@@ -656,6 +656,16 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
     >
       <ContextSummaryStrip items={summaryItems} />
 
+      <SurfaceBasisNotice marginTop={t.space.sm} marginBottom={t.space.lg}>
+        This page is a <strong>mixed-basis</strong> workspace. Live attribution diagnostics use the selected config
+        {configId ? ` ${configId.slice(0, 8)}…` : ''}, while stored path outputs remain workspace-level. Use this view to understand divergence, not to assume every card is filtered by the selected config in the same way.
+        {selectedSegment ? (
+          <>
+            {' '}Focus segment <strong>{selectedSegment.name}</strong> stays analytical here and does not narrow the workspace-wide reconciliation card below.
+          </>
+        ) : null}
+      </SurfaceBasisNotice>
+
       <SegmentOverlapNotice selectedSegment={selectedSegment} />
 
       <AnalysisNarrativePanel
@@ -857,11 +867,6 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
           }
         >
           <div style={{ display: 'grid', gap: t.space.sm }}>
-            {selectedSegment ? (
-              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                Focus segment <strong style={{ color: t.color.text }}>{selectedSegment.name}</strong> does not narrow this reconciliation card. It remains anchored to workspace-wide live journeys and workspace-wide materialized path outputs so trust diagnostics stay comparable.
-              </div>
-            ) : null}
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.md, flexWrap: 'wrap' }}>
               <span style={{ color: t.color.textSecondary }}>Live journeys</span>
               <strong>{formatNumber(liveJourneys)}</strong>
@@ -922,9 +927,6 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
         onToggle={() => setShowMethodPanel((prev) => !prev)}
       >
       <div style={{ display: 'grid', gap: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-          <div>
-            This page intentionally mixes two bases: config-aware live attribution diagnostics and stored workspace path outputs. Use it to understand trust and divergence, not to assume every card is filtered by the selected config in the same way.
-          </div>
           <div>
             Mapping coverage and taxonomy coverage answer different questions: mapping coverage is how much spend or value can be assigned cleanly into modeled entities, while taxonomy coverage is how much source/medium traffic can be classified into channels at all.
           </div>
