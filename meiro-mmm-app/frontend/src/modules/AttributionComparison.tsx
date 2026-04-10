@@ -1347,7 +1347,7 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
           >
             <div style={{ display: 'grid', gap: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
               <div>
-                Current readiness: <strong style={{ color: t.color.text }}>{readiness?.status || 'unknown'}</strong>
+                Current readiness: <strong style={{ color: t.color.text }}>{readiness?.status || 'unavailable'}</strong>
                 {readiness?.warnings?.length ? ` · ${readiness.warnings.slice(0, 2).join(' · ')}` : ''}
               </div>
               <div>

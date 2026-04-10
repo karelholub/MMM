@@ -602,7 +602,7 @@ export default function JourneysSettingsSection({
           <div style={cardStyle}>
             <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Status</div>
             <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: readinessQuery.data?.status === 'blocked' ? t.color.danger : readinessQuery.data?.status === 'warning' ? t.color.warning : t.color.success }}>
-              {readinessQuery.isLoading ? '…' : (readinessQuery.data?.status || 'unknown')}
+              {readinessQuery.isLoading ? '…' : (readinessQuery.data?.status || 'unavailable')}
             </div>
           </div>
           <div style={cardStyle}>
@@ -867,7 +867,7 @@ export default function JourneysSettingsSection({
                         {selected.version_label} • {selected.status}
                       </div>
                       <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-                        Created by {selected.created_by || 'unknown'} · {formatDateTime(selected.created_at)}
+                        Created by {selected.created_by || 'system'} · {formatDateTime(selected.created_at)}
                       </div>
                       {selected.activated_at && (
                         <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>

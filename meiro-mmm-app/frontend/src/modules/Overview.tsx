@@ -830,7 +830,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
         ? `${selectedSegment.name} contributes ${formatPercent(conversionShare)} of visible conversions and runs at ${formatPercent(cvrRate)} CVR.`
         : null,
       selectedSegment && segmentComparison && !selectedSegmentAutoCompatible && segmentAnalysisQuery.data?.summary
-        ? `${selectedSegment.name} matches ${formatPercent(journeyShare)} of visible journey rows and ${formatPercent(conversionShare)} of visible conversions, with ${medianLagRate != null ? `${medianLagRate.toFixed(1)}d` : 'unknown'} median lag.`
+        ? `${selectedSegment.name} matches ${formatPercent(journeyShare)} of visible journey rows and ${formatPercent(conversionShare)} of visible conversions, with ${medianLagRate != null ? `${medianLagRate.toFixed(1)}d` : 'unavailable'} median lag.`
         : null,
       selectedSegment && compareSegment && segmentCompareQuery.data
         ? `${selectedSegment.name} vs ${compareSegment.name}: ${segmentCompareQuery.data.overlap.relationship.replace(/_/g, ' ')} with ${(segmentCompareQuery.data.overlap.jaccard * 100).toFixed(0)}% similarity. Revenue delta is ${segmentCompareQuery.data.deltas.revenue == null ? '—' : `${segmentCompareQuery.data.deltas.revenue >= 0 ? '+' : ''}${formatCurrency(Math.abs(segmentCompareQuery.data.deltas.revenue))}`}.`
