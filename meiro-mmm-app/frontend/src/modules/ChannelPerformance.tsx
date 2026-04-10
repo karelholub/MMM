@@ -38,6 +38,10 @@ import {
   type SegmentRegistryResponse,
 } from '../lib/segments'
 
+function hasBaselineValue(value: number | null | undefined): boolean {
+  return value != null && Number.isFinite(value) && Math.abs(value) > 1e-9
+}
+
 interface ChannelPerformanceProps {
   model: string
   channels: string[]
@@ -863,7 +867,9 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     const headline =
       kpiDeltas?.totalValuePct != null
         ? `Attributed revenue ${kpiDeltas.totalValuePct >= 0 ? 'rose' : 'fell'} ${Math.abs(kpiDeltas.totalValuePct).toFixed(1)}% vs the previous period.`
-        : 'Channel performance is loaded for the current period.'
+        : comparePrevious && !hasBaselineValue(summaryPrevious.revenue)
+          ? 'Channel performance is loaded, but the previous period has no revenue baseline for a reliable percentage comparison.'
+          : 'Channel performance is loaded for the current period.'
     const items = [
       topRevenueChannel
         ? `${topRevenueChannel.channel} is currently the largest revenue channel at ${formatCurrency(topRevenueChannel.attributed_value)}.`
@@ -884,6 +890,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     ].filter((item): item is string => Boolean(item))
     return { headline, items }
   }, [
+    comparePrevious,
     filteredForCharts,
     focusedSegmentSummary,
     kpiDeltas?.totalValuePct,
@@ -891,6 +898,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     selectedSegment,
     showSpendConfidentSummary,
     spendAllocatedOnly,
+    summaryPrevious.revenue,
   ])
 
   if (loading) {
@@ -1569,20 +1577,20 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
                     if (kpiDeltas.totalVisits == null) return 'Δ N/A'
                     const abs = kpiDeltas.totalVisits
                     const pct = kpiDeltas.totalVisitsPct
-                    return `${abs >= 0 ? '+' : ''}${abs.toFixed(0)} ${pct != null ? `/ ${pct.toFixed(1)}%` : ''}`
+                    return `${abs >= 0 ? '+' : ''}${abs.toFixed(0)} ${pct != null ? `/ ${pct.toFixed(1)}%` : comparePrevious && !hasBaselineValue(summaryPrevious.visits) ? '/ No prior data' : ''}`
                   }
                   if (kpi.label === 'Attributed Revenue') {
                     if (kpiDeltas.totalValue == null) return 'Δ N/A'
                     const abs = kpiDeltas.totalValue
                     const pct = kpiDeltas.totalValuePct
                     const absLabel = formatCurrency(Math.abs(abs))
-                    return `${abs >= 0 ? '+' : '-'}${absLabel} ${pct != null ? `/ ${pct.toFixed(1)}%` : ''}`
+                    return `${abs >= 0 ? '+' : '-'}${absLabel} ${pct != null ? `/ ${pct.toFixed(1)}%` : comparePrevious && !hasBaselineValue(summaryPrevious.revenue) ? '/ No prior data' : ''}`
                   }
                   if (kpi.label === 'Conversions') {
                     if (kpiDeltas.totalConversions == null) return 'Δ N/A'
                     const abs = kpiDeltas.totalConversions
                     const pct = kpiDeltas.totalConversionsPct
-                    return `${abs >= 0 ? '+' : ''}${abs.toFixed(0)} ${pct != null ? `/ ${pct.toFixed(1)}%` : ''}`
+                    return `${abs >= 0 ? '+' : ''}${abs.toFixed(0)} ${pct != null ? `/ ${pct.toFixed(1)}%` : comparePrevious && !hasBaselineValue(summaryPrevious.conversions) ? '/ No prior data' : ''}`
                   }
                   return 'Δ N/A'
                 })()}

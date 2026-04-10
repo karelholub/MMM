@@ -29,6 +29,10 @@ import {
   type SegmentRegistryResponse,
 } from '../lib/segments'
 
+function hasBaselineValue(value: number | null | undefined): boolean {
+  return value != null && Number.isFinite(value) && Math.abs(value) > 1e-9
+}
+
 interface CampaignPerformanceProps {
   model: string
   modelsReady: boolean
@@ -900,7 +904,9 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
     const headline =
       comparePrevious && totalValue > 0 && Math.abs(summaryQuery.data?.totals?.previous?.revenue ?? 0) > 1e-9
         ? `Attributed revenue ${totalValue >= (summaryQuery.data?.totals?.previous?.revenue ?? 0) ? 'rose' : 'fell'} ${Math.abs((((totalValue - (summaryQuery.data?.totals?.previous?.revenue ?? 0)) / (summaryQuery.data?.totals?.previous?.revenue ?? 1)) * 100)).toFixed(1)}% vs the previous period.`
-        : 'Campaign performance is loaded for the current slice.'
+        : comparePrevious && !hasBaselineValue(summaryQuery.data?.totals?.previous?.revenue ?? null)
+          ? 'Campaign performance is loaded, but the previous period has no revenue baseline for a reliable percentage comparison.'
+          : 'Campaign performance is loaded for the current slice.'
     const items = [
       topRevenueCampaign
         ? `${topRevenueCampaign.campaign_name || topRevenueCampaign.campaign} is the largest revenue campaign at ${formatCurrency(topRevenueCampaign.attributed_value)}.`
