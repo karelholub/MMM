@@ -385,39 +385,6 @@ export default function Alerts() {
             </div>
           ) : undefined
         }
-        isLoading={
-          (tab === 'alerts' && (alertsQuery.isLoading || journeyAlertsForMainQuery.isLoading)) ||
-          (tab === 'journey_alerts' && (journeyAlertDefsQuery.isLoading || journeyAlertEventsQuery.isLoading))
-        }
-        isError={
-          (tab === 'alerts' && (alertsQuery.isError || journeyAlertsForMainQuery.isError)) ||
-          (tab === 'journey_alerts' && (journeyAlertDefsQuery.isError || journeyAlertEventsQuery.isError))
-        }
-        errorMessage={
-          tab === 'alerts'
-            ? (alertsQuery.error as Error)?.message || (journeyAlertsForMainQuery.error as Error)?.message || null
-            : tab === 'journey_alerts'
-              ? (journeyAlertDefsQuery.error as Error)?.message || (journeyAlertEventsQuery.error as Error)?.message || null
-              : null
-        }
-        isEmpty={
-          (tab === 'alerts' && filteredItems.length === 0) ||
-          (tab === 'journey_alerts' && filteredJourneyAlertDefs.length === 0)
-        }
-        emptyState={
-          <div
-            style={{
-              padding: t.space.xl,
-              textAlign: 'center',
-              color: t.color.textSecondary,
-              border: `1px dashed ${t.color.border}`,
-              borderRadius: t.radius.md,
-              background: t.color.surface,
-            }}
-          >
-            No alerts match the current filters.
-          </div>
-        }
       >
         <div style={{ display: 'grid', gap: t.space.xl }}>
           <div
@@ -483,198 +450,210 @@ export default function Alerts() {
               title="Alerts list"
               subtitle="Filter by status, severity, type, and date; search in title and message."
             >
-              <DashboardTable
-                search={{
-                  value: search,
-                  onChange: setSearch,
-                  placeholder: 'Search title, message, rule…',
-                }}
-                pagination={
-                  totalPages > 1 ? (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: t.space.sm }}>
-                      <button
-                        type="button"
-                        onClick={() => setPage((p) => Math.max(1, p - 1))}
-                        disabled={page <= 1}
-                        style={{
-                          padding: '4px 8px',
-                          borderRadius: t.radius.sm,
-                          border: `1px solid ${t.color.border}`,
-                          background: t.color.surface,
-                          fontSize: t.font.sizeSm,
-                          cursor: page <= 1 ? 'not-allowed' : 'pointer',
-                        }}
-                      >
-                        Previous
-                      </button>
-                      <span style={{ color: t.color.textSecondary, fontSize: t.font.sizeSm }}>
-                        Page {page} of {totalPages}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                        disabled={page >= totalPages}
-                        style={{
-                          padding: '4px 8px',
-                          borderRadius: t.radius.sm,
-                          border: `1px solid ${t.color.border}`,
-                          background: t.color.surface,
-                          fontSize: t.font.sizeSm,
-                          cursor: page >= totalPages ? 'not-allowed' : 'pointer',
-                        }}
-                      >
-                        Next
-                      </button>
-                    </div>
-                  ) : null
-                }
-              >
-                <thead>
-                  <tr>
-                    <th>Severity</th>
-                    <th>Title</th>
-                    <th>Detected</th>
-                    <th>Status</th>
-                    <th>Entity</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredItems.map((alert) => {
-                    const eventId = typeof alert.id === 'number' ? alert.id : null
-                    return (
-                    <tr key={alert.id}>
-                      <td>
-                        <span
+              {(alertsQuery.isLoading || journeyAlertsForMainQuery.isLoading) && (
+                <div style={{ padding: t.space.xl, textAlign: 'center', color: t.color.textSecondary }}>
+                  Loading alerts…
+                </div>
+              )}
+              {(alertsQuery.isError || journeyAlertsForMainQuery.isError) && (
+                <div style={{ padding: t.space.lg, color: t.color.danger, fontSize: t.font.sizeSm }}>
+                  {(alertsQuery.error as Error)?.message || (journeyAlertsForMainQuery.error as Error)?.message || 'Failed to load alerts'}
+                </div>
+              )}
+              {!alertsQuery.isLoading && !journeyAlertsForMainQuery.isLoading && !alertsQuery.isError && !journeyAlertsForMainQuery.isError && (
+                <DashboardTable
+                  search={{
+                    value: search,
+                    onChange: setSearch,
+                    placeholder: 'Search title, message, rule…',
+                  }}
+                  pagination={
+                    totalPages > 1 ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: t.space.sm }}>
+                        <button
+                          type="button"
+                          onClick={() => setPage((p) => Math.max(1, p - 1))}
+                          disabled={page <= 1}
                           style={{
-                            fontWeight: t.font.weightMedium,
-                            color: severityColor(alert.severity),
-                            fontSize: t.font.sizeXs,
+                            padding: '4px 8px',
+                            borderRadius: t.radius.sm,
+                            border: `1px solid ${t.color.border}`,
+                            background: t.color.surface,
+                            fontSize: t.font.sizeSm,
+                            cursor: page <= 1 ? 'not-allowed' : 'pointer',
                           }}
                         >
-                          {formatSeverity(alert.severity)}
+                          Previous
+                        </button>
+                        <span style={{ color: t.color.textSecondary, fontSize: t.font.sizeSm }}>
+                          Page {page} of {totalPages}
                         </span>
-                      </td>
-                      <td>
-                        {eventId != null ? (
-                          <button
-                            type="button"
-                            onClick={() => openDetail(eventId)}
-                            style={{
-                              border: 'none',
-                              background: 'transparent',
-                              padding: 0,
-                              cursor: 'pointer',
-                              fontSize: t.font.sizeSm,
-                              color: t.color.accent,
-                              textAlign: 'left',
-                              textDecoration: 'underline',
-                            }}
-                          >
-                            {alert.title}
-                          </button>
-                        ) : (
-                          <span style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{alert.title}</span>
-                        )}
-                      </td>
-                      <td style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                        {formatTs(alert.ts_detected)}
-                      </td>
-                      <td>{alert.status}</td>
-                      <td style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                        {alert.deep_link?.entity_type ?? '—'}
-                        {alert.deep_link?.entity_id ? ` · ${alert.deep_link.entity_id}` : ''}
-                      </td>
-                      <td>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: t.space.xs }}>
-                          {eventId != null && (
-                            <>
+                        <button
+                          type="button"
+                          onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                          disabled={page >= totalPages}
+                          style={{
+                            padding: '4px 8px',
+                            borderRadius: t.radius.sm,
+                            border: `1px solid ${t.color.border}`,
+                            background: t.color.surface,
+                            fontSize: t.font.sizeSm,
+                            cursor: page >= totalPages ? 'not-allowed' : 'pointer',
+                          }}
+                        >
+                          Next
+                        </button>
+                      </div>
+                    ) : null
+                  }
+                >
+                  <thead>
+                    <tr>
+                      <th>Severity</th>
+                      <th>Title</th>
+                      <th>Detected</th>
+                      <th>Status</th>
+                      <th>Entity</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredItems.map((alert) => {
+                      const eventId = typeof alert.id === 'number' ? alert.id : null
+                      return (
+                        <tr key={alert.id}>
+                          <td>
+                            <span
+                              style={{
+                                fontWeight: t.font.weightMedium,
+                                color: severityColor(alert.severity),
+                                fontSize: t.font.sizeXs,
+                              }}
+                            >
+                              {formatSeverity(alert.severity)}
+                            </span>
+                          </td>
+                          <td>
+                            {eventId != null ? (
                               <button
                                 type="button"
                                 onClick={() => openDetail(eventId)}
                                 style={{
-                                  padding: '2px 6px',
-                                  borderRadius: t.radius.sm,
-                                  border: `1px solid ${t.color.border}`,
-                                  background: t.color.surface,
-                                  fontSize: t.font.sizeXs,
+                                  border: 'none',
+                                  background: 'transparent',
+                                  padding: 0,
                                   cursor: 'pointer',
-                                  color: t.color.text,
+                                  fontSize: t.font.sizeSm,
+                                  color: t.color.accent,
+                                  textAlign: 'left',
+                                  textDecoration: 'underline',
                                 }}
                               >
-                                Detail
+                                {alert.title}
                               </button>
-                              {alert.status === 'open' && (
+                            ) : (
+                              <span style={{ fontSize: t.font.sizeSm, color: t.color.text }}>{alert.title}</span>
+                            )}
+                          </td>
+                          <td style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                            {formatTs(alert.ts_detected)}
+                          </td>
+                          <td>{alert.status}</td>
+                          <td style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                            {alert.deep_link?.entity_type ?? '—'}
+                            {alert.deep_link?.entity_id ? ` · ${alert.deep_link.entity_id}` : ''}
+                          </td>
+                          <td>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: t.space.xs }}>
+                              {eventId != null && (
                                 <>
                                   <button
                                     type="button"
-                                    onClick={() => ackMutation.mutate(eventId)}
-                                    disabled={ackMutation.isPending}
+                                    onClick={() => openDetail(eventId)}
                                     style={{
                                       padding: '2px 6px',
                                       borderRadius: t.radius.sm,
                                       border: `1px solid ${t.color.border}`,
                                       background: t.color.surface,
                                       fontSize: t.font.sizeXs,
-                                      cursor: ackMutation.isPending ? 'wait' : 'pointer',
+                                      cursor: 'pointer',
                                       color: t.color.text,
                                     }}
                                   >
-                                    Ack
+                                    Detail
                                   </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => snoozeMutation.mutate({ id: eventId, duration_minutes: 60 })}
-                                    disabled={snoozeMutation.isPending}
-                                    style={{
-                                      padding: '2px 6px',
-                                      borderRadius: t.radius.sm,
-                                      border: `1px solid ${t.color.border}`,
-                                      background: t.color.surface,
-                                      fontSize: t.font.sizeXs,
-                                      cursor: snoozeMutation.isPending ? 'wait' : 'pointer',
-                                      color: t.color.text,
-                                    }}
-                                  >
-                                    Snooze
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => resolveMutation.mutate(eventId)}
-                                    disabled={resolveMutation.isPending}
-                                    style={{
-                                      padding: '2px 6px',
-                                      borderRadius: t.radius.sm,
-                                      border: 'none',
-                                      background: t.color.accent,
-                                      color: t.color.surface,
-                                      fontSize: t.font.sizeXs,
-                                      cursor: resolveMutation.isPending ? 'wait' : 'pointer',
-                                    }}
-                                  >
-                                    Resolve
-                                  </button>
+                                  {alert.status === 'open' && (
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={() => ackMutation.mutate(eventId)}
+                                        disabled={ackMutation.isPending}
+                                        style={{
+                                          padding: '2px 6px',
+                                          borderRadius: t.radius.sm,
+                                          border: `1px solid ${t.color.border}`,
+                                          background: t.color.surface,
+                                          fontSize: t.font.sizeXs,
+                                          cursor: ackMutation.isPending ? 'wait' : 'pointer',
+                                          color: t.color.text,
+                                        }}
+                                      >
+                                        Ack
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => snoozeMutation.mutate({ id: eventId, duration_minutes: 60 })}
+                                        disabled={snoozeMutation.isPending}
+                                        style={{
+                                          padding: '2px 6px',
+                                          borderRadius: t.radius.sm,
+                                          border: `1px solid ${t.color.border}`,
+                                          background: t.color.surface,
+                                          fontSize: t.font.sizeXs,
+                                          cursor: snoozeMutation.isPending ? 'wait' : 'pointer',
+                                          color: t.color.text,
+                                        }}
+                                      >
+                                        Snooze
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => resolveMutation.mutate(eventId)}
+                                        disabled={resolveMutation.isPending}
+                                        style={{
+                                          padding: '2px 6px',
+                                          borderRadius: t.radius.sm,
+                                          border: 'none',
+                                          background: t.color.accent,
+                                          color: t.color.surface,
+                                          fontSize: t.font.sizeXs,
+                                          cursor: resolveMutation.isPending ? 'wait' : 'pointer',
+                                        }}
+                                      >
+                                        Resolve
+                                      </button>
+                                    </>
+                                  )}
                                 </>
                               )}
-                            </>
-                          )}
-                          {eventId == null && (
-                            <span style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>Pending evaluation</span>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                    )
-                  })}
-                  {filteredItems.length === 0 && (
-                    <tr>
-                      <td colSpan={6} style={{ textAlign: 'center', color: t.color.textSecondary, padding: t.space.lg }}>
-                        No alerts found.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </DashboardTable>
+                              {eventId == null && (
+                                <span style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>Pending evaluation</span>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                    {filteredItems.length === 0 && (
+                      <tr>
+                        <td colSpan={6} style={{ textAlign: 'center', color: t.color.textSecondary, padding: t.space.lg }}>
+                          No alerts found.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </DashboardTable>
+              )}
             </SectionCard>
           )}
 
@@ -720,53 +699,67 @@ export default function Alerts() {
                 </div>
               }
             >
-              {journeyDefinitionFilter ? (
-                <div style={{ marginBottom: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                  Filtered to journey definition <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace' }}>{journeyDefinitionFilter}</span>.
+              {(journeyAlertDefsQuery.isLoading || journeyAlertEventsQuery.isLoading) && (
+                <div style={{ padding: t.space.xl, textAlign: 'center', color: t.color.textSecondary }}>
+                  Loading journey and funnel alerts…
                 </div>
-              ) : null}
-              <DashboardTable>
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Domain</th>
-                    <th>Metric</th>
-                    <th>Scope</th>
-                    <th>Status</th>
-                    <th>Last triggered</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredJourneyAlertDefs.map((def) => {
-                    const latest = filteredJourneyAlertEvents.find((ev) => ev.alert_definition_id === def.id)
-                    const scope = def.scope || {}
-                    const scopeLabel =
-                      (scope.path_hash as string | undefined) ||
-                      (scope.funnel_id as string | undefined) ||
-                      (scope.journey_definition_id as string | undefined) ||
-                      'workspace'
-                    return (
-                      <tr key={def.id}>
-                        <td>{def.name}</td>
-                        <td>{def.domain}</td>
-                        <td>{def.metric}</td>
-                        <td>{scopeLabel}</td>
-                        <td>{def.is_enabled ? 'Enabled' : 'Disabled'}</td>
-                        <td>{formatTs(latest?.triggered_at)}</td>
+              )}
+              {(journeyAlertDefsQuery.isError || journeyAlertEventsQuery.isError) && (
+                <div style={{ padding: t.space.lg, color: t.color.danger, fontSize: t.font.sizeSm }}>
+                  {(journeyAlertDefsQuery.error as Error)?.message || (journeyAlertEventsQuery.error as Error)?.message || 'Failed to load journey alerts'}
+                </div>
+              )}
+              {!journeyAlertDefsQuery.isLoading && !journeyAlertEventsQuery.isLoading && !journeyAlertDefsQuery.isError && !journeyAlertEventsQuery.isError && (
+                <>
+                  {journeyDefinitionFilter ? (
+                    <div style={{ marginBottom: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                      Filtered to journey definition <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace' }}>{journeyDefinitionFilter}</span>.
+                    </div>
+                  ) : null}
+                  <DashboardTable>
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Domain</th>
+                        <th>Metric</th>
+                        <th>Scope</th>
+                        <th>Status</th>
+                        <th>Last triggered</th>
                       </tr>
-                    )
-                  })}
-                  {filteredJourneyAlertDefs.length === 0 && (
-                    <tr>
-                      <td colSpan={6} style={{ textAlign: 'center', color: t.color.textSecondary, padding: t.space.lg }}>
-                        {journeyDefinitionFilter
-                          ? 'No alerts reference this journey definition yet.'
-                          : 'No definitions yet. Create an alert from the Journeys page.'}
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </DashboardTable>
+                    </thead>
+                    <tbody>
+                      {filteredJourneyAlertDefs.map((def) => {
+                        const latest = filteredJourneyAlertEvents.find((ev) => ev.alert_definition_id === def.id)
+                        const scope = def.scope || {}
+                        const scopeLabel =
+                          (scope.path_hash as string | undefined) ||
+                          (scope.funnel_id as string | undefined) ||
+                          (scope.journey_definition_id as string | undefined) ||
+                          'workspace'
+                        return (
+                          <tr key={def.id}>
+                            <td>{def.name}</td>
+                            <td>{def.domain}</td>
+                            <td>{def.metric}</td>
+                            <td>{scopeLabel}</td>
+                            <td>{def.is_enabled ? 'Enabled' : 'Disabled'}</td>
+                            <td>{formatTs(latest?.triggered_at)}</td>
+                          </tr>
+                        )
+                      })}
+                      {filteredJourneyAlertDefs.length === 0 && (
+                        <tr>
+                          <td colSpan={6} style={{ textAlign: 'center', color: t.color.textSecondary, padding: t.space.lg }}>
+                            {journeyDefinitionFilter
+                              ? 'No alerts reference this journey definition yet.'
+                              : 'No definitions yet. Create an alert from the Journeys page.'}
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </DashboardTable>
+                </>
+              )}
             </SectionCard>
           )}
         </div>
