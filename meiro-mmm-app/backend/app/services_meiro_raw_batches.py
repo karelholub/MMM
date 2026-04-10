@@ -2,14 +2,37 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import func
+from sqlalchemy.exc import DatabaseError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.models_config_dq import MeiroRawBatch
+
+logger = logging.getLogger(__name__)
+
+
+class MeiroRawBatchUnavailableError(RuntimeError):
+    pass
+
+
+def _is_retryable_or_corrupt_sqlite_error(exc: Exception) -> bool:
+    message = str(getattr(exc, "orig", exc) or exc).lower()
+    markers = (
+        "disk i/o error",
+        "database is locked",
+        "database table is locked",
+        "unable to open database file",
+        "readonly database",
+        "cannot commit transaction",
+        "database disk image is malformed",
+        "malformed",
+    )
+    return any(marker in message for marker in markers)
 
 
 def _parse_received_at(value: Optional[str]) -> datetime:
@@ -109,10 +132,16 @@ def record_meiro_raw_batch(
         metadata_json=metadata_json or {},
     )
     db.add(item)
-    db.flush()
-    detached = _clone_batch(item)
-    db.commit()
-    return detached
+    try:
+        db.flush()
+        detached = _clone_batch(item)
+        db.commit()
+        return detached
+    except (OperationalError, DatabaseError) as exc:
+        db.rollback()
+        if _is_retryable_or_corrupt_sqlite_error(exc):
+            raise MeiroRawBatchUnavailableError(str(exc)) from exc
+        raise
 
 
 def list_meiro_raw_batches(
@@ -124,21 +153,75 @@ def list_meiro_raw_batches(
     since: Optional[str] = None,
     until: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    query = _base_query(db, source_kind=source_kind, after_db_id=after_db_id, since=since, until=until).order_by(
-        MeiroRawBatch.received_at.desc(),
-        MeiroRawBatch.id.desc(),
-    )
-    if limit is not None:
-        query = query.limit(max(1, min(50000, int(limit))))
-    return [_serialize_batch(row) for row in query.all()]
+    try:
+        query = _base_query(db, source_kind=source_kind, after_db_id=after_db_id, since=since, until=until).order_by(
+            MeiroRawBatch.received_at.desc(),
+            MeiroRawBatch.id.desc(),
+        )
+        if limit is not None:
+            query = query.limit(max(1, min(50000, int(limit))))
+        return [_serialize_batch(row) for row in query.all()]
+    except (OperationalError, DatabaseError):
+        db.rollback()
+        logger.warning("Meiro raw-batch storage unavailable; falling back to file archive paths", exc_info=True)
+        return []
 
 
 def get_meiro_raw_batch_status(db: Session, *, source_kind: str) -> Dict[str, Any]:
     normalized = _normalize_source_kind(source_kind)
-    query = _base_query(db, source_kind=normalized)
-    entries = int(query.count())
     label = "profiles_received" if normalized == "profiles" else "events_received"
-    if entries <= 0:
+    try:
+        query = _base_query(db, source_kind=normalized)
+        entries = int(query.count())
+        if entries <= 0:
+            return {
+                "available": False,
+                "entries": 0,
+                label: 0,
+                "last_received_at": None,
+                "latest_batch_db_id": None,
+                "parser_versions": [],
+            }
+
+        records_received = (
+            db.query(func.coalesce(func.sum(MeiroRawBatch.records_count), 0))
+            .filter(MeiroRawBatch.source_kind == normalized)
+            .scalar()
+            or 0
+        )
+        latest = (
+            db.query(MeiroRawBatch.id, MeiroRawBatch.received_at)
+            .filter(MeiroRawBatch.source_kind == normalized)
+            .order_by(MeiroRawBatch.received_at.desc(), MeiroRawBatch.id.desc())
+            .first()
+        )
+        parser_versions = [
+            value
+            for (value,) in (
+                db.query(MeiroRawBatch.parser_version)
+                .filter(MeiroRawBatch.source_kind == normalized, MeiroRawBatch.parser_version.isnot(None))
+                .distinct()
+                .all()
+            )
+            if value
+        ]
+        last_received_at = None
+        latest_batch_db_id = None
+        if latest:
+            latest_batch_db_id = int(latest[0]) if latest[0] is not None else None
+            if latest[1]:
+                last_received_at = latest[1].replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+        return {
+            "available": True,
+            "entries": entries,
+            label: int(records_received),
+            "last_received_at": last_received_at,
+            "latest_batch_db_id": latest_batch_db_id,
+            "parser_versions": sorted(parser_versions),
+        }
+    except (OperationalError, DatabaseError):
+        db.rollback()
+        logger.warning("Meiro raw-batch status unavailable; falling back to file archive status", exc_info=True)
         return {
             "available": False,
             "entries": 0,
@@ -147,43 +230,6 @@ def get_meiro_raw_batch_status(db: Session, *, source_kind: str) -> Dict[str, An
             "latest_batch_db_id": None,
             "parser_versions": [],
         }
-
-    records_received = (
-        db.query(func.coalesce(func.sum(MeiroRawBatch.records_count), 0))
-        .filter(MeiroRawBatch.source_kind == normalized)
-        .scalar()
-        or 0
-    )
-    latest = (
-        db.query(MeiroRawBatch.id, MeiroRawBatch.received_at)
-        .filter(MeiroRawBatch.source_kind == normalized)
-        .order_by(MeiroRawBatch.received_at.desc(), MeiroRawBatch.id.desc())
-        .first()
-    )
-    parser_versions = [
-        value
-        for (value,) in (
-            db.query(MeiroRawBatch.parser_version)
-            .filter(MeiroRawBatch.source_kind == normalized, MeiroRawBatch.parser_version.isnot(None))
-            .distinct()
-            .all()
-        )
-        if value
-    ]
-    last_received_at = None
-    latest_batch_db_id = None
-    if latest:
-        latest_batch_db_id = int(latest[0]) if latest[0] is not None else None
-        if latest[1]:
-            last_received_at = latest[1].replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
-    return {
-        "available": True,
-        "entries": entries,
-        label: int(records_received),
-        "last_received_at": last_received_at,
-        "latest_batch_db_id": latest_batch_db_id,
-        "parser_versions": sorted(parser_versions),
-    }
 
 
 def rebuild_profiles_from_meiro_profile_batches(

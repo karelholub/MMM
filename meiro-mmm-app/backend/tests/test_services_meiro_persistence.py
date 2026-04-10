@@ -1,6 +1,11 @@
+import sqlite3
+
+import pytest
+from sqlalchemy.exc import DatabaseError
+
 from app.db import SessionLocal
 from app.models_config_dq import MeiroRawBatch, MeiroReplayRun, MeiroReplaySnapshot
-from app.services_meiro_raw_batches import record_meiro_raw_batch
+from app.services_meiro_raw_batches import MeiroRawBatchUnavailableError, record_meiro_raw_batch
 from app.services_meiro_replay_runs import record_meiro_replay_run
 from app.services_meiro_replay_snapshots import create_meiro_replay_snapshot
 
@@ -48,6 +53,39 @@ def test_record_meiro_raw_batch_returns_accessible_detached_row() -> None:
         assert stored.batch_id == row.batch_id
     finally:
         verify_db.close()
+
+
+def test_record_meiro_raw_batch_raises_unavailable_on_corrupt_sqlite() -> None:
+    class FakeSession:
+        def add(self, _item) -> None:
+            return None
+
+        def flush(self) -> None:
+            raise DatabaseError(
+                "INSERT INTO meiro_raw_batches ...",
+                {},
+                sqlite3.DatabaseError("database disk image is malformed"),
+            )
+
+        def rollback(self) -> None:
+            return None
+
+        def commit(self) -> None:
+            raise AssertionError("commit should not be reached when flush fails")
+
+    with pytest.raises(MeiroRawBatchUnavailableError):
+        record_meiro_raw_batch(
+            FakeSession(),
+            source_kind="events",
+            ingestion_channel="webhook",
+            payload_json={"events": [{"event_id": "evt-1"}]},
+            received_at="2026-03-31T06:00:00Z",
+            parser_version="v-test",
+            payload_shape="object",
+            replace=False,
+            records_count=1,
+            metadata_json={"ip": "127.0.0.1"},
+        )
 
 
 def test_record_meiro_replay_run_persists_without_refresh() -> None:

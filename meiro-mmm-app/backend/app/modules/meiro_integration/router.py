@@ -52,6 +52,7 @@ from app.utils.meiro_config import (
 from app.services_meiro_readiness import build_meiro_readiness
 from app.services_meiro_quarantine import get_quarantine_run, get_quarantine_runs
 from app.services_meiro_raw_batches import (
+    MeiroRawBatchUnavailableError,
     get_meiro_raw_batch_status,
     list_meiro_raw_batches,
     rebuild_profiles_from_meiro_profile_batches,
@@ -1534,28 +1535,39 @@ def create_router(
                     "profiles": profiles,
                 }
             )
-            raw_batch = record_meiro_raw_batch_fn(
-                db,
-                source_kind="profiles",
-                ingestion_channel="webhook",
-                payload_json={
-                    "received_at": now_iso,
-                    "parser_version": meiro_parser_version,
-                    "replace": bool(replace),
-                    "payload_shape": "array" if isinstance(body, list) else "object",
-                    "received_count": int(len(profiles)),
-                    "profiles": profiles,
-                },
-                received_at=now_iso,
-                parser_version=meiro_parser_version,
-                payload_shape="array" if isinstance(body, list) else "object",
-                replace=bool(replace),
-                records_count=int(len(profiles)),
-                metadata_json={
-                    "ip": request.client.host if request.client else None,
-                    "user_agent": (request.headers.get("user-agent") or "")[:256] or None,
-                },
-            )
+            raw_batch = None
+            raw_batch_status = {"ok": True, "stored": True, "warning": None}
+            try:
+                raw_batch = record_meiro_raw_batch_fn(
+                    db,
+                    source_kind="profiles",
+                    ingestion_channel="webhook",
+                    payload_json={
+                        "received_at": now_iso,
+                        "parser_version": meiro_parser_version,
+                        "replace": bool(replace),
+                        "payload_shape": "array" if isinstance(body, list) else "object",
+                        "received_count": int(len(profiles)),
+                        "profiles": profiles,
+                    },
+                    received_at=now_iso,
+                    parser_version=meiro_parser_version,
+                    payload_shape="array" if isinstance(body, list) else "object",
+                    replace=bool(replace),
+                    records_count=int(len(profiles)),
+                    metadata_json={
+                        "ip": request.client.host if request.client else None,
+                        "user_agent": (request.headers.get("user-agent") or "")[:256] or None,
+                    },
+                )
+            except MeiroRawBatchUnavailableError as exc:
+                logger.warning("Meiro raw-batch storage is unavailable; continuing with file archive + profile facts", exc_info=True)
+                raw_batch_status = {
+                    "ok": False,
+                    "stored": False,
+                    "warning": "DB raw-batch storage is unavailable. File archive and profile facts were still updated.",
+                    "reason": str(exc),
+                }
             upsert_meiro_profile_facts(
                 db,
                 profiles=profiles,
@@ -1583,6 +1595,8 @@ def create_router(
                     "status_code": 200,
                     "outcome": "success",
                     "error_class": None,
+                    "warning_class": None if raw_batch_status["ok"] else "raw_batch_unavailable",
+                    "warning_detail": raw_batch_status["warning"],
                 },
                 max_items=100,
             )
@@ -1592,6 +1606,7 @@ def create_router(
                     "ok": True,
                     "received": len(profiles),
                     "stored_total": len(to_store),
+                    "raw_batch": raw_batch_status,
                     "message": "Profiles saved. Use Import from CDP in Data Sources to load into attribution.",
                 },
             )
@@ -1709,28 +1724,39 @@ def create_router(
                     "events": events,
                 }
             )
-            raw_batch = record_meiro_raw_batch_fn(
-                db,
-                source_kind="events",
-                ingestion_channel="webhook",
-                payload_json={
-                    "received_at": now_iso,
-                    "parser_version": meiro_parser_version,
-                    "replace": bool(replace),
-                    "payload_shape": "array" if isinstance(body, list) else "object",
-                    "received_count": int(len(events)),
-                    "events": events,
-                },
-                received_at=now_iso,
-                parser_version=meiro_parser_version,
-                payload_shape="array" if isinstance(body, list) else "object",
-                replace=bool(replace),
-                records_count=int(len(events)),
-                metadata_json={
-                    "ip": request.client.host if request.client else None,
-                    "user_agent": (request.headers.get("user-agent") or "")[:256] or None,
-                },
-            )
+            raw_batch = None
+            raw_batch_status = {"ok": True, "stored": True, "warning": None}
+            try:
+                raw_batch = record_meiro_raw_batch_fn(
+                    db,
+                    source_kind="events",
+                    ingestion_channel="webhook",
+                    payload_json={
+                        "received_at": now_iso,
+                        "parser_version": meiro_parser_version,
+                        "replace": bool(replace),
+                        "payload_shape": "array" if isinstance(body, list) else "object",
+                        "received_count": int(len(events)),
+                        "events": events,
+                    },
+                    received_at=now_iso,
+                    parser_version=meiro_parser_version,
+                    payload_shape="array" if isinstance(body, list) else "object",
+                    replace=bool(replace),
+                    records_count=int(len(events)),
+                    metadata_json={
+                        "ip": request.client.host if request.client else None,
+                        "user_agent": (request.headers.get("user-agent") or "")[:256] or None,
+                    },
+                )
+            except MeiroRawBatchUnavailableError as exc:
+                logger.warning("Meiro raw-batch storage is unavailable; continuing with file archive + downstream persistence", exc_info=True)
+                raw_batch_status = {
+                    "ok": False,
+                    "stored": False,
+                    "warning": "DB raw-batch storage is unavailable. File archive and event-derived persistence were still updated.",
+                    "reason": str(exc),
+                }
             event_facts_status = {"ok": True, "stored": True, "warning": None}
             try:
                 upsert_meiro_event_facts(
@@ -1777,8 +1803,10 @@ def create_router(
                     "error_class": None,
                     "ingest_kind": "events",
                     "reconstructed_profiles": len(rebuilt_profiles),
-                    "warning_class": None if event_facts_status["ok"] else "event_facts_unavailable",
-                    "warning_detail": event_facts_status["warning"],
+                    "warning_class": None if raw_batch_status["ok"] and event_facts_status["ok"] else (
+                        "raw_batch_unavailable" if not raw_batch_status["ok"] else "event_facts_unavailable"
+                    ),
+                    "warning_detail": raw_batch_status["warning"] or event_facts_status["warning"],
                 },
                 max_items=100,
             )
@@ -1798,6 +1826,7 @@ def create_router(
                     "stored_total": len(to_store),
                     "reconstructed_profiles": len(rebuilt_profiles),
                     "message": "Events saved. Use Replay archived webhook payloads or import from the event archive to build journeys.",
+                    "raw_batch": raw_batch_status,
                     "event_facts": event_facts_status,
                     "auto_replay": auto_replay_result,
                 },
