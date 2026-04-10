@@ -764,27 +764,23 @@ export default function BudgetOptimizer({
 
       <div style={{ marginBottom: t.space.xl }}>
         <CollapsiblePanel
-          title="Model & Dataset Context"
-          subtitle="What data this optimizer uses and how much trust to place in range-bound recommendations."
+          title="Scenario caveats"
+          subtitle="What can make a recommendation less reliable once you push beyond the observed range."
           open={showContextPanel}
           onToggle={() => setShowContextPanel((value) => !value)}
         >
           <div style={{ display: 'grid', gap: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
             <div>
-              Recommendations are derived from the active MMM run and the linked dataset preview. Manual sliders scale each channel relative to observed baseline spend.
+              Manual sliders scale each channel relative to observed baseline spend, so larger jumps are inherently more speculative than the top model-guided recommendation.
             </div>
             <div>
-              Dataset rows: <strong style={{ color: t.color.text }}>{dataset.length.toLocaleString()}</strong> · baseline spend{' '}
+              Baseline spend{' '}
               <strong style={{ color: t.color.text }}>{formatCurrency(totalBaselineSpend)}</strong> · weighted ROI{' '}
               <strong style={{ color: t.color.text }}>{(recommendationsQuery.data?.summary.weighted_roi ?? 0).toFixed(2)}</strong>
             </div>
             <div>
-              Channels considered: <strong style={{ color: t.color.text }}>{channelList.length.toLocaleString()}</strong>
-              {' · '}modeled periods <strong style={{ color: t.color.text }}>{(recommendationsQuery.data?.summary.periods ?? 0).toLocaleString()}</strong>
-            </div>
-            <div>
-              Saved scenarios: <strong style={{ color: t.color.text }}>{(savedScenariosQuery.data?.total ?? 0).toLocaleString()}</strong>
-              {' · '}rollout records <strong style={{ color: t.color.text }}>{(realizationQuery.data?.total ?? 0).toLocaleString()}</strong>
+              Modeled periods <strong style={{ color: t.color.text }}>{(recommendationsQuery.data?.summary.periods ?? 0).toLocaleString()}</strong>
+              {' · '}channels considered <strong style={{ color: t.color.text }}>{channelList.length.toLocaleString()}</strong>
             </div>
             <div>
               Trust layer: recommendations are strongest inside the observed spend range. Extrapolation warnings appear when the scenario pushes outside those historical bounds.
