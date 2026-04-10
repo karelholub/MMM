@@ -105,6 +105,11 @@ function pageToPathname(page: AppPage): string {
   return '/'
 }
 
+function pageDocumentTitle(page: AppPage): string {
+  const label = NAV_ITEMS.find((item) => item.key === page)?.label ?? 'Workspace'
+  return `${label} | Meiro Measurement`
+}
+
 function isIsoDateOnly(value?: string | null): value is string {
   if (!value) return false
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
@@ -397,6 +402,11 @@ export default function App() {
   }, [page])
 
   useEffect(() => {
+    if (typeof document === 'undefined') return
+    document.title = pageDocumentTitle(page)
+  }, [page])
+
+  useEffect(() => {
     if (typeof window === 'undefined') return
     const onResize = () => setViewportWidth(window.innerWidth)
     window.addEventListener('resize', onResize)
@@ -648,6 +658,7 @@ export default function App() {
         />
 
         <AppTopBar
+          currentPage={page}
           isMobileHeader={isMobileHeader}
           periodLabel={periodLabel}
           periodDateFrom={globalDateRange.dateFrom}

@@ -363,7 +363,7 @@ function daysInPeriod(fromIso?: string, toIso?: string): number {
   return Math.max(1, days)
 }
 
-// --- Cover Dashboard ---
+// --- Overview ---
 export default function Overview({ lastPage, onNavigate, onConnectDataSources }: OverviewProps) {
   const {
     globalDateFrom,
@@ -975,8 +975,8 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
   const headerActions = (
     <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
       <AnalysisShareActions
-        fileStem="cover-dashboard"
-        summaryTitle="Cover Dashboard brief"
+        fileStem="overview"
+        summaryTitle="Overview brief"
         summaryLines={[
           `Period: ${overviewPeriodLabel}`,
           `Focus: ${focusSegmentLabel}`,
@@ -1032,7 +1032,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
             letterSpacing: '-0.02em',
           }}
         >
-          Cover Dashboard
+          Overview
         </h2>
         <p style={{ margin: `${t.space.sm}px 0 0`, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
           Connect data sources and load journeys to see KPIs, drivers, and alerts here.
@@ -1124,7 +1124,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
 
   return (
     <DashboardPage
-      title="Cover Dashboard"
+      title="Overview"
       description="What happened, why it happened, and what to check next. Period, source, model, and config are controlled in the workspace header."
       dateRange={null}
       filters={null}

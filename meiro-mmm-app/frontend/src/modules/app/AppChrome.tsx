@@ -327,6 +327,7 @@ interface ModelConfigOption {
 }
 
 interface AppTopBarProps {
+  currentPage: AppPage
   isMobileHeader: boolean
   periodLabel: string
   periodDateFrom: string
@@ -355,6 +356,7 @@ interface AppTopBarProps {
 }
 
 export function AppTopBar({
+  currentPage,
   isMobileHeader,
   periodLabel,
   periodDateFrom,
@@ -383,6 +385,7 @@ export function AppTopBar({
 }: AppTopBarProps) {
   const [draftDateFrom, setDraftDateFrom] = useState(periodDateFrom)
   const [draftDateTo, setDraftDateTo] = useState(periodDateTo)
+  const [expanded, setExpanded] = useState(false)
   useEffect(() => {
     setDraftDateFrom(periodDateFrom)
     setDraftDateTo(periodDateTo)
@@ -392,6 +395,14 @@ export function AppTopBar({
     !!draftDateTo &&
     draftDateFrom <= draftDateTo &&
     (draftDateFrom !== periodDateFrom || draftDateTo !== periodDateTo)
+  const canRunModels = ['dashboard', 'roles', 'trust', 'comparison', 'campaigns'].includes(currentPage)
+  const selectedModelLabel =
+    ATTRIBUTION_MODELS.find((model) => model.id === selectedModel)?.label ?? selectedModel
+  const selectedConfigLabel = selectedConfigId
+    ? modelConfigs.find((config) => config.id === selectedConfigId)?.name ?? 'Selected config'
+    : 'Default active'
+  const sourceLabel =
+    journeySourceOptions.find((src) => src.key === activeJourneySource)?.label ?? 'Source'
 
   const panelStyle: CSSProperties = {
     display: 'grid',
@@ -444,21 +455,22 @@ export function AppTopBar({
         gridColumn: 2,
         display: 'grid',
         gap: 12,
-        padding: isMobileHeader ? '12px' : '14px 20px',
+        padding: isMobileHeader ? '10px 12px' : '10px 20px',
         borderBottom: `1px solid ${tokens.color.borderLight}`,
         background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 40%, #1d4ed8 100%)',
         color: '#e5e7eb',
-        position: 'relative',
-        zIndex: 20,
+        position: 'sticky',
+        top: 0,
+        zIndex: 40,
         minWidth: 0,
       }}
     >
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: isMobileHeader ? 'minmax(0,1fr)' : 'minmax(0,1fr) minmax(280px, 400px)',
-          alignItems: 'start',
-          gap: 12,
+          gridTemplateColumns: isMobileHeader ? 'minmax(0,1fr)' : 'minmax(0,1fr) auto',
+          alignItems: 'center',
+          gap: 10,
           minWidth: 0,
         }}
       >
@@ -470,195 +482,238 @@ export function AppTopBar({
           <div style={{ fontSize: tokens.font.sizeSm, color: 'rgba(226,232,240,0.82)', maxWidth: 720 }}>
             Unified attribution, incrementality, MMM, and data quality.
           </div>
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 8,
+              marginTop: 2,
+            }}
+          >
+            {[periodLabel, conversionLabel, sourceLabel, selectedModelLabel, selectedConfigLabel].map((item) => (
+              <span
+                key={item}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  padding: '4px 10px',
+                  borderRadius: 999,
+                  border: '1px solid rgba(148,163,184,0.35)',
+                  backgroundColor: 'rgba(11,18,32,0.54)',
+                  fontSize: tokens.font.sizeXs,
+                  color: 'rgba(226,232,240,0.88)',
+                  maxWidth: '100%',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {item}
+              </span>
+            ))}
+          </div>
         </div>
 
-        <div style={{ ...panelStyle, justifySelf: isMobileHeader ? 'stretch' : 'end' }}>
-          <div style={panelLabelStyle}>Analysis period</div>
-          <div style={{ display: 'grid', gridTemplateColumns: isMobileHeader ? '1fr' : 'minmax(0,1fr) auto minmax(0,1fr) auto', gap: 8, alignItems: 'center' }}>
-            <input
-              type="date"
-              value={draftDateFrom}
-              onChange={(e) => setDraftDateFrom(e.target.value)}
-              style={dateInputStyle}
-            />
-            {!isMobileHeader && <span style={{ opacity: 0.8 }}>–</span>}
-            <input
-              type="date"
-              value={draftDateTo}
-              onChange={(e) => setDraftDateTo(e.target.value)}
-              style={dateInputStyle}
-            />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifySelf: isMobileHeader ? 'stretch' : 'end', flexWrap: 'wrap' }}>
+          {!journeysLoaded && (
             <button
               type="button"
-              onClick={() => onPeriodChange({ dateFrom: draftDateFrom, dateTo: draftDateTo })}
-              disabled={!canApplyPeriod}
-              style={{
-                height: 30,
-                borderRadius: tokens.radius.sm,
-                border: '1px solid rgba(148,163,184,0.45)',
-                backgroundColor: canApplyPeriod ? '#2563eb' : '#334155',
-                color: '#e5e7eb',
-                padding: '0 10px',
-                fontSize: tokens.font.sizeXs,
-                fontWeight: tokens.font.weightSemibold,
-                cursor: canApplyPeriod ? 'pointer' : 'not-allowed',
-                opacity: canApplyPeriod ? 1 : 0.7,
-              }}
+              onClick={onLoadSample}
+              disabled={loadingSample}
+              style={{ padding: '8px 14px', minHeight: 34, borderRadius: 999, fontSize: tokens.font.sizeXs, fontWeight: tokens.font.weightSemibold, backgroundColor: tokens.color.accent, color: '#ffffff', border: 'none', cursor: loadingSample ? 'wait' : 'pointer', opacity: loadingSample ? 0.7 : 1 }}
             >
-              Apply
+              {loadingSample ? 'Loading sample…' : 'Load sample data'}
             </button>
-          </div>
-          <div style={{ fontSize: tokens.font.sizeXs, color: 'rgba(226,232,240,0.75)' }}>
-            {periodLabel}
-          </div>
+          )}
+          {journeysLoaded && canRunModels && (
+            <button
+              type="button"
+              onClick={onRunModels}
+              disabled={runningModels}
+              style={{ padding: '8px 16px', minHeight: 34, borderRadius: 999, fontSize: tokens.font.sizeXs, fontWeight: tokens.font.weightSemibold, backgroundColor: '#f97316', color: '#111827', border: 'none', cursor: runningModels ? 'wait' : 'pointer', opacity: runningModels ? 0.85 : 1, boxShadow: '0 0 0 1px rgba(15,23,42,0.35)' }}
+            >
+              {runningModels ? 'Running models…' : 'Re-run attribution models'}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setExpanded((current) => !current)}
+            style={{
+              padding: '8px 14px',
+              minHeight: 34,
+              borderRadius: 999,
+              fontSize: tokens.font.sizeXs,
+              fontWeight: tokens.font.weightSemibold,
+              backgroundColor: 'rgba(11,18,32,0.66)',
+              color: '#e5e7eb',
+              border: '1px solid rgba(148,163,184,0.45)',
+              cursor: 'pointer',
+            }}
+          >
+            {expanded ? 'Collapse context' : 'Edit context'}
+          </button>
         </div>
       </div>
 
-      <div
-        role="toolbar"
-        aria-label="Workspace controls"
-        style={{
-          display: 'grid',
-          gridTemplateColumns: isMobileHeader ? 'minmax(0,1fr)' : 'minmax(0, 1.7fr) minmax(280px, 360px)',
-          gap: 12,
-          minWidth: 0,
-        }}
-      >
-        <div style={panelStyle}>
-          <div style={panelLabelStyle}>Analysis context</div>
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-              gap: 10,
-              minWidth: 0,
-            }}
-          >
-            <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
-              <span style={{ fontSize: tokens.font.sizeXs, color: 'rgba(226,232,240,0.72)' }}>Conversion</span>
-              <div
-                style={{
-                  minHeight: 34,
-                  padding: '7px 10px',
-                  borderRadius: tokens.radius.sm,
-                  border: '1px solid rgba(148,163,184,0.45)',
-                  backgroundColor: 'rgba(11,18,32,0.92)',
-                  color: '#e5e7eb',
-                  fontSize: tokens.font.sizeXs,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  minWidth: 0,
-                }}
-              >
-                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: tokens.font.weightMedium }}>
-                  {conversionLabel}
-                </span>
-                <span style={{ color: 'rgba(226,232,240,0.55)', flexShrink: 0 }}>read-only</span>
-              </div>
-            </div>
-
-            <label style={{ display: 'grid', gap: 4, minWidth: 0 }}>
-              <span style={{ fontSize: tokens.font.sizeXs, color: 'rgba(226,232,240,0.72)' }}>Source</span>
-              <select
-                value={activeJourneySource || ''}
-                onChange={(e) => onJourneySourceChange(e.target.value as 'sample' | 'upload' | 'meiro')}
-                disabled={sourceSwitching || !activeJourneySource}
-                style={{ ...selectStyle, cursor: sourceSwitching ? 'wait' : 'pointer' }}
-              >
-                {journeySourceOptions.map((src) => (
-                  <option key={src.key} value={src.key} disabled={!src.available}>
-                    {src.label}{src.available ? '' : ' (n/a)'}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label style={{ display: 'grid', gap: 4, minWidth: 0 }}>
-              <span style={{ fontSize: tokens.font.sizeXs, color: 'rgba(226,232,240,0.72)' }}>Model</span>
-              <select value={selectedModel} onChange={(e) => onModelChange(e.target.value)} style={selectStyle}>
-                {ATTRIBUTION_MODELS.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label style={{ display: 'grid', gap: 4, minWidth: 0 }}>
-              <span style={{ fontSize: tokens.font.sizeXs, color: 'rgba(226,232,240,0.72)' }}>Config</span>
-              {modelConfigsLoading ? (
-                <span
-                  aria-hidden="true"
+      {expanded && (
+        <div
+          role="toolbar"
+          aria-label="Workspace controls"
+          style={{
+            display: 'grid',
+            gridTemplateColumns: isMobileHeader ? 'minmax(0,1fr)' : 'minmax(0, 1.7fr) minmax(280px, 360px)',
+            gap: 12,
+            minWidth: 0,
+          }}
+        >
+          <div style={panelStyle}>
+            <div style={panelLabelStyle}>Analysis context</div>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                gap: 10,
+                minWidth: 0,
+              }}
+            >
+              <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
+                <span style={{ fontSize: tokens.font.sizeXs, color: 'rgba(226,232,240,0.72)' }}>Conversion</span>
+                <div
                   style={{
-                    display: 'inline-block',
-                    height: 34,
+                    minHeight: 34,
+                    padding: '7px 10px',
                     borderRadius: tokens.radius.sm,
-                    backgroundColor: 'rgba(100,116,139,0.45)',
-                    border: '1px solid rgba(148,163,184,0.4)',
+                    border: '1px solid rgba(148,163,184,0.45)',
+                    backgroundColor: 'rgba(11,18,32,0.92)',
+                    color: '#e5e7eb',
+                    fontSize: tokens.font.sizeXs,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    minWidth: 0,
                   }}
-                />
-              ) : (
-                <select value={selectedConfigId ?? ''} onChange={(e) => onConfigChange(e.target.value || null)} style={selectStyle}>
-                  <option value="">Default active</option>
-                  {modelConfigs.filter((c) => c.status === 'active' || c.status === 'draft').map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} v{c.version} {c.status === 'active' ? '• active' : '(draft)'}
+                >
+                  <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: tokens.font.weightMedium }}>
+                    {conversionLabel}
+                  </span>
+                  <span style={{ color: 'rgba(226,232,240,0.55)', flexShrink: 0 }}>read-only</span>
+                </div>
+              </div>
+
+              <label style={{ display: 'grid', gap: 4, minWidth: 0 }}>
+                <span style={{ fontSize: tokens.font.sizeXs, color: 'rgba(226,232,240,0.72)' }}>Source</span>
+                <select
+                  value={activeJourneySource || ''}
+                  onChange={(e) => onJourneySourceChange(e.target.value as 'sample' | 'upload' | 'meiro')}
+                  disabled={sourceSwitching || !activeJourneySource}
+                  style={{ ...selectStyle, cursor: sourceSwitching ? 'wait' : 'pointer' }}
+                >
+                  {journeySourceOptions.map((src) => (
+                    <option key={src.key} value={src.key} disabled={!src.available}>
+                      {src.label}{src.available ? '' : ' (n/a)'}
                     </option>
                   ))}
                 </select>
-              )}
-            </label>
-          </div>
-        </div>
+              </label>
 
-        <div style={panelStyle}>
-          <div style={panelLabelStyle}>{journeysLoaded ? 'Dataset status' : 'Workspace status'}</div>
-          <div
-            style={{
-              display: 'grid',
-              gap: 6,
-              padding: '8px 10px',
-              borderRadius: 14,
-              backgroundColor: journeysLoaded ? 'rgba(22,163,74,0.16)' : 'rgba(250,204,21,0.12)',
-              border: `1px solid ${journeysLoaded ? 'rgba(34,197,94,0.4)' : 'rgba(234,179,8,0.35)'}`,
-            }}
-          >
-            <div style={{ fontSize: tokens.font.sizeSm, fontWeight: tokens.font.weightSemibold, color: journeysLoaded ? '#bbf7d0' : '#fde68a' }}>
-              {journeysLoaded ? 'Journeys loaded and ready for analysis' : 'No journeys loaded yet'}
-            </div>
-            <div style={{ fontSize: tokens.font.sizeXs, color: 'rgba(226,232,240,0.8)' }}>
-              {journeysLoaded
-                ? primaryKpiLabel
-                  ? `${journeyCount} journeys observed · ${primaryKpiLabel}: ${primaryKpiCount ?? convertedCount}`
-                  : `${journeyCount} journeys observed · ${convertedCount} converted`
-                : 'Load sample data or connect a source to populate attribution, journeys, and cover metrics.'}
+              <label style={{ display: 'grid', gap: 4, minWidth: 0 }}>
+                <span style={{ fontSize: tokens.font.sizeXs, color: 'rgba(226,232,240,0.72)' }}>Model</span>
+                <select value={selectedModel} onChange={(e) => onModelChange(e.target.value)} style={selectStyle}>
+                  {ATTRIBUTION_MODELS.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label style={{ display: 'grid', gap: 4, minWidth: 0 }}>
+                <span style={{ fontSize: tokens.font.sizeXs, color: 'rgba(226,232,240,0.72)' }}>Config</span>
+                {modelConfigsLoading ? (
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      display: 'inline-block',
+                      height: 34,
+                      borderRadius: tokens.radius.sm,
+                      backgroundColor: 'rgba(100,116,139,0.45)',
+                      border: '1px solid rgba(148,163,184,0.4)',
+                    }}
+                  />
+                ) : (
+                  <select value={selectedConfigId ?? ''} onChange={(e) => onConfigChange(e.target.value || null)} style={selectStyle}>
+                    <option value="">Default active</option>
+                    {modelConfigs.filter((c) => c.status === 'active' || c.status === 'draft').map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} v{c.version} {c.status === 'active' ? '• active' : '(draft)'}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </label>
             </div>
           </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {!journeysLoaded && (
+
+          <div style={panelStyle}>
+            <div style={panelLabelStyle}>Analysis period</div>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobileHeader ? '1fr' : 'minmax(0,1fr) auto minmax(0,1fr) auto', gap: 8, alignItems: 'center' }}>
+              <input
+                type="date"
+                value={draftDateFrom}
+                onChange={(e) => setDraftDateFrom(e.target.value)}
+                style={dateInputStyle}
+              />
+              {!isMobileHeader && <span style={{ opacity: 0.8 }}>–</span>}
+              <input
+                type="date"
+                value={draftDateTo}
+                onChange={(e) => setDraftDateTo(e.target.value)}
+                style={dateInputStyle}
+              />
               <button
                 type="button"
-                onClick={onLoadSample}
-                disabled={loadingSample}
-                style={{ padding: '8px 14px', minHeight: 34, borderRadius: 999, fontSize: tokens.font.sizeXs, fontWeight: tokens.font.weightSemibold, backgroundColor: tokens.color.accent, color: '#ffffff', border: 'none', cursor: loadingSample ? 'wait' : 'pointer', opacity: loadingSample ? 0.7 : 1, width: isMobileHeader ? '100%' : 'auto' }}
+                onClick={() => onPeriodChange({ dateFrom: draftDateFrom, dateTo: draftDateTo })}
+                disabled={!canApplyPeriod}
+                style={{
+                  height: 30,
+                  borderRadius: tokens.radius.sm,
+                  border: '1px solid rgba(148,163,184,0.45)',
+                  backgroundColor: canApplyPeriod ? '#2563eb' : '#334155',
+                  color: '#e5e7eb',
+                  padding: '0 10px',
+                  fontSize: tokens.font.sizeXs,
+                  fontWeight: tokens.font.weightSemibold,
+                  cursor: canApplyPeriod ? 'pointer' : 'not-allowed',
+                  opacity: canApplyPeriod ? 1 : 0.7,
+                }}
               >
-                {loadingSample ? 'Loading sample…' : 'Load sample data'}
+                Apply
               </button>
-            )}
-            {journeysLoaded && (
-              <button
-                type="button"
-                onClick={onRunModels}
-                disabled={runningModels}
-                style={{ padding: '8px 16px', minHeight: 34, borderRadius: 999, fontSize: tokens.font.sizeXs, fontWeight: tokens.font.weightSemibold, backgroundColor: '#f97316', color: '#111827', border: 'none', cursor: runningModels ? 'wait' : 'pointer', opacity: runningModels ? 0.85 : 1, boxShadow: '0 0 0 1px rgba(15,23,42,0.35)', width: isMobileHeader ? '100%' : 'auto' }}
-              >
-                {runningModels ? 'Running models…' : 'Re-run attribution models'}
-              </button>
-            )}
+            </div>
+            <div
+              style={{
+                display: 'grid',
+                gap: 6,
+                padding: '8px 10px',
+                borderRadius: 14,
+                backgroundColor: journeysLoaded ? 'rgba(22,163,74,0.16)' : 'rgba(250,204,21,0.12)',
+                border: `1px solid ${journeysLoaded ? 'rgba(34,197,94,0.4)' : 'rgba(234,179,8,0.35)'}`,
+              }}
+            >
+              <div style={{ fontSize: tokens.font.sizeSm, fontWeight: tokens.font.weightSemibold, color: journeysLoaded ? '#bbf7d0' : '#fde68a' }}>
+                {journeysLoaded ? 'Journeys loaded and ready for analysis' : 'No journeys loaded yet'}
+              </div>
+              <div style={{ fontSize: tokens.font.sizeXs, color: 'rgba(226,232,240,0.8)' }}>
+                {journeysLoaded
+                  ? primaryKpiLabel
+                    ? `${journeyCount} journeys observed · ${primaryKpiLabel}: ${primaryKpiCount ?? convertedCount}`
+                    : `${journeyCount} journeys observed · ${convertedCount} converted`
+                  : 'Load sample data or connect a source to populate attribution, journeys, and cover metrics.'}
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </header>
   )
 }
