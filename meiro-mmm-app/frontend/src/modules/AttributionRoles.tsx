@@ -477,6 +477,7 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
     { label: 'Role metric', value: metric === 'conversions' ? 'Conversions' : 'Revenue' },
     { label: 'KPI', value: String(conversionKey || 'Primary KPI') },
     { label: 'Model context', value: model.replace(/_/g, ' ') },
+    { label: 'Config context', value: configId ? `${configId.slice(0, 8)}…` : 'Default active' },
     { label: 'Focus segment', value: selectedSegment?.name || 'Workspace baseline' },
     { label: 'Journeys loaded', value: journeysSummary?.count?.toLocaleString() ?? '—' },
   ]

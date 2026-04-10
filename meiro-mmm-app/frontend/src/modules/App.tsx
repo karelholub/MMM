@@ -134,7 +134,12 @@ export default function App() {
     return readOptionalSearchParam(window.location.search, 'mmm_dataset_id')
   })
   const [pendingMmmMapping, setPendingMmmMapping] = useState<{ dataset_id: string; columns: { kpi: string; spend_channels: string[]; covariates?: string[] } } | null>(null)
-  const [selectedConfigId, setSelectedConfigId] = useState<string | null>(null)
+  const [selectedConfigId, setSelectedConfigId] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null
+    const params = new URLSearchParams(window.location.search)
+    const raw = params.get('config_id')
+    return raw && raw.trim() ? raw.trim() : null
+  })
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false
     try {
@@ -364,6 +369,8 @@ export default function App() {
       const params = new URLSearchParams(window.location.search)
       setMmmRunId(readOptionalSearchParam(window.location.search, 'mmm_run_id'))
       setMmmDatasetId(readOptionalSearchParam(window.location.search, 'mmm_dataset_id'))
+      const configId = params.get('config_id')
+      setSelectedConfigId(configId && configId.trim() ? configId.trim() : null)
       const dateFrom = params.get('date_from')
       const dateTo = params.get('date_to')
       if (isIsoDateOnly(dateFrom) && isIsoDateOnly(dateTo) && dateFrom <= dateTo) {
@@ -420,6 +427,17 @@ export default function App() {
     const next = `${window.location.pathname}?${params.toString()}${window.location.hash}`
     window.history.replaceState({}, '', next)
   }, [globalDateRange.dateFrom, globalDateRange.dateTo])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    if (selectedConfigId) params.set('config_id', selectedConfigId)
+    else params.delete('config_id')
+    const next = `${window.location.pathname}?${params.toString()}${window.location.hash}`
+    if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== next) {
+      window.history.replaceState({}, '', next)
+    }
+  }, [selectedConfigId])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
