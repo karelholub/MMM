@@ -20,6 +20,7 @@ import { apiGetJson } from '../lib/apiClient'
 import ContextSummaryStrip from '../components/dashboard/ContextSummaryStrip'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import SectionCard from '../components/dashboard/SectionCard'
+import DashboardTable from '../components/dashboard/DashboardTable'
 import AnalysisNarrativePanel from '../components/dashboard/AnalysisNarrativePanel'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import AnalysisShareActions from '../components/dashboard/AnalysisShareActions'
@@ -98,6 +99,70 @@ function channelDisplayName(
   if (overrides?.[channel]) return overrides[channel]
   if (taxonomyMap?.get(channel)) return taxonomyMap.get(channel)!
   return channel.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+function MetricCard(props: {
+  label: string
+  value: string
+  description: string
+  tone?: 'neutral' | 'success' | 'warning' | 'danger'
+  title?: string
+}) {
+  const t = tokens
+  const toneColor =
+    props.tone === 'success'
+      ? t.color.success
+      : props.tone === 'warning'
+        ? t.color.warning
+        : props.tone === 'danger'
+          ? t.color.danger
+          : t.color.text
+  const borderColor =
+    props.tone === 'warning'
+      ? t.color.warning
+      : props.tone === 'danger'
+        ? t.color.danger
+        : t.color.borderLight
+
+  return (
+    <div
+      title={props.title}
+      style={{
+        background: t.color.surface,
+        border: `1px solid ${borderColor}`,
+        borderRadius: t.radius.md,
+        padding: `${t.space.lg}px ${t.space.xl}px`,
+        boxShadow: t.shadowSm,
+        minWidth: 0,
+      }}
+    >
+      <div
+        style={{
+          fontSize: t.font.sizeXs,
+          fontWeight: t.font.weightMedium,
+          color: t.color.textMuted,
+          textTransform: 'uppercase',
+          letterSpacing: '0.04em',
+          marginBottom: 4,
+        }}
+      >
+        {props.label}
+      </div>
+      <div
+        style={{
+          fontSize: t.font.sizeXl,
+          fontWeight: t.font.weightBold,
+          color: toneColor,
+          fontVariantNumeric: 'tabular-nums',
+        }}
+      >
+        {props.value}
+      </div>
+      <div style={{ marginTop: 4, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+        {props.description}
+      </div>
+    </div>
+  )
 }
 
 export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenDataQuality }: MMMDashboardProps) {
@@ -230,6 +295,8 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
     if (!contrib?.length) return null
     return [...contrib].sort((a, b) => b.mean_share - a.mean_share)[0] ?? null
   }, [contrib])
+
+  const negativeRoiCount = useMemo(() => roi?.filter((item) => item.roi < 0).length ?? 0, [roi])
 
   const reconciliationSummary = useMemo(() => {
     if (!runMetadata?.attribution_model || !attributionWeekly?.series || !dataset.length) return null
@@ -450,201 +517,54 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
               gap: t.space.md,
             }}
           >
-            <div
-              style={{
-                background: t.color.surface,
-                border: `1px solid ${t.color.borderLight}`,
-                borderRadius: t.radius.md,
-                padding: `${t.space.lg}px ${t.space.xl}px`,
-                boxShadow: t.shadowSm,
-              }}
-            >
-          <div
-            style={{
-              fontSize: t.font.sizeXs,
-              fontWeight: t.font.weightMedium,
-              color: t.color.textMuted,
-              textTransform: 'uppercase',
-              letterSpacing: '0.04em',
-              marginBottom: 4,
-            }}
-          >
-            Model fit (R²)
-          </div>
-          <div
-            style={{
-              fontSize: t.font.sizeXl,
-              fontWeight: t.font.weightBold,
-              color: suspiciousFit ? t.color.warning : t.color.text,
-              fontVariantNumeric: 'tabular-nums',
-            }}
-            title="Proportion of KPI variance explained by the model."
-          >
-            {r2 !== null ? r2.toFixed(3) : '—'}
-          </div>
-          <div style={{ marginTop: 4, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-            {suspiciousFit
-              ? 'Very high fit on short history – treat ROI with care.'
-              : 'Higher is better; 0.7–0.9 is typical for stable MMM.'}
-          </div>
-            </div>
+            <MetricCard
+              label="Model fit (R²)"
+              value={r2 !== null ? r2.toFixed(3) : '—'}
+              tone={suspiciousFit ? 'warning' : 'neutral'}
+              title="Proportion of KPI variance explained by the model."
+              description={
+                suspiciousFit
+                  ? 'Very high fit on short history; treat ROI with care.'
+                  : 'Higher is better; 0.7-0.9 is typical for stable MMM.'
+              }
+            />
 
             {run?.calibration_mape != null && (
-              <div
-                style={{
-                  background: t.color.surface,
-                  border: `1px solid ${t.color.borderLight}`,
-                  borderRadius: t.radius.md,
-                  padding: `${t.space.lg}px ${t.space.xl}px`,
-                  boxShadow: t.shadowSm,
-                }}
-              >
-            <div
-              style={{
-                fontSize: t.font.sizeXs,
-                fontWeight: t.font.weightMedium,
-                color: t.color.textMuted,
-                textTransform: 'uppercase',
-                letterSpacing: '0.04em',
-                marginBottom: 4,
-              }}
-            >
-              Holdout error (MAPE)
-            </div>
-            <div
-              style={{
-                fontSize: t.font.sizeXl,
-                fontWeight: t.font.weightBold,
-                color: (run.calibration_mape as number) <= 0.25 ? t.color.success : t.color.warning,
-                fontVariantNumeric: 'tabular-nums',
-              }}
-              title="Mean Absolute Percentage Error on holdout period."
-            >
-              {((run.calibration_mape as number) * 100).toFixed(1)}%
-            </div>
-            <div style={{ marginTop: 4, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-              Lower is better; &lt;20% is usually strong calibration.
-            </div>
-              </div>
+              <MetricCard
+                label="Holdout error (MAPE)"
+                value={`${((run.calibration_mape as number) * 100).toFixed(1)}%`}
+                tone={(run.calibration_mape as number) <= 0.25 ? 'success' : 'warning'}
+                title="Mean Absolute Percentage Error on holdout period."
+                description="Lower is better; below 20% is usually strong calibration."
+              />
             )}
 
-            <div
-              style={{
-                background: t.color.surface,
-                border: `1px solid ${t.color.borderLight}`,
-                borderRadius: t.radius.md,
-                padding: `${t.space.lg}px ${t.space.xl}px`,
-                boxShadow: t.shadowSm,
-              }}
-            >
-          <div
-            style={{
-              fontSize: t.font.sizeXs,
-              fontWeight: t.font.weightMedium,
-              color: t.color.textMuted,
-              textTransform: 'uppercase',
-              letterSpacing: '0.04em',
-              marginBottom: 4,
-            }}
-          >
-            Data points
-          </div>
-          <div
-            style={{
-              fontSize: t.font.sizeXl,
-              fontWeight: t.font.weightBold,
-              color: weeks < 20 ? t.color.warning : t.color.text,
-              fontVariantNumeric: 'tabular-nums',
-            }}
-            title="Number of weekly observations used by the model."
-          >
-            {weeks} weeks
-          </div>
-          <div style={{ marginTop: 4, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-            More history increases stability; aim for 26+ weeks.
-          </div>
-            </div>
+            <MetricCard
+              label="Data points"
+              value={`${weeks} weeks`}
+              tone={weeks < 20 ? 'warning' : 'neutral'}
+              title="Number of weekly observations used by the model."
+              description="More history increases stability; aim for 26+ weeks."
+            />
 
-            <div
-              style={{
-                background: t.color.surface,
-                border: `1px solid ${t.color.borderLight}`,
-                borderRadius: t.radius.md,
-                padding: `${t.space.lg}px ${t.space.xl}px`,
-                boxShadow: t.shadowSm,
-              }}
-            >
-          <div
-            style={{
-              fontSize: t.font.sizeXs,
-              fontWeight: t.font.weightMedium,
-              color: t.color.textMuted,
-              textTransform: 'uppercase',
-              letterSpacing: '0.04em',
-              marginBottom: 4,
-            }}
-          >
-            Channels modeled
-          </div>
-          <div
-            style={{
-              fontSize: t.font.sizeXl,
-              fontWeight: t.font.weightBold,
-              color: manyParamsFewPoints ? t.color.warning : t.color.text,
-              fontVariantNumeric: 'tabular-nums',
-            }}
-            title="Media channels included in the model."
-          >
-            {channelsModeled}
-          </div>
-          <div style={{ marginTop: 4, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-            Too many channels vs weeks can overfit.
-          </div>
-            </div>
+            <MetricCard
+              label="Channels modeled"
+              value={channelsModeled.toLocaleString()}
+              tone={manyParamsFewPoints ? 'warning' : 'neutral'}
+              title="Media channels included in the model."
+              description="Too many channels vs weeks can overfit."
+            />
 
-            <div
-              style={{
-                background: t.color.surface,
-                border: `1px solid ${confidenceLevel === 'ok' ? t.color.successMuted : t.color.warning}`,
-                borderRadius: t.radius.md,
-                padding: `${t.space.lg}px ${t.space.xl}px`,
-                boxShadow: t.shadowSm,
-              }}
-            >
-          <div
-            style={{
-              fontSize: t.font.sizeXs,
-              fontWeight: t.font.weightMedium,
-              color: t.color.textMuted,
-              textTransform: 'uppercase',
-              letterSpacing: '0.04em',
-              marginBottom: 4,
-            }}
-          >
-            Confidence / diagnostics
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-            <span
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                padding: '2px 8px',
-                borderRadius: 999,
-                fontSize: t.font.sizeXs,
-                fontWeight: t.font.weightMedium,
-                backgroundColor: confidenceLevel === 'ok' ? t.color.successMuted : t.color.warningMuted,
-                color: confidenceLevel === 'ok' ? t.color.success : t.color.warning,
-              }}
-            >
-              {confidenceLabel}
-            </span>
-          </div>
-          <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary, maxHeight: 44, overflow: 'hidden' }}>
-            {confidenceReasons.length === 0
-              ? 'No major red flags detected. Check data health section for details.'
-              : confidenceReasons[0]}
-          </div>
-            </div>
+            <MetricCard
+              label="Confidence / diagnostics"
+              value={confidenceLabel}
+              tone={confidenceLevel === 'ok' ? 'success' : 'warning'}
+              description={
+                confidenceReasons.length === 0
+                  ? 'No major red flags detected. Check data health for details.'
+                  : confidenceReasons[0]
+              }
+            />
           </div>
         </SectionCard>
       </div>
@@ -1151,131 +1071,49 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
           style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-            gap: t.space.xl,
+            gap: t.space.md,
             marginBottom: roi?.length ? t.space.xl : 0,
           }}
         >
-          <div>
-            <p style={{ fontSize: t.font.sizeSm, color: t.color.textMuted, marginBottom: 4 }}>Total Spend</p>
-            <p style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightBold, color: t.color.text, margin: 0, fontVariantNumeric: 'tabular-nums' }}>
-              {formatCurrency(totalSpend)}
-            </p>
-          </div>
-          <div>
-            <p style={{ fontSize: t.font.sizeSm, color: t.color.textMuted, marginBottom: 4 }}>Avg ROI per channel</p>
-            <p
-              style={{
-                fontSize: t.font.sizeLg,
-                fontWeight: t.font.weightBold,
-                color: weightedROI > 1 ? t.color.success : t.color.danger,
-                margin: 0,
-                fontVariantNumeric: 'tabular-nums',
-              }}
-            >
-              {weightedROI.toFixed(2)}×
-            </p>
-          </div>
-          <div>
-            <p style={{ fontSize: t.font.sizeSm, color: t.color.textMuted, marginBottom: 4 }}>Data points</p>
-            <p
-              style={{
-                fontSize: t.font.sizeLg,
-                fontWeight: t.font.weightBold,
-                color: t.color.text,
-                margin: 0,
-                fontVariantNumeric: 'tabular-nums',
-              }}
-            >
-              {weeks} weeks
-            </p>
-          </div>
+          <MetricCard
+            label="Top ROI channel"
+            value={topRoiChannel ? channelDisplay(topRoiChannel.channel) : '—'}
+            tone={topRoiChannel && topRoiChannel.roi > 0 ? 'success' : 'neutral'}
+            description={topRoiChannel ? `${topRoiChannel.roi.toFixed(2)}x modeled return` : 'No ROI output for this run yet.'}
+          />
+          <MetricCard
+            label="Top contribution"
+            value={topContributionChannel ? channelDisplay(topContributionChannel.channel) : '—'}
+            tone="neutral"
+            description={
+              topContributionChannel
+                ? `${(topContributionChannel.mean_share * 100).toFixed(1)}% of modeled KPI`
+                : 'No contribution output for this run yet.'
+            }
+          />
+          <MetricCard
+            label="Channels to review"
+            value={negativeRoiCount.toLocaleString()}
+            tone={negativeRoiCount > 0 ? 'warning' : 'success'}
+            description={negativeRoiCount > 0 ? 'Negative ROI channels need validation before action.' : 'No negative ROI channels detected.'}
+          />
         </div>
 
         {roi && roi.length > 0 && contrib && contrib.length > 0 && (
-          <div>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: t.font.sizeSm }}>
+          <DashboardTable density="compact">
               <thead>
-                <tr style={{ borderBottom: `2px solid ${t.color.border}` }}>
-                  <th
-                    style={{
-                      padding: `${t.space.md}px ${t.space.lg}px`,
-                      textAlign: 'left',
-                      fontWeight: t.font.weightSemibold,
-                      color: t.color.textSecondary,
-                    }}
-                  >
-                    Channel
-                  </th>
-                  <th
-                    style={{
-                      padding: `${t.space.md}px ${t.space.lg}px`,
-                      textAlign: 'right',
-                      fontWeight: t.font.weightSemibold,
-                      color: t.color.textSecondary,
-                    }}
-                    title="Total spend over the modeled period."
-                  >
-                    Spend
-                  </th>
-                  <th
-                    style={{
-                      padding: `${t.space.md}px ${t.space.lg}px`,
-                      textAlign: 'right',
-                      fontWeight: t.font.weightSemibold,
-                      color: t.color.textSecondary,
-                    }}
-                    title="Estimated KPI generated by this channel."
-                  >
-                    Contribution
-                  </th>
-                  <th
-                    style={{
-                      padding: `${t.space.md}px ${t.space.lg}px`,
-                      textAlign: 'right',
-                      fontWeight: t.font.weightSemibold,
-                      color: t.color.textSecondary,
-                    }}
-                    title="Modeled return per 1 unit of spend."
-                  >
-                    ROI
-                  </th>
-                  <th
-                    style={{
-                      padding: `${t.space.md}px ${t.space.lg}px`,
-                      textAlign: 'right',
-                      fontWeight: t.font.weightSemibold,
-                      color: t.color.textSecondary,
-                    }}
-                    title="Incremental ROI at current spend (if available)."
-                  >
-                    Marginal ROI
-                  </th>
-                  <th
-                    style={{
-                      padding: `${t.space.md}px ${t.space.lg}px`,
-                      textAlign: 'right',
-                      fontWeight: t.font.weightSemibold,
-                      color: t.color.textSecondary,
-                    }}
-                    title="Share of total modeled KPI."
-                  >
-                    Share
-                  </th>
-                  <th
-                    style={{
-                      padding: `${t.space.md}px ${t.space.lg}px`,
-                      textAlign: 'right',
-                      fontWeight: t.font.weightSemibold,
-                      color: t.color.textSecondary,
-                    }}
-                    title="Heuristic efficiency tier based on ROI."
-                  >
-                    Efficiency
-                  </th>
+                <tr>
+                  <th>Channel</th>
+                  <th style={{ textAlign: 'right' }} title="Total spend over the modeled period.">Spend</th>
+                  <th style={{ textAlign: 'right' }} title="Estimated KPI generated by this channel.">Contribution</th>
+                  <th style={{ textAlign: 'right' }} title="Modeled return per 1 unit of spend.">ROI</th>
+                  <th style={{ textAlign: 'right' }} title="Incremental ROI at current spend (if available).">Marginal ROI</th>
+                  <th style={{ textAlign: 'right' }} title="Share of total modeled KPI.">Share</th>
+                  <th style={{ textAlign: 'right' }} title="Heuristic efficiency tier based on ROI.">Efficiency</th>
                 </tr>
               </thead>
               <tbody>
-                {roi.map((r: { channel: string; roi: number }, idx: number) => {
+                {roi.map((r: { channel: string; roi: number }) => {
                   const c = contrib.find((x: { channel: string }) => x.channel === r.channel)
                   const summary = channelSummary.find((s) => s.channel === r.channel)
                   const channelSpend = summary?.spend ?? 0
@@ -1291,16 +1129,9 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
                           ? 'Low'
                           : 'Medium'
                   return (
-                    <tr
-                      key={r.channel}
-                      style={{
-                        borderBottom: `1px solid ${t.color.borderLight}`,
-                        backgroundColor: idx % 2 === 0 ? t.color.surface : t.color.bg,
-                      }}
-                    >
+                    <tr key={r.channel}>
                       <td
                         style={{
-                          padding: `${t.space.md}px ${t.space.lg}px`,
                           fontWeight: t.font.weightMedium,
                           color: t.color.text,
                         }}
@@ -1309,7 +1140,6 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
                       </td>
                       <td
                         style={{
-                          padding: `${t.space.md}px ${t.space.lg}px`,
                           textAlign: 'right',
                           fontVariantNumeric: 'tabular-nums',
                         }}
@@ -1319,7 +1149,6 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
                       </td>
                       <td
                         style={{
-                          padding: `${t.space.md}px ${t.space.lg}px`,
                           textAlign: 'right',
                           fontVariantNumeric: 'tabular-nums',
                         }}
@@ -1335,7 +1164,6 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
                       </td>
                       <td
                         style={{
-                          padding: `${t.space.md}px ${t.space.lg}px`,
                           textAlign: 'right',
                           color: r.roi >= 0 ? t.color.success : t.color.danger,
                           fontVariantNumeric: 'tabular-nums',
@@ -1345,7 +1173,6 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
                       </td>
                       <td
                         style={{
-                          padding: `${t.space.md}px ${t.space.lg}px`,
                           textAlign: 'right',
                           color: marginalRoi >= 0 ? t.color.success : t.color.danger,
                           fontVariantNumeric: 'tabular-nums',
@@ -1355,7 +1182,6 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
                       </td>
                       <td
                         style={{
-                          padding: `${t.space.md}px ${t.space.lg}px`,
                           textAlign: 'right',
                           fontVariantNumeric: 'tabular-nums',
                         }}
@@ -1364,7 +1190,6 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
                       </td>
                       <td
                         style={{
-                          padding: `${t.space.md}px ${t.space.lg}px`,
                           textAlign: 'right',
                           fontSize: t.font.sizeXs,
                           color:
@@ -1381,8 +1206,7 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
                   )
                 })}
               </tbody>
-            </table>
-          </div>
+          </DashboardTable>
         )}
       </SectionCard>
     </div>
