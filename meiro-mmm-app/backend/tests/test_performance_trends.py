@@ -82,6 +82,20 @@ def test_build_channel_trend_compare_and_null_buckets():
     assert prev[0]["ts"] == "2026-01-30" and round(prev[0]["value"], 4) == round(40.0 / 30.0, 4)
     assert prev[1]["ts"] == "2026-01-31" and prev[1]["value"] is None
 
+    visits_out = build_channel_trend_response(
+        journeys=journeys,
+        expenses=expenses,
+        date_from="2026-02-01",
+        date_to="2026-02-02",
+        timezone="UTC",
+        kpi_key="visits",
+        grain="daily",
+        compare=True,
+    )
+    visits_prev = [r for r in visits_out["series_prev"] if r["channel"] == "google_ads"]
+    assert visits_prev[0]["ts"] == "2026-01-30" and visits_prev[0]["value"] == 1.0
+    assert visits_prev[1]["ts"] == "2026-01-31" and visits_prev[1]["value"] == 0.0
+
 
 def test_build_campaign_trend_weekly_monday_buckets():
     journeys = [
@@ -114,6 +128,7 @@ def test_build_campaign_trend_weekly_monday_buckets():
     rows = [r for r in out["series"] if r["campaign_id"] == "meta_ads:Spring Launch"]
     assert rows
     assert any(r["ts"] == "2026-03-02" and r["value"] == 75.0 for r in rows)
+    assert any(r["ts"] == "2026-03-09" and r["value"] == 0.0 for r in rows)
 
 
 def test_build_trend_empty_data_returns_empty_series():

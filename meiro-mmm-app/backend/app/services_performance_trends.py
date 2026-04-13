@@ -19,6 +19,16 @@ from app.services_metrics import (
 )
 
 
+ADDITIVE_TREND_KPIS = {"spend", "visits", "conversions", "revenue"}
+
+
+def _trend_metric_value(metric_row: Dict[str, Any], kpi_key: str) -> Optional[float]:
+    if metric_row:
+        return metric_value(metric_row, kpi_key)
+    if kpi_key in ADDITIVE_TREND_KPIS:
+        return 0.0
+    return None
+
 
 def _safe_tz(timezone_name: Optional[str]) -> ZoneInfo:
     try:
@@ -1096,7 +1106,7 @@ def build_channel_trend_response(
     for ch in dims:
         for key in current_keys:
             metric_row = curr_store.get(ch, {}).get(key, {})
-            val = metric_value(metric_row, kpi_key) if metric_row else None
+            val = _trend_metric_value(metric_row, kpi_key)
             series.append({"ts": key, "channel": ch, "value": val})
 
     out: Dict[str, Any] = {
@@ -1109,7 +1119,7 @@ def build_channel_trend_response(
         for ch in dims:
             for key in prev_keys:
                 metric_row = prev_store.get(ch, {}).get(key, {})
-                val = metric_value(metric_row, kpi_key) if metric_row else None
+                val = _trend_metric_value(metric_row, kpi_key)
                 series_prev.append({"ts": key, "channel": ch, "value": val})
         out["series_prev"] = series_prev
     return out
@@ -1162,7 +1172,7 @@ def build_campaign_trend_response(
         dim_meta = meta.get(dim, {"campaign_id": dim, "campaign_name": None, "channel": dim.split(":", 1)[0], "platform": None})
         for key in current_keys:
             metric_row = curr_store.get(dim, {}).get(key, {})
-            val = metric_value(metric_row, kpi_key) if metric_row else None
+            val = _trend_metric_value(metric_row, kpi_key)
             series.append(
                 {
                     "ts": key,
@@ -1185,7 +1195,7 @@ def build_campaign_trend_response(
             dim_meta = meta.get(dim, {"campaign_id": dim, "campaign_name": None, "channel": dim.split(":", 1)[0], "platform": None})
             for key in prev_keys:
                 metric_row = prev_store.get(dim, {}).get(key, {})
-                val = metric_value(metric_row, kpi_key) if metric_row else None
+                val = _trend_metric_value(metric_row, kpi_key)
                 series_prev.append(
                     {
                         "ts": key,
