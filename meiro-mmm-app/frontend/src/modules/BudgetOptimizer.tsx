@@ -202,7 +202,6 @@ export default function BudgetOptimizer({
   const [isWhatIfLoading, setIsWhatIfLoading] = useState(false)
   const [showContextPanel, setShowContextPanel] = usePersistentToggle('budget-optimizer:show-context', false)
   const [showEvidencePanel, setShowEvidencePanel] = usePersistentToggle('budget-optimizer:show-evidence', false)
-  const [showSavedPanel, setShowSavedPanel] = usePersistentToggle('budget-optimizer:show-saved', false)
   const [showRealizationPanel, setShowRealizationPanel] = usePersistentToggle('budget-optimizer:show-realization', false)
 
   const totalBudgetMultiplier =
@@ -585,6 +584,22 @@ export default function BudgetOptimizer({
   }, [optimalMix, channelList, baselineSpendByChannel])
 
   const topRecommendation = recommendationsQuery.data?.recommendations?.[0] ?? null
+  const savedScenarios = useMemo(
+    () =>
+      (savedScenariosQuery.data?.items ?? [])
+        .slice()
+        .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()),
+    [savedScenariosQuery.data?.items],
+  )
+  const latestScenario = savedScenarios[0] ?? null
+  const rolloutRecords = useMemo(
+    () =>
+      (realizationQuery.data?.items ?? [])
+        .slice()
+        .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()),
+    [realizationQuery.data?.items],
+  )
+  const latestRollout = rolloutRecords[0] ?? null
 
   const budgetTrustNarrative = useMemo(() => {
     const modeledPeriods = recommendationsQuery.data?.summary.periods ?? 0
@@ -762,6 +777,125 @@ export default function BudgetOptimizer({
         </SectionCard>
       </div>
 
+      <SectionCard
+        title="Resume budget work"
+        subtitle="Saved scenarios and rollout tracking stay tied to this MMM run, so prior optimizer work is directly reusable."
+        actions={
+          <button
+            type="button"
+            onClick={() => {
+              void savedScenariosQuery.refetch()
+              void realizationQuery.refetch()
+            }}
+            style={{
+              padding: `${t.space.sm}px ${t.space.md}px`,
+              fontSize: t.font.sizeSm,
+              fontWeight: t.font.weightMedium,
+              color: t.color.textSecondary,
+              background: 'transparent',
+              border: `1px solid ${t.color.border}`,
+              borderRadius: t.radius.sm,
+              cursor: 'pointer',
+            }}
+          >
+            Refresh work
+          </button>
+        }
+      >
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: t.space.md }}>
+          <div
+            style={{
+              padding: t.space.lg,
+              borderRadius: t.radius.md,
+              border: `1px solid ${latestScenario ? t.color.accent : t.color.borderLight}`,
+              background: latestScenario ? t.color.accentMuted : t.color.bg,
+              display: 'grid',
+              gap: t.space.sm,
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'baseline' }}>
+              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                Latest saved scenario
+              </div>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                {savedScenarios.length.toLocaleString()} total
+              </div>
+            </div>
+            {latestScenario ? (
+              <>
+                <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                  {latestScenario.objective.replace(/_/g, ' ')}
+                </div>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  Saved {latestScenario.created_at ? new Date(latestScenario.created_at).toLocaleString() : 'recently'} · budget{' '}
+                  {Number(latestScenario.total_budget_change_pct || 0) >= 0 ? '+' : ''}
+                  {Number(latestScenario.total_budget_change_pct || 0).toFixed(0)}%
+                </div>
+                <button
+                  type="button"
+                  onClick={() => loadSavedScenario(latestScenario)}
+                  style={{
+                    justifySelf: 'start',
+                    padding: `${t.space.sm}px ${t.space.md}px`,
+                    borderRadius: t.radius.sm,
+                    border: 'none',
+                    background: t.color.accent,
+                    color: '#ffffff',
+                    fontSize: t.font.sizeSm,
+                    fontWeight: t.font.weightSemibold,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Load scenario
+                </button>
+              </>
+            ) : (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                No saved budget scenarios yet. Save the model-backed recommendation or a manual allocation to reuse it later.
+              </div>
+            )}
+          </div>
+
+          <div
+            style={{
+              padding: t.space.lg,
+              borderRadius: t.radius.md,
+              border: `1px solid ${latestRollout ? t.color.success : t.color.borderLight}`,
+              background: latestRollout ? t.color.successMuted : t.color.bg,
+              display: 'grid',
+              gap: t.space.sm,
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'baseline' }}>
+              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                Latest rollout tracking
+              </div>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                {rolloutRecords.length.toLocaleString()} total
+              </div>
+            </div>
+            {latestRollout ? (
+              <>
+                <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                  {latestRollout.objective.replace(/_/g, ' ')}
+                </div>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  {latestRollout.execution.execution_progress_pct.toFixed(0)}% applied · {latestRollout.execution.counts.pending_approval} pending ·{' '}
+                  {formatCurrency(latestRollout.execution.applied_budget_delta_total)} moved
+                </div>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                  Projected realized lift: +{latestRollout.execution.projected_realized_lift_pct.toFixed(1)}%
+                </div>
+              </>
+            ) : (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                No rollout tracking yet. Create change requests from a recommendation to start execution tracking.
+              </div>
+            )}
+          </div>
+        </div>
+      </SectionCard>
+
       <div style={{ marginBottom: t.space.xl }}>
         <CollapsiblePanel
           title="Scenario caveats"
@@ -844,6 +978,16 @@ export default function BudgetOptimizer({
             onActionClick={(action) => navigateForRecommendedAction(action, { defaultPage: 'mmm' })}
           />
         )}
+        {saveScenarioMutation.isError ? (
+          <div style={{ marginTop: t.space.sm, fontSize: t.font.sizeXs, color: t.color.danger }}>
+            {(saveScenarioMutation.error as Error).message}
+          </div>
+        ) : null}
+        {saveScenarioMutation.isSuccess ? (
+          <div style={{ marginTop: t.space.sm, fontSize: t.font.sizeXs, color: t.color.success }}>
+            Scenario saved and available in Resume budget work.
+          </div>
+        ) : null}
 
         {recommendationsQuery.isLoading ? (
           <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
@@ -1038,56 +1182,6 @@ export default function BudgetOptimizer({
                   Based on {recommendationsQuery.data?.summary.periods ?? 0} modeled periods across{' '}
                   {recommendationsQuery.data?.summary.channels_considered ?? 0} channels.
                 </div>
-              </CollapsiblePanel>
-
-              <CollapsiblePanel
-                title="Saved scenarios"
-                subtitle="Previously stored budget plans for this run."
-                open={showSavedPanel}
-                onToggle={() => setShowSavedPanel((value) => !value)}
-              >
-                {savedScenariosQuery.data?.items?.length ? (
-                  <div style={{ display: 'grid', gap: t.space.sm }}>
-                    {savedScenariosQuery.data.items.slice(0, 3).map((scenario) => (
-                      <button
-                        key={scenario.id}
-                        type="button"
-                        onClick={() => loadSavedScenario(scenario)}
-                        style={{
-                          textAlign: 'left',
-                          padding: t.space.sm,
-                          borderRadius: t.radius.sm,
-                          border: `1px solid ${t.color.borderLight}`,
-                          background: t.color.bg,
-                          cursor: 'pointer',
-                          display: 'grid',
-                          gap: 4,
-                        }}
-                      >
-                        <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightMedium, color: t.color.text }}>
-                          {scenario.objective.replace(/_/g, ' ')}
-                        </div>
-                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-                          Saved {scenario.created_at ? new Date(scenario.created_at).toLocaleString() : 'recently'}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                    No saved scenarios yet.
-                  </div>
-                )}
-                {saveScenarioMutation.isError ? (
-                  <div style={{ marginTop: t.space.sm, fontSize: t.font.sizeXs, color: t.color.danger }}>
-                    {(saveScenarioMutation.error as Error).message}
-                  </div>
-                ) : null}
-                {saveScenarioMutation.isSuccess ? (
-                  <div style={{ marginTop: t.space.sm, fontSize: t.font.sizeXs, color: t.color.success }}>
-                    Scenario saved.
-                  </div>
-                ) : null}
               </CollapsiblePanel>
 
               <CollapsiblePanel
