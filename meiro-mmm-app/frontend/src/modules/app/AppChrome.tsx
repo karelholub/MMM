@@ -459,9 +459,6 @@ export function AppTopBar({
         borderBottom: `1px solid ${tokens.color.borderLight}`,
         background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 40%, #1d4ed8 100%)',
         color: '#e5e7eb',
-        position: 'sticky',
-        top: 0,
-        zIndex: 40,
         minWidth: 0,
       }}
     >
