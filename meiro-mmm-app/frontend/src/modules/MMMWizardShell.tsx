@@ -174,6 +174,10 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
         .slice(0, 5),
     [recentRunsQuery.data],
   )
+  const latestFinishedRun = useMemo(
+    () => recentRuns.find((run) => run.status === 'finished' && run.dataset_id) ?? null,
+    [recentRuns],
+  )
 
   const formatRunDate = (value?: string | null) =>
     value ? new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—'
@@ -190,6 +194,13 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
     })
   }
 
+  const openRunView = (run: MMMRunSummary, view: 'analysis' | 'budget') => {
+    if (!run.dataset_id) return
+    onMmmSelectRun(run.run_id, run.dataset_id)
+    setCurrentStep(view === 'budget' ? 'optimize' : 'results')
+    jumpToMmmView(view)
+  }
+
   useEffect(() => {
     if (!mmmRunId || typeof window === 'undefined') return
     const view = new URLSearchParams(window.location.search).get('mmm_view')
@@ -200,6 +211,15 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
     }, 0)
     return () => window.clearTimeout(timer)
   }, [mmmRunId])
+
+  useEffect(() => {
+    if (!mmmRunId) return
+    if (runStatus === 'finished') {
+      setCurrentStep((step) => (step === 'optimize' ? 'optimize' : 'results'))
+    } else if (runStatus === 'queued' || runStatus === 'running') {
+      setCurrentStep('model_run')
+    }
+  }, [mmmRunId, runStatus])
 
   const renderStepContent = () => {
     if (mmmRunId) {
@@ -458,8 +478,181 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
         </SectionCard>
 
         <SectionCard
-          title="Workflow"
-          subtitle="Prepare the dataset, run the model, review results, and move into budget decisions."
+          title="Resume MMM work"
+          subtitle="Open previous MMM results and budget scenarios without going through model setup."
+          actions={
+            <button
+              type="button"
+              onClick={() => recentRunsQuery.refetch()}
+              style={{
+                padding: `${t.space.sm}px ${t.space.md}px`,
+                fontSize: t.font.sizeSm,
+                fontWeight: t.font.weightMedium,
+                color: t.color.textSecondary,
+                background: 'transparent',
+                border: `1px solid ${t.color.border}`,
+                borderRadius: t.radius.sm,
+                cursor: 'pointer',
+              }}
+            >
+              Refresh runs
+            </button>
+          }
+        >
+          {recentRunsQuery.isLoading ? (
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading MMM runs…</div>
+          ) : !recentRuns.length ? (
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              No prior runs yet. Start a model below; finished results and budget work will appear here.
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gap: t.space.lg }}>
+              {latestFinishedRun && (
+                <div
+                  style={{
+                    padding: t.space.lg,
+                    borderRadius: t.radius.lg,
+                    border: `1px solid ${t.color.accent}`,
+                    background: t.color.accentMuted,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    gap: t.space.lg,
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <div style={{ display: 'grid', gap: 4 }}>
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      Latest finished MMM run
+                    </div>
+                    <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                      {latestFinishedRun.kpi || 'MMM run'} · {formatRunDate(latestFinishedRun.updated_at || latestFinishedRun.created_at)}
+                    </div>
+                    <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                      {latestFinishedRun.n_channels.toLocaleString()} channels
+                      {latestFinishedRun.r2 != null ? ` · R² ${latestFinishedRun.r2.toFixed(3)}` : ''}
+                      {latestFinishedRun.dataset_id ? ` · dataset ${latestFinishedRun.dataset_id.slice(0, 8)}…` : ''}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={() => openRunView(latestFinishedRun, 'analysis')}
+                      style={{
+                        padding: `${t.space.sm}px ${t.space.lg}px`,
+                        borderRadius: t.radius.sm,
+                        border: 'none',
+                        background: t.color.accent,
+                        color: '#ffffff',
+                        fontSize: t.font.sizeSm,
+                        fontWeight: t.font.weightSemibold,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Open results
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openRunView(latestFinishedRun, 'budget')}
+                      style={{
+                        padding: `${t.space.sm}px ${t.space.lg}px`,
+                        borderRadius: t.radius.sm,
+                        border: `1px solid ${t.color.border}`,
+                        background: t.color.surface,
+                        color: t.color.text,
+                        fontSize: t.font.sizeSm,
+                        fontWeight: t.font.weightSemibold,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Open budget actions
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: t.space.md }}>
+                {recentRuns.map((run) => {
+                  const isSelected = run.run_id === mmmRunId
+                  const statusColor =
+                    run.status === 'finished'
+                      ? t.color.success
+                      : run.status === 'error'
+                        ? t.color.danger
+                        : t.color.warning
+                  return (
+                    <div
+                      key={run.run_id}
+                      style={{
+                        padding: t.space.md,
+                        borderRadius: t.radius.md,
+                        border: `1px solid ${isSelected ? t.color.accent : t.color.borderLight}`,
+                        background: isSelected ? t.color.accentMuted : t.color.surface,
+                        display: 'grid',
+                        gap: 6,
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'baseline' }}>
+                        <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                          {run.kpi || 'MMM run'}
+                        </div>
+                        <div style={{ fontSize: t.font.sizeXs, fontWeight: t.font.weightSemibold, color: statusColor, textTransform: 'capitalize' }}>
+                          {run.status}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                        {formatRunDate(run.updated_at || run.created_at)}
+                      </div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                        {run.n_channels.toLocaleString()} channels
+                        {run.r2 != null ? ` · R² ${run.r2.toFixed(3)}` : ''}
+                        {run.dataset_id ? ` · dataset ${run.dataset_id.slice(0, 8)}…` : ''}
+                      </div>
+                      <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          onClick={() => openRunView(run, 'analysis')}
+                          disabled={!run.dataset_id}
+                          style={{
+                            padding: `${t.space.xs}px ${t.space.sm}px`,
+                            borderRadius: t.radius.sm,
+                            border: `1px solid ${t.color.borderLight}`,
+                            background: t.color.bg,
+                            color: t.color.accent,
+                            fontSize: t.font.sizeXs,
+                            cursor: run.dataset_id ? 'pointer' : 'not-allowed',
+                          }}
+                        >
+                          {isSelected ? 'Current analysis' : 'Open analysis'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openRunView(run, 'budget')}
+                          disabled={!run.dataset_id || run.status !== 'finished'}
+                          style={{
+                            padding: `${t.space.xs}px ${t.space.sm}px`,
+                            borderRadius: t.radius.sm,
+                            border: `1px solid ${t.color.borderLight}`,
+                            background: t.color.bg,
+                            color: run.status === 'finished' ? t.color.textSecondary : t.color.textMuted,
+                            fontSize: t.font.sizeXs,
+                            cursor: run.dataset_id && run.status === 'finished' ? 'pointer' : 'not-allowed',
+                          }}
+                        >
+                          {isSelected ? 'Current budget' : 'Open budget actions'}
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+        </SectionCard>
+
+        <SectionCard
+          title="New model workflow"
+          subtitle="Prepare a new dataset, run a model, review results, and move into budget decisions."
         >
           <div style={{ display: 'grid', gap: t.space.lg }}>
             <div
@@ -581,121 +774,6 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
               </button>
             </div>
           </div>
-        </SectionCard>
-
-        <SectionCard
-          title="Recent MMM runs"
-          subtitle="Reopen prior MMM results and budget work directly from the shared workspace."
-          actions={
-            <button
-              type="button"
-              onClick={() => recentRunsQuery.refetch()}
-              style={{
-                padding: `${t.space.sm}px ${t.space.md}px`,
-                fontSize: t.font.sizeSm,
-                fontWeight: t.font.weightMedium,
-                color: t.color.textSecondary,
-                background: 'transparent',
-                border: `1px solid ${t.color.border}`,
-                borderRadius: t.radius.sm,
-                cursor: 'pointer',
-              }}
-            >
-              Refresh runs
-            </button>
-          }
-        >
-          {recentRunsQuery.isLoading ? (
-            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading MMM runs…</div>
-          ) : !recentRuns.length ? (
-            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-              No prior runs yet. Once a model finishes, it will be reopenable here without starting a new setup flow.
-            </div>
-          ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: t.space.md }}>
-              {recentRuns.map((run) => {
-                const isSelected = run.run_id === mmmRunId
-                const statusColor =
-                  run.status === 'finished'
-                    ? t.color.success
-                    : run.status === 'error'
-                      ? t.color.danger
-                      : t.color.warning
-                return (
-                  <div
-                    key={run.run_id}
-                    style={{
-                      padding: t.space.md,
-                      borderRadius: t.radius.md,
-                      border: `1px solid ${isSelected ? t.color.accent : t.color.borderLight}`,
-                      background: isSelected ? t.color.accentMuted : t.color.surface,
-                      display: 'grid',
-                      gap: 6,
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'baseline' }}>
-                      <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-                        {run.kpi || 'MMM run'}
-                      </div>
-                      <div style={{ fontSize: t.font.sizeXs, fontWeight: t.font.weightSemibold, color: statusColor, textTransform: 'capitalize' }}>
-                        {run.status}
-                      </div>
-                    </div>
-                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-                      {formatRunDate(run.updated_at || run.created_at)}
-                    </div>
-                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
-                      {run.n_channels.toLocaleString()} channels
-                      {run.r2 != null ? ` • R² ${run.r2.toFixed(3)}` : ''}
-                      {run.dataset_id ? ` • dataset ${run.dataset_id.slice(0, 8)}…` : ''}
-                    </div>
-                    <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!run.dataset_id) return
-                          onMmmSelectRun(run.run_id, run.dataset_id)
-                          jumpToMmmView('analysis')
-                        }}
-                        disabled={!run.dataset_id}
-                        style={{
-                          padding: `${t.space.xs}px ${t.space.sm}px`,
-                          borderRadius: t.radius.sm,
-                          border: `1px solid ${t.color.borderLight}`,
-                          background: t.color.bg,
-                          color: t.color.accent,
-                          fontSize: t.font.sizeXs,
-                          cursor: run.dataset_id ? 'pointer' : 'not-allowed',
-                        }}
-                      >
-                        {isSelected ? 'Current analysis' : 'Open analysis'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!run.dataset_id) return
-                          onMmmSelectRun(run.run_id, run.dataset_id)
-                          jumpToMmmView('budget')
-                        }}
-                        disabled={!run.dataset_id || run.status !== 'finished'}
-                        style={{
-                          padding: `${t.space.xs}px ${t.space.sm}px`,
-                          borderRadius: t.radius.sm,
-                          border: `1px solid ${t.color.borderLight}`,
-                          background: t.color.bg,
-                          color: run.status === 'finished' ? t.color.textSecondary : t.color.textMuted,
-                          fontSize: t.font.sizeXs,
-                          cursor: run.dataset_id && run.status === 'finished' ? 'pointer' : 'not-allowed',
-                        }}
-                      >
-                        {isSelected ? 'Current budget' : 'Open budget actions'}
-                      </button>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          )}
         </SectionCard>
 
         {renderStepContent()}
