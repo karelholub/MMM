@@ -821,6 +821,7 @@ function FlowSankeyTooltip({
 }: {
   active?: boolean
   payload?: Array<{
+    name?: string
     value?: number
     payload?: {
       sourceLabel?: string
@@ -836,6 +837,8 @@ function FlowSankeyTooltip({
   if (!raw) return null
   const linkPayload = (raw as { payload?: unknown }).payload as
     | {
+        fullName?: string
+        name?: string
         source?: { fullName?: string; name?: string } | number
         target?: { fullName?: string; name?: string } | number
         value?: number
@@ -844,14 +847,14 @@ function FlowSankeyTooltip({
   const sourceLabel =
     raw.sourceLabel ||
     (typeof raw.source === 'object' ? raw.source?.fullName || raw.source?.name : '') ||
-    (typeof linkPayload?.source === 'object' ? linkPayload.source?.fullName || linkPayload.source?.name : '') ||
-    'Unknown'
+    (typeof linkPayload?.source === 'object' ? linkPayload.source?.fullName || linkPayload.source?.name : '')
   const targetLabel =
     raw.targetLabel ||
     (typeof raw.target === 'object' ? raw.target?.fullName || raw.target?.name : '') ||
-    (typeof linkPayload?.target === 'object' ? linkPayload.target?.fullName || linkPayload.target?.name : '') ||
-    'Unknown'
+    (typeof linkPayload?.target === 'object' ? linkPayload.target?.fullName || linkPayload.target?.name : '')
+  const nodeLabel = linkPayload?.fullName || linkPayload?.name || payload[0]?.name || 'Node'
   const value = Number(raw.value ?? linkPayload?.value ?? payload[0]?.value ?? 0)
+  const isLink = Boolean(sourceLabel && targetLabel)
   return (
     <div
       style={{
@@ -865,10 +868,10 @@ function FlowSankeyTooltip({
       }}
     >
       <div style={{ fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightMedium }}>
-        {sourceLabel} → {targetLabel}
+        {isLink ? `${sourceLabel} → ${targetLabel}` : nodeLabel}
       </div>
       <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-        {value.toLocaleString()} transitions
+        {value.toLocaleString()} {isLink ? 'transitions' : 'transition volume'}
       </div>
     </div>
   )

@@ -250,6 +250,7 @@ function SankeyFlowTooltip({
 }: {
   active?: boolean
   payload?: Array<{
+    name?: string
     value?: number
     payload?: {
       sourceLabel?: string
@@ -265,6 +266,8 @@ function SankeyFlowTooltip({
   if (!raw) return null
   const linkPayload = (raw as { payload?: unknown }).payload as
     | {
+        fullName?: string
+        name?: string
         source?: { fullName?: string; name?: string } | number
         target?: { fullName?: string; name?: string } | number
         value?: number
@@ -273,14 +276,14 @@ function SankeyFlowTooltip({
   const sourceLabel =
     raw.sourceLabel ||
     (typeof raw.source === 'object' ? raw.source?.fullName || raw.source?.name : '') ||
-    (typeof linkPayload?.source === 'object' ? linkPayload.source?.fullName || linkPayload.source?.name : '') ||
-    'Unknown'
+    (typeof linkPayload?.source === 'object' ? linkPayload.source?.fullName || linkPayload.source?.name : '')
   const targetLabel =
     raw.targetLabel ||
     (typeof raw.target === 'object' ? raw.target?.fullName || raw.target?.name : '') ||
-    (typeof linkPayload?.target === 'object' ? linkPayload.target?.fullName || linkPayload.target?.name : '') ||
-    'Unknown'
+    (typeof linkPayload?.target === 'object' ? linkPayload.target?.fullName || linkPayload.target?.name : '')
+  const nodeLabel = linkPayload?.fullName || linkPayload?.name || payload[0]?.name || 'Node'
   const value = Number(raw.value ?? linkPayload?.value ?? payload[0]?.value ?? 0)
+  const isLink = Boolean(sourceLabel && targetLabel)
   return (
     <div
       style={{
@@ -294,10 +297,10 @@ function SankeyFlowTooltip({
       }}
     >
       <div style={{ fontSize: tokens.font.sizeSm, color: tokens.color.text, fontWeight: tokens.font.weightMedium }}>
-        {sourceLabel} → {targetLabel}
+        {isLink ? `${sourceLabel} → ${targetLabel}` : nodeLabel}
       </div>
       <div style={{ fontSize: tokens.font.sizeXs, color: tokens.color.textSecondary }}>
-        {value.toLocaleString()} journeys
+        {value.toLocaleString()} {isLink ? 'journeys' : 'journeys through this step'}
       </div>
     </div>
   )
