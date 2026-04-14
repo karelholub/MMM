@@ -263,6 +263,9 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
   }, [mmmRunId])
 
   const renderStepContent = () => {
+    if (mmmRunId && (runStatus === 'queued' || runStatus === 'running' || createMmmRunMutation.isPending)) {
+      return renderRunContent()
+    }
     if (pendingMmmMapping) {
       return (
         <div>
@@ -315,6 +318,18 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
   const renderRunContent = () => {
 
     if (!mmmRunQuery.data || runStatus === 'queued' || runStatus === 'running' || mmmRunQuery.isLoading) {
+      const runData = (mmmRunQuery.data || {}) as any
+      const config = runData?.config || pendingMmmMapping?.columns || {}
+      const startedAt = runData?.created_at
+        ? new Date(runData.created_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+        : null
+      const updatedAt = runData?.updated_at
+        ? new Date(runData.updated_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+        : null
+      const statusText = runStatus === 'running' ? 'Fitting model' : createMmmRunMutation.isPending ? 'Creating run' : 'Queued'
+      const spendChannels = Array.isArray(config.spend_channels)
+        ? config.spend_channels
+        : pendingMmmMapping?.columns.spend_channels ?? []
       return (
         <div
           style={{
@@ -322,28 +337,73 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
             borderRadius: t.radius.lg,
             border: `1px solid ${t.color.warning}`,
             backgroundColor: t.color.warningMuted,
-            textAlign: 'center',
+            display: 'grid',
+            gap: t.space.lg,
           }}
         >
-          <p
-            style={{
-              margin: 0,
-              fontSize: t.font.sizeMd,
-              fontWeight: t.font.weightSemibold,
-              color: t.color.warning,
-            }}
-          >
-            Model {runStatus === 'running' ? 'running' : 'queued'}…
-          </p>
-          <p
-            style={{
-              marginTop: t.space.xs,
-              fontSize: t.font.sizeSm,
-              color: t.color.textSecondary,
-            }}
-          >
-            This may take a few minutes. You can navigate away and return to MMM; progress is preserved for this session.
-          </p>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.lg, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            <div style={{ display: 'grid', gap: t.space.xs }}>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.warning, fontWeight: t.font.weightSemibold, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                {statusText}
+              </div>
+              <h3 style={{ margin: 0, fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                MMM run is in progress
+              </h3>
+              <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.textSecondary, lineHeight: 1.5 }}>
+                The backend is fitting the model from the generated weekly dataset. This page polls automatically and will switch to results when the run finishes.
+              </p>
+            </div>
+            <span
+              style={{
+                padding: `${t.space.xs}px ${t.space.sm}px`,
+                borderRadius: 999,
+                background: t.color.surface,
+                color: t.color.warning,
+                fontSize: t.font.sizeXs,
+                fontWeight: t.font.weightSemibold,
+                textTransform: 'capitalize',
+              }}
+            >
+              {runStatus || 'starting'}
+            </span>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: t.space.md }}>
+            {[
+              { label: 'Run', value: mmmRunId ? mmmRunId.slice(0, 12) : 'Starting...', helper: startedAt ? `Started ${startedAt}` : 'Waiting for run id' },
+              { label: 'Dataset', value: String(config.dataset_id || mmmDatasetId || 'Preparing'), helper: `${spendChannels.length.toLocaleString()} spend signals` },
+              { label: 'KPI', value: String(config.kpi || pendingMmmMapping?.columns.kpi || 'KPI'), helper: String(config.kpi_mode || 'conversions') },
+              { label: 'Last update', value: updatedAt || 'Polling...', helper: 'Refreshes automatically every few seconds' },
+            ].map((item) => (
+              <div key={item.label} style={{ padding: t.space.md, borderRadius: t.radius.md, border: `1px solid ${t.color.borderLight}`, background: t.color.surface, minWidth: 0 }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{item.label}</div>
+                <div style={{ marginTop: 4, fontSize: t.font.sizeMd, color: t.color.text, fontWeight: t.font.weightSemibold, overflowWrap: 'anywhere' }}>{item.value}</div>
+                <div style={{ marginTop: 2, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>{item.helper}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', alignItems: 'center' }}>
+            <button
+              type="button"
+              onClick={() => mmmRunQuery.refetch()}
+              style={{
+                padding: `${t.space.sm}px ${t.space.lg}px`,
+                fontSize: t.font.sizeSm,
+                fontWeight: t.font.weightSemibold,
+                color: t.color.text,
+                background: t.color.surface,
+                border: `1px solid ${t.color.border}`,
+                borderRadius: t.radius.sm,
+                cursor: 'pointer',
+              }}
+            >
+              Check now
+            </button>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              You can leave this page; the run remains available in MMM run history.
+            </div>
+          </div>
         </div>
       )
     }
@@ -777,6 +837,7 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
       </button>
     ) : null
   const shouldShowNewWorkflow = showNewModelWorkflow || !!pendingMmmMapping || (!mmmRunId && !recentRuns.length)
+  const setupRunInProgress = shouldShowNewWorkflow && !!mmmRunId && (runStatus === 'queued' || runStatus === 'running' || createMmmRunMutation.isPending)
   const workspaceSubtitle = mmmRunId
     ? 'Selected MMM run is the active workspace. Results, budget recommendations, saved scenarios, and rollout evidence stay attached to this run.'
     : 'Pick up prior MMM results and budget scenarios without starting a new model run.'
@@ -1092,7 +1153,8 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
             ) : (
               <SetupChecklist
                 pendingMapping={pendingMmmMapping}
-                runId={null}
+                runId={setupRunInProgress ? mmmRunId : null}
+                runStatus={setupRunInProgress ? runStatus : undefined}
               />
             )}
           </div>
