@@ -9,6 +9,7 @@ import { MMMContextBar, KpiMode } from '../components/MMMContextBar'
 import DashboardPage from '../components/dashboard/DashboardPage'
 import SectionCard from '../components/dashboard/SectionCard'
 import { apiGetJson } from '../lib/apiClient'
+import { evaluateMMMRunQuality } from '../lib/mmmQuality'
 
 type MMMRunView = 'analysis' | 'budget'
 
@@ -538,7 +539,6 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
 
     const runData = mmmRunQuery.data as any
     const hasBudgetView = (runData?.roi?.length ?? 0) > 0 && (runData?.contrib?.length ?? 0) > 0
-    const activeRunView: MMMRunView = selectedRunView === 'budget' && hasBudgetView ? 'budget' : 'analysis'
     const runCreatedAt = runData?.created_at ? new Date(runData.created_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : ''
     const runUpdatedAt = runData?.updated_at ? new Date(runData.updated_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : ''
     const datasetId = runData?.dataset_id || runData?.config?.dataset_id || mmmDatasetId
@@ -555,8 +555,26 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
       diagnostics.ess_bulk_min != null && diagnostics.ess_bulk_min < 200 ? `ESS ${Number(diagnostics.ess_bulk_min).toFixed(0)}` : null,
       diagnostics.divergences != null && diagnostics.divergences > 0 ? `${Number(diagnostics.divergences).toLocaleString()} divergences` : null,
     ].filter((item): item is string => Boolean(item))
+    const totalSpendFromSummary = Array.isArray(runData?.channel_summary)
+      ? runData.channel_summary.reduce((sum: number, row: any) => sum + (Number(row?.spend) || 0), 0)
+      : undefined
+    const runQuality = evaluateMMMRunQuality({
+      status: runStatus,
+      datasetAvailable,
+      r2: hasR2 ? r2Value : null,
+      weeks: 0,
+      channelsModeled: Array.isArray(runData?.config?.spend_channels) ? runData.config.spend_channels.length : 0,
+      totalSpend: totalSpendFromSummary,
+      roi: runData?.roi,
+      contrib: runData?.contrib,
+      diagnostics,
+    })
+    const canOpenBudgetView = hasBudgetView && runQuality.canUseBudget
+    const activeRunView: MMMRunView = selectedRunView === 'budget' && canOpenBudgetView ? 'budget' : 'analysis'
     const healthTone =
-      runStatus === 'error'
+      runQuality.level === 'not_usable'
+        ? 'danger'
+        : runStatus === 'error'
         ? 'danger'
         : runStatus !== 'finished'
           ? 'warning'
@@ -564,7 +582,9 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
             ? 'warning'
             : 'success'
     const healthLabel =
-      runStatus !== 'finished'
+      runQuality.level === 'not_usable'
+        ? runQuality.label
+        : runStatus !== 'finished'
         ? String(runStatus || 'pending')
         : !datasetAvailable
           ? 'Readout only'
@@ -616,17 +636,17 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
               </button>
               <button
                 type="button"
-                onClick={() => hasBudgetView && jumpToMmmView('budget')}
-                disabled={!hasBudgetView}
+                onClick={() => canOpenBudgetView && jumpToMmmView('budget')}
+                disabled={!canOpenBudgetView}
                 style={{
                   padding: `${t.space.sm}px ${t.space.lg}px`,
                   fontSize: t.font.sizeSm,
                   fontWeight: t.font.weightSemibold,
-                  color: activeRunView === 'budget' ? '#ffffff' : hasBudgetView ? t.color.text : t.color.textMuted,
+                  color: activeRunView === 'budget' ? '#ffffff' : canOpenBudgetView ? t.color.text : t.color.textMuted,
                   backgroundColor: activeRunView === 'budget' ? t.color.accent : t.color.surface,
                   border: `1px solid ${activeRunView === 'budget' ? t.color.accent : t.color.border}`,
                   borderRadius: t.radius.sm,
-                  cursor: hasBudgetView ? 'pointer' : 'not-allowed',
+                  cursor: canOpenBudgetView ? 'pointer' : 'not-allowed',
                 }}
               >
                 Budget actions
@@ -690,7 +710,7 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
                   {
                     label: 'Model health',
                     value: hasR2 ? `R² ${r2Value.toFixed(3)}` : healthLabel,
-                    helper: diagnosticsIssues.length ? diagnosticsIssues.join(', ') : modelMeta.join(' · ') || 'Diagnostics unavailable',
+                    helper: runQuality.reasons[0] || (diagnosticsIssues.length ? diagnosticsIssues.join(', ') : modelMeta.join(' · ') || 'Diagnostics unavailable'),
                   },
                   {
                     label: 'KPI source',
@@ -707,7 +727,7 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
                   {
                     label: 'Budget work',
                     value: `${scenarioCount.toLocaleString()} scenario${scenarioCount === 1 ? '' : 's'}`,
-                    helper: latestScenarioAt ? `Latest ${latestScenarioAt}` : hasBudgetView ? 'Recommendations available' : 'No optimizer readout yet',
+                    helper: latestScenarioAt ? `Latest ${latestScenarioAt}` : canOpenBudgetView ? 'Recommendations available' : runQuality.level === 'not_usable' ? 'Blocked by model quality' : 'No optimizer readout yet',
                   },
                 ].map((item) => (
                   <div
@@ -734,7 +754,11 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
                   </div>
                 ))}
               </div>
-              {!datasetAvailable ? (
+              {runQuality.level === 'not_usable' ? (
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.danger, lineHeight: 1.5 }}>
+                  This run is not usable for results or budget actions. {runQuality.reasons[0] || 'Create a new run after checking spend and KPI signal.'}
+                </div>
+              ) : !datasetAvailable ? (
                 <div style={{ fontSize: t.font.sizeSm, color: t.color.warning, lineHeight: 1.5 }}>
                   This run can be used for saved ROI, contribution, fit, and scenario readouts. New optimizer
                   recommendations require rebuilding or reattaching the linked dataset.
@@ -798,7 +822,7 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
               datasetId={mmmDatasetId ?? ''}
               runMetadata={{ attribution_model: runData?.attribution_model, attribution_config_id: runData?.attribution_config_id }}
               onOpenDataQuality={onOpenDataQuality}
-              onOpenBudgetActions={hasBudgetView ? () => jumpToMmmView('budget') : undefined}
+              onOpenBudgetActions={canOpenBudgetView ? () => jumpToMmmView('budget') : undefined}
             />
           </div>
         ) : (

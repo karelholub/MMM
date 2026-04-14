@@ -25,6 +25,7 @@ import AnalysisNarrativePanel from '../components/dashboard/AnalysisNarrativePan
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import AnalysisShareActions from '../components/dashboard/AnalysisShareActions'
 import { buildSettingsHref } from '../lib/settingsLinks'
+import { evaluateMMMRunQuality } from '../lib/mmmQuality'
 
 interface MMMDashboardProps {
   runId: string
@@ -294,17 +295,36 @@ export default function MMMDashboard({
   if (diagnostics?.ess_bulk_min && diagnostics.ess_bulk_min < 200) diagnosticsIssues.push('Effective sample size is low for some parameters.')
   if (diagnostics?.divergences && diagnostics.divergences > 0) diagnosticsIssues.push('There are MCMC divergences; results may be unstable.')
 
-  const confidenceLevel: 'ok' | 'warn' =
-    datasetReadoutOnly || suspiciousFit || manyParamsFewPoints || hasNegativeRoi || diagnosticsIssues.length > 0 ? 'warn' : 'ok'
+  const modelQuality = useMemo(
+    () =>
+      evaluateMMMRunQuality({
+        status: 'finished',
+        datasetAvailable: !datasetReadoutOnly,
+        r2,
+        weeks,
+        channelsModeled,
+        totalSpend,
+        roi,
+        contrib,
+        diagnostics,
+      }),
+    [channelsModeled, contrib, datasetReadoutOnly, diagnostics, r2, roi, totalSpend, weeks],
+  )
+  const confidenceLevel: 'ok' | 'warn' | 'danger' =
+    modelQuality.level === 'ready' && !suspiciousFit && !manyParamsFewPoints && !hasNegativeRoi && diagnosticsIssues.length === 0
+      ? 'ok'
+      : modelQuality.level === 'not_usable'
+        ? 'danger'
+        : 'warn'
 
-  const confidenceLabel = datasetReadoutOnly ? 'Readout only' : confidenceLevel === 'ok' ? 'OK' : 'Check model'
+  const confidenceLabel = confidenceLevel === 'ok' ? 'OK' : modelQuality.label
 
-  const confidenceReasons: string[] = []
-  if (datasetReadoutOnly) confidenceReasons.push('Linked dataset preview is unavailable; source-row checks and time-series diagnostics are disabled.')
+  const confidenceReasons: string[] = [...modelQuality.reasons]
   if (suspiciousFit) confidenceReasons.push('Very high R² with short history.')
-  if (manyParamsFewPoints) confidenceReasons.push('Many channels compared to weeks of data.')
-  if (hasNegativeRoi) confidenceReasons.push('Some channels have negative ROI.')
-  confidenceReasons.push(...diagnosticsIssues)
+  diagnosticsIssues.forEach((issue) => {
+    if (!confidenceReasons.includes(issue)) confidenceReasons.push(issue)
+  })
+  const canUseModelResults = modelQuality.canUseResults
 
   const topRoiChannel = useMemo(() => {
     if (!roi?.length) return null
@@ -373,7 +393,9 @@ export default function MMMDashboard({
   }
 
   const trustNarrative = useMemo(() => {
-    const headline = datasetReadoutOnly
+    const headline = modelQuality.level === 'not_usable'
+      ? 'This MMM run should not be used for ROI, contribution, or budget decisions.'
+      : datasetReadoutOnly
       ? 'This historical MMM run is open for saved readout, but source-row diagnostics are paused until the dataset is rebuilt.'
       : confidenceLevel === 'ok'
       ? 'The current MMM run looks usable for directional budget decisions.'
@@ -405,6 +427,7 @@ export default function MMMDashboard({
     confidenceReasons,
     datasetReadoutOnly,
     datasetPeriodLabel,
+    modelQuality.level,
     reconciliationSummary,
     runMetadata?.attribution_model,
     weeks,
@@ -429,7 +452,7 @@ export default function MMMDashboard({
   }, [contrib])
 
   const contributionOverTime = useMemo(() => {
-    if (!contrib || contrib.length === 0 || !dataset || !kpiKey) return []
+    if (!canUseModelResults || !contrib || contrib.length === 0 || !dataset || !kpiKey) return []
     const shareMap = new Map(contrib.map((c) => [c.channel, c.mean_share]))
     return dataset.map((row) => {
       const date = (row['date'] as string) || ''
@@ -441,10 +464,10 @@ export default function MMMDashboard({
       })
       return entry
     })
-  }, [dataset, contrib, kpiKey, topChannelsByShare])
+  }, [canUseModelResults, dataset, contrib, kpiKey, topChannelsByShare])
 
   const responseCurves = useMemo(() => {
-    if (!spendChannels.length || !dataset.length || !roi?.length) return []
+    if (!canUseModelResults || !spendChannels.length || !dataset.length || !roi?.length) return []
     const roiMap = new Map(roi.map((r: KPI) => [r.channel, r.roi]))
     const meanSpend: Record<string, number> = {}
     spendChannels.forEach((ch) => {
@@ -471,15 +494,20 @@ export default function MMMDashboard({
       }
       return { channel: ch, points }
     })
-  }, [spendChannels, dataset, roi])
+  }, [canUseModelResults, spendChannels, dataset, roi])
 
-  const decisionTone: 'success' | 'warning' = datasetReadoutOnly || confidenceLevel !== 'ok' ? 'warning' : 'success'
-  const decisionLabel = datasetReadoutOnly
+  const decisionTone: 'success' | 'warning' | 'danger' =
+    modelQuality.level === 'not_usable' ? 'danger' : datasetReadoutOnly || confidenceLevel !== 'ok' ? 'warning' : 'success'
+  const decisionLabel = modelQuality.level === 'not_usable'
+    ? 'Do not use for decisions'
+    : datasetReadoutOnly
     ? 'Readout only'
     : confidenceLevel === 'ok'
       ? 'Ready for budget review'
       : 'Validate before action'
-  const decisionReason = datasetReadoutOnly
+  const decisionReason = modelQuality.level === 'not_usable'
+    ? confidenceReasons[0] || 'The model output has no usable signal.'
+    : datasetReadoutOnly
     ? 'Saved results are visible, but source-row diagnostics and new optimization need dataset recovery.'
     : confidenceLevel === 'ok'
       ? 'Model outputs and linked dataset checks are available for directional budget planning.'
@@ -511,7 +539,7 @@ export default function MMMDashboard({
             { label: 'KPI', value: getKpiDisplayName() },
             { label: 'Total spend', value: formatCurrency(totalSpend) },
             { label: 'Weeks', value: datasetReadoutOnly ? 'Unavailable' : weeks.toLocaleString() },
-            { label: 'Confidence', value: confidenceLabel, valueColor: confidenceLevel === 'ok' ? t.color.success : t.color.warning },
+            { label: 'Confidence', value: confidenceLabel, valueColor: confidenceLevel === 'ok' ? t.color.success : confidenceLevel === 'danger' ? t.color.danger : t.color.warning },
           ]}
         />
       </div>
@@ -582,8 +610,8 @@ export default function MMMDashboard({
               style={{
                 padding: t.space.md,
                 borderRadius: t.radius.md,
-                border: `1px solid ${decisionTone === 'success' ? t.color.success : t.color.warning}`,
-                background: decisionTone === 'success' ? t.color.successMuted : t.color.warningMuted,
+                border: `1px solid ${decisionTone === 'success' ? t.color.success : decisionTone === 'danger' ? t.color.danger : t.color.warning}`,
+                background: decisionTone === 'success' ? t.color.successMuted : decisionTone === 'danger' ? t.color.dangerMuted : t.color.warningMuted,
                 display: 'grid',
                 gap: 4,
               }}
@@ -592,7 +620,7 @@ export default function MMMDashboard({
                 style={{
                   fontSize: t.font.sizeSm,
                   fontWeight: t.font.weightSemibold,
-                  color: decisionTone === 'success' ? t.color.success : t.color.warning,
+                    color: decisionTone === 'success' ? t.color.success : decisionTone === 'danger' ? t.color.danger : t.color.warning,
                 }}
               >
                 {decisionLabel}
@@ -611,13 +639,13 @@ export default function MMMDashboard({
               {[
                 {
                   label: 'Top ROI',
-                  value: topRoiChannel ? channelDisplay(topRoiChannel.channel) : 'Unavailable',
-                  helper: topRoiChannel ? `${topRoiChannel.roi.toFixed(2)}x modeled return` : 'No ROI output yet',
+                  value: canUseModelResults && topRoiChannel ? channelDisplay(topRoiChannel.channel) : 'Unavailable',
+                  helper: canUseModelResults && topRoiChannel ? `${topRoiChannel.roi.toFixed(2)}x modeled return` : 'Run quality blocks ROI ranking',
                 },
                 {
                   label: 'Top contribution',
-                  value: topContributionChannel ? channelDisplay(topContributionChannel.channel) : 'Unavailable',
-                  helper: topContributionChannel
+                  value: canUseModelResults && topContributionChannel ? channelDisplay(topContributionChannel.channel) : 'Unavailable',
+                  helper: canUseModelResults && topContributionChannel
                     ? `${(topContributionChannel.mean_share * 100).toFixed(1)}% of modeled KPI`
                     : 'No contribution output yet',
                 },
@@ -699,8 +727,8 @@ export default function MMMDashboard({
             `Channels modeled: ${channelsModeled.toLocaleString()}`,
             `Model fit (R²): ${r2 !== null ? r2.toFixed(3) : 'Unavailable'}`,
             `Confidence: ${confidenceLabel}`,
-            topRoiChannel ? `Top ROI channel: ${channelDisplay(topRoiChannel.channel)} (${topRoiChannel.roi.toFixed(2)}x)` : '',
-            topContributionChannel
+            canUseModelResults && topRoiChannel ? `Top ROI channel: ${channelDisplay(topRoiChannel.channel)} (${topRoiChannel.roi.toFixed(2)}x)` : '',
+            canUseModelResults && topContributionChannel
               ? `Top contribution channel: ${channelDisplay(topContributionChannel.channel)} (${(topContributionChannel.mean_share * 100).toFixed(1)}%)`
               : '',
           ]}
@@ -773,7 +801,7 @@ export default function MMMDashboard({
             <MetricCard
               label="Confidence / diagnostics"
               value={confidenceLabel}
-              tone={confidenceLevel === 'ok' ? 'success' : 'warning'}
+              tone={confidenceLevel === 'ok' ? 'success' : confidenceLevel === 'danger' ? 'danger' : 'warning'}
               description={
                 confidenceReasons.length === 0
                   ? 'No major red flags detected. Check data health for details.'
@@ -1294,27 +1322,45 @@ export default function MMMDashboard({
         >
           <MetricCard
             label="Top ROI channel"
-            value={topRoiChannel ? channelDisplay(topRoiChannel.channel) : '—'}
-            tone={topRoiChannel && topRoiChannel.roi > 0 ? 'success' : 'neutral'}
-            description={topRoiChannel ? `${topRoiChannel.roi.toFixed(2)}x modeled return` : 'No ROI output for this run yet.'}
+            value={canUseModelResults && topRoiChannel ? channelDisplay(topRoiChannel.channel) : '—'}
+            tone={canUseModelResults && topRoiChannel && topRoiChannel.roi > 0 ? 'success' : 'neutral'}
+            description={canUseModelResults && topRoiChannel ? `${topRoiChannel.roi.toFixed(2)}x modeled return` : 'Run quality blocks ROI ranking.'}
           />
           <MetricCard
             label="Top contribution"
-            value={topContributionChannel ? channelDisplay(topContributionChannel.channel) : '—'}
+            value={canUseModelResults && topContributionChannel ? channelDisplay(topContributionChannel.channel) : '—'}
             tone="neutral"
             description={
-              topContributionChannel
+              canUseModelResults && topContributionChannel
                 ? `${(topContributionChannel.mean_share * 100).toFixed(1)}% of modeled KPI`
-                : 'No contribution output for this run yet.'
+                : 'Run quality blocks contribution ranking.'
             }
           />
           <MetricCard
             label="Channels to review"
-            value={negativeRoiCount.toLocaleString()}
-            tone={negativeRoiCount > 0 ? 'warning' : 'success'}
-            description={negativeRoiCount > 0 ? 'Negative ROI channels need validation before action.' : 'No negative ROI channels detected.'}
+            value={canUseModelResults ? negativeRoiCount.toLocaleString() : 'All'}
+            tone={canUseModelResults ? (negativeRoiCount > 0 ? 'warning' : 'success') : 'danger'}
+            description={canUseModelResults ? (negativeRoiCount > 0 ? 'Negative ROI channels need validation before action.' : 'No negative ROI channels detected.') : confidenceReasons[0] || 'Run is not usable for channel decisions.'}
           />
         </div>
+
+        {!canUseModelResults && (
+          <div
+            style={{
+              marginBottom: t.space.lg,
+              padding: t.space.md,
+              borderRadius: t.radius.md,
+              border: `1px solid ${t.color.danger}`,
+              background: t.color.dangerMuted,
+              color: t.color.textSecondary,
+              fontSize: t.font.sizeSm,
+              lineHeight: 1.5,
+            }}
+          >
+            <strong style={{ color: t.color.danger }}>Model output is not usable.</strong>{' '}
+            {confidenceReasons[0] || 'The run did not produce reliable ROI or contribution signal.'} Create a new run after confirming the dataset has spend and KPI variation.
+          </div>
+        )}
 
         {roi && roi.length > 0 && contrib && contrib.length > 0 && (
           <DashboardTable density="compact">
@@ -1344,13 +1390,20 @@ export default function MMMDashboard({
                         : '—'
                   const marginalRoi = summary?.mroas ?? r.roi
                   const efficiencyTier =
-                    r.roi < 0
+                    !canUseModelResults
+                      ? 'Not usable'
+                      : channelSpend <= 0
+                        ? 'No spend'
+                        : Math.abs(weightedROI) <= 1e-9
+                          ? 'Unavailable'
+                          : r.roi < 0
                       ? 'Unprofitable'
                       : r.roi >= weightedROI * 1.2
                         ? 'High'
                         : r.roi <= weightedROI * 0.8
                           ? 'Low'
                           : 'Medium'
+                  const metricColor = !canUseModelResults || channelSpend <= 0 ? t.color.textMuted : r.roi >= 0 ? t.color.success : t.color.danger
                   return (
                     <tr key={r.channel}>
                       <td
@@ -1390,20 +1443,20 @@ export default function MMMDashboard({
                       <td
                         style={{
                           textAlign: 'right',
-                          color: r.roi >= 0 ? t.color.success : t.color.danger,
+                          color: metricColor,
                           fontVariantNumeric: 'tabular-nums',
                         }}
                       >
-                        {r.roi.toFixed(3)}×
+                        {canUseModelResults && channelSpend > 0 ? `${r.roi.toFixed(3)}×` : '—'}
                       </td>
                       <td
                         style={{
                           textAlign: 'right',
-                          color: marginalRoi >= 0 ? t.color.success : t.color.danger,
+                          color: !canUseModelResults || channelSpend <= 0 ? t.color.textMuted : marginalRoi >= 0 ? t.color.success : t.color.danger,
                           fontVariantNumeric: 'tabular-nums',
                         }}
                       >
-                        {marginalRoi.toFixed(3)}×
+                        {canUseModelResults && channelSpend > 0 ? `${marginalRoi.toFixed(3)}×` : '—'}
                       </td>
                       <td
                         style={{
@@ -1420,7 +1473,7 @@ export default function MMMDashboard({
                           color:
                             efficiencyTier === 'High'
                               ? t.color.success
-                              : efficiencyTier === 'Low' || efficiencyTier === 'Unprofitable'
+                              : efficiencyTier === 'Low' || efficiencyTier === 'Unprofitable' || efficiencyTier === 'Not usable'
                                 ? t.color.danger
                                 : t.color.textSecondary,
                         }}
