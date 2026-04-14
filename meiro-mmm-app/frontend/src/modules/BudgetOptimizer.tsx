@@ -20,7 +20,7 @@ const t = tokens
 
 interface BudgetOptimizerProps {
   roiData: { channel: string; roi: number }[]
-  contribData: { channel: string; mean_share: number }[]
+  contribData: { channel: string; mean_share: number; mean_contribution?: number }[]
   baselineKPI?: number
   runId?: string | null
   datasetId?: string | null
@@ -450,6 +450,16 @@ export default function BudgetOptimizer({
     () => Object.fromEntries(contribData.map((c) => [c.channel, c.mean_share])),
     [contribData]
   )
+  const contributionValueMap = useMemo(
+    () =>
+      Object.fromEntries(
+        contribData.map((c) => [
+          c.channel,
+          Number.isFinite(Number(c.mean_contribution)) ? Number(c.mean_contribution) : undefined,
+        ]),
+      ),
+    [contribData],
+  )
   const roiMap = useMemo(() => Object.fromEntries(roiData.map((r) => [r.channel, r.roi])), [roiData])
 
   const baselineKpiValue = baselineKPI
@@ -457,19 +467,21 @@ export default function BudgetOptimizer({
   const baselineScore = useMemo(() => {
     let s = 0
     for (const ch of channelList) {
-      s += (roiMap[ch] ?? 0) * (contribMap[ch] ?? 0)
+      const contributionValue = contributionValueMap[ch]
+      s += contributionValue ?? (roiMap[ch] ?? 0) * (contribMap[ch] ?? 0)
     }
     return s
-  }, [channelList, roiMap, contribMap])
+  }, [channelList, roiMap, contribMap, contributionValueMap])
 
   const predictedScore = useMemo(() => {
     let s = 0
     for (const ch of channelList) {
       const mult = constraints[ch]?.locked ? 1.0 : (multipliers[ch] ?? 1.0)
-      s += (roiMap[ch] ?? 0) * (contribMap[ch] ?? 0) * mult
+      const contributionValue = contributionValueMap[ch]
+      s += (contributionValue ?? (roiMap[ch] ?? 0) * (contribMap[ch] ?? 0)) * mult
     }
     return s
-  }, [channelList, roiMap, contribMap, multipliers, constraints])
+  }, [channelList, roiMap, contribMap, contributionValueMap, multipliers, constraints])
 
   const predictedKPI = baselineScore > 0 ? (predictedScore / baselineScore) * baselineKpiValue : 0
   const upliftPercent = baselineKpiValue ? ((predictedKPI - baselineKpiValue) / baselineKpiValue) * 100 : 0

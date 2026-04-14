@@ -248,6 +248,100 @@ def test_budget_recommendations_summarize_tall_campaign_dataset(tmp_path):
     assert paid_action["base_spend"] == paid_spend
 
 
+def test_mmm_what_if_and_auto_optimizer_use_contribution_and_spend_basis(tmp_path):
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    def override_get_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    dataset_path = tmp_path / "response-basis.csv"
+    dataset_path.write_text(
+        "\n".join(
+            [
+                "date,high_roi,low_roi,conversions",
+                "2026-01-01,50,100,120",
+                "2026-01-08,50,100,130",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    original_runs = copy.deepcopy(main_module.RUNS)
+    original_datasets = copy.deepcopy(main_module.DATASETS)
+    original_mmm_enabled = getattr(main_module.SETTINGS.feature_flags, "mmm_enabled", False)
+
+    main_module.RUNS.clear()
+    main_module.DATASETS.clear()
+    main_module.SETTINGS.feature_flags.mmm_enabled = True
+    main_module.DATASETS["response-basis-dataset"] = {
+        "path": dataset_path,
+        "type": "sales",
+        "metadata": {"period_start": "2026-01-01", "period_end": "2026-01-08"},
+    }
+    main_module.RUNS["mmm_response_basis"] = {
+        "status": "finished",
+        "engine_version": CURRENT_MMM_ENGINE_VERSION,
+        "dataset_id": "response-basis-dataset",
+        "config": {
+            "dataset_id": "response-basis-dataset",
+            "kpi": "conversions",
+            "spend_channels": ["high_roi", "low_roi"],
+        },
+        "r2": 0.8,
+        "roi": [{"channel": "high_roi", "roi": 2.0}, {"channel": "low_roi", "roi": 1.0}],
+        "contrib": [
+            {"channel": "high_roi", "mean_share": 0.5, "mean_contribution": 200.0},
+            {"channel": "low_roi", "mean_share": 0.5, "mean_contribution": 200.0},
+        ],
+        "channel_summary": [
+            {"channel": "high_roi", "spend": 100.0, "roi": 2.0, "mroas": 2.0, "elasticity": 0.2},
+            {"channel": "low_roi", "spend": 200.0, "roi": 1.0, "mroas": 1.0, "elasticity": 0.1},
+        ],
+    }
+
+    app.dependency_overrides.clear()
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        with TestClient(app) as client:
+            what_if_resp = client.post("/api/models/mmm_response_basis/what_if", json={"high_roi": 1.5, "low_roi": 1.0})
+            assert what_if_resp.status_code == 200
+            what_if_body = what_if_resp.json()
+            assert what_if_body["baseline"]["total_kpi"] == 400.0
+            assert what_if_body["scenario"]["total_kpi"] == 500.0
+            assert what_if_body["lift"]["percent"] == 25.0
+
+            auto_resp = client.post(
+                "/api/models/mmm_response_basis/optimize/auto",
+                json={"total_budget": 1.0, "min_spend": 0.5, "max_spend": 2.0},
+            )
+            assert auto_resp.status_code == 200
+            auto_body = auto_resp.json()
+            assert auto_body["baseline_kpi"] == 400.0
+            assert round(auto_body["predicted_kpi"], 2) == 500.0
+            assert round(auto_body["uplift"], 2) == 25.0
+            assert round(auto_body["optimal_mix"]["high_roi"], 2) == 2.0
+            assert round(auto_body["optimal_mix"]["low_roi"], 2) == 0.5
+    finally:
+        app.dependency_overrides.clear()
+        main_module.RUNS.clear()
+        main_module.RUNS.update(original_runs)
+        main_module.DATASETS.clear()
+        main_module.DATASETS.update(original_datasets)
+        main_module.SETTINGS.feature_flags.mmm_enabled = original_mmm_enabled
+        engine.dispose()
+
+
 def test_mmm_run_with_missing_dataset_is_readout_only(tmp_path):
     engine = create_engine(
         "sqlite://",

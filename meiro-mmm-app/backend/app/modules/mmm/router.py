@@ -179,6 +179,38 @@ def create_router(
         except Exception:
             return None
 
+    def _channel_response_basis(run: Dict[str, Any]) -> Dict[str, Dict[str, float]]:
+        roi_map = {
+            str(row.get("channel")): float(row.get("roi") or 0.0)
+            for row in run.get("roi", [])
+            if isinstance(row, dict) and row.get("channel")
+        }
+        contrib_map = {
+            str(row.get("channel")): row
+            for row in run.get("contrib", [])
+            if isinstance(row, dict) and row.get("channel")
+        }
+        summary_map = {
+            str(row.get("channel")): row
+            for row in run.get("channel_summary", [])
+            if isinstance(row, dict) and row.get("channel")
+        }
+        channels = sorted(set(roi_map) | set(contrib_map) | set(summary_map))
+        basis: Dict[str, Dict[str, float]] = {}
+        for ch in channels:
+            roi = roi_map.get(ch, 0.0)
+            summary = summary_map.get(ch) or {}
+            contrib = contrib_map.get(ch) or {}
+            spend = float(summary.get("spend") or 0.0)
+            contribution_raw = contrib.get("mean_contribution")
+            contribution = float(contribution_raw) if contribution_raw is not None else 0.0
+            if contribution <= 0 and spend > 0:
+                contribution = max(roi, 0.0) * spend
+            if contribution <= 0:
+                contribution = max(roi, 0.0) * max(float(contrib.get("mean_share") or 0.0), 0.0)
+            basis[ch] = {"roi": roi, "spend": spend, "contribution": contribution}
+        return basis
+
     def _mark_stale_mmm_runs() -> None:
         runs = get_runs_obj()
         now = _parse_run_ts(now_iso_fn()) or datetime.now(timezone.utc)
@@ -474,19 +506,16 @@ def create_router(
         if not quality.get("can_use_results"):
             detail = "; ".join(quality.get("reasons") or ["MMM run is not safe for scenario readouts."])
             raise HTTPException(status_code=400, detail=detail)
-        roi_map = {row["channel"]: row["roi"] for row in run.get("roi", [])}
-        contrib_map = {row["channel"]: row["mean_share"] for row in run.get("contrib", [])}
-        if not roi_map or not contrib_map:
+        channel_basis = _channel_response_basis(run)
+        if not channel_basis:
             raise HTTPException(status_code=400, detail="ROI or contribution data not available")
-        channels = sorted(roi_map.keys())
+        channels = sorted(channel_basis.keys())
         baseline_per_channel: Dict[str, float] = {}
         scenario_per_channel: Dict[str, float] = {}
         baseline_total = 0.0
         scenario_total = 0.0
         for ch in channels:
-            roi_val = float(roi_map.get(ch, 0.0))
-            share = float(contrib_map.get(ch, 0.0))
-            base = roi_val * share
+            base = float(channel_basis[ch].get("contribution") or 0.0)
             mult = float(scenario.get(ch, 1.0))
             new_val = base * mult
             baseline_per_channel[ch] = base
@@ -544,10 +573,11 @@ def create_router(
             run,
             dataset_available=_dataset_available(run.get("dataset_id") or (run.get("config") or {}).get("dataset_id")),
         )
-        roi_map = {row["channel"]: row["roi"] for row in run.get("roi", [])}
-        contrib_map = {row["channel"]: row["mean_share"] for row in run.get("contrib", [])}
-        baseline = sum(roi_map.get(ch, 0) * contrib_map.get(ch, 0) for ch in roi_map)
-        new_score = sum(roi_map.get(ch, 0) * contrib_map.get(ch, 0) * scenario.get(ch, 1.0) for ch in roi_map)
+        channel_basis = _channel_response_basis(run)
+        if not channel_basis:
+            raise HTTPException(status_code=400, detail="ROI or contribution data not available")
+        baseline = sum(row["contribution"] for row in channel_basis.values())
+        new_score = sum(row["contribution"] * float(scenario.get(ch, 1.0)) for ch, row in channel_basis.items())
         uplift = ((new_score - baseline) / baseline * 100) if baseline != 0 else 0
         return {"uplift": uplift, "predicted_kpi": new_score, "baseline": baseline}
 
@@ -564,23 +594,24 @@ def create_router(
             run,
             dataset_available=_dataset_available(run.get("dataset_id") or (run.get("config") or {}).get("dataset_id")),
         )
-        roi_map = {row["channel"]: row["roi"] for row in run.get("roi", [])}
-        contrib_map = {row["channel"]: row["mean_share"] for row in run.get("contrib", [])}
-        if not roi_map or not contrib_map:
+        channel_basis = _channel_response_basis(run)
+        if not channel_basis:
             raise HTTPException(status_code=400, detail="ROI or contribution data not available")
 
-        channels = list(roi_map.keys())
+        channels = list(channel_basis.keys())
         n = len(channels)
-        roi_values = np.maximum(np.array([roi_map.get(ch, 0) for ch in channels]), 0.01)
-        contrib_raw = np.array([contrib_map.get(ch, 0) for ch in channels])
-        contrib_sum = contrib_raw.sum()
-        contrib_values = contrib_raw / contrib_sum if contrib_sum > 0 else contrib_raw
-        baseline_score = float(np.sum(roi_values * contrib_values))
+        roi_values = np.maximum(np.array([channel_basis[ch]["roi"] for ch in channels]), 0.0)
+        spend_values = np.array([channel_basis[ch]["spend"] for ch in channels])
+        contribution_values = np.array([channel_basis[ch]["contribution"] for ch in channels])
+        if float(spend_values.sum()) <= 0:
+            spend_values = np.ones(n)
+        baseline_score = float(np.sum(contribution_values))
+        baseline_budget = float(np.sum(spend_values))
 
         def objective(x: Any) -> float:
-            return -(np.sum(roi_values * contrib_values * x) - baseline_score)
+            return -float(np.sum(roi_values * spend_values * x))
 
-        constraints = ({"type": "eq", "fun": lambda x: np.sum(x) - (request.total_budget * n)},)
+        constraints = ({"type": "eq", "fun": lambda x: float(np.sum(spend_values * x) - (baseline_budget * request.total_budget))},)
         bounds: list[tuple[float, float]] = []
         per_constraints = request.channel_constraints or {}
         for ch in channels:
@@ -610,14 +641,14 @@ def create_router(
                     "message": "At baseline",
                 }
             optimal_mix = {ch: float(val) for ch, val in zip(channels, result.x)}
-            predicted = float(-result.fun + baseline_score)
+            predicted = float(-result.fun)
             uplift = ((predicted - baseline_score) / baseline_score * 100) if baseline_score > 0 else 0
             return {
                 "optimal_mix": optimal_mix,
-                "predicted_kpi": max(predicted, baseline_score),
+                "predicted_kpi": predicted,
                 "baseline_kpi": baseline_score,
-                "uplift": max(uplift, 0),
-                "message": f"Uplift: {max(uplift, 0):.1f}%",
+                "uplift": uplift,
+                "message": f"Uplift: {uplift:.1f}%",
             }
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Optimization error: {exc}")
