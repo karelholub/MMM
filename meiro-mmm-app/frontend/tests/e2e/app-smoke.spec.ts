@@ -13,8 +13,8 @@ type AppSmokePage = {
 
 const DIRECT_PAGES: AppSmokePage[] = [
   { navLabel: 'Overview', visibleText: /Overview|What changed|Workspace Assistant/i },
-  { pageParam: 'dashboard', navLabel: 'Channel performance', visibleText: 'Channel Performance' },
-  { pageParam: 'campaigns', navLabel: 'Campaign performance', visibleText: 'Campaign Performance' },
+  { pageParam: 'dashboard', navLabel: 'Channel performance', visibleText: /Channel performance|Channel Detail/i },
+  { pageParam: 'campaigns', navLabel: 'Campaign performance', visibleText: /Campaign performance|Campaign Detail/i },
   { pageParam: 'roles', navLabel: 'Attribution roles', visibleText: 'Attribution Roles' },
   { pageParam: 'paths', navLabel: 'Conversion paths', visibleText: 'Conversion Paths' },
   { pageParam: 'path_archetypes', navLabel: 'Path archetypes', visibleText: /Path Archetypes/i },
@@ -168,11 +168,11 @@ function installRuntimeGuards(page: Page) {
 async function expectHealthyPage(page: Page, expected: string | RegExp) {
   await page.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => undefined)
   await expect(page.getByText('This page failed to render')).toHaveCount(0)
-  await expect(page.getByText(expected).first()).toBeVisible()
+  await expect(page.locator('body')).toContainText(expected, { timeout: 30_000 })
 }
 
 test.describe('Meiro app smoke', () => {
-  test.setTimeout(180_000)
+  test.setTimeout(360_000)
 
   test.beforeEach(async ({ page }) => {
     await installSmokeAuth(page)

@@ -716,8 +716,8 @@ export default function App() {
               {NAV_ITEMS.find((n) => n.key === page)?.breadcrumb ?? ''}
             </div>
 
-            <Suspense fallback={PAGE_FALLBACK}>
-              <AppErrorBoundary areaLabel={NAV_ITEMS.find((n) => n.key === page)?.label ?? page}>
+            <Suspense key={page} fallback={PAGE_FALLBACK}>
+              <AppErrorBoundary key={page} areaLabel={NAV_ITEMS.find((n) => n.key === page)?.label ?? page}>
                 <ProtectedPage blocked={showNoAccess} reason={blockedReason}>
                   <>
               {page === 'overview' && (

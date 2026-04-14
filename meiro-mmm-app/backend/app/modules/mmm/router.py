@@ -118,9 +118,10 @@ def create_router(
         _ensure_mmm_enabled()
         channels = set()
         for exp in get_expenses_obj().values():
-            if getattr(exp, "status", "active") == "deleted":
+            status = exp.get("status", "active") if isinstance(exp, dict) else getattr(exp, "status", "active")
+            if status == "deleted":
                 continue
-            ch = getattr(exp, "channel", None)
+            ch = exp.get("channel") if isinstance(exp, dict) else getattr(exp, "channel", None)
             if ch:
                 channels.add(ch)
         return {"spend_channels": sorted(channels), "covariates": []}

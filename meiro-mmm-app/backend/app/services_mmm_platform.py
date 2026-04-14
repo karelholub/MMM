@@ -12,8 +12,25 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 from .services_metrics import journey_revenue_value
 
-# Week start: Monday (pandas 'W-MON')
+# Week start: Monday. Pandas "W-MON" means weeks ending on Monday, so use
+# explicit weekday arithmetic for bucket assignment.
 WEEK_FREQ = "W-MON"
+
+
+def _field(obj: Any, key: str, default: Any = None) -> Any:
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _week_start(ts: Any) -> pd.Timestamp:
+    value = pd.to_datetime(ts, errors="coerce")
+    if pd.isna(value):
+        return value
+    if getattr(value, "tzinfo", None) is not None:
+        value = value.tz_convert(None) if hasattr(value, "tz_convert") else value.tz_localize(None)
+    normalized = value.normalize()
+    return normalized - pd.Timedelta(days=int(normalized.weekday()))
 
 
 def _conversion_week_ts(j: Dict[str, Any]) -> Optional[pd.Timestamp]:
@@ -51,7 +68,7 @@ def _aggregate_kpi_by_week(
         if ts is None:
             continue
         # Week start (Monday)
-        week_start = ts.normalize().to_period(WEEK_FREQ).start_time
+        week_start = _week_start(ts)
         if date_start <= week_start <= date_end:
             if kpi_target == "sales":
                 val = journey_revenue_value(j, dedupe_seen=dedupe_seen)
@@ -68,38 +85,58 @@ def _aggregate_expenses_by_week_channel(
     date_start: pd.Timestamp,
     date_end: pd.Timestamp,
 ) -> pd.DataFrame:
-    """Aggregate expenses by week and channel. Expects expense-like objects with channel, amount/converted_amount, service_period_start."""
+    """Aggregate expenses by week and channel.
+
+    Service-period expenses are allocated evenly across covered days, then
+    rolled into Monday-start weeks. This keeps monthly spend usable for MMM
+    windows that contain only part of the service period.
+    """
     # Build (week_start, channel) -> amount
     week_channel: Dict[Tuple[pd.Timestamp, str], float] = {}
+    selected_start = date_start.normalize()
+    selected_end = date_end.normalize() + pd.Timedelta(days=6)
     for exp in expenses:
-        ch = getattr(exp, "channel", None) or (exp.get("channel") if isinstance(exp, dict) else None)
+        ch = _field(exp, "channel")
         if not ch or ch not in spend_channels:
             continue
-        status = getattr(exp, "status", "active") or (exp.get("status") if isinstance(exp, dict) else "active")
+        status = _field(exp, "status", "active") or "active"
         if status == "deleted":
             continue
-        amount = getattr(exp, "converted_amount", None) or getattr(exp, "amount", None)
-        if amount is None and isinstance(exp, dict):
-            amount = exp.get("converted_amount") or exp.get("amount")
+        amount = _field(exp, "converted_amount") or _field(exp, "amount")
         if amount is None:
             continue
         amount = float(amount)
-        start_str = getattr(exp, "service_period_start", None) or (exp.get("service_period_start") if isinstance(exp, dict) else None)
+        start_str = _field(exp, "service_period_start")
+        end_str = _field(exp, "service_period_end")
         if not start_str:
             # Fallback to period YYYY-MM
-            p = getattr(exp, "period", None) or (exp.get("period") if isinstance(exp, dict) else None)
+            p = _field(exp, "period")
             if p:
                 start_str = f"{p}-01"
+                end_str = pd.Timestamp(start_str).to_period("M").end_time.strftime("%Y-%m-%d")
         if not start_str:
             continue
         try:
-            ts = pd.to_datetime(start_str, errors="coerce")
-            if pd.isna(ts):
+            service_start = pd.to_datetime(start_str, errors="coerce")
+            service_end = pd.to_datetime(end_str, errors="coerce") if end_str else service_start
+            if pd.isna(service_start) or pd.isna(service_end):
                 continue
-            week_start = ts.normalize().to_period(WEEK_FREQ).start_time
-            if date_start <= week_start <= date_end:
+            service_start = service_start.normalize()
+            service_end = service_end.normalize()
+            if service_end < service_start:
+                service_start, service_end = service_end, service_start
+            total_days = max(int((service_end - service_start).days) + 1, 1)
+            daily_amount = amount / total_days
+            overlap_start = max(service_start, selected_start)
+            overlap_end = min(service_end, selected_end)
+            if overlap_end < overlap_start:
+                continue
+            for day in pd.date_range(overlap_start, overlap_end, freq="D"):
+                week_start = _week_start(day)
+                if not (date_start <= week_start <= date_end):
+                    continue
                 key = (week_start, ch)
-                week_channel[key] = week_channel.get(key, 0) + amount
+                week_channel[key] = week_channel.get(key, 0) + daily_amount
         except Exception:
             continue
 
@@ -148,8 +185,8 @@ def build_mmm_dataset_from_platform(
     if pd.isna(ds) or pd.isna(de) or ds > de:
         raise ValueError("Invalid date_start or date_end")
     # Align to week boundaries (Monday)
-    date_start_ts = ds.normalize().to_period(WEEK_FREQ).start_time
-    date_end_ts = de.normalize().to_period(WEEK_FREQ).start_time
+    date_start_ts = _week_start(ds)
+    date_end_ts = _week_start(de)
 
     # Full week index
     week_range = pd.date_range(start=date_start_ts, end=date_end_ts, freq=WEEK_FREQ)
@@ -183,11 +220,21 @@ def build_mmm_dataset_from_platform(
     for ch in spend_channels:
         result[ch] = result["date"].map(lambda d: spend_by_date.get(d, {}).get(ch, 0.0))
     result[kpi_col] = result["date"].map(
-        lambda d: float(kpi_series.get(pd.Timestamp(d).to_period(WEEK_FREQ).start_time, 0.0))
+        lambda d: float(kpi_series.get(_week_start(pd.Timestamp(d)), 0.0))
     )
     for cov in covariates:
         if cov not in result.columns:
             result[cov] = 0.0
+
+    spend_totals = {ch: float(result[ch].sum()) for ch in spend_channels}
+    channels_with_spend = [ch for ch, value in spend_totals.items() if value > 0]
+    all_zero_spend_channels = [ch for ch, value in spend_totals.items() if value <= 0]
+    total_spend = float(sum(spend_totals.values()))
+    if spend_channels and total_spend <= 0:
+        raise ValueError(
+            "No spend was found for the selected MMM channels and date range. "
+            "Choose channels with active expenses in this period or update Data Sources / Expenses."
+        )
 
     # Coverage
     missing_spend_weeks: Dict[str, int] = {}
@@ -199,5 +246,9 @@ def build_mmm_dataset_from_platform(
         "n_weeks": n_weeks,
         "missing_spend_weeks": missing_spend_weeks,
         "missing_kpi_weeks": missing_kpi_weeks,
+        "spend_totals": spend_totals,
+        "channels_with_spend": channels_with_spend,
+        "all_zero_spend_channels": all_zero_spend_channels,
+        "total_spend": total_spend,
     }
     return result, coverage

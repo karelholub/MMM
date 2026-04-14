@@ -34,6 +34,27 @@ def fit_model(
                 runs_obj[run_id] = {**runs_obj.get(run_id, {}), "status": "error", "detail": f"Column '{channel}' missing", "updated_at": now_ts}
                 save_runs_fn()
                 return
+        spend_totals = df[cfg.spend_channels].apply(pd.to_numeric, errors="coerce").fillna(0).sum()
+        if float(spend_totals.sum()) <= 0:
+            runs_obj[run_id] = {
+                **runs_obj.get(run_id, {}),
+                "status": "error",
+                "detail": "MMM run cannot start because all selected spend channels have zero spend in the dataset.",
+                "updated_at": now_ts,
+            }
+            save_runs_fn()
+            return
+    else:
+        total_spend = float(pd.to_numeric(df["spend"], errors="coerce").fillna(0).sum())
+        if total_spend <= 0:
+            runs_obj[run_id] = {
+                **runs_obj.get(run_id, {}),
+                "status": "error",
+                "detail": "MMM run cannot start because the dataset has zero spend.",
+                "updated_at": now_ts,
+            }
+            save_runs_fn()
+            return
     priors = cfg.priors or {}
     adstock_cfg = {
         "l_max": 8,

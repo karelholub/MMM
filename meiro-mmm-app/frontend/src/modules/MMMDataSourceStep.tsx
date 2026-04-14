@@ -17,7 +17,15 @@ interface BuildResponse {
   dataset_id: string
   columns: string[]
   preview_rows: Record<string, unknown>[]
-  coverage: { n_weeks: number; missing_spend_weeks: Record<string, number>; missing_kpi_weeks: number }
+  coverage: {
+    n_weeks: number
+    missing_spend_weeks: Record<string, number>
+    missing_kpi_weeks: number
+    spend_totals?: Record<string, number>
+    channels_with_spend?: string[]
+    all_zero_spend_channels?: string[]
+    total_spend?: number
+  }
   metadata: {
     period_start: string
     period_end: string
@@ -109,12 +117,14 @@ export default function MMMDataSourceStep({ onMappingComplete, initialPlatformDr
     const draftChannels = initialPlatformDraft?.spendChannels ?? []
     if (draftChannels.length && spendChannelOptions.length && seededDraftChannelsRef.current !== initialSpendChannelsKey) {
       const availableDraftChannels = draftChannels.filter((ch) => spendChannelOptions.includes(ch))
-      setSelectedChannels(availableDraftChannels.length ? availableDraftChannels : draftChannels)
+      setSelectedChannels(availableDraftChannels)
       seededDraftChannelsRef.current = initialSpendChannelsKey
       return
     }
     if (spendChannelOptions.length && !selectedChannels.length) {
-      setSelectedChannels(spendChannelOptions.filter((ch) => ['google_ads', 'meta_ads', 'linkedin_ads'].includes(ch)))
+      const preferred = ['paid_search', 'paid_social', 'facebook_ads', 'organic_search', 'referral', 'direct']
+      const preferredAvailable = preferred.filter((ch) => spendChannelOptions.includes(ch))
+      setSelectedChannels(preferredAvailable.length ? preferredAvailable : spendChannelOptions.slice(0, 6))
     }
   }, [initialSpendChannelsKey, spendChannelOptions.join(','), selectedChannels.length])
 
@@ -183,6 +193,9 @@ export default function MMMDataSourceStep({ onMappingComplete, initialPlatformDr
   // —— Platform: show result (preview + coverage + Use this dataset) ——
   if (platformResult) {
     const { coverage, metadata } = platformResult
+    const totalSpend = Number(coverage.total_spend ?? 0)
+    const allZeroSpendChannels = coverage.all_zero_spend_channels ?? []
+    const hasUsableSpend = totalSpend > 0
     return (
       <div style={{ maxWidth: 920, margin: '0 auto' }}>
         <div style={{ marginBottom: t.space.lg }}>
@@ -258,6 +271,28 @@ export default function MMMDataSourceStep({ onMappingComplete, initialPlatformDr
           ))}
         </div>
 
+        <div
+          style={{
+            marginBottom: t.space.xl,
+            padding: t.space.lg,
+            borderRadius: t.radius.lg,
+            border: `1px solid ${hasUsableSpend && allZeroSpendChannels.length === 0 ? t.color.success : t.color.warning}`,
+            background: hasUsableSpend && allZeroSpendChannels.length === 0 ? t.color.successMuted : t.color.warningMuted,
+            color: t.color.textSecondary,
+            fontSize: t.font.sizeSm,
+          }}
+        >
+          <strong style={{ color: t.color.text }}>Spend coverage:</strong>{' '}
+          {hasUsableSpend
+            ? `$${totalSpend.toLocaleString(undefined, { maximumFractionDigits: 0 })} mapped across ${coverage.channels_with_spend?.length ?? 0} selected channels.`
+            : 'No spend was found for the selected channels and period.'}
+          {allZeroSpendChannels.length > 0 && (
+            <div style={{ marginTop: t.space.xs }}>
+              No spend found for {allZeroSpendChannels.map(channelLabel).join(', ')}. Remove those channels or add expenses before using this dataset.
+            </div>
+          )}
+        </div>
+
         {/* Preview table */}
         <div
           style={{
@@ -317,15 +352,16 @@ export default function MMMDataSourceStep({ onMappingComplete, initialPlatformDr
           <button
             type="button"
             onClick={handleUsePlatformDataset}
+            disabled={!hasUsableSpend}
             style={{
               padding: `${t.space.md}px ${t.space.xl}px`,
               fontSize: t.font.sizeBase,
               fontWeight: t.font.weightSemibold,
               color: '#fff',
-              background: t.color.accent,
+              background: hasUsableSpend ? t.color.accent : t.color.border,
               border: 'none',
               borderRadius: t.radius.sm,
-              cursor: 'pointer',
+              cursor: hasUsableSpend ? 'pointer' : 'not-allowed',
             }}
           >
             Use this dataset →

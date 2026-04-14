@@ -58,6 +58,7 @@ type TrendDotProps = {
   cx?: number
   cy?: number
   value?: number | null
+  index?: number
 }
 
 function toDate(ts: string): Date | null {
@@ -205,10 +206,11 @@ export default function TrendPanel({
   const connectCurrentNulls = sparse && validCount >= 2
   const connectPreviousNulls = hasPrevious && previousValidCount >= 2 && previousValidCount < previous.length
   const currentDot = validCount <= 3 || !compact
-    ? ({ cx, cy, value }: TrendDotProps) => {
-        if (typeof cx !== 'number' || typeof cy !== 'number' || value == null) return <g />
+    ? ({ cx, cy, value, index }: TrendDotProps) => {
+        if (typeof cx !== 'number' || typeof cy !== 'number' || value == null) return <g key={`current-dot-empty-${index ?? 'unknown'}`} />
         return (
           <circle
+            key={`current-dot-${index ?? `${cx}-${cy}`}`}
             cx={cx}
             cy={cy}
             r={validCount === 1 ? 3.5 : 2.25}
