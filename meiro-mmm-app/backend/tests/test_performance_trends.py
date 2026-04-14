@@ -192,6 +192,80 @@ def test_build_channel_summary_uses_same_source_rollups():
     assert out["totals"]["current"]["revenue"] == 150.0
 
 
+def test_build_channel_summary_splits_revenue_by_selected_attribution_model():
+    journeys = [
+        {
+            "converted": True,
+            "conversion_value": 90.0,
+            "conversions": [{"timestamp": "2026-02-02T12:00:00Z"}],
+            "touchpoints": [
+                {"timestamp": "2026-02-01T10:00:00Z", "channel": "paid_search"},
+                {"timestamp": "2026-02-01T11:00:00Z", "channel": "organic_search"},
+                {"timestamp": "2026-02-02T10:00:00Z", "channel": "direct"},
+            ],
+        }
+    ]
+
+    linear = build_channel_summary_response(
+        journeys=journeys,
+        expenses=[],
+        date_from="2026-02-01",
+        date_to="2026-02-02",
+        compare=False,
+        attribution_model="linear",
+    )
+    linear_by_channel = {row["channel"]: row for row in linear["items"]}
+    assert round(linear_by_channel["paid_search"]["current"]["revenue"], 2) == 30.0
+    assert round(linear_by_channel["organic_search"]["current"]["revenue"], 2) == 30.0
+    assert round(linear_by_channel["direct"]["current"]["revenue"], 2) == 30.0
+    assert round(linear_by_channel["paid_search"]["current"]["conversions"], 3) == 0.333
+    assert linear["totals"]["current"]["revenue"] == 90.0
+    assert round(linear["totals"]["current"]["conversions"], 3) == 1.0
+
+    last_touch = build_channel_summary_response(
+        journeys=journeys,
+        expenses=[],
+        date_from="2026-02-01",
+        date_to="2026-02-02",
+        compare=False,
+        attribution_model="last_touch",
+    )
+    last_by_channel = {row["channel"]: row for row in last_touch["items"]}
+    assert last_by_channel["direct"]["current"]["revenue"] == 90.0
+    assert last_by_channel["paid_search"]["current"]["revenue"] == 0.0
+    assert last_touch["totals"]["current"]["revenue"] == 90.0
+
+
+def test_build_campaign_summary_splits_revenue_by_selected_attribution_model():
+    journeys = [
+        {
+            "converted": True,
+            "conversion_value": 80.0,
+            "conversions": [{"timestamp": "2026-02-02T12:00:00Z"}],
+            "touchpoints": [
+                {"timestamp": "2026-02-01T10:00:00Z", "channel": "paid_search", "campaign": "brand"},
+                {"timestamp": "2026-02-02T10:00:00Z", "channel": "paid_social", "campaign": "retargeting"},
+            ],
+        }
+    ]
+
+    out = build_campaign_summary_response(
+        journeys=journeys,
+        expenses=[],
+        date_from="2026-02-01",
+        date_to="2026-02-02",
+        compare=False,
+        attribution_model="linear",
+    )
+
+    by_campaign = {row["campaign_id"]: row for row in out["items"]}
+    assert by_campaign["paid_search:brand"]["current"]["revenue"] == 40.0
+    assert by_campaign["paid_social:retargeting"]["current"]["revenue"] == 40.0
+    assert by_campaign["paid_search:brand"]["current"]["conversions"] == 0.5
+    assert out["totals"]["current"]["revenue"] == 80.0
+    assert out["totals"]["current"]["conversions"] == 1.0
+
+
 def test_build_channel_aggregate_overlay_uses_unfiltered_visits_and_keyed_conversions():
     db = _unit_db_session()
     try:

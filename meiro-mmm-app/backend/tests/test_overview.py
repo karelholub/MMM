@@ -2,6 +2,7 @@
 
 from datetime import datetime
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -232,6 +233,36 @@ def test_overview_summary_channel_group_filters_metrics_and_expenses():
         assert tiles["visits"] == 2
         assert tiles["conversions"] == 1
         assert tiles["revenue"] == 120.0
+    finally:
+        db.close()
+
+
+def test_overview_summary_periodizes_expense_service_periods():
+    db = _unit_db_session()
+    try:
+        body = get_overview_summary(
+            db,
+            date_from="2024-04-01",
+            date_to="2024-04-15",
+            timezone="UTC",
+            expenses=[
+                {
+                    "channel": "paid",
+                    "amount": 300.0,
+                    "service_period_start": "2024-04-01",
+                    "service_period_end": "2024-04-30",
+                    "status": "active",
+                }
+            ],
+            import_runs_get_last_successful=lambda: None,
+        )
+
+        spend_tile = next(tile for tile in body["kpi_tiles"] if tile["kpi_key"] == "spend")
+        observed = [point["value"] for point in spend_tile["series"] if point["value"] is not None]
+        assert spend_tile["value"] == pytest.approx(150.0)
+        assert len(observed) == 15
+        assert observed[0] == pytest.approx(10.0)
+        assert sum(observed) == pytest.approx(150.0)
     finally:
         db.close()
 

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { tokens } from '../theme/tokens'
 import DatasetUploader from './DatasetUploader'
@@ -48,9 +48,16 @@ interface MMMDataSourceStepProps {
     dataset_id: string
     columns: { kpi: string; spend_channels: string[]; covariates: string[] }
   }) => void
+  initialPlatformDraft?: {
+    kpiTarget?: 'sales' | 'attribution'
+    spendChannels?: string[]
+    attributionModel?: string
+    attributionConfigId?: string | null
+    notice?: string
+  }
 }
 
-export default function MMMDataSourceStep({ onMappingComplete }: MMMDataSourceStepProps) {
+export default function MMMDataSourceStep({ onMappingComplete, initialPlatformDraft }: MMMDataSourceStepProps) {
   const [sourceType, setSourceType] = useState<DataSourceType>('platform')
   const [kpiTarget, setKpiTarget] = useState<'sales' | 'attribution'>('sales')
   const [dateStart, setDateStart] = useState(() => {
@@ -63,6 +70,7 @@ export default function MMMDataSourceStep({ onMappingComplete }: MMMDataSourceSt
   const [platformResult, setPlatformResult] = useState<BuildResponse | null>(null)
   const [attributionModel, setAttributionModel] = useState<string>('linear')
   const [attributionConfigId, setAttributionConfigId] = useState<string | null>(null)
+  const seededDraftChannelsRef = useRef<string | null>(null)
 
   const { data: platformOptions } = useQuery<PlatformOptions>({
     queryKey: ['mmm-platform-options'],
@@ -89,12 +97,26 @@ export default function MMMDataSourceStep({ onMappingComplete }: MMMDataSourceSt
   const attributionModelOptions = attributionModelsData?.models ?? ['linear', 'last_touch', 'first_touch', 'time_decay', 'position_based', 'markov']
   const spendChannelOptions = platformOptions?.spend_channels ?? []
   const covariateOptions = platformOptions?.covariates ?? []
+  const initialSpendChannelsKey = initialPlatformDraft?.spendChannels?.join(',') ?? ''
 
   useEffect(() => {
+    if (initialPlatformDraft?.kpiTarget) setKpiTarget(initialPlatformDraft.kpiTarget)
+    if (initialPlatformDraft?.attributionModel) setAttributionModel(initialPlatformDraft.attributionModel)
+    if (initialPlatformDraft?.attributionConfigId !== undefined) setAttributionConfigId(initialPlatformDraft.attributionConfigId)
+  }, [initialPlatformDraft?.kpiTarget, initialPlatformDraft?.attributionModel, initialPlatformDraft?.attributionConfigId])
+
+  useEffect(() => {
+    const draftChannels = initialPlatformDraft?.spendChannels ?? []
+    if (draftChannels.length && spendChannelOptions.length && seededDraftChannelsRef.current !== initialSpendChannelsKey) {
+      const availableDraftChannels = draftChannels.filter((ch) => spendChannelOptions.includes(ch))
+      setSelectedChannels(availableDraftChannels.length ? availableDraftChannels : draftChannels)
+      seededDraftChannelsRef.current = initialSpendChannelsKey
+      return
+    }
     if (spendChannelOptions.length && !selectedChannels.length) {
       setSelectedChannels(spendChannelOptions.filter((ch) => ['google_ads', 'meta_ads', 'linkedin_ads'].includes(ch)))
     }
-  }, [spendChannelOptions.join(','), selectedChannels.length])
+  }, [initialSpendChannelsKey, spendChannelOptions.join(','), selectedChannels.length])
 
   const buildMutation = useMutation({
     mutationFn: async () => {
@@ -369,6 +391,21 @@ export default function MMMDataSourceStep({ onMappingComplete }: MMMDataSourceSt
         <h4 style={{ margin: `0 0 ${t.space.lg}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
           Use platform data
         </h4>
+        {initialPlatformDraft?.notice && (
+          <div
+            style={{
+              marginBottom: t.space.lg,
+              padding: t.space.md,
+              borderRadius: t.radius.md,
+              border: `1px solid ${t.color.warning}`,
+              background: t.color.warningMuted,
+              color: t.color.textSecondary,
+              fontSize: t.font.sizeSm,
+            }}
+          >
+            <strong style={{ color: t.color.text }}>Compatible rebuild:</strong> {initialPlatformDraft.notice}
+          </div>
+        )}
 
         <div style={{ marginBottom: t.space.lg }}>
           <label style={{ display: 'block', fontSize: t.font.sizeSm, fontWeight: t.font.weightMedium, color: t.color.textSecondary, marginBottom: t.space.xs }}>

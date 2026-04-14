@@ -334,12 +334,28 @@ def create_router(
             raise HTTPException(status_code=404, detail="Dataset not found")
         path = dataset_info.get("path")
         if path is None:
-            raise HTTPException(status_code=404, detail="Dataset not found")
+            return {
+                "dataset_id": dataset_id,
+                "columns": [],
+                "preview_rows": [],
+                "type": dataset_info.get("type", "sales"),
+                "metadata": dataset_info.get("metadata"),
+                "available": False,
+                "detail": "Dataset file is not available in this runtime.",
+            }
         p = Path(path) if isinstance(path, str) else path
         if not p.exists():
-            raise HTTPException(status_code=404, detail="Dataset not found")
+            return {
+                "dataset_id": dataset_id,
+                "columns": [],
+                "preview_rows": [],
+                "type": dataset_info.get("type", "sales"),
+                "metadata": dataset_info.get("metadata"),
+                "available": False,
+                "detail": "Dataset file is not available in this runtime.",
+            }
         df = pd.read_csv(p).head(5) if preview_only else pd.read_csv(p)
-        out = {"dataset_id": dataset_id, "columns": list(df.columns), "preview_rows": df.to_dict(orient="records"), "type": dataset_info.get("type", "sales")}
+        out = {"dataset_id": dataset_id, "columns": list(df.columns), "preview_rows": df.to_dict(orient="records"), "type": dataset_info.get("type", "sales"), "available": True}
         if dataset_info.get("metadata"):
             out["metadata"] = dataset_info["metadata"]
         return out

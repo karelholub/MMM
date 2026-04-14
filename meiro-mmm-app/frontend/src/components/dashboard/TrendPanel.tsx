@@ -7,6 +7,7 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  ReferenceDot,
 } from 'recharts'
 import { tokens as t } from '../../theme/tokens'
 
@@ -51,6 +52,12 @@ interface TrendPanelProps {
   noDataMessage?: string
   onOpenDataSources?: () => void
   onOpenDataQuality?: () => void
+}
+
+type TrendDotProps = {
+  cx?: number
+  cy?: number
+  value?: number | null
 }
 
 function toDate(ts: string): Date | null {
@@ -192,8 +199,34 @@ export default function TrendPanel({
   }, [current, previous, hasPrevious])
 
   const validCount = current.filter((p) => p.value != null).length
+  const previousValidCount = previous.filter((p) => p.value != null).length
   const sparse = current.length > 0 && validCount < Math.max(2, Math.floor(current.length * 0.6))
   const empty = current.length === 0 || validCount === 0
+  const connectCurrentNulls = sparse && validCount >= 2
+  const connectPreviousNulls = hasPrevious && previousValidCount >= 2 && previousValidCount < previous.length
+  const currentDot = validCount <= 3 || !compact
+    ? ({ cx, cy, value }: TrendDotProps) => {
+        if (typeof cx !== 'number' || typeof cy !== 'number' || value == null) return <g />
+        return (
+          <circle
+            cx={cx}
+            cy={cy}
+            r={validCount === 1 ? 3.5 : 2.25}
+            fill={t.color.accent}
+            stroke={t.color.surface}
+            strokeWidth={1.5}
+          />
+        )
+      }
+    : false
+  const singleCurrentPoint =
+    validCount === 1 ? current.find((p) => p.value != null && Number.isFinite(p.value)) ?? null : null
+  const sparseNote =
+    validCount === 1
+      ? 'Only one data point is available for this metric in the selected period.'
+      : connectCurrentNulls
+      ? 'Sparse data detected: connecting available points; missing days are skipped.'
+      : 'Sparse data detected: missing points are shown as gaps.'
 
   return (
     <div
@@ -411,56 +444,69 @@ export default function TrendPanel({
           </table>
         </div>
       ) : (
-        <div style={{ width: '100%', height: compact ? 140 : 280 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={rows} margin={{ top: 8, right: 12, left: 4, bottom: 8 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
-              <XAxis
-                dataKey="ts"
-                tick={{ fontSize: t.font.sizeXs, fill: t.color.textSecondary }}
-                tickFormatter={(v) => formatAxisLabel(String(v), resolvedGrain)}
-              />
-              <YAxis
-                tick={{ fontSize: t.font.sizeXs, fill: t.color.textSecondary }}
-                tickFormatter={(v) => formatter(Number(v))}
-                width={compact ? 52 : 64}
-              />
-              <Tooltip
-                contentStyle={{ fontSize: t.font.sizeSm, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
-                labelFormatter={(label) => `Date: ${formatAxisLabel(String(label), resolvedGrain)}`}
-                formatter={(value, name) => {
-                  const numeric = typeof value === 'number' ? value : Number(value)
-                  const label = name === 'previous' ? 'Previous' : 'Current'
-                  if (value == null) return ['—', name === 'previous' ? 'Previous' : 'Current']
-                  return [Number.isFinite(numeric) ? formatter(numeric) : String(value), label]
-                }}
-              />
-              {hasPrevious ? (
+        <div style={{ display: 'grid', gap: t.space.xs, width: '100%' }}>
+          <div style={{ width: '100%', height: compact ? 140 : 280 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={rows} margin={{ top: 8, right: 12, left: 4, bottom: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={t.color.borderLight} />
+                <XAxis
+                  dataKey="ts"
+                  tick={{ fontSize: t.font.sizeXs, fill: t.color.textSecondary }}
+                  tickFormatter={(v) => formatAxisLabel(String(v), resolvedGrain)}
+                />
+                <YAxis
+                  tick={{ fontSize: t.font.sizeXs, fill: t.color.textSecondary }}
+                  tickFormatter={(v) => formatter(Number(v))}
+                  width={compact ? 52 : 64}
+                />
+                <Tooltip
+                  contentStyle={{ fontSize: t.font.sizeSm, borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }}
+                  labelFormatter={(label) => `Date: ${formatAxisLabel(String(label), resolvedGrain)}`}
+                  formatter={(value, name) => {
+                    const numeric = typeof value === 'number' ? value : Number(value)
+                    const label = name === 'previous' ? 'Previous' : 'Current'
+                    if (value == null) return ['—', name === 'previous' ? 'Previous' : 'Current']
+                    return [Number.isFinite(numeric) ? formatter(numeric) : String(value), label]
+                  }}
+                />
+                {hasPrevious ? (
+                  <Line
+                    type="monotone"
+                    dataKey="previous"
+                    name="previous"
+                    stroke={t.color.textMuted}
+                    strokeDasharray="4 4"
+                    strokeWidth={1.5}
+                    dot={false}
+                    connectNulls={connectPreviousNulls}
+                  />
+                ) : null}
                 <Line
                   type="monotone"
-                  dataKey="previous"
-                  name="previous"
-                  stroke={t.color.textMuted}
-                  strokeDasharray="4 4"
-                  strokeWidth={1.5}
-                  dot={false}
-                  connectNulls={false}
+                  dataKey="current"
+                  name="current"
+                  stroke={t.color.accent}
+                  strokeWidth={2}
+                  dot={currentDot}
+                  connectNulls={connectCurrentNulls}
                 />
-              ) : null}
-              <Line
-                type="monotone"
-                dataKey="current"
-                name="current"
-                stroke={t.color.accent}
-                strokeWidth={2}
-                dot={compact ? false : { r: 2 }}
-                connectNulls={false}
-              />
-            </LineChart>
-          </ResponsiveContainer>
+                {singleCurrentPoint ? (
+                  <ReferenceDot
+                    x={singleCurrentPoint.ts}
+                    y={singleCurrentPoint.value ?? 0}
+                    r={4}
+                    fill={t.color.accent}
+                    stroke={t.color.surface}
+                    strokeWidth={1.5}
+                    ifOverflow="extendDomain"
+                  />
+                ) : null}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
           {sparse ? (
-            <div style={{ marginTop: 4, fontSize: t.font.sizeXs, color: t.color.textMuted }}>
-              Sparse data detected: missing points are shown as gaps.
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+              {sparseNote}
             </div>
           ) : null}
         </div>

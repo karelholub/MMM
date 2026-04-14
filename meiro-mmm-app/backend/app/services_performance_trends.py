@@ -179,6 +179,106 @@ def _merge_outcome_metrics(target: Dict[str, float], outcome: Dict[str, float], 
         target["mixed_path_conversions"] += selected_count
 
 
+def _merge_outcome_metrics_weighted(target: Dict[str, float], outcome: Dict[str, float], path_type: str, weight: float) -> None:
+    w = max(0.0, float(weight or 0.0))
+    if w <= 0:
+        return
+    target["gross_conversions"] += float(outcome.get("gross_conversions", 0.0) or 0.0) * w
+    target["net_conversions"] += float(outcome.get("net_conversions", 0.0) or 0.0) * w
+    target["gross_revenue"] += float(outcome.get("gross_value", 0.0) or 0.0) * w
+    target["net_revenue"] += float(outcome.get("net_value", 0.0) or 0.0) * w
+    target["refunded_value"] += float(outcome.get("refunded_value", 0.0) or 0.0) * w
+    target["cancelled_value"] += float(outcome.get("cancelled_value", 0.0) or 0.0) * w
+    target["invalid_leads"] += float(outcome.get("invalid_leads", 0.0) or 0.0) * w
+    target["valid_leads"] += float(outcome.get("valid_leads", 0.0) or 0.0) * w
+    selected_count = float(outcome.get("net_conversions", 0.0) or 0.0) * w
+    if path_type == "click_through":
+        target["click_through_conversions"] += selected_count
+    elif path_type == "view_through":
+        target["view_through_conversions"] += selected_count
+    elif path_type == "mixed_path":
+        target["mixed_path_conversions"] += selected_count
+
+
+def _conversion_day_for_journey(journey: Dict[str, Any], tz: ZoneInfo) -> Optional[date]:
+    for conv in journey.get("conversions") or []:
+        if not isinstance(conv, dict):
+            continue
+        day = _local_date_from_ts(
+            conv.get("timestamp")
+            or conv.get("ts")
+            or conv.get("conversion_ts")
+            or conv.get("converted_at"),
+            tz,
+        )
+        if day is not None:
+            return day
+    day = _local_date_from_ts(
+        journey.get("conversion_ts")
+        or journey.get("converted_at")
+        or journey.get("conversion_timestamp"),
+        tz,
+    )
+    if day is not None:
+        return day
+    touchpoints = journey.get("touchpoints") or []
+    if touchpoints and isinstance(touchpoints[-1], dict):
+        return _local_date_from_ts(touchpoints[-1].get("timestamp") or touchpoints[-1].get("ts"), tz)
+    return None
+
+
+def _touchpoint_attribution_weights(touchpoints: List[Dict[str, Any]], model: Optional[str]) -> List[float]:
+    n = len(touchpoints)
+    if n <= 0:
+        return []
+    model_key = (model or "last_touch").strip().lower()
+    if model_key == "first_touch":
+        return [1.0] + [0.0] * (n - 1)
+    if model_key == "linear" or model_key == "markov":
+        return [1.0 / n] * n
+    if model_key == "position_based":
+        first_pct = 0.4
+        last_pct = 0.4
+        if n == 1:
+            return [1.0]
+        if n == 2:
+            total = first_pct + last_pct
+            return [first_pct / total, last_pct / total]
+        middle = max(0.0, 1.0 - first_pct - last_pct) / float(n - 2)
+        return [first_pct, *([middle] * (n - 2)), last_pct]
+    if model_key == "time_decay":
+        parsed: List[Optional[datetime]] = []
+        for tp in touchpoints:
+            ts = tp.get("timestamp") or tp.get("ts")
+            try:
+                dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00")) if ts else None
+            except Exception:
+                dt = None
+            parsed.append(dt)
+        if any(value is not None for value in parsed):
+            last_ts = max(value for value in parsed if value is not None)
+            raw = []
+            for value in parsed:
+                if value is None:
+                    raw.append(0.5)
+                else:
+                    raw.append(pow(2, -((last_ts - value).total_seconds() / 86400.0) / 7.0))
+        else:
+            raw = [pow(2, -(n - 1 - idx) / max(n / 2, 1)) for idx in range(n)]
+        total = sum(raw) or 1.0
+        return [value / total for value in raw]
+    return [0.0] * (n - 1) + [1.0]
+
+
+def _converted_journey_matches(journey: Dict[str, Any], conversion_key: Optional[str]) -> bool:
+    if not ((journey.get("conversions") or []) or journey.get("converted", False)):
+        return False
+    if not conversion_key:
+        return True
+    journey_key = str(journey.get("kpi_type") or journey.get("conversion_key") or "")
+    return journey_key == conversion_key
+
+
 
 def _expense_records(expenses: Any) -> Iterable[Any]:
     if isinstance(expenses, dict):
@@ -224,6 +324,21 @@ def _rows_have_positive_revenue(rows: List[Any]) -> bool:
         except Exception:
             continue
     return False
+
+
+def _aggregate_rows_end_before(rows: List[Any], end_day: date) -> bool:
+    latest: Optional[date] = None
+    for row in rows:
+        try:
+            if float(getattr(row, "gross_revenue_total", 0.0) or 0.0) <= 1e-9:
+                continue
+        except Exception:
+            continue
+        row_date = getattr(row, "date", None)
+        if not isinstance(row_date, date):
+            continue
+        latest = row_date if latest is None else max(latest, row_date)
+    return latest is not None and latest < end_day
 
 
 def _overlay_has_positive_revenue(overlay: Optional[Dict[str, Any]]) -> bool:
@@ -317,6 +432,22 @@ def build_campaign_aggregate_overlay(
             conversion_key=conversion_key,
             timezone=timezone,
         )
+    if _aggregate_rows_end_before(rows, curr_to):
+        fallback = _build_campaign_aggregate_overlay_from_silver(
+            db,
+            curr_from=curr_from,
+            curr_to=curr_to,
+            prev_from=prev_from,
+            prev_to=prev_to,
+            compare=compare,
+            resolved_grain=resolved_grain,
+            allowed_channels=allowed_channels,
+            filter_channels=filter_channels,
+            conversion_key=conversion_key,
+            timezone=timezone,
+        )
+        if fallback:
+            return fallback
     if not _rows_have_positive_revenue(rows):
         return None
 
@@ -541,6 +672,22 @@ def build_channel_aggregate_overlay(
             conversion_key=conversion_key,
             timezone=timezone,
         )
+    if _aggregate_rows_end_before(rows, curr_to):
+        fallback = _build_channel_aggregate_overlay_from_silver(
+            db,
+            curr_from=curr_from,
+            curr_to=curr_to,
+            prev_from=prev_from,
+            prev_to=prev_to,
+            compare=compare,
+            resolved_grain=resolved_grain,
+            allowed_channels=allowed_channels,
+            filter_channels=filter_channels,
+            conversion_key=conversion_key,
+            timezone=timezone,
+        )
+        if fallback:
+            return fallback
     if not _rows_have_positive_revenue(rows):
         return None
 
@@ -720,6 +867,7 @@ def _collect_channel_rollups(
     compare: bool,
     channels: Optional[List[str]],
     conversion_key: Optional[str] = None,
+    attribution_model: Optional[str] = None,
     aggregate_overlay: Optional[Dict[str, Any]] = None,
 ) -> Tuple[
     Dict[str, Dict[str, Dict[str, float]]],
@@ -761,30 +909,37 @@ def _collect_channel_rollups(
 
             if not matches_conversion_key:
                 continue
-            if not ((journey.get("conversions") or []) or journey.get("converted", False)):
+            if not _converted_journey_matches(journey, conversion_key):
                 continue
             if not touchpoints:
                 continue
-            last_tp = touchpoints[-1] if isinstance(touchpoints[-1], dict) else {}
-            channel = str(last_tp.get("channel") or "unknown")
-            if filter_channels and channel not in allowed_channels:
-                continue
-            day = _local_date_from_ts(last_tp.get("timestamp"), tz)
+            day = _conversion_day_for_journey(journey, tz)
             if day is None:
                 continue
             bucket = _bucket_start(day, resolved_grain).isoformat()
             outcome = journey_outcome_summary(journey)
             path_type = _path_type(journey)
+            conversion_count = float(outcome.get("gross_conversions", 0.0) or 0.0) or 1.0
+            touchpoint_rows = [tp for tp in touchpoints if isinstance(tp, dict)]
+            weights = _touchpoint_attribution_weights(touchpoint_rows, attribution_model)
             if curr_from <= day <= curr_to:
                 revenue = journey_revenue_value(journey, dedupe_seen=dedupe_curr)
-                _add_metric_rollup(curr_store, channel, bucket, conversions=1.0, revenue=revenue)
-                metrics = curr_outcomes.setdefault(channel, _empty_outcome_metrics())
-                _merge_outcome_metrics(metrics, outcome, path_type)
+                for tp, weight in zip(touchpoint_rows, weights):
+                    channel = str(tp.get("channel") or "unknown")
+                    if filter_channels and channel not in allowed_channels:
+                        continue
+                    _add_metric_rollup(curr_store, channel, bucket, conversions=conversion_count * weight, revenue=revenue * weight)
+                    metrics = curr_outcomes.setdefault(channel, _empty_outcome_metrics())
+                    _merge_outcome_metrics_weighted(metrics, outcome, path_type, weight)
             elif compare and prev_from <= day <= prev_to:
                 revenue = journey_revenue_value(journey, dedupe_seen=dedupe_prev)
-                _add_metric_rollup(prev_store, channel, bucket, conversions=1.0, revenue=revenue)
-                metrics = prev_outcomes.setdefault(channel, _empty_outcome_metrics())
-                _merge_outcome_metrics(metrics, outcome, path_type)
+                for tp, weight in zip(touchpoint_rows, weights):
+                    channel = str(tp.get("channel") or "unknown")
+                    if filter_channels and channel not in allowed_channels:
+                        continue
+                    _add_metric_rollup(prev_store, channel, bucket, conversions=conversion_count * weight, revenue=revenue * weight)
+                    metrics = prev_outcomes.setdefault(channel, _empty_outcome_metrics())
+                    _merge_outcome_metrics_weighted(metrics, outcome, path_type, weight)
     else:
         for channel, buckets in (aggregate_overlay.get("current_store") or {}).items():
             for bucket, row in buckets.items():
@@ -848,6 +1003,7 @@ def _collect_campaign_rollups(
     compare: bool,
     channels: Optional[List[str]],
     conversion_key: Optional[str] = None,
+    attribution_model: Optional[str] = None,
     aggregate_overlay: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Dict[str, Dict[str, Dict[str, float]]], Dict[str, Dict[str, Dict[str, float]]], Dict[str, Dict[str, Any]]]:
     tz = _safe_tz(timezone)
@@ -908,38 +1064,53 @@ def _collect_campaign_rollups(
         if aggregate_overlay is None:
             if not matches_conversion_key:
                 continue
-            if not ((journey.get("conversions") or []) or journey.get("converted", False)):
-                continue
             if not touchpoints:
                 continue
-            last_tp = touchpoints[-1] if isinstance(touchpoints[-1], dict) else {}
-            channel = str(last_tp.get("channel") or "unknown")
-            if filter_channels and channel not in allowed_channels:
+            if not _converted_journey_matches(journey, conversion_key):
                 continue
-            campaign_name = last_tp.get("campaign")
-            c_key = campaign_key(channel, campaign_name if campaign_name else None)
-            meta[c_key] = {
-                "campaign_id": c_key,
-                "campaign_name": campaign_name,
-                "channel": channel,
-                "platform": last_tp.get("platform"),
-            }
-            day = _local_date_from_ts(last_tp.get("timestamp"), tz)
+            day = _conversion_day_for_journey(journey, tz)
             if day is None:
                 continue
             bucket = _bucket_start(day, resolved_grain).isoformat()
             outcome = journey_outcome_summary(journey)
             path_type = _path_type(journey)
+            conversion_count = float(outcome.get("gross_conversions", 0.0) or 0.0) or 1.0
+            touchpoint_rows = [tp for tp in touchpoints if isinstance(tp, dict)]
+            weights = _touchpoint_attribution_weights(touchpoint_rows, attribution_model)
             if curr_from <= day <= curr_to:
                 revenue = journey_revenue_value(journey, dedupe_seen=dedupe_curr)
-                _add_metric_rollup(curr_store, c_key, bucket, conversions=1.0, revenue=revenue)
-                metrics = curr_outcomes.setdefault(c_key, _empty_outcome_metrics())
-                _merge_outcome_metrics(metrics, outcome, path_type)
+                for tp, weight in zip(touchpoint_rows, weights):
+                    channel = str(tp.get("channel") or "unknown")
+                    if filter_channels and channel not in allowed_channels:
+                        continue
+                    campaign_name = tp.get("campaign")
+                    c_key = campaign_key(channel, campaign_name if campaign_name else None)
+                    meta[c_key] = {
+                        "campaign_id": c_key,
+                        "campaign_name": campaign_name,
+                        "channel": channel,
+                        "platform": tp.get("platform"),
+                    }
+                    _add_metric_rollup(curr_store, c_key, bucket, conversions=conversion_count * weight, revenue=revenue * weight)
+                    metrics = curr_outcomes.setdefault(c_key, _empty_outcome_metrics())
+                    _merge_outcome_metrics_weighted(metrics, outcome, path_type, weight)
             elif compare and prev_from <= day <= prev_to:
                 revenue = journey_revenue_value(journey, dedupe_seen=dedupe_prev)
-                _add_metric_rollup(prev_store, c_key, bucket, conversions=1.0, revenue=revenue)
-                metrics = prev_outcomes.setdefault(c_key, _empty_outcome_metrics())
-                _merge_outcome_metrics(metrics, outcome, path_type)
+                for tp, weight in zip(touchpoint_rows, weights):
+                    channel = str(tp.get("channel") or "unknown")
+                    if filter_channels and channel not in allowed_channels:
+                        continue
+                    campaign_name = tp.get("campaign")
+                    c_key = campaign_key(channel, campaign_name if campaign_name else None)
+                    meta[c_key] = {
+                        "campaign_id": c_key,
+                        "campaign_name": campaign_name,
+                        "channel": channel,
+                        "platform": tp.get("platform"),
+                    }
+                    _add_metric_rollup(prev_store, c_key, bucket, conversions=conversion_count * weight, revenue=revenue * weight)
+                    metrics = prev_outcomes.setdefault(c_key, _empty_outcome_metrics())
+                    _merge_outcome_metrics_weighted(metrics, outcome, path_type, weight)
 
     if aggregate_overlay is not None:
         for c_key, details in (aggregate_overlay.get("meta") or {}).items():
@@ -1074,6 +1245,7 @@ def build_channel_trend_response(
     compare: bool = True,
     channels: Optional[List[str]] = None,
     conversion_key: Optional[str] = None,
+    attribution_model: Optional[str] = None,
     aggregate_overlay: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     if kpi_key not in SUPPORTED_KPIS:
@@ -1098,6 +1270,7 @@ def build_channel_trend_response(
         compare=compare,
         channels=channels,
         conversion_key=conversion_key,
+        attribution_model=attribution_model,
         aggregate_overlay=aggregate_overlay,
     )
 
@@ -1137,6 +1310,7 @@ def build_campaign_trend_response(
     compare: bool = True,
     channels: Optional[List[str]] = None,
     conversion_key: Optional[str] = None,
+    attribution_model: Optional[str] = None,
     aggregate_overlay: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     if kpi_key not in SUPPORTED_KPIS:
@@ -1161,6 +1335,7 @@ def build_campaign_trend_response(
         compare=compare,
         channels=channels,
         conversion_key=conversion_key,
+        attribution_model=attribution_model,
         aggregate_overlay=aggregate_overlay,
     )
     if isinstance(meta.get("__current_outcomes__"), dict):
@@ -1220,6 +1395,7 @@ def build_channel_summary_response(
     compare: bool = True,
     channels: Optional[List[str]] = None,
     conversion_key: Optional[str] = None,
+    attribution_model: Optional[str] = None,
     aggregate_overlay: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     windows = resolve_period_windows(date_from, date_to, "daily")
@@ -1239,6 +1415,7 @@ def build_channel_summary_response(
         compare=compare,
         channels=channels,
         conversion_key=conversion_key,
+        attribution_model=attribution_model,
         aggregate_overlay=aggregate_overlay,
     )
     dims = sorted(set(curr_store.keys()) | (set(prev_store.keys()) if compare else set()))
@@ -1308,6 +1485,7 @@ def build_campaign_summary_response(
     compare: bool = True,
     channels: Optional[List[str]] = None,
     conversion_key: Optional[str] = None,
+    attribution_model: Optional[str] = None,
     aggregate_overlay: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     windows = resolve_period_windows(date_from, date_to, "daily")
@@ -1327,6 +1505,7 @@ def build_campaign_summary_response(
         compare=compare,
         channels=channels,
         conversion_key=conversion_key,
+        attribution_model=attribution_model,
         aggregate_overlay=aggregate_overlay,
     )
     curr_outcomes = meta.pop("__current_outcomes__", {}) if isinstance(meta.get("__current_outcomes__"), dict) else {}

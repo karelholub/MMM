@@ -1698,15 +1698,19 @@ def create_router(
 
             out_path = get_data_dir_obj() / "meiro_cdp_events.json"
             out_path.parent.mkdir(parents=True, exist_ok=True)
+            snapshot_limit = 1000
             if replace or not out_path.exists():
-                to_store = events
+                to_store = list(events)[-snapshot_limit:]
             else:
+                existing_tail: list[Any] = []
                 try:
-                    existing = json.loads(out_path.read_text())
-                    to_store = (existing if isinstance(existing, list) else []) + list(events)
+                    if out_path.stat().st_size <= 5_000_000:
+                        existing = json.loads(out_path.read_text())
+                        existing_tail = (existing if isinstance(existing, list) else [])[-snapshot_limit:]
                 except Exception:
-                    to_store = list(events)
-            out_path.write_text(json.dumps(to_store, indent=2))
+                    existing_tail = []
+                to_store = (existing_tail + list(events))[-snapshot_limit:]
+            out_path.write_text(json.dumps(to_store, separators=(",", ":")))
 
             now_iso = datetime.utcnow().isoformat() + "Z"
             set_webhook_received(count_delta=len(events), last_received_at=now_iso)

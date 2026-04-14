@@ -31,6 +31,7 @@ interface MMMDashboardProps {
   datasetId: string
   runMetadata?: { attribution_model?: string; attribution_config_id?: string }
   onOpenDataQuality?: () => void
+  onOpenBudgetActions?: () => void
 }
 
 interface KPI {
@@ -62,6 +63,12 @@ interface RunData {
   uplift?: number
   r2?: number
   calibration_mape?: number
+  dataset_available?: boolean
+  scenario_count?: number
+  latest_scenario_at?: string | null
+  stale_from_status?: string | null
+  stale_reason?: string | null
+  stale_at?: string | null
   diagnostics?: {
     rhat_max?: number
     ess_bulk_min?: number
@@ -165,7 +172,13 @@ function MetricCard(props: {
   )
 }
 
-export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenDataQuality }: MMMDashboardProps) {
+export default function MMMDashboard({
+  runId,
+  datasetId,
+  runMetadata,
+  onOpenDataQuality,
+  onOpenBudgetActions,
+}: MMMDashboardProps) {
   const t = tokens
   const [showTrustPanel, setShowTrustPanel] = usePersistentToggle('mmm-dashboard:show-trust-panel', false)
   const [showReconcilePanel, setShowReconcilePanel] = usePersistentToggle('mmm-dashboard:show-reconcile-panel', false)
@@ -215,12 +228,13 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
   const { data: datasetResponse } = useQuery({
     queryKey: ['dataset', datasetId],
     queryFn: async () =>
-      apiGetJson<{ preview_rows?: Record<string, unknown>[]; metadata?: { period_start?: string; period_end?: string } }>(
+      apiGetJson<{ preview_rows?: Record<string, unknown>[]; metadata?: { period_start?: string; period_end?: string }; available?: boolean; detail?: string }>(
         `/api/datasets/${datasetId}?preview_only=false`,
         { fallbackMessage: 'Failed to fetch dataset' },
       ),
-    enabled: !!datasetId,
+    enabled: !!datasetId && !!run && run.dataset_available !== false,
   })
+  const datasetReadoutOnly = run?.dataset_available === false
   const dataset = (datasetResponse?.preview_rows ?? []) as Record<string, unknown>[]
   const datasetMetadata = datasetResponse?.metadata
 
@@ -248,12 +262,15 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
 
   const totalSpend = useMemo(() => {
     const chs = run?.config?.spend_channels || []
+    if (!dataset.length && channelSummary.length) {
+      return channelSummary.reduce((sum, row) => sum + (Number(row.spend) || 0), 0)
+    }
     return dataset.reduce((sum, row) => {
       let rowSpend = 0
       chs.forEach((ch: string) => { rowSpend += Number(row[ch]) || 0 })
       return sum + rowSpend
     }, 0)
-  }, [dataset, run?.config?.spend_channels])
+  }, [channelSummary, dataset, run?.config?.spend_channels])
 
   const weightedROI = roi?.length ? roi.reduce((s: number, r: KPI) => s + r.roi, 0) / roi.length : 0
   const weeks = dataset.length
@@ -262,7 +279,9 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
   const datasetPeriodLabel =
     datasetMetadata?.period_start && datasetMetadata?.period_end
       ? `${datasetMetadata.period_start} – ${datasetMetadata.period_end}`
-      : 'Dataset period unavailable'
+      : datasetReadoutOnly
+        ? 'Dataset file unavailable'
+        : 'Dataset period unavailable'
 
   const hasNegativeRoi = !!roi?.some((r) => r.roi < 0)
   const suspiciousFit = !!(r2 !== null && r2 > 0.98 && weeks > 0 && weeks < 26)
@@ -276,11 +295,12 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
   if (diagnostics?.divergences && diagnostics.divergences > 0) diagnosticsIssues.push('There are MCMC divergences; results may be unstable.')
 
   const confidenceLevel: 'ok' | 'warn' =
-    suspiciousFit || manyParamsFewPoints || hasNegativeRoi || diagnosticsIssues.length > 0 ? 'warn' : 'ok'
+    datasetReadoutOnly || suspiciousFit || manyParamsFewPoints || hasNegativeRoi || diagnosticsIssues.length > 0 ? 'warn' : 'ok'
 
-  const confidenceLabel = confidenceLevel === 'ok' ? 'OK' : 'Check model'
+  const confidenceLabel = datasetReadoutOnly ? 'Readout only' : confidenceLevel === 'ok' ? 'OK' : 'Check model'
 
   const confidenceReasons: string[] = []
+  if (datasetReadoutOnly) confidenceReasons.push('Linked dataset preview is unavailable; source-row checks and time-series diagnostics are disabled.')
   if (suspiciousFit) confidenceReasons.push('Very high R² with short history.')
   if (manyParamsFewPoints) confidenceReasons.push('Many channels compared to weeks of data.')
   if (hasNegativeRoi) confidenceReasons.push('Some channels have negative ROI.')
@@ -353,12 +373,18 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
   }
 
   const trustNarrative = useMemo(() => {
-    const headline = confidenceLevel === 'ok'
+    const headline = datasetReadoutOnly
+      ? 'This historical MMM run is open for saved readout, but source-row diagnostics are paused until the dataset is rebuilt.'
+      : confidenceLevel === 'ok'
       ? 'The current MMM run looks usable for directional budget decisions.'
       : 'Use this MMM run directionally, but validate the fragile parts before acting on exact ROI values.'
     const items = [
-      `Basis: this page uses the saved MMM run plus the linked dataset preview for ${datasetPeriodLabel}. ROI, contribution, and response curves all come from that run context.`,
-      weeks < 20
+      datasetReadoutOnly
+        ? 'Basis: ROI, contribution, fit, and saved budget work come from the saved MMM run. Time-series charts, response curves, and dataset reconciliation need the missing source rows.'
+        : `Basis: this page uses the saved MMM run plus the linked dataset preview for ${datasetPeriodLabel}. ROI, contribution, and response curves all come from that run context.`,
+      datasetReadoutOnly
+        ? `The saved model still contains ${channelsModeled.toLocaleString()} modeled channel${channelsModeled === 1 ? '' : 's'}; rebuild a compatible dataset before using it for new optimization.`
+        : weeks < 20
         ? `History is short at ${weeks.toLocaleString()} weeks, so ranking channels is more reliable than trusting precise point estimates.`
         : `The run covers ${weeks.toLocaleString()} modeled weeks across ${channelsModeled.toLocaleString()} channels.`,
       confidenceReasons[0]
@@ -377,6 +403,7 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
     channelsModeled,
     confidenceLevel,
     confidenceReasons,
+    datasetReadoutOnly,
     datasetPeriodLabel,
     reconciliationSummary,
     runMetadata?.attribution_model,
@@ -446,6 +473,18 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
     })
   }, [spendChannels, dataset, roi])
 
+  const decisionTone: 'success' | 'warning' = datasetReadoutOnly || confidenceLevel !== 'ok' ? 'warning' : 'success'
+  const decisionLabel = datasetReadoutOnly
+    ? 'Readout only'
+    : confidenceLevel === 'ok'
+      ? 'Ready for budget review'
+      : 'Validate before action'
+  const decisionReason = datasetReadoutOnly
+    ? 'Saved results are visible, but source-row diagnostics and new optimization need dataset recovery.'
+    : confidenceLevel === 'ok'
+      ? 'Model outputs and linked dataset checks are available for directional budget planning.'
+      : confidenceReasons[0] || 'Model diagnostics need review before acting on exact ROI values.'
+
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto' }}>
       <div style={{ marginBottom: t.space.md }}>
@@ -467,15 +506,187 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
       <div style={{ marginBottom: t.space.md }}>
         <ContextSummaryStrip
           items={[
-            { label: 'Source', value: 'MMM run + dataset preview' },
+            { label: 'Source', value: datasetReadoutOnly ? 'MMM run readout only' : 'MMM run + dataset preview' },
             { label: 'Dataset period', value: datasetPeriodLabel },
             { label: 'KPI', value: getKpiDisplayName() },
             { label: 'Total spend', value: formatCurrency(totalSpend) },
-            { label: 'Weeks', value: weeks.toLocaleString() },
+            { label: 'Weeks', value: datasetReadoutOnly ? 'Unavailable' : weeks.toLocaleString() },
             { label: 'Confidence', value: confidenceLabel, valueColor: confidenceLevel === 'ok' ? t.color.success : t.color.warning },
           ]}
         />
       </div>
+
+      <div style={{ marginBottom: t.space.xl }}>
+        <SectionCard
+          title="Decision summary"
+          subtitle="The compact MMM readout for what can be trusted and where to go next."
+          actions={
+            <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={() => onOpenBudgetActions?.()}
+                disabled={!onOpenBudgetActions}
+                style={{
+                  padding: `${t.space.sm}px ${t.space.md}px`,
+                  borderRadius: t.radius.sm,
+                  border: `1px solid ${t.color.accent}`,
+                  background: t.color.accent,
+                  color: '#ffffff',
+                  fontSize: t.font.sizeSm,
+                  fontWeight: t.font.weightSemibold,
+                  cursor: onOpenBudgetActions ? 'pointer' : 'not-allowed',
+                }}
+              >
+                Open budget actions
+              </button>
+              <button
+                type="button"
+                onClick={() => onOpenDataQuality?.()}
+                disabled={!onOpenDataQuality}
+                style={{
+                  padding: `${t.space.sm}px ${t.space.md}px`,
+                  borderRadius: t.radius.sm,
+                  border: `1px solid ${t.color.border}`,
+                  background: t.color.surface,
+                  color: onOpenDataQuality ? t.color.textSecondary : t.color.textMuted,
+                  fontSize: t.font.sizeSm,
+                  fontWeight: t.font.weightMedium,
+                  cursor: onOpenDataQuality ? 'pointer' : 'not-allowed',
+                }}
+              >
+                View data quality
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  window.location.assign(buildSettingsHref('mmm'))
+                }}
+                style={{
+                  padding: `${t.space.sm}px ${t.space.md}px`,
+                  borderRadius: t.radius.sm,
+                  border: `1px solid ${t.color.border}`,
+                  background: t.color.surface,
+                  color: t.color.textSecondary,
+                  fontSize: t.font.sizeSm,
+                  fontWeight: t.font.weightMedium,
+                  cursor: 'pointer',
+                }}
+              >
+                MMM settings
+              </button>
+            </div>
+          }
+        >
+          <div style={{ display: 'grid', gap: t.space.lg }}>
+            <div
+              style={{
+                padding: t.space.md,
+                borderRadius: t.radius.md,
+                border: `1px solid ${decisionTone === 'success' ? t.color.success : t.color.warning}`,
+                background: decisionTone === 'success' ? t.color.successMuted : t.color.warningMuted,
+                display: 'grid',
+                gap: 4,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: t.font.sizeSm,
+                  fontWeight: t.font.weightSemibold,
+                  color: decisionTone === 'success' ? t.color.success : t.color.warning,
+                }}
+              >
+                {decisionLabel}
+              </div>
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                {decisionReason}
+              </div>
+            </div>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gap: t.space.md,
+              }}
+            >
+              {[
+                {
+                  label: 'Top ROI',
+                  value: topRoiChannel ? channelDisplay(topRoiChannel.channel) : 'Unavailable',
+                  helper: topRoiChannel ? `${topRoiChannel.roi.toFixed(2)}x modeled return` : 'No ROI output yet',
+                },
+                {
+                  label: 'Top contribution',
+                  value: topContributionChannel ? channelDisplay(topContributionChannel.channel) : 'Unavailable',
+                  helper: topContributionChannel
+                    ? `${(topContributionChannel.mean_share * 100).toFixed(1)}% of modeled KPI`
+                    : 'No contribution output yet',
+                },
+                {
+                  label: 'Model basis',
+                  value: datasetReadoutOnly ? 'Saved readout' : `${weeks.toLocaleString()} weeks`,
+                  helper: `${channelsModeled.toLocaleString()} modeled channel${channelsModeled === 1 ? '' : 's'}`,
+                },
+                {
+                  label: 'Reconcile',
+                  value: reconciliationSummary
+                    ? reconciliationSummary.largeDivergence
+                      ? 'Mismatch'
+                      : 'Aligned'
+                    : 'No overlay',
+                  helper: reconciliationSummary
+                    ? `${reconciliationSummary.pairCount.toLocaleString()} overlapping buckets`
+                    : runMetadata?.attribution_model
+                      ? 'Insufficient overlap'
+                      : 'Direct KPI source',
+                },
+              ].map((item) => (
+                <div
+                  key={item.label}
+                  style={{
+                    padding: t.space.md,
+                    borderRadius: t.radius.md,
+                    border: `1px solid ${t.color.borderLight}`,
+                    background: t.color.bg,
+                    display: 'grid',
+                    gap: 4,
+                    minWidth: 0,
+                  }}
+                >
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    {item.label}
+                  </div>
+                  <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text, overflowWrap: 'anywhere' }}>
+                    {item.value}
+                  </div>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary, overflowWrap: 'anywhere' }}>
+                    {item.helper}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </SectionCard>
+      </div>
+
+      {datasetReadoutOnly ? (
+        <div style={{ marginBottom: t.space.xl }}>
+          <SectionCard
+            title="Readout-only MMM run"
+            subtitle="The model output loaded, but the linked dataset file is missing in this runtime."
+          >
+            <div style={{ display: 'grid', gap: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              <div>
+                Saved fit, ROI, contribution, and budget history are still available. Dataset-preview checks, time-series
+                charts, response curves, attribution reconciliation, and new optimizer recommendations are paused.
+              </div>
+              <div>
+                To make new budget decisions, use the recovery action above to create a compatible new run from the saved
+                model settings.
+              </div>
+            </div>
+          </SectionCard>
+        </div>
+      ) : null}
 
       <div style={{ marginBottom: t.space.xl }}>
         <AnalysisShareActions
@@ -541,10 +752,14 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
 
             <MetricCard
               label="Data points"
-              value={`${weeks} weeks`}
-              tone={weeks < 20 ? 'warning' : 'neutral'}
+              value={datasetReadoutOnly ? 'Unavailable' : `${weeks} weeks`}
+              tone={weeks < 20 || datasetReadoutOnly ? 'warning' : 'neutral'}
               title="Number of weekly observations used by the model."
-              description="More history increases stability; aim for 26+ weeks."
+              description={
+                datasetReadoutOnly
+                  ? 'Linked dataset preview is unavailable for this saved run.'
+                  : 'More history increases stability; aim for 26+ weeks.'
+              }
             />
 
             <MetricCard
@@ -576,7 +791,9 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
         >
           <div style={{ display: 'grid', gap: t.space.md }}>
             <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-              MMM diagnostics on this page are anchored to the selected run and its linked dataset preview. When attribution is available, the overlay compares overlapping dated totals only. It is a contract check, not a replacement for model fit.
+              {datasetReadoutOnly
+                ? 'MMM diagnostics on this page are anchored to the selected saved run. Dataset-preview and attribution reconciliation checks are unavailable until the source rows are rebuilt or reattached.'
+                : 'MMM diagnostics on this page are anchored to the selected run and its linked dataset preview. When attribution is available, the overlay compares overlapping dated totals only. It is a contract check, not a replacement for model fit.'}
             </div>
             <div
               style={{
@@ -588,7 +805,7 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
               <div style={{ display: 'grid', gap: 2 }}>
                 <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>MMM run basis</div>
                 <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                  <strong style={{ color: t.color.text }}>{weeks.toLocaleString()}</strong> dataset rows
+                  <strong style={{ color: t.color.text }}>{datasetReadoutOnly ? 'Unavailable' : weeks.toLocaleString()}</strong> dataset rows
                 </div>
               </div>
               <div style={{ display: 'grid', gap: 2 }}>
@@ -1119,6 +1336,12 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
                   const channelSpend = summary?.spend ?? 0
                   const contributionShare = c ? c.mean_share : 0
                   const contributionAmount = kpiTotal * contributionShare
+                  const contributionDisplay =
+                    c && kpiTotal > 0
+                      ? `${contributionAmount.toFixed(0)} (${(contributionShare * 100).toFixed(1)}%)`
+                      : c
+                        ? `${(contributionShare * 100).toFixed(1)}% share`
+                        : '—'
                   const marginalRoi = summary?.mroas ?? r.roi
                   const efficiencyTier =
                     r.roi < 0
@@ -1153,14 +1376,16 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
                           fontVariantNumeric: 'tabular-nums',
                         }}
                         title={
-                          c
+                          c && kpiTotal > 0
                             ? `Approx. ${contributionAmount.toFixed(
                                 0,
                               )} KPI (${(contributionShare * 100).toFixed(1)}% of total).`
+                            : c
+                              ? 'Contribution share from the saved MMM run. KPI total is unavailable because the linked dataset preview is missing.'
                             : undefined
                         }
                       >
-                        {c ? `${contributionAmount.toFixed(0)} (${(contributionShare * 100).toFixed(1)}%)` : '—'}
+                        {contributionDisplay}
                       </td>
                       <td
                         style={{

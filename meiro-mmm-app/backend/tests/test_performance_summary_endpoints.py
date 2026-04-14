@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -68,6 +66,31 @@ def test_campaign_summary_includes_conversion_key_meta_when_passed():
     assert res.status_code == 200
     body = res.json()
     assert body["meta"]["conversion_key"] == "purchase"
+
+
+def test_performance_conversion_scope_defaults_to_all_when_config_has_primary_key():
+    key, resolution = performance_router._resolve_effective_conversion_key(
+        None,
+        requested_conversion_key=None,
+        configured_conversion_key="purchase",
+        date_from="2026-04-01",
+        date_to="2026-04-15",
+    )
+    assert key is None
+    assert resolution["configured_conversion_key"] == "purchase"
+    assert resolution["applied_conversion_key"] is None
+
+
+def test_performance_conversion_scope_treats_empty_query_as_all_conversions():
+    key, resolution = performance_router._resolve_effective_conversion_key(
+        None,
+        requested_conversion_key="",
+        configured_conversion_key="purchase",
+        date_from="2026-04-01",
+        date_to="2026-04-15",
+    )
+    assert key is None
+    assert resolution["configured_conversion_key"] == "purchase"
 
 
 def test_channel_lag_response_shape():
@@ -232,18 +255,7 @@ def test_filter_journeys_for_campaign_suggestions_respects_period_channels_and_c
     assert filtered[0]["touchpoints"][-1]["campaign"] == "Brand"
 
 
-def test_resolve_effective_conversion_key_falls_back_when_configured_key_has_no_data(monkeypatch):
-    def fake_iter_canonical_conversion_rows(db, *, date_from=None, date_to=None, conversion_key=None):
-        if conversion_key == "form_submit":
-            return iter(())
-        return iter([SimpleNamespace(conversion_id="conv-1")])
-
-    monkeypatch.setattr(
-        performance_router,
-        "iter_canonical_conversion_rows",
-        fake_iter_canonical_conversion_rows,
-    )
-
+def test_resolve_effective_conversion_key_does_not_apply_configured_key_by_default():
     effective_key, resolution = performance_router._resolve_effective_conversion_key(
         db=None,
         requested_conversion_key=None,
@@ -257,5 +269,5 @@ def test_resolve_effective_conversion_key_falls_back_when_configured_key_has_no_
         "requested_conversion_key": None,
         "configured_conversion_key": "form_submit",
         "applied_conversion_key": None,
-        "reason": "configured_conversion_key_has_no_data_in_selected_period",
+        "reason": "performance_defaults_to_all_conversions_until_user_selects_a_conversion_key",
     }

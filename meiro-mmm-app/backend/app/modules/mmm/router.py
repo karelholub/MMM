@@ -1,11 +1,13 @@
 import io
 import json
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict
 
 import pandas as pd
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException
+from sqlalchemy import func
 
 from app.modules.mmm.schemas import (
     BudgetScenarioCreateRequest,
@@ -38,6 +40,7 @@ def create_router(
     validate_mapping_fn: Callable[..., Any],
 ) -> APIRouter:
     router = APIRouter(tags=["mmm"])
+    stale_run_after = timedelta(hours=6)
 
     def _ensure_mmm_enabled() -> None:
         if not getattr(get_settings_obj().feature_flags, "mmm_enabled", False):
@@ -61,6 +64,54 @@ def create_router(
             raise HTTPException(status_code=404, detail="Dataset file not found")
         rows = pd.read_csv(p).fillna(0).to_dict(orient="records")
         return run, rows
+
+    def _dataset_available(dataset_id: Any) -> bool:
+        if not dataset_id:
+            return False
+        dataset_info = get_datasets_obj().get(str(dataset_id))
+        if not dataset_info:
+            return False
+        path = dataset_info.get("path")
+        if path is None:
+            return False
+        p = Path(path) if isinstance(path, str) else path
+        return p.exists()
+
+    def _parse_run_ts(value: Any) -> datetime | None:
+        if not value:
+            return None
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except Exception:
+            return None
+
+    def _mark_stale_mmm_runs() -> None:
+        runs = get_runs_obj()
+        now = _parse_run_ts(now_iso_fn()) or datetime.now(timezone.utc)
+        changed = False
+        for run_id, run in runs.items():
+            status = str((run or {}).get("status") or "").lower()
+            if status not in {"queued", "running"}:
+                continue
+            heartbeat = _parse_run_ts((run or {}).get("updated_at")) or _parse_run_ts((run or {}).get("created_at"))
+            if heartbeat is None or now - heartbeat <= stale_run_after:
+                continue
+            run["status"] = "stale"
+            run["stale_from_status"] = status
+            run["stale_reason"] = "run_heartbeat_expired"
+            run["stale_at"] = now_iso_fn()
+            run["detail"] = (
+                f"MMM run was {status} but has not updated for more than "
+                f"{int(stale_run_after.total_seconds() // 3600)} hours. The background job is no longer active."
+            )
+            run["updated_at"] = run["stale_at"]
+            runs[run_id] = run
+            changed = True
+        if changed:
+            save_runs_fn()
 
     @router.get("/api/mmm/platform-options")
     def get_mmm_platform_options():
@@ -185,27 +236,71 @@ def create_router(
         return {"run_id": run_id, "status": "queued"}
 
     @router.get("/api/models")
-    def list_models():
+    def list_models(db=Depends(get_db_dependency)):
         _ensure_mmm_enabled()
+        from app.models_config_dq import BudgetScenario
+
+        _mark_stale_mmm_runs()
+        scenario_counts: Dict[str, int] = {}
+        latest_scenario_at: Dict[str, Any] = {}
+        for run_id, count, latest in (
+            db.query(
+                BudgetScenario.run_id,
+                func.count(BudgetScenario.id),
+                func.max(BudgetScenario.created_at),
+            )
+            .group_by(BudgetScenario.run_id)
+            .all()
+        ):
+            scenario_counts[str(run_id)] = int(count or 0)
+            latest_scenario_at[str(run_id)] = latest.isoformat() if latest else None
+
         items = []
         for run_id, run in get_runs_obj().items():
             config = run.get("config") or {}
+            dataset_id = run.get("dataset_id") or config.get("dataset_id")
             items.append(
                 {
                     "run_id": run_id,
                     "status": run.get("status", "unknown"),
                     "created_at": run.get("created_at"),
                     "updated_at": run.get("updated_at"),
-                    "dataset_id": run.get("dataset_id") or config.get("dataset_id"),
+                    "dataset_id": dataset_id,
+                    "dataset_available": _dataset_available(dataset_id),
                     "kpi_mode": run.get("kpi_mode"),
                     "kpi": config.get("kpi"),
                     "n_channels": len(config.get("spend_channels") or []),
                     "n_covariates": len(config.get("covariates") or []),
                     "r2": run.get("r2"),
                     "engine": run.get("engine"),
+                    "detail": run.get("detail"),
+                    "stale_from_status": run.get("stale_from_status"),
+                    "stale_reason": run.get("stale_reason"),
+                    "stale_at": run.get("stale_at"),
+                    "scenario_count": scenario_counts.get(run_id, 0),
+                    "latest_scenario_at": latest_scenario_at.get(run_id),
                 }
             )
-        items.sort(key=lambda item: (item.get("created_at") or ""), reverse=True)
+
+        def list_priority(item: Dict[str, Any]) -> int:
+            status = item.get("status")
+            if status == "finished" and item.get("dataset_available") is not False:
+                return 0
+            if status == "finished":
+                return 1
+            if status in {"queued", "running"}:
+                return 2
+            if status == "stale":
+                return 3
+            if status == "error":
+                return 4
+            return 5
+
+        def list_recency(item: Dict[str, Any]) -> float:
+            parsed = _parse_run_ts(item.get("updated_at") or item.get("created_at"))
+            return parsed.timestamp() if parsed else 0.0
+
+        items.sort(key=lambda item: (list_priority(item), -list_recency(item)))
         return items
 
     @router.get("/api/models/compare")
@@ -230,12 +325,28 @@ def create_router(
         return list(comparison.values())
 
     @router.get("/api/models/{run_id}")
-    def get_model(run_id: str):
+    def get_model(run_id: str, db=Depends(get_db_dependency)):
         _ensure_mmm_enabled()
+        from app.models_config_dq import BudgetScenario
+
+        _mark_stale_mmm_runs()
         res = get_runs_obj().get(run_id)
         if not res:
             raise HTTPException(status_code=404, detail="run_id not found")
-        return res
+        out = dict(res)
+        dataset_id = out.get("dataset_id") or (out.get("config") or {}).get("dataset_id")
+        out["dataset_available"] = _dataset_available(dataset_id)
+        scenario_count, latest_scenario_at = (
+            db.query(
+                func.count(BudgetScenario.id),
+                func.max(BudgetScenario.created_at),
+            )
+            .filter(BudgetScenario.run_id == run_id)
+            .first()
+        )
+        out["scenario_count"] = int(scenario_count or 0)
+        out["latest_scenario_at"] = latest_scenario_at.isoformat() if latest_scenario_at else None
+        return out
 
     @router.get("/api/models/{run_id}/contrib")
     def channel_contrib(run_id: str):
@@ -400,7 +511,40 @@ def create_router(
         total_budget_change_pct: float = 0.0,
     ):
         _ensure_mmm_enabled()
-        run, dataset_rows = _load_run_and_dataset_rows(run_id)
+        try:
+            run, dataset_rows = _load_run_and_dataset_rows(run_id)
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            run = get_runs_obj().get(run_id)
+            if not run:
+                raise
+            roi_rows = run.get("roi") or []
+            roi_values = [float(row.get("roi") or 0.0) for row in roi_rows if isinstance(row, dict)]
+            return {
+                "run_id": run_id,
+                "objective": objective,
+                "recommendations": [],
+                "decision": {
+                    "status": "blocked",
+                    "blockers": ["Linked MMM dataset is unavailable in this runtime; saved model readouts remain available, but optimizer recommendations need the dataset preview."],
+                    "actions": [
+                        {
+                            "id": "rebuild_mmm_dataset",
+                            "label": "Rebuild or reattach MMM dataset",
+                            "domain": "mmm",
+                            "target_page": "mmm",
+                        }
+                    ],
+                },
+                "summary": {
+                    "total_budget_change_pct": total_budget_change_pct,
+                    "baseline_spend_total": 0,
+                    "channels_considered": len(roi_rows),
+                    "periods": 0,
+                    "weighted_roi": sum(roi_values) / len(roi_values) if roi_values else 0,
+                },
+            }
         return build_budget_recommendations(
             run_id=run_id,
             run=run,

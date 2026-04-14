@@ -9,7 +9,7 @@ Overview (Cover) Dashboard: summary KPIs, drivers, alerts, freshness.
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -44,12 +44,6 @@ from .services_metrics import delta_pct, journey_outcome_summary
 def _parse_dt(s: Optional[str]):
     if not s:
         return None
-
-
-def _overview_delta_pct(current: float, previous: float) -> Optional[float]:
-    if previous == 0:
-        return None
-    return round((current - previous) / previous * 100.0, 1)
     try:
         dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
         if dt.tzinfo is None:
@@ -57,6 +51,12 @@ def _overview_delta_pct(current: float, previous: float) -> Optional[float]:
         return dt
     except Exception:
         return None
+
+
+def _overview_delta_pct(current: float, previous: float) -> Optional[float]:
+    if previous == 0:
+        return None
+    return round((current - previous) / previous * 100.0, 1)
 
 
 def _coerce_utc_datetime(value: datetime) -> datetime:
@@ -236,41 +236,94 @@ def _merge_silver_outcomes(target: Dict[str, float], row: Any) -> None:
         target["mixed_path_conversions"] += count
 
 
+def _expense_entry_fields(exp: Any) -> Tuple[str, Optional[str], float, Any, Any]:
+    entry = exp if isinstance(exp, dict) else getattr(exp, "__dict__", exp)
+    if isinstance(entry, dict):
+        status = str(entry.get("status", "active") or "active")
+        channel = entry.get("channel")
+        amount = float(entry.get("converted_amount") or entry.get("amount") or 0.0)
+        start_raw = entry.get("service_period_start")
+        end_raw = entry.get("service_period_end")
+        return status, (str(channel) if channel not in (None, "") else None), amount, start_raw, end_raw
+    status = str(getattr(exp, "status", "active") or "active")
+    channel = getattr(exp, "channel", None)
+    amount = float(getattr(exp, "converted_amount", None) or getattr(exp, "amount", 0.0) or 0.0)
+    return (
+        status,
+        (str(channel) if channel not in (None, "") else None),
+        amount,
+        getattr(exp, "service_period_start", None),
+        getattr(exp, "service_period_end", None),
+    )
+
+
+def _date_from_any(value: Any) -> Optional[date]:
+    dt = _as_datetime(value)
+    return dt.date() if dt is not None else None
+
+
+def _expense_daily_allocation(
+    *,
+    amount: float,
+    service_start_raw: Any,
+    service_end_raw: Any,
+    range_start: date,
+    range_end: date,
+) -> List[Tuple[date, float]]:
+    service_start = _date_from_any(service_start_raw)
+    if service_start is None:
+        return []
+    service_end = _date_from_any(service_end_raw) or service_start
+    if service_end < service_start:
+        service_start, service_end = service_end, service_start
+    total_service_days = (service_end - service_start).days + 1
+    if total_service_days <= 0:
+        return []
+    overlap_start = max(service_start, range_start)
+    overlap_end = min(service_end, range_end)
+    if overlap_end < overlap_start:
+        return []
+    daily_amount = float(amount or 0.0) / total_service_days
+    days = (overlap_end - overlap_start).days + 1
+    return [(overlap_start + timedelta(days=idx), daily_amount) for idx in range(days)]
+
+
 def _expense_by_channel(
     expenses: Any,
     date_from: Optional[str],
     date_to: Optional[str],
     allowed_channels: Optional[List[str]] = None,
 ) -> Dict[str, float]:
-    """Aggregate expenses by channel. expenses: dict[id -> ExpenseEntry] or list of dicts."""
+    """Aggregate periodized expenses by channel for the selected date window."""
     by_ch: Dict[str, float] = {}
+    range_start = _date_from_any(date_from) if date_from else date.min
+    range_end = _date_from_any(date_to) if date_to else date.max
+    if range_start is None:
+        range_start = date.min
+    if range_end is None:
+        range_end = date.max
+    if range_end < range_start:
+        range_start, range_end = range_end, range_start
     allowed = {str(value) for value in (allowed_channels or []) if str(value)}
     use_allowed = bool(allowed)
     items = expenses.values() if isinstance(expenses, dict) else (expenses or [])
     for exp in items:
-        entry = exp if isinstance(exp, dict) else getattr(exp, "__dict__", exp)
-        if isinstance(entry, dict):
-            status = entry.get("status", "active")
-            ch = entry.get("channel")
-            amount = entry.get("converted_amount") or entry.get("amount") or 0
-            start = entry.get("service_period_start")
-        else:
-            status = getattr(exp, "status", "active")
-            ch = getattr(exp, "channel", None)
-            amount = getattr(exp, "converted_amount", None) or getattr(exp, "amount", 0) or 0
-            start = getattr(exp, "service_period_start", None)
-        if status == "deleted" or not ch:
+        status, channel, amount, start_raw, end_raw = _expense_entry_fields(exp)
+        if status == "deleted" or not channel:
             continue
-        if use_allowed and str(ch) not in allowed:
+        if use_allowed and channel not in allowed:
             continue
-        if date_from and start and start < date_from:
+        allocated = _expense_daily_allocation(
+            amount=amount,
+            service_start_raw=start_raw,
+            service_end_raw=end_raw,
+            range_start=range_start,
+            range_end=range_end,
+        )
+        if not allocated:
             continue
-        if date_to and start:
-            end = getattr(exp, "service_period_end", None) if not isinstance(entry, dict) else entry.get("service_period_end")
-            if end and end > date_to:
-                continue
-        by_ch[ch] = by_ch.get(ch, 0.0) + float(amount)
-    return by_ch
+        by_ch[channel] = by_ch.get(channel, 0.0) + sum(day_amount for _day, day_amount in allocated)
+    return {channel: round(value, 2) for channel, value in by_ch.items()}
 
 
 def _filtered_conversion_ids_for_channel_group(
@@ -312,6 +365,26 @@ def _is_full_utc_day_window(date_from: Optional[datetime], date_to: Optional[dat
     return end.time() == datetime.max.time()
 
 
+def _daily_aggregate_rows_are_stale(rows: List[Any], end: datetime) -> bool:
+    end_day = _to_utc_naive(end).date()
+    latest: Optional[Any] = None
+    for row in rows:
+        row_date = getattr(row, "date", None)
+        if row_date is None:
+            continue
+        try:
+            has_signal = (
+                float(getattr(row, "count_conversions", 0.0) or 0.0) > 1e-9
+                or float(getattr(row, "gross_revenue_total", 0.0) or 0.0) > 1e-9
+            )
+        except Exception:
+            has_signal = False
+        if not has_signal:
+            continue
+        latest = row_date if latest is None else max(latest, row_date)
+    return latest is not None and latest < end_day
+
+
 def _conversions_and_revenue_from_channel_facts(
     db: Session,
     date_from: datetime,
@@ -330,6 +403,8 @@ def _conversions_and_revenue_from_channel_facts(
         .all()
     )
     if not rows:
+        return None
+    if _daily_aggregate_rows_are_stale(rows, date_to):
         return None
     daily: Dict[str, Dict[str, Any]] = {}
     total_value = 0.0
@@ -429,8 +504,10 @@ def _bucket_key_for_date(day: Any, grain: str) -> str:
         return _bucket_key(day, grain)
     if grain == "hourly":
         return f"{str(day)[:10]}T00:00:00"
-    if hasattr(day, "weekday"):
+    if grain == "weekly" and hasattr(day, "weekday"):
         return (day - timedelta(days=day.weekday())).isoformat()
+    if hasattr(day, "isoformat"):
+        return day.isoformat()
     return str(day)[:10]
 
 
@@ -452,6 +529,8 @@ def _series_from_channel_facts(
         .all()
     )
     if not rows:
+        return None
+    if _daily_aggregate_rows_are_stale(rows, end):
         return None
 
     conv_map: Dict[str, float] = {}
@@ -510,6 +589,8 @@ def _aggregate_outcomes_from_channel_facts(
         .all()
     )
     if not rows:
+        return None
+    if _daily_aggregate_rows_are_stale(rows, end):
         return None
     totals = _empty_outcomes()
     for row in rows:
@@ -579,6 +660,8 @@ def _aggregate_channel_metrics_from_facts(
     )
     if not rows:
         return None
+    if _daily_aggregate_rows_are_stale(rows, dt_to):
+        return None
     metrics: Dict[str, Dict[str, float]] = {}
     outcomes: Dict[str, Dict[str, float]] = {}
     for row in rows:
@@ -619,6 +702,8 @@ def _aggregate_daily_channel_revenue_from_facts(
         .all()
     )
     if not rows:
+        return None
+    if _daily_aggregate_rows_are_stale(rows, dt_to):
         return None
     out: Dict[str, Dict[str, float]] = {}
     for row in rows:
@@ -695,6 +780,23 @@ def _series_from_daily_path_aggregates(
         "revenue_map": rev_map,
         "observed_points": len(conv_map),
     }
+
+
+def _daily_path_aggregates_cover_window(
+    db: Session,
+    *,
+    journey_definition_id: str,
+    end: datetime,
+) -> bool:
+    latest = (
+        db.query(func.max(JourneyPathDaily.date))
+        .filter(
+            JourneyPathDaily.journey_definition_id == journey_definition_id,
+            (JourneyPathDaily.count_conversions > 0) | (JourneyPathDaily.gross_revenue_total > 0),
+        )
+        .scalar()
+    )
+    return latest is not None and latest >= end.date()
 
 
 def _aggregate_outcomes_from_daily_path_aggregates(
@@ -958,36 +1060,35 @@ def _series_from_expenses(
     allowed_channels: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     amount_map: Dict[str, float] = {}
-    observed_points = 0
+    range_start = start.date()
+    range_end = end.date()
+    if range_end < range_start:
+        range_start, range_end = range_end, range_start
     allowed = {str(value) for value in (allowed_channels or []) if str(value)}
     use_allowed = bool(allowed)
     items = expenses.values() if isinstance(expenses, dict) else (expenses or [])
     for exp in items:
-        entry = exp if isinstance(exp, dict) else getattr(exp, "__dict__", exp)
-        if isinstance(entry, dict):
-            status = entry.get("status", "active")
-            amount_raw = entry.get("converted_amount") or entry.get("amount") or 0
-            start_raw = entry.get("service_period_start")
-        else:
-            status = getattr(exp, "status", "active")
-            amount_raw = getattr(exp, "converted_amount", None) or getattr(exp, "amount", 0) or 0
-            start_raw = getattr(exp, "service_period_start", None)
+        status, channel, amount, start_raw, end_raw = _expense_entry_fields(exp)
         if status == "deleted":
             continue
-        channel = str(entry.get("channel") if isinstance(entry, dict) else getattr(exp, "channel", None) or "")
+        if not channel:
+            continue
         if use_allowed and channel not in allowed:
             continue
-        ts = _as_datetime(start_raw)
-        if ts is None or ts < start or ts > end:
-            continue
-        key = _bucket_key(ts, grain)
-        amount = float(amount_raw)
-        amount_map[key] = amount_map.get(key, 0.0) + amount
-        observed_points += 1
+        for day, daily_amount in _expense_daily_allocation(
+            amount=amount,
+            service_start_raw=start_raw,
+            service_end_raw=end_raw,
+            range_start=range_start,
+            range_end=range_end,
+        ):
+            ts = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc)
+            key = _bucket_key(ts, grain)
+            amount_map[key] = amount_map.get(key, 0.0) + daily_amount
     return {
         "total": round(sum(amount_map.values()), 2),
         "map": amount_map,
-        "observed_points": observed_points,
+        "observed_points": len(amount_map),
     }
 
 
@@ -1503,6 +1604,12 @@ def get_overview_summary(
         prev_visits = fact_prev
     else:
         aggregate_definition_id = _single_active_overview_definition_id(db) if grain == "daily" and not use_channel_group_filter and use_utc_daily_aggregates else None
+        if aggregate_definition_id and not _daily_path_aggregates_cover_window(
+            db,
+            journey_definition_id=aggregate_definition_id,
+            end=dt_to,
+        ):
+            aggregate_definition_id = None
         if aggregate_definition_id:
             current_paths = _series_from_daily_path_aggregates(
                 db,

@@ -1,11 +1,33 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 
 from app.services_metrics import journey_revenue_value
+
+
+def _parse_timestamp(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    raw = str(value).strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except Exception:
+        pass
+    try:
+        parsed_pd = pd.to_datetime(raw, errors="coerce", utc=True)
+    except Exception:
+        return None
+    if parsed_pd is None or pd.isna(parsed_pd):
+        return None
+    return parsed_pd.to_pydatetime()
 
 
 def _journey_quality_score(journey: Dict[str, Any]) -> Optional[int]:
@@ -101,11 +123,8 @@ def build_journeys_summary(
             ts = tp.get("timestamp")
             if not ts:
                 continue
-            try:
-                dt = pd.to_datetime(ts, errors="coerce")
-            except Exception:
-                dt = None
-            if dt is None or pd.isna(dt):
+            dt = _parse_timestamp(ts)
+            if dt is None:
                 continue
             if first_ts is None or dt < first_ts:
                 first_ts = dt
@@ -183,15 +202,12 @@ def build_journeys_preview(*, journeys: List[Dict[str, Any]], limit: int) -> Dic
         for tp in touchpoints:
             ts = tp.get("timestamp")
             if ts:
-                try:
-                    dt = pd.to_datetime(ts, errors="coerce")
-                    if dt is not None and not pd.isna(dt):
-                        if first_ts is None or dt < first_ts:
-                            first_ts = dt
-                        if last_ts is None or dt > last_ts:
-                            last_ts = dt
-                except Exception:
-                    pass
+                dt = _parse_timestamp(ts)
+                if dt is not None:
+                    if first_ts is None or dt < first_ts:
+                        first_ts = dt
+                    if last_ts is None or dt > last_ts:
+                        last_ts = dt
         channels = list(dict.fromkeys(tp.get("channel", "?") for tp in touchpoints))
         rows.append(
             {

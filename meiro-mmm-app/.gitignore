@@ -14,11 +14,14 @@ backend/meiro_mmm.db
 backend/app/data/*.json
 backend/app/data/*.csv
 backend/app/data/mmm_platform/*.csv
+backend/db_backups/
 
 # Frontend build/runtime artifacts
 frontend/node_modules/
 frontend/dist/
 frontend/tsconfig.tsbuildinfo
+frontend/playwright-report/
+frontend/test-results/
 
 # Logs
 *.log

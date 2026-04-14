@@ -14,17 +14,19 @@
     "frequency": "W"
   },
   "nba": {
-    "min_prefix_support": 50,
-    "min_conversion_rate": 0.025,
-    "max_prefix_depth": 3,
-    "min_next_support": 50,
+    "min_prefix_support": 5,
+    "min_conversion_rate": 0.01,
+    "max_prefix_depth": 5,
+    "min_next_support": 5,
     "max_suggestions_per_prefix": 3,
     "min_uplift_pct": null,
     "excluded_channels": [
       "direct"
-    ]
+    ],
+    "promoted_journey_policies": []
   },
   "feature_flags": {
+    "mmm_enabled": true,
     "journeys_enabled": true,
     "journey_examples_enabled": true,
     "funnel_builder_enabled": true,
