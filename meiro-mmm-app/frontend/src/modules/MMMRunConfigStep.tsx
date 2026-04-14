@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { tokens } from '../theme/tokens'
 import { apiGetJson } from '../lib/apiClient'
@@ -49,10 +49,16 @@ export default function MMMRunConfigStep({
   currentRunId,
   isRunning,
 }: MMMRunConfigStepProps) {
+  const initialKpiMode = /sales|revenue|value/i.test(pendingMapping.columns.kpi) ? 'sales' : 'conversions'
+  const [kpiMode, setKpiMode] = useState(initialKpiMode)
   const [useAdstock, setUseAdstock] = useState(true)
   const [useSaturation, setUseSaturation] = useState(true)
   const [holdoutWeeks, setHoldoutWeeks] = useState(8)
   const [seed, setSeed] = useState<string>('')
+
+  useEffect(() => {
+    setKpiMode(initialKpiMode)
+  }, [initialKpiMode])
 
   const { data: runs = [], refetch } = useQuery<RunSummary[]>({
     queryKey: ['mmm-runs'],
@@ -65,7 +71,7 @@ export default function MMMRunConfigStep({
       kpi: pendingMapping.columns.kpi,
       spend_channels: pendingMapping.columns.spend_channels,
       covariates: pendingMapping.columns.covariates || [],
-      kpi_mode: 'conversions',
+      kpi_mode: kpiMode,
       use_adstock: useAdstock,
       use_saturation: useSaturation,
       holdout_weeks: holdoutWeeks,
@@ -74,10 +80,18 @@ export default function MMMRunConfigStep({
   }
 
   const formatDate = (iso: string | null) => (iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : '—')
+  const hasEnoughChannels = pendingMapping.columns.spend_channels.length > 0
+  const modelShape = useAdstock && useSaturation
+    ? 'Carry-over + diminishing returns'
+    : useAdstock
+      ? 'Carry-over only'
+      : useSaturation
+        ? 'Diminishing returns only'
+        : 'Simple linear ridge'
 
   return (
-    <div style={{ maxWidth: 960, margin: '0 auto' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: t.space.xl }}>
+    <div style={{ maxWidth: 1180, margin: '0 auto' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: t.space.xl }}>
         {/* Left: Model run configuration */}
         <div
           style={{
@@ -88,76 +102,134 @@ export default function MMMRunConfigStep({
             boxShadow: t.shadowSm,
           }}
         >
-          <h3 style={{ margin: `0 0 ${t.space.lg}px`, fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-            Model run configuration
-          </h3>
-
           <div style={{ marginBottom: t.space.lg }}>
-            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: t.space.xs }}>Target KPI</div>
-            <div style={{ fontSize: t.font.sizeBase, fontWeight: t.font.weightMedium, color: t.color.text }}>{pendingMapping.columns.kpi}</div>
-          </div>
-          <div style={{ marginBottom: t.space.lg }}>
-            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: t.space.xs }}>Channels ({pendingMapping.columns.spend_channels.length})</div>
-            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{pendingMapping.columns.spend_channels.join(', ')}</div>
-          </div>
-          <div style={{ marginBottom: t.space.lg }}>
-            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: t.space.xs }}>Covariates ({(pendingMapping.columns.covariates || []).length})</div>
-            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{(pendingMapping.columns.covariates || []).length ? (pendingMapping.columns.covariates || []).join(', ') : 'None'}</div>
+            <h3 style={{ margin: `0 0 ${t.space.xs}px`, fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+              Launch MMM model
+            </h3>
+            <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.textSecondary, lineHeight: 1.5 }}>
+              Confirm the analysis question, selected spend signals, and model assumptions before creating the run.
+            </p>
           </div>
 
-          <div style={{ borderTop: `1px solid ${t.color.borderLight}`, paddingTop: t.space.lg, marginTop: t.space.lg }}>
-            <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightMedium, color: t.color.text, marginBottom: t.space.sm }}>Transforms</div>
-            <label style={{ display: 'flex', alignItems: 'center', gap: t.space.sm, marginBottom: t.space.sm, cursor: 'pointer', fontSize: t.font.sizeSm, color: t.color.text }}>
-              <input type="checkbox" checked={useAdstock} onChange={(e) => setUseAdstock(e.target.checked)} />
-              Adstock (carry-over effect)
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: t.space.sm, marginBottom: t.space.sm, cursor: 'pointer', fontSize: t.font.sizeSm, color: t.color.text }}>
-              <input type="checkbox" checked={useSaturation} onChange={(e) => setUseSaturation(e.target.checked)} />
-              Saturation (diminishing returns)
-            </label>
-            <p style={{ margin: 0, fontSize: t.font.sizeXs, color: t.color.textMuted }}>If both off, a simple Ridge model is used.</p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: t.space.md, marginBottom: t.space.xl }}>
+            {[
+              { label: 'Dataset', value: pendingMapping.dataset_id.slice(0, 14), helper: 'Generated source table' },
+              { label: 'Target KPI column', value: pendingMapping.columns.kpi, helper: 'What the model explains' },
+              { label: 'Spend signals', value: `${pendingMapping.columns.spend_channels.length}`, helper: pendingMapping.columns.spend_channels.join(', ') || 'No channels selected' },
+              { label: 'Covariates', value: `${(pendingMapping.columns.covariates || []).length}`, helper: (pendingMapping.columns.covariates || []).join(', ') || 'None' },
+            ].map((item) => (
+              <div key={item.label} style={{ padding: t.space.md, borderRadius: t.radius.md, border: `1px solid ${t.color.borderLight}`, background: t.color.bg, minWidth: 0 }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{item.label}</div>
+                <div style={{ marginTop: 4, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text, overflowWrap: 'anywhere' }}>{item.value}</div>
+                <div style={{ marginTop: 2, fontSize: t.font.sizeXs, color: t.color.textSecondary, overflowWrap: 'anywhere' }}>{item.helper}</div>
+              </div>
+            ))}
           </div>
 
-          <div style={{ marginTop: t.space.lg }}>
-            <label style={{ display: 'block', fontSize: t.font.sizeSm, color: t.color.textSecondary, marginBottom: t.space.xs }}>Holdout weeks (optional)</label>
-            <input
-              type="number"
-              min={0}
-              max={52}
-              value={holdoutWeeks}
-              onChange={(e) => setHoldoutWeeks(parseInt(e.target.value, 10) || 0)}
-              style={{ width: 80, padding: t.space.sm, fontSize: t.font.sizeSm, border: `1px solid ${t.color.border}`, borderRadius: t.radius.sm }}
-            />
-            <span style={{ marginLeft: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textMuted }}>Last N weeks reserved (e.g. for validation)</span>
+          <div style={{ display: 'grid', gap: t.space.lg }}>
+            <section style={{ padding: t.space.lg, borderRadius: t.radius.lg, border: `1px solid ${t.color.borderLight}`, background: t.color.surface }}>
+              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, marginBottom: t.space.sm }}>
+                1. Analysis target
+              </div>
+              <label style={{ display: 'block', fontSize: t.font.sizeSm, color: t.color.textSecondary, marginBottom: t.space.xs }}>KPI basis</label>
+              <select
+                value={kpiMode}
+                onChange={(e) => setKpiMode(e.target.value)}
+                style={{ width: '100%', maxWidth: 320, padding: t.space.sm, fontSize: t.font.sizeSm, border: `1px solid ${t.color.border}`, borderRadius: t.radius.sm }}
+              >
+                <option value="conversions">Conversions / attributed outcomes</option>
+                <option value="sales">Revenue / sales value</option>
+                <option value="profit">Profit</option>
+              </select>
+              <p style={{ margin: `${t.space.sm}px 0 0`, fontSize: t.font.sizeXs, color: t.color.textMuted, lineHeight: 1.45 }}>
+                This labels the MMM run and keeps results, budget recommendations, and comparisons aligned with the business question.
+              </p>
+            </section>
+
+            <section style={{ padding: t.space.lg, borderRadius: t.radius.lg, border: `1px solid ${t.color.borderLight}`, background: t.color.surface }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.md, alignItems: 'baseline', flexWrap: 'wrap', marginBottom: t.space.sm }}>
+                <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                  2. Media response assumptions
+                </div>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.accent, fontWeight: t.font.weightSemibold }}>{modelShape}</div>
+              </div>
+              <div style={{ display: 'grid', gap: t.space.sm }}>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: t.space.sm, cursor: 'pointer', fontSize: t.font.sizeSm, color: t.color.text }}>
+                  <input type="checkbox" checked={useAdstock} onChange={(e) => setUseAdstock(e.target.checked)} style={{ marginTop: 3 }} />
+                  <span>
+                    <strong>Carry-over effect</strong>
+                    <span style={{ display: 'block', color: t.color.textSecondary, fontSize: t.font.sizeXs, marginTop: 2 }}>
+                      Lets prior spend influence later KPI movement. Keep on for most paid media.
+                    </span>
+                  </span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: t.space.sm, cursor: 'pointer', fontSize: t.font.sizeSm, color: t.color.text }}>
+                  <input type="checkbox" checked={useSaturation} onChange={(e) => setUseSaturation(e.target.checked)} style={{ marginTop: 3 }} />
+                  <span>
+                    <strong>Diminishing returns</strong>
+                    <span style={{ display: 'block', color: t.color.textSecondary, fontSize: t.font.sizeXs, marginTop: 2 }}>
+                      Prevents the model from assuming every extra dollar scales linearly forever.
+                    </span>
+                  </span>
+                </label>
+              </div>
+            </section>
+
+            <section style={{ padding: t.space.lg, borderRadius: t.radius.lg, border: `1px solid ${t.color.borderLight}`, background: t.color.surface }}>
+              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, marginBottom: t.space.sm }}>
+                3. Validation and reproducibility
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: t.space.md }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: t.font.sizeSm, color: t.color.textSecondary, marginBottom: t.space.xs }}>Holdout weeks</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={52}
+                    value={holdoutWeeks}
+                    onChange={(e) => setHoldoutWeeks(parseInt(e.target.value, 10) || 0)}
+                    style={{ width: '100%', padding: t.space.sm, fontSize: t.font.sizeSm, border: `1px solid ${t.color.border}`, borderRadius: t.radius.sm }}
+                  />
+                  <div style={{ marginTop: t.space.xs, fontSize: t.font.sizeXs, color: t.color.textMuted }}>Most recent weeks reserved for validation.</div>
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: t.font.sizeSm, color: t.color.textSecondary, marginBottom: t.space.xs }}>Random seed</label>
+                  <input
+                    type="number"
+                    placeholder="Optional"
+                    value={seed}
+                    onChange={(e) => setSeed(e.target.value)}
+                    style={{ width: '100%', padding: t.space.sm, fontSize: t.font.sizeSm, border: `1px solid ${t.color.border}`, borderRadius: t.radius.sm }}
+                  />
+                  <div style={{ marginTop: t.space.xs, fontSize: t.font.sizeXs, color: t.color.textMuted }}>Set this when you need repeatable run output.</div>
+                </div>
+              </div>
+            </section>
           </div>
-          <div style={{ marginTop: t.space.md }}>
-            <label style={{ display: 'block', fontSize: t.font.sizeSm, color: t.color.textSecondary, marginBottom: t.space.xs }}>Random seed (optional)</label>
-            <input
-              type="number"
-              placeholder="e.g. 42"
-              value={seed}
-              onChange={(e) => setSeed(e.target.value)}
-              style={{ width: 100, padding: t.space.sm, fontSize: t.font.sizeSm, border: `1px solid ${t.color.border}`, borderRadius: t.radius.sm }}
-            />
-          </div>
+
+          {!hasEnoughChannels && (
+            <div style={{ marginTop: t.space.lg, padding: t.space.md, borderRadius: t.radius.md, border: `1px solid ${t.color.danger}`, background: t.color.dangerMuted, color: t.color.danger, fontSize: t.font.sizeSm }}>
+              Select at least one spend channel before running MMM.
+            </div>
+          )}
 
           <button
             type="button"
             onClick={handleRun}
-            disabled={isRunning}
+            disabled={isRunning || !hasEnoughChannels}
             style={{
               marginTop: t.space.xl,
               padding: `${t.space.md}px ${t.space.xl}px`,
               fontSize: t.font.sizeBase,
               fontWeight: t.font.weightSemibold,
               color: '#fff',
-              background: isRunning ? t.color.border : t.color.accent,
+              background: isRunning || !hasEnoughChannels ? t.color.border : t.color.accent,
               border: 'none',
               borderRadius: t.radius.sm,
-              cursor: isRunning ? 'not-allowed' : 'pointer',
+              cursor: isRunning || !hasEnoughChannels ? 'not-allowed' : 'pointer',
             }}
           >
-            {isRunning ? 'Running…' : 'Run model'}
+            {isRunning ? 'Starting model...' : 'Create MMM run'}
           </button>
         </div>
 

@@ -10,7 +10,6 @@ import DashboardPage from '../components/dashboard/DashboardPage'
 import SectionCard from '../components/dashboard/SectionCard'
 import { apiGetJson } from '../lib/apiClient'
 
-type StepKey = 'data_source' | 'mapping' | 'model_run' | 'results' | 'optimize'
 type MMMRunView = 'analysis' | 'budget'
 
 type MMMPlatformDraft = {
@@ -46,14 +45,7 @@ interface MMMWizardShellProps {
   onStartOver: () => void
 }
 
-interface StepState {
-  key: StepKey
-  label: string
-  status: 'not_started' | 'ready' | 'completed'
-}
-
 interface PersistedState {
-  currentStep: StepKey
   lastRunId: string | null
   lastDatasetId: string | null
   kpiMode: KpiMode
@@ -99,7 +91,6 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
   } = props
 
   const [kpiMode, setKpiMode] = useState<KpiMode>('sales')
-  const [currentStep, setCurrentStep] = useState<StepKey>('data_source')
   const [selectedRunView, setSelectedRunView] = useState<MMMRunView>(() => {
     if (typeof window === 'undefined') return 'analysis'
     return new URLSearchParams(window.location.search).get('mmm_view') === 'budget' ? 'budget' : 'analysis'
@@ -120,7 +111,6 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
       const raw = window.sessionStorage.getItem(STORAGE_KEY)
       if (!raw) return
       const parsed = JSON.parse(raw) as PersistedState
-      if (parsed.currentStep) setCurrentStep(parsed.currentStep)
       if (parsed.kpiMode) setKpiMode(parsed.kpiMode)
       if (!mmmRunId && parsed.lastRunId && parsed.lastDatasetId) {
         onMmmSelectRun(parsed.lastRunId, parsed.lastDatasetId)
@@ -133,7 +123,6 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
   // Persist when key pieces change
   useEffect(() => {
     const state: PersistedState = {
-      currentStep,
       lastRunId: mmmRunId,
       lastDatasetId: mmmDatasetId,
       kpiMode,
@@ -143,38 +132,9 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
     } catch {
       // ignore
     }
-  }, [currentStep, mmmRunId, mmmDatasetId, kpiMode])
+  }, [mmmRunId, mmmDatasetId, kpiMode])
 
   const runStatus: string | undefined = (mmmRunQuery.data as any)?.status
-
-  const steps: StepState[] = useMemo(() => {
-    const hasDataset = !!mmmDatasetId || !!pendingMmmMapping
-    const hasMapping = !!pendingMmmMapping
-    const hasRun = !!mmmRunId
-    const finished = runStatus === 'finished'
-
-    return [
-      { key: 'data_source', label: 'Data source', status: hasDataset ? 'completed' : 'ready' },
-      { key: 'mapping', label: 'Mapping', status: hasDataset ? 'completed' : 'not_started' },
-      { key: 'model_run', label: 'Model run', status: hasRun ? (finished ? 'completed' : 'ready') : hasMapping ? 'ready' : 'not_started' },
-      { key: 'results', label: 'Results', status: finished ? 'completed' : hasRun ? 'ready' : 'not_started' },
-      {
-        key: 'optimize',
-        label: 'Optimize',
-        status: finished && (mmmRunQuery.data as any)?.roi?.length ? 'ready' : finished ? 'ready' : 'not_started',
-      },
-    ]
-  }, [mmmDatasetId, pendingMmmMapping, mmmRunId, runStatus, mmmRunQuery.data])
-
-  const setStepSafely = (key: StepKey) => {
-    // Only allow navigating to steps that are ready or completed to keep flow predictable
-    const step = steps.find((s) => s.key === key)
-    if (!step) return
-    if (step.status === 'not_started') return
-    setCurrentStep(key)
-  }
-
-  const activeStepIndex = steps.findIndex((s) => s.key === currentStep)
 
   const activeConfigLabel = useMemo(() => {
     if (runStatus === 'finished' && (mmmRunQuery.data as any)?.config?.version != null) {
@@ -237,7 +197,6 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
     if (!run.dataset_id) return
     setShowNewModelWorkflow(false)
     onMmmSelectRun(run.run_id, run.dataset_id)
-    setCurrentStep(view === 'budget' ? 'optimize' : 'results')
     jumpToMmmView(view)
   }
 
@@ -260,7 +219,6 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
     setInitialPlatformDraft(draft ?? null)
     setShowNewModelWorkflow(true)
     onStartOver()
-    setCurrentStep('data_source')
     if (typeof document === 'undefined') return
     window.requestAnimationFrame(() => {
       document.getElementById('mmm-new-model-workflow')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -277,7 +235,6 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
     if (didAutoSelectRunRef.current) return
     didAutoSelectRunRef.current = true
     onMmmSelectRun(latestFinishedRun.run_id, latestFinishedRun.dataset_id)
-    setCurrentStep('results')
   }, [
     latestFinishedRun,
     mmmRunId,
@@ -304,15 +261,6 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
     }, 0)
     return () => window.clearTimeout(timer)
   }, [mmmRunId])
-
-  useEffect(() => {
-    if (!mmmRunId) return
-    if (runStatus === 'finished') {
-      setCurrentStep((step) => (step === 'optimize' || selectedRunView === 'budget' ? 'optimize' : 'results'))
-    } else if (runStatus === 'queued' || runStatus === 'running') {
-      setCurrentStep('model_run')
-    }
-  }, [mmmRunId, runStatus, selectedRunView])
 
   const renderStepContent = () => {
     if (mmmRunId) {
@@ -794,25 +742,7 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
     )
   }
 
-  const nextStep = () => {
-    if (activeStepIndex < steps.length - 1) {
-      const target = steps[activeStepIndex + 1]
-      if (target.status !== 'not_started') {
-        setCurrentStep(target.key)
-      }
-    }
-  }
-
   const primaryKpi = primaryKpiLabel ?? (kpiMode === 'sales' ? 'Total sales' : 'Marketing-driven conversions')
-  const activeStep = steps[activeStepIndex]
-  const statusLabel =
-    activeStep?.status === 'completed'
-      ? 'Completed'
-      : activeStep?.status === 'ready'
-        ? 'Ready'
-        : 'Not started'
-  const canContinue =
-    activeStepIndex < steps.length - 1 && steps[activeStepIndex + 1]?.status !== 'not_started'
   const workflowActions =
     recentRuns.length || mmmRunId || pendingMmmMapping || mmmDatasetId ? (
       <button
@@ -1146,126 +1076,11 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
                 </button>
               </div>
             ) : (
-              <>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: t.space.md,
-                overflowX: 'auto',
-                paddingBottom: t.space.xs,
-              }}
-            >
-              {steps.map((step, idx) => {
-                const isActive = step.key === currentStep
-                const isCompleted = step.status === 'completed'
-                const isClickable = step.status !== 'not_started'
-                return (
-                  <div
-                    key={step.key}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: t.space.xs,
-                    }}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => setStepSafely(step.key)}
-                      disabled={!isClickable}
-                      style={{
-                        padding: `${t.space.sm}px ${t.space.md}px`,
-                        borderRadius: 999,
-                        border: `1px solid ${
-                          isActive ? t.color.accent : isCompleted ? t.color.success : t.color.border
-                        }`,
-                        backgroundColor: isActive
-                          ? t.color.accent
-                          : isCompleted
-                            ? t.color.successMuted
-                            : t.color.surface,
-                        color: isActive
-                          ? '#ffffff'
-                          : isCompleted
-                            ? t.color.success
-                            : t.color.textSecondary,
-                        cursor: isClickable ? 'pointer' : 'default',
-                        fontSize: t.font.sizeSm,
-                        fontWeight: isActive ? t.font.weightSemibold : t.font.weightMedium,
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: t.space.xs,
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      <span
-                        style={{
-                          width: 18,
-                          height: 18,
-                          borderRadius: 999,
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: t.font.sizeXs,
-                          backgroundColor: isCompleted
-                            ? t.color.success
-                            : isActive
-                              ? 'rgba(15,23,42,0.15)'
-                              : t.color.bg,
-                          color: isCompleted ? '#ffffff' : isActive ? '#ffffff' : t.color.textMuted,
-                        }}
-                      >
-                        {idx + 1}
-                      </span>
-                      <span>{step.label}</span>
-                    </button>
-                    {idx < steps.length - 1 && (
-                      <div
-                        style={{
-                          width: 32,
-                          height: 1,
-                          backgroundColor: t.color.borderLight,
-                          flexShrink: 0,
-                        }}
-                      />
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                flexWrap: 'wrap',
-                gap: t.space.sm,
-              }}
-            >
-              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                <strong style={{ color: t.color.text }}>Step {activeStepIndex + 1}:</strong> {activeStep?.label}{' '}
-                <span style={{ color: t.color.textMuted }}>({statusLabel})</span>
-              </div>
-              <button
-                type="button"
-                onClick={nextStep}
-                disabled={!canContinue}
-                style={{
-                  padding: `${t.space.sm}px ${t.space.lg}px`,
-                  fontSize: t.font.sizeSm,
-                  fontWeight: t.font.weightMedium,
-                  borderRadius: t.radius.sm,
-                  border: 'none',
-                  backgroundColor: canContinue ? t.color.accent : t.color.border,
-                  color: '#ffffff',
-                  cursor: canContinue ? 'pointer' : 'not-allowed',
-                }}
-              >
-                Continue
-              </button>
-            </div>
-              </>
+              <SetupChecklist
+                pendingMapping={pendingMmmMapping}
+                runId={mmmRunId}
+                runStatus={runStatus}
+              />
             )}
           </div>
         </SectionCard>
@@ -1313,6 +1128,110 @@ function SectionHeader(props: { title: string; subtitle?: string; trailing?: Rea
         )}
       </div>
       {props.trailing}
+    </div>
+  )
+}
+
+function SetupChecklist(props: {
+  pendingMapping: MMMWizardShellProps['pendingMmmMapping']
+  runId: string | null
+  runStatus?: string
+}) {
+  const t = tokens
+  const hasDataset = Boolean(props.pendingMapping?.dataset_id || props.runId)
+  const hasMapping = Boolean(props.pendingMapping)
+  const hasRun = Boolean(props.runId)
+  const channels = props.pendingMapping?.columns.spend_channels ?? []
+  const cards = [
+    {
+      title: 'Dataset and KPI',
+      status: hasDataset ? 'Ready' : 'Choose source',
+      tone: hasDataset ? 'success' : 'accent',
+      detail: props.pendingMapping
+        ? `${props.pendingMapping.columns.kpi} from dataset ${props.pendingMapping.dataset_id.slice(0, 12)}...`
+        : 'Pick platform data or upload a CSV, then confirm the KPI period.',
+    },
+    {
+      title: 'Spend mapping',
+      status: hasMapping ? `${channels.length} channel${channels.length === 1 ? '' : 's'}` : 'Not set',
+      tone: hasMapping ? 'success' : 'muted',
+      detail: hasMapping
+        ? channels.join(', ') || 'No spend channels selected'
+        : 'Choose paid channels and optional covariates before generating the model dataset.',
+    },
+    {
+      title: 'Model assumptions',
+      status: hasMapping ? 'Configure below' : 'Waiting for dataset',
+      tone: hasMapping ? 'accent' : 'muted',
+      detail: hasMapping
+        ? 'Set KPI basis, carry-over, saturation, holdout, and reproducibility before launch.'
+        : 'These settings become available after a dataset is generated.',
+    },
+    {
+      title: 'Launch and review',
+      status: hasRun ? String(props.runStatus || 'Queued') : hasMapping ? 'Ready to run' : 'Not started',
+      tone: hasRun ? (props.runStatus === 'error' ? 'danger' : 'success') : hasMapping ? 'accent' : 'muted',
+      detail: hasRun
+        ? 'The active run will open results and budget actions when finished.'
+        : 'Start the model once the setup summary matches the analysis question.',
+    },
+  ]
+
+  const colorForTone = (tone: string) => {
+    if (tone === 'success') return { bg: t.color.successMuted, fg: t.color.success, border: t.color.success }
+    if (tone === 'danger') return { bg: t.color.dangerMuted, fg: t.color.danger, border: t.color.danger }
+    if (tone === 'accent') return { bg: t.color.accentMuted, fg: t.color.accent, border: t.color.accent }
+    return { bg: t.color.bg, fg: t.color.textMuted, border: t.color.borderLight }
+  }
+
+  return (
+    <div style={{ display: 'grid', gap: t.space.md }}>
+      <div style={{ display: 'grid', gap: 4 }}>
+        <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+          Setup checklist
+        </div>
+        <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+          No hidden wizard steps. Configure the dataset first, then review model assumptions and launch from the panel below.
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: t.space.md }}>
+        {cards.map((card) => {
+          const color = colorForTone(card.tone)
+          return (
+            <div
+              key={card.title}
+              style={{
+                padding: t.space.md,
+                borderRadius: t.radius.md,
+                border: `1px solid ${color.border}`,
+                background: color.bg,
+                display: 'grid',
+                gap: t.space.xs,
+                minWidth: 0,
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'center' }}>
+                <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                  {card.title}
+                </div>
+                <span
+                  style={{
+                    fontSize: t.font.sizeXs,
+                    fontWeight: t.font.weightSemibold,
+                    color: color.fg,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {card.status}
+                </span>
+              </div>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary, lineHeight: 1.45, overflowWrap: 'anywhere' }}>
+                {card.detail}
+              </div>
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
