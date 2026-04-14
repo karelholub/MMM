@@ -10,6 +10,8 @@ import DashboardPage from '../components/dashboard/DashboardPage'
 import SectionCard from '../components/dashboard/SectionCard'
 import { apiGetJson } from '../lib/apiClient'
 import { evaluateMMMRunQuality, MMMQualityLevel } from '../lib/mmmQuality'
+import { navigateForRecommendedAction } from '../lib/recommendedActions'
+import type { RecommendedActionItem } from '../components/RecommendedActionsList'
 
 type MMMRunView = 'analysis' | 'budget'
 
@@ -101,6 +103,8 @@ const STORAGE_KEY = 'mmm-wizard-state-v1'
 const runCanUseResults = (run: MMMRunSummary) => run.quality?.can_use_results ?? run.quality?.canUseResults ?? run.status === 'finished'
 const runCanUseBudget = (run: MMMRunSummary) =>
   run.quality?.can_use_budget ?? run.quality?.canUseBudget ?? (run.status === 'finished' && run.dataset_available !== false)
+const runCanOpenBudgetReadout = (run: MMMRunSummary) =>
+  run.status === 'finished' && runCanUseResults(run) && !!run.dataset_id && Number(run.n_channels || 0) > 0
 
 type MMMStartConfig = Parameters<MMMWizardShellProps['onMmmStartRun']>[0]
 
@@ -678,7 +682,7 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
       contrib: runData?.contrib,
       diagnostics,
     })
-    const canOpenBudgetView = hasBudgetView && runQuality.canUseBudget
+    const canOpenBudgetView = hasBudgetView && runQuality.canUseResults
     const activeRunView: MMMRunView = selectedRunView === 'budget' && canOpenBudgetView ? 'budget' : 'analysis'
     const healthTone =
       runQuality.level === 'not_usable'
@@ -719,6 +723,21 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
         : null,
     ].filter((item): item is string => Boolean(item))
     const canRerunActive = datasetAvailable && !!startConfigFromRun(runData) && !createMmmRunMutation.isPending
+    const handleBudgetRecommendedAction = (action: RecommendedActionItem) => {
+      if (action.id === 'rerun_mmm_same_setup') {
+        rerunWithSameSetup(runData)
+        return
+      }
+      if (action.id === 'rebuild_mmm_dataset') {
+        startNewModelWorkflow(compatibleDraftForRun(runData))
+        return
+      }
+      if (action.id === 'review_mmm_inputs') {
+        jumpToMmmView('analysis')
+        return
+      }
+      navigateForRecommendedAction(action, { defaultPage: 'mmm' })
+    }
     return (
       <div>
         <SectionHeader
@@ -761,7 +780,7 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
                   cursor: canOpenBudgetView ? 'pointer' : 'not-allowed',
                 }}
               >
-                Budget actions
+                {runQuality.canUseBudget ? 'Budget actions' : 'Budget readout'}
               </button>
               <button
                 type="button"
@@ -981,6 +1000,9 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
               runId={mmmRunId}
               datasetId={mmmDatasetId}
               datasetAvailable={runData?.dataset_available !== false}
+              budgetActionsAvailable={runQuality.canUseBudget}
+              budgetReadoutReason={runQuality.reasons[0] ?? null}
+              onRecommendedActionClick={handleBudgetRecommendedAction}
             />
           </div>
         )}
@@ -1014,6 +1036,7 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
     ? 'Selected MMM run is the active workspace. Results, budget recommendations, saved scenarios, and rollout evidence stay attached to this run.'
     : 'Pick up prior MMM results and budget scenarios without starting a new model run.'
   const latestFinishedRunCanUseBudget = latestFinishedRun ? runCanUseBudget(latestFinishedRun) : false
+  const latestFinishedRunCanOpenBudget = latestFinishedRun ? runCanOpenBudgetReadout(latestFinishedRun) : false
   const latestFinishedRunQualityLabel = latestFinishedRun?.quality?.label || (latestFinishedRun?.dataset_available === false ? 'Readout only' : 'Decision ready')
   const latestFinishedRunReason = latestFinishedRun?.quality?.reasons?.[0]
   const latestFinishedRunCanRerun =
@@ -1152,19 +1175,19 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
                     <button
                       type="button"
                       onClick={() => openRunView(latestFinishedRun, 'budget')}
-                      disabled={!latestFinishedRunCanUseBudget}
+                      disabled={!latestFinishedRunCanOpenBudget}
                       style={{
                         padding: `${t.space.sm}px ${t.space.lg}px`,
                         borderRadius: t.radius.sm,
                         border: `1px solid ${t.color.border}`,
                         background: t.color.surface,
-                        color: latestFinishedRunCanUseBudget ? t.color.text : t.color.textMuted,
+                        color: latestFinishedRunCanOpenBudget ? t.color.text : t.color.textMuted,
                         fontSize: t.font.sizeSm,
                         fontWeight: t.font.weightSemibold,
-                        cursor: latestFinishedRunCanUseBudget ? 'pointer' : 'not-allowed',
+                        cursor: latestFinishedRunCanOpenBudget ? 'pointer' : 'not-allowed',
                       }}
                     >
-                      Open budget actions
+                      {latestFinishedRunCanUseBudget ? 'Open budget actions' : 'Open budget readout'}
                     </button>
                     <button
                       type="button"
@@ -1192,6 +1215,7 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
                   const isSelected = run.run_id === mmmRunId
                   const isStale = run.status === 'stale'
                   const canUseBudget = runCanUseBudget(run)
+                  const canOpenBudget = runCanOpenBudgetReadout(run)
                   const canRerun = run.dataset_available !== false && !!startConfigFromRun(run) && !createMmmRunMutation.isPending
                   const qualityTone = run.quality?.tone
                   const qualityLabel = run.quality?.label || run.status
@@ -1267,18 +1291,24 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
                         <button
                           type="button"
                           onClick={() => openRunView(run, 'budget')}
-                          disabled={!run.dataset_id || !canUseBudget}
+                          disabled={!canOpenBudget}
                           style={{
                             padding: `${t.space.xs}px ${t.space.sm}px`,
                             borderRadius: t.radius.sm,
                             border: `1px solid ${t.color.borderLight}`,
                             background: t.color.bg,
-                            color: canUseBudget ? t.color.textSecondary : t.color.textMuted,
+                            color: canOpenBudget ? t.color.textSecondary : t.color.textMuted,
                             fontSize: t.font.sizeXs,
-                            cursor: run.dataset_id && canUseBudget ? 'pointer' : 'not-allowed',
+                            cursor: canOpenBudget ? 'pointer' : 'not-allowed',
                           }}
                         >
-                          {isSelected ? 'Current budget' : 'Open budget actions'}
+                          {isSelected
+                            ? canUseBudget
+                              ? 'Current budget'
+                              : 'Current readout'
+                            : canUseBudget
+                            ? 'Open budget actions'
+                            : 'Open budget readout'}
                         </button>
                         <button
                           type="button"

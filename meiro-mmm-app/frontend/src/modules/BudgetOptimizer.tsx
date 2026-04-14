@@ -9,6 +9,7 @@ import AnalysisShareActions from '../components/dashboard/AnalysisShareActions'
 import SectionCard from '../components/dashboard/SectionCard'
 import AnalysisNarrativePanel from '../components/dashboard/AnalysisNarrativePanel'
 import { navigateForRecommendedAction } from '../lib/recommendedActions'
+import type { RecommendedActionItem } from '../components/RecommendedActionsList'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import {
   createAdsChangeRequestsFromBudgetRecommendation,
@@ -24,6 +25,9 @@ interface BudgetOptimizerProps {
   runId?: string | null
   datasetId?: string | null
   datasetAvailable?: boolean
+  budgetActionsAvailable?: boolean
+  budgetReadoutReason?: string | null
+  onRecommendedActionClick?: (action: RecommendedActionItem) => void
 }
 
 interface ChannelConstraint {
@@ -179,6 +183,9 @@ export default function BudgetOptimizer({
   runId,
   datasetId,
   datasetAvailable = true,
+  budgetActionsAvailable = true,
+  budgetReadoutReason,
+  onRecommendedActionClick,
 }: BudgetOptimizerProps) {
   const queryClient = useQueryClient()
   const [multipliers, setMultipliers] = useState<Record<string, number>>(() =>
@@ -207,6 +214,12 @@ export default function BudgetOptimizer({
   const [showEvidencePanel, setShowEvidencePanel] = usePersistentToggle('budget-optimizer:show-evidence', false)
   const [showRealizationPanel, setShowRealizationPanel] = usePersistentToggle('budget-optimizer:show-realization', false)
   const isDatasetReadoutOnly = datasetAvailable === false
+  const isBudgetReadoutOnly = isDatasetReadoutOnly || budgetActionsAvailable === false
+  const readoutOnlyReason =
+    budgetReadoutReason ||
+    (isDatasetReadoutOnly
+      ? 'The linked MMM dataset is unavailable, so new budget scenarios cannot be created from this run.'
+      : 'This MMM run is available as a readout, but it needs to be refreshed before creating new budget decisions.')
 
   const totalBudgetMultiplier =
     totalBudgetMode === 'constant' ? 1.0 : 1.0 + totalBudgetChangePct / 100
@@ -276,8 +289,8 @@ export default function BudgetOptimizer({
   const saveScenarioMutation = useMutation({
     mutationFn: async () => {
       if (!runId) throw new Error('Missing model run')
-      if (isDatasetReadoutOnly) {
-        throw new Error('The linked MMM dataset is unavailable, so new budget scenarios cannot be saved from this run.')
+      if (isBudgetReadoutOnly) {
+        throw new Error(readoutOnlyReason)
       }
       return apiSendJson<SavedBudgetScenario>(
         `/api/models/${runId}/budget/scenarios`,
@@ -494,7 +507,7 @@ export default function BudgetOptimizer({
   }
 
   const handleSuggestOptimal = async () => {
-    if (!runId || isDatasetReadoutOnly) return
+    if (!runId || isBudgetReadoutOnly) return
     setIsOptimizing(true)
     setOptimalMix(null)
     setOptimalUplift(null)
@@ -532,7 +545,7 @@ export default function BudgetOptimizer({
   }
 
   const handleRunWhatIf = async () => {
-    if (!runId || isDatasetReadoutOnly) return
+    if (!runId || isBudgetReadoutOnly) return
     setIsWhatIfLoading(true)
     setWhatIfResult(null)
     try {
@@ -606,7 +619,7 @@ export default function BudgetOptimizer({
     : recommendationsQuery.data?.summary
   const canUseDatasetBackedActions =
     !!runId &&
-    !isDatasetReadoutOnly &&
+    !isBudgetReadoutOnly &&
     (isUsingSavedScenario || recommendationsQuery.data?.decision?.status !== 'blocked') &&
     !!topRecommendation
   const savedScenarios = useMemo(
@@ -633,8 +646,10 @@ export default function BudgetOptimizer({
     const savedScenarioCount = savedScenariosQuery.data?.total ?? 0
     const realizationCount = realizationQuery.data?.total ?? 0
     const hasLargeExtrapolation = extrapolationWarnings.length > 0
-    const headline = isDatasetReadoutOnly
-      ? 'This MMM run is available as a saved readout, but new budget recommendations need the missing source dataset.'
+    const headline = isBudgetReadoutOnly
+      ? isDatasetReadoutOnly
+        ? 'This MMM run is available as a saved readout, but new budget recommendations need the missing source dataset.'
+        : 'This MMM run is available as a saved readout, but new budget recommendations need a refreshed model run.'
       : topRecommendation
       ? hasLargeExtrapolation
         ? 'Budget guidance is usable, but the active scenario is stretching beyond observed spend history.'
@@ -644,19 +659,27 @@ export default function BudgetOptimizer({
     const items = [
       isDatasetReadoutOnly
         ? 'Basis: saved ROI, contribution, scenarios, and rollout records are still readable, but the linked dataset preview is unavailable in this runtime.'
+        : isBudgetReadoutOnly
+        ? `Basis: saved ROI, contribution, scenarios, and rollout records remain readable. ${readoutOnlyReason}`
         : `Basis: this workspace uses the selected MMM run plus ${dataset.length.toLocaleString()} linked dataset preview rows across ${datasetDateCoverage}.`,
       isDatasetReadoutOnly
         ? 'Recommendation engine basis: unavailable until the source MMM dataset is rebuilt or reattached.'
+        : isBudgetReadoutOnly
+        ? 'Recommendation engine basis: paused for this run until a compatible replacement run is created.'
         : modeledPeriods > 0
         ? `Recommendation engine basis: ${modeledPeriods.toLocaleString()} modeled periods across ${channelList.length.toLocaleString()} channels.`
         : 'Recommendation engine basis is still unavailable, so treat this page as setup and manual planning only.',
       isDatasetReadoutOnly
         ? 'Do not use manual sliders or optimizer output for action from this run; create a compatible new run first.'
+        : isBudgetReadoutOnly
+        ? 'Do not create new budget actions from this readout; use it only to review prior scenarios and rollout evidence.'
         : topRecommendation
         ? `Current top recommendation is ${topRecommendation.confidence.band.toLowerCase()} confidence with ${topRecommendation.risk.extrapolation.toLowerCase()} extrapolation risk.`
         : 'No top recommendation is available yet, so manual budget editing should be treated as exploratory only.',
       isDatasetReadoutOnly
         ? 'Observed spend ranges are unavailable, so extrapolation guardrails cannot be evaluated.'
+        : isBudgetReadoutOnly
+        ? 'Observed spend ranges may be visible, but optimizer guardrails are disabled until the run is refreshed.'
         : hasLargeExtrapolation
         ? `Primary trust risk: ${extrapolationWarnings.length.toLocaleString()} channel scenario${extrapolationWarnings.length === 1 ? '' : 's'} exceed observed spend ranges.`
         : 'Current scenario stays inside observed historical spend ranges, so the optimizer is not extrapolating aggressively.',
@@ -669,7 +692,9 @@ export default function BudgetOptimizer({
     channelList.length,
     dataset.length,
     datasetDateCoverage,
+    isBudgetReadoutOnly,
     isDatasetReadoutOnly,
+    readoutOnlyReason,
     extrapolationWarnings.length,
     realizationQuery.data?.total,
     recommendationsQuery.data?.summary.periods,
@@ -711,7 +736,7 @@ export default function BudgetOptimizer({
     setOptimalPredictedKpi(null)
     setOptimizationMessage('Loaded saved scenario')
   }
-  const budgetSourceLabel = isDatasetReadoutOnly
+  const budgetSourceLabel = isBudgetReadoutOnly
     ? 'MMM run readout only'
     : runId
       ? 'MMM model run + dataset preview'
@@ -786,6 +811,8 @@ export default function BudgetOptimizer({
             <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
               {isDatasetReadoutOnly
                 ? 'This workspace is showing saved MMM readouts, scenarios, and rollout realization for a historical run whose linked dataset is unavailable. Rebuild a compatible dataset before creating new optimizer recommendations.'
+                : isBudgetReadoutOnly
+                ? `This workspace is showing saved MMM readouts, scenarios, and rollout realization, but new optimizer actions are paused. ${readoutOnlyReason}`
                 : 'Budget actions here are derived from the active MMM run and its linked dataset preview. Saved scenarios and rollout realization stay tied to that run, so reopening prior work preserves the same model basis instead of forcing a new run setup.'}
             </div>
             <div
@@ -1197,7 +1224,11 @@ export default function BudgetOptimizer({
             blockers={recommendationsQuery.data.decision.blockers ?? []}
             warnings={recommendationsQuery.data.decision.warnings ?? []}
             actions={recommendationsQuery.data.decision.actions ?? []}
-            onActionClick={(action) => navigateForRecommendedAction(action, { defaultPage: 'mmm' })}
+            onActionClick={(action) =>
+              onRecommendedActionClick
+                ? onRecommendedActionClick(action)
+                : navigateForRecommendedAction(action, { defaultPage: 'mmm' })
+            }
           />
         )}
         {saveScenarioMutation.isError ? (
@@ -1462,19 +1493,25 @@ export default function BudgetOptimizer({
         )}
       </SectionCard>
 
-      {isDatasetReadoutOnly ? (
+      {isBudgetReadoutOnly ? (
         <SectionCard
-          title="Dataset-backed planning paused"
-          subtitle="The historical model readout is available, but manual allocation and optimizer actions need the linked source rows."
+          title={isDatasetReadoutOnly ? 'Dataset-backed planning paused' : 'New budget actions paused'}
+          subtitle={
+            isDatasetReadoutOnly
+              ? 'The historical model readout is available, but manual allocation and optimizer actions need the linked source rows.'
+              : 'Prior budget work remains readable, but new optimizer actions require a refreshed MMM run.'
+          }
         >
           <div style={{ display: 'grid', gap: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
             <div>
-              Saved ROI, contribution, scenarios, and rollout tracking remain visible above. Baseline spend, observed spend
-              ranges, and period-level budget checks are unavailable because the MMM dataset file is missing.
+              Saved ROI, contribution, scenarios, and rollout tracking remain visible above.{' '}
+              {isDatasetReadoutOnly
+                ? 'Baseline spend, observed spend ranges, and period-level budget checks are unavailable because the MMM dataset file is missing.'
+                : readoutOnlyReason}
             </div>
             <div>
-              Use <strong style={{ color: t.color.text }}>Create compatible new run</strong> from the MMM analysis
-              recovery panel to rebuild the dataset and unlock new budget recommendations.
+              Use <strong style={{ color: t.color.text }}>{isDatasetReadoutOnly ? 'Create compatible new run' : 'Re-run same setup'}</strong>{' '}
+              from the MMM workspace to unlock new budget recommendations.
             </div>
           </div>
         </SectionCard>
