@@ -59,6 +59,12 @@ def _overview_delta_pct(current: float, previous: float) -> Optional[float]:
     return round((current - previous) / previous * 100.0, 1)
 
 
+def _overview_driver_delta_pct(current: float, previous: float) -> Optional[float]:
+    if previous == 0:
+        return 100.0 if current > 0 else None
+    return _overview_delta_pct(current, previous)
+
+
 def _coerce_utc_datetime(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
@@ -365,26 +371,6 @@ def _is_full_utc_day_window(date_from: Optional[datetime], date_to: Optional[dat
     return end.time() == datetime.max.time()
 
 
-def _daily_aggregate_rows_are_stale(rows: List[Any], end: datetime) -> bool:
-    end_day = _to_utc_naive(end).date()
-    latest: Optional[Any] = None
-    for row in rows:
-        row_date = getattr(row, "date", None)
-        if row_date is None:
-            continue
-        try:
-            has_signal = (
-                float(getattr(row, "count_conversions", 0.0) or 0.0) > 1e-9
-                or float(getattr(row, "gross_revenue_total", 0.0) or 0.0) > 1e-9
-            )
-        except Exception:
-            has_signal = False
-        if not has_signal:
-            continue
-        latest = row_date if latest is None else max(latest, row_date)
-    return latest is not None and latest < end_day
-
-
 def _conversions_and_revenue_from_channel_facts(
     db: Session,
     date_from: datetime,
@@ -403,8 +389,6 @@ def _conversions_and_revenue_from_channel_facts(
         .all()
     )
     if not rows:
-        return None
-    if _daily_aggregate_rows_are_stale(rows, date_to):
         return None
     daily: Dict[str, Dict[str, Any]] = {}
     total_value = 0.0
@@ -530,8 +514,6 @@ def _series_from_channel_facts(
     )
     if not rows:
         return None
-    if _daily_aggregate_rows_are_stale(rows, end):
-        return None
 
     conv_map: Dict[str, float] = {}
     rev_map: Dict[str, float] = {}
@@ -589,8 +571,6 @@ def _aggregate_outcomes_from_channel_facts(
         .all()
     )
     if not rows:
-        return None
-    if _daily_aggregate_rows_are_stale(rows, end):
         return None
     totals = _empty_outcomes()
     for row in rows:
@@ -660,8 +640,6 @@ def _aggregate_channel_metrics_from_facts(
     )
     if not rows:
         return None
-    if _daily_aggregate_rows_are_stale(rows, dt_to):
-        return None
     metrics: Dict[str, Dict[str, float]] = {}
     outcomes: Dict[str, Dict[str, float]] = {}
     for row in rows:
@@ -702,8 +680,6 @@ def _aggregate_daily_channel_revenue_from_facts(
         .all()
     )
     if not rows:
-        return None
-    if _daily_aggregate_rows_are_stale(rows, dt_to):
         return None
     out: Dict[str, Dict[str, float]] = {}
     for row in rows:
@@ -780,23 +756,6 @@ def _series_from_daily_path_aggregates(
         "revenue_map": rev_map,
         "observed_points": len(conv_map),
     }
-
-
-def _daily_path_aggregates_cover_window(
-    db: Session,
-    *,
-    journey_definition_id: str,
-    end: datetime,
-) -> bool:
-    latest = (
-        db.query(func.max(JourneyPathDaily.date))
-        .filter(
-            JourneyPathDaily.journey_definition_id == journey_definition_id,
-            (JourneyPathDaily.count_conversions > 0) | (JourneyPathDaily.gross_revenue_total > 0),
-        )
-        .scalar()
-    )
-    return latest is not None and latest >= end.date()
 
 
 def _aggregate_outcomes_from_daily_path_aggregates(
@@ -1590,65 +1549,49 @@ def get_overview_summary(
     fact_prev = None if use_channel_group_filter or not use_utc_daily_aggregates else _series_from_channel_facts(db, prev_from, prev_to, grain)
     fact_current_outcomes = None if use_channel_group_filter or not use_utc_daily_aggregates else _aggregate_outcomes_from_channel_facts(db, dt_from, dt_to)
     fact_prev_outcomes = None if use_channel_group_filter or not use_utc_daily_aggregates else _aggregate_outcomes_from_channel_facts(db, prev_from, prev_to)
-    if (
-        fact_current is not None
-        and fact_prev is not None
-        and fact_current_outcomes is not None
-        and fact_prev_outcomes is not None
-    ):
-        current_paths = fact_current
-        prev_paths = fact_prev
-        current_outcomes = fact_current_outcomes
-        prev_outcomes = fact_prev_outcomes
-        current_visits = fact_current
-        prev_visits = fact_prev
-    else:
+    current_paths = fact_current if fact_current is not None and fact_current_outcomes is not None else None
+    prev_paths = fact_prev if fact_prev is not None and fact_prev_outcomes is not None else None
+    current_outcomes = fact_current_outcomes if current_paths is not None else None
+    prev_outcomes = fact_prev_outcomes if prev_paths is not None else None
+    current_visits = fact_current if current_paths is not None else None
+    prev_visits = fact_prev if prev_paths is not None else None
+
+    if current_paths is None or prev_paths is None:
         aggregate_definition_id = _single_active_overview_definition_id(db) if grain == "daily" and not use_channel_group_filter and use_utc_daily_aggregates else None
-        if aggregate_definition_id and not _daily_path_aggregates_cover_window(
-            db,
-            journey_definition_id=aggregate_definition_id,
-            end=dt_to,
-        ):
-            aggregate_definition_id = None
         if aggregate_definition_id:
-            current_paths = _series_from_daily_path_aggregates(
-                db,
-                journey_definition_id=aggregate_definition_id,
-                start=dt_from,
-                end=dt_to,
-            )
-            prev_paths = _series_from_daily_path_aggregates(
-                db,
-                journey_definition_id=aggregate_definition_id,
-                start=prev_from,
-                end=prev_to,
-            )
-            current_outcomes = _aggregate_outcomes_from_daily_path_aggregates(
-                db,
-                journey_definition_id=aggregate_definition_id,
-                start=dt_from,
-                end=dt_to,
-            )
-            prev_outcomes = _aggregate_outcomes_from_daily_path_aggregates(
-                db,
-                journey_definition_id=aggregate_definition_id,
-                start=prev_from,
-                end=prev_to,
-            )
-        else:
+            if current_paths is None:
+                current_paths = _series_from_daily_path_aggregates(
+                    db,
+                    journey_definition_id=aggregate_definition_id,
+                    start=dt_from,
+                    end=dt_to,
+                )
+                current_outcomes = _aggregate_outcomes_from_daily_path_aggregates(
+                    db,
+                    journey_definition_id=aggregate_definition_id,
+                    start=dt_from,
+                    end=dt_to,
+                )
+            if prev_paths is None:
+                prev_paths = _series_from_daily_path_aggregates(
+                    db,
+                    journey_definition_id=aggregate_definition_id,
+                    start=prev_from,
+                    end=prev_to,
+                )
+                prev_outcomes = _aggregate_outcomes_from_daily_path_aggregates(
+                    db,
+                    journey_definition_id=aggregate_definition_id,
+                    start=prev_from,
+                    end=prev_to,
+                )
+        if current_paths is None:
             current_paths = _series_from_conversion_paths(
                 db,
                 dt_from,
                 dt_to,
                 grain,
                 conversion_ids=current_conversion_ids if use_channel_group_filter else None,
-            )
-            prev_paths = _series_from_conversion_paths(
-                db,
-                prev_from,
-                prev_to,
-                grain,
-                conversion_ids=previous_conversion_ids if use_channel_group_filter else None,
             )
             current_outcomes = _aggregate_outcomes_from_paths(
                 db,
@@ -1657,6 +1600,14 @@ def get_overview_summary(
                 None,
                 conversion_ids=current_conversion_ids if use_channel_group_filter else None,
             )
+        if prev_paths is None:
+            prev_paths = _series_from_conversion_paths(
+                db,
+                prev_from,
+                prev_to,
+                grain,
+                conversion_ids=previous_conversion_ids if use_channel_group_filter else None,
+            )
             prev_outcomes = _aggregate_outcomes_from_paths(
                 db,
                 prev_from,
@@ -1664,6 +1615,7 @@ def get_overview_summary(
                 None,
                 conversion_ids=previous_conversion_ids if use_channel_group_filter else None,
             )
+    if current_visits is None:
         current_visits = _series_from_visits(
             db,
             dt_from,
@@ -1671,6 +1623,7 @@ def get_overview_summary(
             grain,
             conversion_ids=current_conversion_ids if use_channel_group_filter else None,
         )
+    if prev_visits is None:
         prev_visits = _series_from_visits(
             db,
             prev_from,
@@ -2202,10 +2155,10 @@ def get_overview_drivers(
             "visits": visits,
             "conversions": conv,
             "revenue": round(rev, 2),
-            "delta_spend_pct": _overview_delta_pct(spend, prev_spend),
-            "delta_visits_pct": _overview_delta_pct(float(visits), float(prev_visits)),
-            "delta_conversions_pct": _overview_delta_pct(float(conv), float(prev_conv)),
-            "delta_revenue_pct": _overview_delta_pct(rev, prev_rev),
+            "delta_spend_pct": _overview_driver_delta_pct(spend, prev_spend),
+            "delta_visits_pct": _overview_driver_delta_pct(float(visits), float(prev_visits)),
+            "delta_conversions_pct": _overview_driver_delta_pct(float(conv), float(prev_conv)),
+            "delta_revenue_pct": _overview_driver_delta_pct(rev, prev_rev),
             "outcomes": ch_outcomes.get(ch, _empty_outcomes()),
         })
     by_channel.sort(key=lambda x: -x["revenue"])
@@ -2229,7 +2182,7 @@ def get_overview_drivers(
             "campaign": c,
             "revenue": round(camp_rev[c], 2),
             "conversions": camp_conv.get(c, 0),
-            "delta_revenue_pct": _overview_delta_pct(camp_rev.get(c, 0), prev_camp_rev.get(c, 0)),
+            "delta_revenue_pct": _overview_driver_delta_pct(camp_rev.get(c, 0), prev_camp_rev.get(c, 0)),
             "outcomes": camp_outcomes.get(c, _empty_outcomes()),
         }
         for c in campaigns_sorted
