@@ -1,6 +1,7 @@
 import pandas as pd
 
 from app.mmm_engine import fit_model
+from app.mmm_version import CURRENT_MMM_ENGINE_VERSION
 
 
 def test_ridge_wide_uses_total_spend_for_roi_and_channel_summary():
@@ -25,6 +26,7 @@ def test_ridge_wide_uses_total_spend_for_roi_and_channel_summary():
     contribution_sum = sum(row["mean_share"] for row in result["contrib"])
 
     assert result["engine"] == "ridge-fallback"
+    assert result["engine_version"] == CURRENT_MMM_ENGINE_VERSION
     assert paid_roi > 0
     assert summary_spend["paid_search"] == 700.0
     assert summary_spend["facebook_ads"] == 400.0

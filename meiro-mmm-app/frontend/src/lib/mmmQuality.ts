@@ -1,7 +1,10 @@
 export type MMMQualityLevel = 'ready' | 'directional' | 'not_usable' | 'pending'
 
+export const CURRENT_MMM_ENGINE_VERSION = '2026-04-14-ridge-contrib-v2'
+
 export interface MMMQualityInput {
   status?: string | null
+  engineVersion?: string | null
   datasetAvailable?: boolean
   r2?: number | null
   weeks?: number
@@ -57,6 +60,7 @@ export function evaluateMMMRunQuality(input: MMMQualityInput): MMMQualityResult 
   const hasSpendSignal = input.totalSpend != null
   const totalSpend = Number(input.totalSpend ?? 0)
   const hasDataset = input.datasetAvailable !== false
+  const isLegacyEngine = status === 'finished' && input.engineVersion !== CURRENT_MMM_ENGINE_VERSION
   const weeks = Number(input.weeks ?? 0)
   const channelsModeled = Number(input.channelsModeled ?? 0)
   const r2 = Number(input.r2)
@@ -74,6 +78,7 @@ export function evaluateMMMRunQuality(input: MMMQualityInput): MMMQualityResult 
   }
 
   if (input.datasetAvailable === false) warnings.push('Linked dataset preview is unavailable; source-row checks are disabled.')
+  if (isLegacyEngine) warnings.push('This run was created before the current MMM calculation contract. Re-run with the same setup before using it for new budget decisions.')
   if (weeks > 0 && weeks < 20) warnings.push(`Short history: ${weeks.toLocaleString()} modeled weeks.`)
   if (channelsModeled > 0 && weeks > 0 && channelsModeled > weeks / 2) {
     warnings.push('Many modeled channels compared to available weeks.')
@@ -99,11 +104,11 @@ export function evaluateMMMRunQuality(input: MMMQualityInput): MMMQualityResult 
   if (warnings.length > 0) {
     return {
       level: 'directional',
-      label: input.datasetAvailable === false ? 'Readout only' : 'Directional',
+      label: input.datasetAvailable === false ? 'Readout only' : isLegacyEngine ? 'Refresh needed' : 'Directional',
       tone: 'warning',
       reasons: [...new Set(warnings)],
       canUseResults: true,
-      canUseBudget: input.datasetAvailable !== false,
+      canUseBudget: input.datasetAvailable !== false && !isLegacyEngine,
     }
   }
 

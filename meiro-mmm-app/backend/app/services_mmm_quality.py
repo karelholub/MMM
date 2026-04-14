@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.mmm_version import CURRENT_MMM_ENGINE_VERSION
+
 
 def _finite_numbers(values: list[Any]) -> list[float]:
     numbers: list[float] = []
@@ -45,6 +47,7 @@ def evaluate_mmm_run_quality(
     contrib_shares = _finite_numbers([row.get("mean_share") for row in run.get("contrib") or [] if isinstance(row, dict)])
     has_output = bool(roi_values) and bool(contrib_shares)
     output_all_zero = has_output and _all_near_zero(roi_values) and _all_near_zero(contrib_shares)
+    is_legacy_engine = status == "finished" and run.get("engine_version") != CURRENT_MMM_ENGINE_VERSION
 
     if not has_output:
         reasons.append("Model output is incomplete: ROI or contribution rows are missing.")
@@ -69,6 +72,8 @@ def evaluate_mmm_run_quality(
 
     if dataset_available is False:
         warnings.append("Linked dataset preview is unavailable; source-row checks are disabled.")
+    if is_legacy_engine:
+        warnings.append("This run was created before the current MMM calculation contract. Re-run with the same setup before using it for new budget decisions.")
     if weeks is not None and weeks > 0 and weeks < 20:
         warnings.append(f"Short history: {weeks:,} modeled weeks.")
     if channels_modeled is not None and channels_modeled > 0 and weeks is not None and weeks > 0 and channels_modeled > weeks / 2:
@@ -96,11 +101,11 @@ def evaluate_mmm_run_quality(
     if warnings:
         return {
             "level": "directional",
-            "label": "Readout only" if dataset_available is False else "Directional",
+            "label": "Readout only" if dataset_available is False else "Refresh needed" if is_legacy_engine else "Directional",
             "tone": "warning",
             "reasons": list(dict.fromkeys(warnings)),
             "can_use_results": True,
-            "can_use_budget": dataset_available is not False,
+            "can_use_budget": dataset_available is not False and not is_legacy_engine,
         }
     return {
         "level": "ready",

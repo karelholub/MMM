@@ -61,6 +61,7 @@ interface RunData {
     kpi_mode?: string
   }
   kpi_mode?: string
+  engine_version?: string | null
   uplift?: number
   r2?: number
   calibration_mape?: number
@@ -299,6 +300,7 @@ export default function MMMDashboard({
     () =>
       evaluateMMMRunQuality({
         status: 'finished',
+        engineVersion: run?.engine_version,
         datasetAvailable: !datasetReadoutOnly,
         r2,
         weeks,
@@ -308,7 +310,7 @@ export default function MMMDashboard({
         contrib,
         diagnostics,
       }),
-    [channelsModeled, contrib, datasetReadoutOnly, diagnostics, r2, roi, totalSpend, weeks],
+    [channelsModeled, contrib, datasetReadoutOnly, diagnostics, r2, roi, run?.engine_version, totalSpend, weeks],
   )
   const confidenceLevel: 'ok' | 'warn' | 'danger' =
     modelQuality.level === 'ready' && !suspiciousFit && !manyParamsFewPoints && !hasNegativeRoi && diagnosticsIssues.length === 0

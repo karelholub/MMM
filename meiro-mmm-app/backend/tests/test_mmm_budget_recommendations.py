@@ -11,6 +11,7 @@ from app.connectors.ads_ops.base import AdsApplyResult, AdsProviderError
 from app.db import Base, get_db
 from app.main import app
 from app import main as main_module
+from app.mmm_version import CURRENT_MMM_ENGINE_VERSION
 
 
 class _FakeAdsAdapter:
@@ -92,6 +93,7 @@ def test_budget_recommendations_and_scenarios(tmp_path, monkeypatch):
     monkeypatch.setattr("app.services_ads_ops.get_access_token_for_provider", lambda *_args, **_kwargs: "token-1")
     main_module.RUNS["mmm_budget_test"] = {
         "status": "finished",
+        "engine_version": CURRENT_MMM_ENGINE_VERSION,
         "dataset_id": "budget-test-dataset",
         "config": {
             "dataset_id": "budget-test-dataset",
@@ -368,6 +370,7 @@ def test_models_list_prioritizes_finished_runs_and_marks_stale_jobs(tmp_path):
             },
             "mmm_finished_available_dataset": {
                 "status": "finished",
+                "engine_version": CURRENT_MMM_ENGINE_VERSION,
                 "dataset_id": "available-mmm-dataset",
                 "created_at": "2026-03-01T00:00:00Z",
                 "updated_at": "2026-03-01T01:00:00Z",
@@ -465,6 +468,7 @@ def test_not_usable_mmm_run_blocks_budget_actions(tmp_path):
     }
     main_module.RUNS["mmm_zero_signal"] = {
         "status": "finished",
+        "engine_version": CURRENT_MMM_ENGINE_VERSION,
         "dataset_id": "zero-signal-dataset",
         "created_at": "2026-04-01T00:00:00Z",
         "updated_at": "2026-04-01T01:00:00Z",

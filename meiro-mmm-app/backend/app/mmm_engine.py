@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 from typing import Any, Dict, List, Optional
 
+from app.mmm_version import CURRENT_MMM_ENGINE_VERSION
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -38,6 +40,7 @@ def engine_info() -> Dict[str, Any]:
     """Return metadata about the active engine."""
     return {
         "engine": "pymc-marketing" if PYMC_AVAILABLE else "ridge-fallback",
+        "engine_version": CURRENT_MMM_ENGINE_VERSION,
         "pymc_available": PYMC_AVAILABLE,
     }
 
@@ -153,6 +156,7 @@ def _fit_bayesian(
         "contrib": contrib,
         "roi": roi,
         "engine": "pymc-marketing",
+        "engine_version": CURRENT_MMM_ENGINE_VERSION,
         "adstock_params": adstock_params,
         "saturation_params": saturation_params,
         "diagnostics": diagnostics,
@@ -237,6 +241,7 @@ def _fit_ridge_wide(
         "contrib": contrib,
         "roi": roi,
         "engine": "ridge-fallback",
+        "engine_version": CURRENT_MMM_ENGINE_VERSION,
         "channel_summary": channel_summary,
         "diagnostics": {"ridge_positive": True, "contribution_basis": "coefficient_x_total_spend"},
     }
@@ -347,6 +352,7 @@ def _fit_ridge_tall(
         "contrib": contrib,
         "roi": roi,
         "engine": "ridge-fallback",
+        "engine_version": CURRENT_MMM_ENGINE_VERSION,
         "campaigns": campaigns,
         "channel_summary": channel_summary,
         "diagnostics": {"ridge_positive": True, "contribution_basis": "coefficient_x_total_spend"},

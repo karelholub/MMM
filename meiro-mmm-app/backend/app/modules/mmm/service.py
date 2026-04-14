@@ -3,6 +3,8 @@ from typing import Any, Callable, Dict
 
 import pandas as pd
 
+from app.mmm_version import CURRENT_MMM_ENGINE_VERSION
+
 
 def _update_run_progress(
     *,
@@ -153,6 +155,7 @@ def fit_model(
             "contrib": result["contrib"],
             "roi": result["roi"],
             "engine": result.get("engine", "unknown"),
+            "engine_version": result.get("engine_version", CURRENT_MMM_ENGINE_VERSION),
             "updated_at": now_iso_fn(),
         }
         for key in ("campaigns", "channel_summary", "adstock_params", "saturation_params", "diagnostics"):

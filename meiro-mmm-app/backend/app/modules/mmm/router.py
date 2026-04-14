@@ -343,6 +343,7 @@ def create_router(
                     "n_covariates": len(config.get("covariates") or []),
                     "r2": run.get("r2"),
                     "engine": run.get("engine"),
+                    "engine_version": run.get("engine_version"),
                     "stage": run.get("stage"),
                     "progress_pct": run.get("progress_pct"),
                     "detail": run.get("detail"),

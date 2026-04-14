@@ -76,6 +76,7 @@ interface MMMRunSummary {
   n_covariates?: number
   r2?: number
   engine?: string
+  engine_version?: string | null
   stage?: string | null
   progress_pct?: number | null
   scenario_count?: number
@@ -667,6 +668,7 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
       : undefined
     const runQuality = evaluateMMMRunQuality({
       status: runStatus,
+      engineVersion: runData?.engine_version,
       datasetAvailable,
       r2: hasR2 ? r2Value : null,
       weeks: 0,
@@ -691,6 +693,8 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
     const healthLabel =
       runQuality.level === 'not_usable'
         ? runQuality.label
+        : runQuality.level === 'directional'
+          ? runQuality.label
         : runStatus !== 'finished'
         ? String(runStatus || 'pending')
         : !datasetAvailable
