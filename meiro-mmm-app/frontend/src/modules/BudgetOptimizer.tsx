@@ -176,6 +176,10 @@ function providerFromBudgetChannel(channel: string): AdsProviderKey | null {
   return null
 }
 
+function isTallMmmDataset(rows: Record<string, unknown>[]): boolean {
+  return rows.some((row) => row.channel != null && row.spend != null)
+}
+
 export default function BudgetOptimizer({
   roiData,
   contribData,
@@ -387,6 +391,14 @@ export default function BudgetOptimizer({
   const baselineSpendByChannel = useMemo(() => {
     const out: Record<string, number> = {}
     const chs = channelList
+    if (isTallMmmDataset(dataset)) {
+      for (const row of dataset) {
+        const channel = String(row.channel ?? '')
+        if (!chs.includes(channel)) continue
+        out[channel] = (out[channel] || 0) + (Number(row.spend) || 0)
+      }
+      return out
+    }
     for (const row of dataset) {
       for (const ch of chs) {
         out[ch] = (out[ch] || 0) + (Number(row[ch]) || 0)
@@ -398,6 +410,27 @@ export default function BudgetOptimizer({
   const observedSpendRangeByChannel = useMemo(() => {
     const out: Record<string, { min: number; max: number }> = {}
     const chs = channelList
+    if (isTallMmmDataset(dataset)) {
+      const spendByDateChannel = new Map<string, number>()
+      for (const row of dataset) {
+        const channel = String(row.channel ?? '')
+        if (!chs.includes(channel)) continue
+        const date = String(row.date ?? '')
+        const key = `${date}|||${channel}`
+        spendByDateChannel.set(key, (spendByDateChannel.get(key) || 0) + (Number(row.spend) || 0))
+      }
+      for (const ch of chs) {
+        const values = Array.from(spendByDateChannel.entries())
+          .filter(([key]) => key.endsWith(`|||${ch}`))
+          .map(([, value]) => value)
+          .filter((value) => value > 0)
+        out[ch] = {
+          min: values.length ? Math.min(...values) : 0,
+          max: values.length ? Math.max(...values) : 0,
+        }
+      }
+      return out
+    }
     for (const ch of chs) {
       const values = dataset.map((row) => Number(row[ch]) || 0).filter((v) => v > 0)
       out[ch] = {

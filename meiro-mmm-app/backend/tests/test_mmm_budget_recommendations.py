@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from datetime import date, timedelta
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -199,6 +200,52 @@ def test_budget_recommendations_and_scenarios(tmp_path, monkeypatch):
         main_module.DATASETS.update(original_datasets)
         main_module.SETTINGS.feature_flags.mmm_enabled = original_mmm_enabled
         engine.dispose()
+
+
+def test_budget_recommendations_summarize_tall_campaign_dataset(tmp_path):
+    dataset_rows = []
+    for week in range(12):
+        week_start = (date(2026, 1, 5) + timedelta(days=week * 7)).isoformat()
+        dataset_rows.extend(
+            [
+                {"date": week_start, "channel": "paid_search", "campaign": "brand", "spend": 100.0 + week, "conversions": 10.0 + week},
+                {"date": week_start, "channel": "facebook_ads", "campaign": "prospecting", "spend": 50.0 + week, "conversions": 10.0 + week},
+            ]
+        )
+    paid_spend = sum(100.0 + week for week in range(12))
+    facebook_spend = sum(50.0 + week for week in range(12))
+    run = {
+        "status": "finished",
+        "engine_version": CURRENT_MMM_ENGINE_VERSION,
+        "config": {"kpi": "conversions", "spend_channels": ["paid_search", "facebook_ads"]},
+        "roi": [{"channel": "paid_search", "roi": 1.6}, {"channel": "facebook_ads", "roi": 0.8}],
+        "contrib": [{"channel": "paid_search", "mean_share": 0.7}, {"channel": "facebook_ads", "mean_share": 0.3}],
+        "channel_summary": [
+            {"channel": "paid_search", "spend": paid_spend, "roi": 1.6, "mroas": 1.6, "elasticity": 0.2},
+            {"channel": "facebook_ads", "spend": facebook_spend, "roi": 0.8, "mroas": 0.8, "elasticity": 0.1},
+        ],
+    }
+
+    from app.services_budget_recommendations import build_budget_recommendations
+
+    body = build_budget_recommendations(
+        run_id="tall-budget-test",
+        run=run,
+        dataset_rows=dataset_rows,
+        objective="protect_efficiency",
+        total_budget_change_pct=0,
+    )
+
+    assert body["decision"]["status"] == "ready"
+    assert body["summary"]["periods"] == 12
+    assert body["summary"]["baseline_spend_total"] == paid_spend + facebook_spend
+    assert body["recommendations"]
+    paid_action = next(
+        action
+        for action in body["recommendations"][0]["actions"]
+        if action["channel"] == "paid_search"
+    )
+    assert paid_action["base_spend"] == paid_spend
 
 
 def test_mmm_run_with_missing_dataset_is_readout_only(tmp_path):

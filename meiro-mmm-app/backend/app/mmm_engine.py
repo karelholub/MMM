@@ -184,6 +184,22 @@ def _normalize_positive_contributions(raw: Dict[str, float]) -> Dict[str, float]
         return {key: 0.0 for key in raw}
     return {key: value / total for key, value in positive.items()}
 
+
+def _aggregate_tall_target_by_date(df: pd.DataFrame, target_column: str, dates: pd.Index) -> pd.Series:
+    """Aggregate tall KPI rows without multiplying repeated daily totals."""
+    target = pd.to_numeric(df[target_column], errors="coerce").fillna(0.0)
+    tmp = pd.DataFrame({"date": df["date"], "__target": target})
+
+    def aggregate(group: pd.Series) -> float:
+        values = group.dropna().astype(float)
+        if values.empty:
+            return 0.0
+        if values.nunique() == 1:
+            return float(values.iloc[0])
+        return float(values.sum())
+
+    return tmp.groupby("date")["__target"].apply(aggregate).reindex(dates).fillna(0.0)
+
 def _fit_ridge_wide(
     df: pd.DataFrame,
     target_column: str,
@@ -255,18 +271,25 @@ def _fit_ridge_tall(
     """Fit Ridge regression for tall-format data (channel/campaign rows)."""
     from sklearn.linear_model import Ridge
 
-    df["__feature"] = df["channel"].astype(str) + "|" + df["campaign"].astype(str)
+    work_df = df.copy()
+    selected_channels = {str(ch) for ch in channel_columns if str(ch)}
+    if selected_channels:
+        work_df = work_df[work_df["channel"].astype(str).isin(selected_channels)].copy()
+    if work_df.empty:
+        raise ValueError("No rows remain after applying selected MMM channels")
+
+    work_df["__feature"] = work_df["channel"].astype(str) + "|" + work_df["campaign"].astype(str)
     spend_wide = (
-        df.pivot_table(
+        work_df.pivot_table(
             index="date", columns="__feature", values="spend", aggfunc="sum", fill_value=0
         )
         .sort_index()
     )
 
-    if target_column not in df.columns:
+    if target_column not in work_df.columns:
         raise ValueError(f"Column '{target_column}' missing from dataset")
 
-    y_series = df.groupby("date")[target_column].sum().reindex(spend_wide.index).fillna(0.0)
+    y_series = _aggregate_tall_target_by_date(work_df, target_column, spend_wide.index)
     X = spend_wide.values
     y = y_series.values
     features = list(spend_wide.columns)
@@ -355,7 +378,12 @@ def _fit_ridge_tall(
         "engine_version": CURRENT_MMM_ENGINE_VERSION,
         "campaigns": campaigns,
         "channel_summary": channel_summary,
-        "diagnostics": {"ridge_positive": True, "contribution_basis": "coefficient_x_total_spend"},
+        "diagnostics": {
+            "ridge_positive": True,
+            "contribution_basis": "coefficient_x_total_spend",
+            "target_aggregation": "single_value_if_repeated_else_sum",
+            "selected_channels": sorted(selected_channels) if selected_channels else [],
+        },
     }
 
 

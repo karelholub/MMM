@@ -1,1 +1,1 @@
-CURRENT_MMM_ENGINE_VERSION = "2026-04-14-ridge-contrib-v2"
+CURRENT_MMM_ENGINE_VERSION = "2026-04-14-ridge-tall-contract-v3"

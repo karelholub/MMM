@@ -96,7 +96,9 @@ def fit_model(
             )
             return
     else:
-        total_spend = float(pd.to_numeric(df["spend"], errors="coerce").fillna(0).sum())
+        selected_channels = {str(ch) for ch in cfg.spend_channels if str(ch)}
+        spend_df = df[df["channel"].astype(str).isin(selected_channels)] if selected_channels else df
+        total_spend = float(pd.to_numeric(spend_df["spend"], errors="coerce").fillna(0).sum())
         if total_spend <= 0:
             _update_run_progress(
                 run_id=run_id,
@@ -106,7 +108,7 @@ def fit_model(
                 status="error",
                 stage="Spend validation failed",
                 progress_pct=100,
-                detail="MMM run cannot start because the dataset has zero spend.",
+                detail="MMM run cannot start because selected spend channels have zero spend in the dataset.",
             )
             return
     priors = cfg.priors or {}

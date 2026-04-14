@@ -70,3 +70,35 @@ def test_ridge_tall_aggregates_campaign_outputs_to_channel_totals():
     assert paid_roi > 0
     assert paid_contrib["mean_share"] > 0
     assert result["campaigns"][0]["spend"] > 0
+
+
+def test_ridge_tall_respects_selected_channels_and_repeated_daily_targets():
+    df = pd.DataFrame(
+        {
+            "date": [
+                "2026-01-05",
+                "2026-01-05",
+                "2026-01-12",
+                "2026-01-12",
+                "2026-01-19",
+                "2026-01-19",
+            ],
+            "channel": ["paid_search", "facebook_ads"] * 3,
+            "campaign": ["brand", "prospecting"] * 3,
+            "spend": [100.0, 999.0, 200.0, 999.0, 300.0, 999.0],
+            "conversions": [10.0, 10.0, 20.0, 20.0, 30.0, 30.0],
+        }
+    )
+
+    result = fit_model(
+        df,
+        target_column="conversions",
+        channel_columns=["paid_search"],
+        force_engine="ridge",
+    )
+
+    assert {row["channel"] for row in result["channel_summary"]} == {"paid_search"}
+    assert result["channel_summary"][0]["spend"] == 600.0
+    assert result["contrib"][0]["mean_share"] == 1.0
+    assert result["diagnostics"]["target_aggregation"] == "single_value_if_repeated_else_sum"
+    assert result["diagnostics"]["selected_channels"] == ["paid_search"]

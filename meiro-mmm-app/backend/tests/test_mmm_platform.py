@@ -135,3 +135,37 @@ def test_fit_model_rejects_all_zero_tall_spend_dataset(tmp_path):
 
     assert runs["run-1"]["status"] == "error"
     assert "zero spend" in runs["run-1"]["detail"]
+
+
+def test_fit_model_rejects_tall_dataset_when_selected_channels_have_no_spend(tmp_path):
+    dataset_path = tmp_path / "other-channel-spend.csv"
+    pd.DataFrame(
+        {
+            "date": ["2026-04-06", "2026-04-13"],
+            "channel": ["facebook_ads", "facebook_ads"],
+            "campaign": ["prospecting", "prospecting"],
+            "spend": [100.0, 120.0],
+            "conversions": [10.0, 20.0],
+        }
+    ).to_csv(dataset_path, index=False)
+    runs = {"run-1": {"status": "queued"}}
+
+    fit_model(
+        run_id="run-1",
+        cfg=SimpleNamespace(
+            dataset_id="dataset-1",
+            kpi="conversions",
+            spend_channels=["paid_search"],
+            covariates=[],
+            priors={},
+            mcmc={},
+        ),
+        runs_obj=runs,
+        datasets_obj={"dataset-1": {"path": str(dataset_path)}},
+        now_iso_fn=lambda: "2026-04-14T12:00:00Z",
+        save_runs_fn=lambda: None,
+        mmm_fit_model_fn=lambda **_: pytest.fail("fit should not run when selected channels have no spend"),
+    )
+
+    assert runs["run-1"]["status"] == "error"
+    assert "selected spend channels" in runs["run-1"]["detail"]
