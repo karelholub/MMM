@@ -104,24 +104,52 @@ def create_router(
             total_spend=_run_channel_summary_spend(run),
         )
 
+    def _budget_blocked_action(quality: Dict[str, Any]) -> Dict[str, str]:
+        label = str(quality.get("label") or "").lower()
+        reason_text = " ".join(str(item) for item in quality.get("reasons") or []).lower()
+        if "dataset" in reason_text and ("unavailable" in reason_text or "runtime" in reason_text or "preview" in reason_text):
+            return {
+                "id": "rebuild_mmm_dataset",
+                "label": "Rebuild or reattach MMM dataset",
+                "domain": "mmm",
+                "target_page": "mmm",
+            }
+        if label == "refresh needed" or "current mmm calculation contract" in reason_text:
+            return {
+                "id": "rerun_mmm_same_setup",
+                "label": "Re-run same setup",
+                "domain": "mmm",
+                "target_page": "mmm",
+            }
+        return {
+            "id": "review_mmm_inputs",
+            "label": "Review MMM inputs",
+            "domain": "mmm",
+            "target_page": "mmm",
+        }
+
+    def _budget_blocked_subtitle(quality: Dict[str, Any], action: Dict[str, str]) -> str:
+        if action["id"] == "rerun_mmm_same_setup":
+            return "This saved MMM readout needs to be refreshed before it can drive new budget decisions."
+        if action["id"] == "rebuild_mmm_dataset":
+            return "Saved MMM results can still be reviewed, but budget recommendations need the linked dataset preview."
+        if str(quality.get("level") or "") == "pending":
+            return "Budget recommendations become available after the MMM run finishes successfully."
+        return "This MMM run is not safe for optimizer recommendations until the model inputs produce usable media signal."
+
     def _budget_blocked_response(run_id: str, run: Dict[str, Any], quality: Dict[str, Any], total_budget_change_pct: float, objective: str) -> Dict[str, Any]:
         roi_rows = run.get("roi") or []
         roi_values = [float(row.get("roi") or 0.0) for row in roi_rows if isinstance(row, dict)]
+        action = _budget_blocked_action(quality)
         return {
             "run_id": run_id,
             "objective": objective,
             "recommendations": [],
             "decision": {
                 "status": "blocked",
+                "subtitle": _budget_blocked_subtitle(quality, action),
                 "blockers": quality.get("reasons") or ["MMM run quality is not sufficient for budget recommendations."],
-                "actions": [
-                    {
-                        "id": "create_new_mmm_run",
-                        "label": "Create a new MMM run",
-                        "domain": "mmm",
-                        "target_page": "mmm",
-                    }
-                ],
+                "actions": [action],
             },
             "summary": {
                 "total_budget_change_pct": total_budget_change_pct,
@@ -609,32 +637,8 @@ def create_router(
             run = get_runs_obj().get(run_id)
             if not run:
                 raise
-            roi_rows = run.get("roi") or []
-            roi_values = [float(row.get("roi") or 0.0) for row in roi_rows if isinstance(row, dict)]
-            return {
-                "run_id": run_id,
-                "objective": objective,
-                "recommendations": [],
-                "decision": {
-                    "status": "blocked",
-                    "blockers": ["Linked MMM dataset is unavailable in this runtime; saved model readouts remain available, but optimizer recommendations need the dataset preview."],
-                    "actions": [
-                        {
-                            "id": "rebuild_mmm_dataset",
-                            "label": "Rebuild or reattach MMM dataset",
-                            "domain": "mmm",
-                            "target_page": "mmm",
-                        }
-                    ],
-                },
-                "summary": {
-                    "total_budget_change_pct": total_budget_change_pct,
-                    "baseline_spend_total": 0,
-                    "channels_considered": len(roi_rows),
-                    "periods": 0,
-                    "weighted_roi": sum(roi_values) / len(roi_values) if roi_values else 0,
-                },
-            }
+            quality = _run_quality(run, dataset_available=False)
+            return _budget_blocked_response(run_id, run, quality, total_budget_change_pct, objective)
         quality = _run_quality(run, dataset_available=True)
         if not quality.get("can_use_budget"):
             return _budget_blocked_response(run_id, run, quality, total_budget_change_pct, objective)
