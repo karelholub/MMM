@@ -54,6 +54,7 @@ export function evaluateMMMRunQuality(input: MMMQualityInput): MMMQualityResult 
   const contribShares = finiteNumbers((input.contrib ?? []).map((row) => row.mean_share))
   const hasOutput = roiValues.length > 0 && contribShares.length > 0
   const outputAllZero = hasOutput && allNearZero(roiValues) && allNearZero(contribShares)
+  const hasSpendSignal = input.totalSpend != null
   const totalSpend = Number(input.totalSpend ?? 0)
   const hasDataset = input.datasetAvailable !== false
   const weeks = Number(input.weeks ?? 0)
@@ -61,7 +62,7 @@ export function evaluateMMMRunQuality(input: MMMQualityInput): MMMQualityResult 
   const r2 = Number(input.r2)
 
   if (!hasOutput) reasons.push('Model output is incomplete: ROI or contribution rows are missing.')
-  if (hasDataset && totalSpend <= 0) reasons.push('Linked dataset has no mapped spend for selected model channels.')
+  if (hasDataset && hasSpendSignal && totalSpend <= 0) reasons.push('Linked dataset has no mapped spend for selected model channels.')
   if (outputAllZero) reasons.push('All modeled ROI and contribution values are zero, so the run has no usable media signal.')
 
   if (Number.isFinite(r2) && r2 < 0.05) {

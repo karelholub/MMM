@@ -9,7 +9,7 @@ import { MMMContextBar, KpiMode } from '../components/MMMContextBar'
 import DashboardPage from '../components/dashboard/DashboardPage'
 import SectionCard from '../components/dashboard/SectionCard'
 import { apiGetJson } from '../lib/apiClient'
-import { evaluateMMMRunQuality } from '../lib/mmmQuality'
+import { evaluateMMMRunQuality, MMMQualityLevel } from '../lib/mmmQuality'
 
 type MMMRunView = 'analysis' | 'budget'
 
@@ -70,9 +70,23 @@ interface MMMRunSummary {
   stale_from_status?: string | null
   stale_reason?: string | null
   stale_at?: string | null
+  quality?: {
+    level?: MMMQualityLevel
+    label?: string
+    tone?: 'success' | 'warning' | 'danger'
+    reasons?: string[]
+    can_use_results?: boolean
+    can_use_budget?: boolean
+    canUseResults?: boolean
+    canUseBudget?: boolean
+  }
 }
 
 const STORAGE_KEY = 'mmm-wizard-state-v1'
+
+const runCanUseResults = (run: MMMRunSummary) => run.quality?.can_use_results ?? run.quality?.canUseResults ?? run.status === 'finished'
+const runCanUseBudget = (run: MMMRunSummary) =>
+  run.quality?.can_use_budget ?? run.quality?.canUseBudget ?? (run.status === 'finished' && run.dataset_available !== false)
 
 export default function MMMWizardShell(props: MMMWizardShellProps) {
   const t = tokens
@@ -154,12 +168,13 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
         .slice()
         .sort((a, b) => {
           const priority = (run: MMMRunSummary) => {
-            if (run.status === 'finished' && run.dataset_available !== false) return 0
-            if (run.status === 'finished') return 1
+            if (run.status === 'finished' && run.quality?.level === 'ready' && run.dataset_available !== false) return 0
+            if (run.status === 'finished' && runCanUseResults(run)) return 1
             if (run.status === 'queued' || run.status === 'running') return 2
-            if (run.status === 'stale') return 3
-            if (run.status === 'error') return 4
-            return 4
+            if (run.status === 'finished') return 3
+            if (run.status === 'stale') return 4
+            if (run.status === 'error') return 5
+            return 5
           }
           const priorityDelta = priority(a) - priority(b)
           if (priorityDelta !== 0) return priorityDelta
@@ -172,8 +187,8 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
   )
   const latestFinishedRun = useMemo(
     () =>
-      recentRuns.find((run) => run.status === 'finished' && run.dataset_available !== false && run.dataset_id) ??
-      recentRuns.find((run) => run.status === 'finished' && run.dataset_id) ??
+      recentRuns.find((run) => run.status === 'finished' && run.dataset_id && runCanUseResults(run) && run.dataset_available !== false) ??
+      recentRuns.find((run) => run.status === 'finished' && run.dataset_id && runCanUseResults(run)) ??
       null,
     [recentRuns],
   )
@@ -865,6 +880,9 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
   const workspaceSubtitle = mmmRunId
     ? 'Selected MMM run is the active workspace. Results, budget recommendations, saved scenarios, and rollout evidence stay attached to this run.'
     : 'Pick up prior MMM results and budget scenarios without starting a new model run.'
+  const latestFinishedRunCanUseBudget = latestFinishedRun ? runCanUseBudget(latestFinishedRun) : false
+  const latestFinishedRunQualityLabel = latestFinishedRun?.quality?.label || (latestFinishedRun?.dataset_available === false ? 'Readout only' : 'Decision ready')
+  const latestFinishedRunReason = latestFinishedRun?.quality?.reasons?.[0]
 
   return (
     <DashboardPage
@@ -955,7 +973,7 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
                 >
                   <div style={{ display: 'grid', gap: 4 }}>
                     <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                      Recommended MMM run
+                      {latestFinishedRunCanUseBudget ? 'Recommended MMM run' : latestFinishedRunQualityLabel}
                     </div>
                     <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
                       {latestFinishedRun.kpi || 'MMM run'} · {formatRunDate(latestFinishedRun.updated_at || latestFinishedRun.created_at)}
@@ -965,10 +983,16 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
                       {latestFinishedRun.r2 != null ? ` · R² ${latestFinishedRun.r2.toFixed(3)}` : ''}
                       {latestFinishedRun.dataset_id ? ` · dataset ${latestFinishedRun.dataset_id.slice(0, 8)}…` : ''}
                       {latestFinishedRun.dataset_available === false ? ' · readout only' : ''}
+                      {latestFinishedRun.quality?.level === 'directional' && latestFinishedRun.dataset_available !== false ? ' · directional' : ''}
                       {Number(latestFinishedRun.scenario_count || 0) > 0
                         ? ` · ${Number(latestFinishedRun.scenario_count).toLocaleString()} saved budget scenario${Number(latestFinishedRun.scenario_count) === 1 ? '' : 's'}`
                         : ' · no saved budget scenarios yet'}
                     </div>
+                    {latestFinishedRunReason ? (
+                      <div style={{ fontSize: t.font.sizeXs, color: latestFinishedRunCanUseBudget ? t.color.textMuted : t.color.warning }}>
+                        {latestFinishedRunReason}
+                      </div>
+                    ) : null}
                   </div>
                   <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
                     <button
@@ -990,15 +1014,16 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
                     <button
                       type="button"
                       onClick={() => openRunView(latestFinishedRun, 'budget')}
+                      disabled={!latestFinishedRunCanUseBudget}
                       style={{
                         padding: `${t.space.sm}px ${t.space.lg}px`,
                         borderRadius: t.radius.sm,
                         border: `1px solid ${t.color.border}`,
                         background: t.color.surface,
-                        color: t.color.text,
+                        color: latestFinishedRunCanUseBudget ? t.color.text : t.color.textMuted,
                         fontSize: t.font.sizeSm,
                         fontWeight: t.font.weightSemibold,
-                        cursor: 'pointer',
+                        cursor: latestFinishedRunCanUseBudget ? 'pointer' : 'not-allowed',
                       }}
                     >
                       Open budget actions
@@ -1011,10 +1036,13 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
                 {recentRuns.map((run) => {
                   const isSelected = run.run_id === mmmRunId
                   const isStale = run.status === 'stale'
+                  const canUseBudget = runCanUseBudget(run)
+                  const qualityTone = run.quality?.tone
+                  const qualityLabel = run.quality?.label || run.status
                   const statusColor =
-                    run.status === 'finished'
+                    qualityTone === 'success'
                       ? t.color.success
-                      : run.status === 'error'
+                      : qualityTone === 'danger' || run.status === 'error'
                         ? t.color.danger
                         : t.color.warning
                   return (
@@ -1034,7 +1062,7 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
                           {run.kpi || 'MMM run'}
                         </div>
                         <div style={{ fontSize: t.font.sizeXs, fontWeight: t.font.weightSemibold, color: statusColor, textTransform: 'capitalize' }}>
-                          {run.status}
+                          {qualityLabel}
                         </div>
                       </div>
                       <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
@@ -1045,6 +1073,8 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
                         {run.r2 != null ? ` · R² ${run.r2.toFixed(3)}` : ''}
                         {run.dataset_id ? ` · dataset ${run.dataset_id.slice(0, 8)}…` : ''}
                         {run.dataset_available === false ? ' · readout only' : ''}
+                        {run.quality?.level === 'directional' && run.dataset_available !== false ? ' · directional' : ''}
+                        {run.quality?.level === 'not_usable' ? ' · not usable' : ''}
                         {isStale ? ' · recovery needed' : ''}
                         {Number(run.scenario_count || 0) > 0
                           ? ` · ${Number(run.scenario_count).toLocaleString()} saved scenario${Number(run.scenario_count) === 1 ? '' : 's'}`
@@ -1053,6 +1083,11 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
                       {isStale ? (
                         <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
                           Stopped before completion. Open recovery to create a compatible new run or start fresh.
+                        </div>
+                      ) : null}
+                      {run.quality?.level === 'not_usable' && run.quality.reasons?.[0] ? (
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.danger, lineHeight: 1.4 }}>
+                          {run.quality.reasons[0]}
                         </div>
                       ) : null}
                       <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
@@ -1075,15 +1110,15 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
                         <button
                           type="button"
                           onClick={() => openRunView(run, 'budget')}
-                          disabled={!run.dataset_id || run.status !== 'finished'}
+                          disabled={!run.dataset_id || !canUseBudget}
                           style={{
                             padding: `${t.space.xs}px ${t.space.sm}px`,
                             borderRadius: t.radius.sm,
                             border: `1px solid ${t.color.borderLight}`,
                             background: t.color.bg,
-                            color: run.status === 'finished' ? t.color.textSecondary : t.color.textMuted,
+                            color: canUseBudget ? t.color.textSecondary : t.color.textMuted,
                             fontSize: t.font.sizeXs,
-                            cursor: run.dataset_id && run.status === 'finished' ? 'pointer' : 'not-allowed',
+                            cursor: run.dataset_id && canUseBudget ? 'pointer' : 'not-allowed',
                           }}
                         >
                           {isSelected ? 'Current budget' : 'Open budget actions'}

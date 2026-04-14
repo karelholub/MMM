@@ -260,12 +260,16 @@ def test_mmm_run_with_missing_dataset_is_readout_only(tmp_path):
             assert listed_run["dataset_available"] is False
             assert listed_run["scenario_count"] == 0
             assert listed_run["latest_scenario_at"] is None
+            assert listed_run["quality"]["label"] == "Readout only"
+            assert listed_run["quality"]["can_use_results"] is True
+            assert listed_run["quality"]["can_use_budget"] is False
 
             get_resp = client.get("/api/models/mmm_missing_dataset")
             assert get_resp.status_code == 200
             loaded_run = get_resp.json()
             assert loaded_run["dataset_available"] is False
             assert loaded_run["roi"]
+            assert loaded_run["quality"]["label"] == "Readout only"
 
             dataset_resp = client.get("/api/datasets/missing-mmm-dataset", params={"preview_only": True})
             assert dataset_resp.status_code == 200
@@ -409,6 +413,90 @@ def test_models_list_prioritizes_finished_runs_and_marks_stale_jobs(tmp_path):
             loaded = get_resp.json()
             assert loaded["status"] == "stale"
             assert loaded["dataset_available"] is True
+    finally:
+        app.dependency_overrides.clear()
+        main_module.RUNS.clear()
+        main_module.RUNS.update(original_runs)
+        main_module.DATASETS.clear()
+        main_module.DATASETS.update(original_datasets)
+        main_module.SETTINGS.feature_flags.mmm_enabled = original_mmm_enabled
+        engine.dispose()
+
+
+def test_not_usable_mmm_run_blocks_budget_actions(tmp_path):
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    def override_get_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    dataset_path = tmp_path / "zero-signal-mmm.csv"
+    dataset_path.write_text(
+        "\n".join(
+            [
+                "date,paid_search_spend,conversions",
+                "2026-01-01,100,0",
+                "2026-01-08,120,0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    original_runs = copy.deepcopy(main_module.RUNS)
+    original_datasets = copy.deepcopy(main_module.DATASETS)
+    original_mmm_enabled = getattr(main_module.SETTINGS.feature_flags, "mmm_enabled", False)
+
+    main_module.RUNS.clear()
+    main_module.DATASETS.clear()
+    main_module.SETTINGS.feature_flags.mmm_enabled = True
+    main_module.DATASETS["zero-signal-dataset"] = {
+        "path": dataset_path,
+        "type": "sales",
+        "metadata": {"period_start": "2026-01-01", "period_end": "2026-01-08"},
+    }
+    main_module.RUNS["mmm_zero_signal"] = {
+        "status": "finished",
+        "dataset_id": "zero-signal-dataset",
+        "created_at": "2026-04-01T00:00:00Z",
+        "updated_at": "2026-04-01T01:00:00Z",
+        "config": {
+            "dataset_id": "zero-signal-dataset",
+            "kpi": "conversions",
+            "spend_channels": ["paid_search_spend"],
+        },
+        "r2": 0.0,
+        "roi": [{"channel": "paid_search_spend", "roi": 0.0}],
+        "contrib": [{"channel": "paid_search_spend", "mean_share": 0.0}],
+        "channel_summary": [{"channel": "paid_search_spend", "spend": 220.0}],
+    }
+
+    app.dependency_overrides.clear()
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        with TestClient(app) as client:
+            get_resp = client.get("/api/models/mmm_zero_signal")
+            assert get_resp.status_code == 200
+            assert get_resp.json()["quality"]["level"] == "not_usable"
+
+            recommendation_resp = client.get("/api/models/mmm_zero_signal/budget/recommendations")
+            assert recommendation_resp.status_code == 200
+            recommendation_body = recommendation_resp.json()
+            assert recommendation_body["decision"]["status"] == "blocked"
+            assert recommendation_body["recommendations"] == []
+            assert "no usable media signal" in " ".join(recommendation_body["decision"]["blockers"])
+
+            optimize_resp = client.post("/api/models/mmm_zero_signal/optimize", json={"paid_search_spend": 1.0})
+            assert optimize_resp.status_code == 400
     finally:
         app.dependency_overrides.clear()
         main_module.RUNS.clear()

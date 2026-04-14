@@ -22,6 +22,7 @@ from app.services_budget_recommendations import (
     serialize_budget_scenario,
 )
 from app.services_budget_realization import list_budget_realization, record_budget_realization_snapshot
+from app.services_mmm_quality import evaluate_mmm_run_quality
 
 
 def create_router(
@@ -76,6 +77,68 @@ def create_router(
             return False
         p = Path(path) if isinstance(path, str) else path
         return p.exists()
+
+    def _run_channel_summary_spend(run: Dict[str, Any]) -> float | None:
+        rows = run.get("channel_summary")
+        if not isinstance(rows, list):
+            return None
+        total = 0.0
+        saw_spend = False
+        for row in rows:
+            if not isinstance(row, dict) or "spend" not in row:
+                continue
+            saw_spend = True
+            try:
+                total += float(row.get("spend") or 0.0)
+            except (TypeError, ValueError):
+                continue
+        return total if saw_spend else None
+
+    def _run_quality(run: Dict[str, Any], *, dataset_available: bool | None = None) -> Dict[str, Any]:
+        config = run.get("config") or {}
+        channels = config.get("spend_channels") or []
+        return evaluate_mmm_run_quality(
+            run,
+            dataset_available=dataset_available,
+            channels_modeled=len(channels) if isinstance(channels, list) else None,
+            total_spend=_run_channel_summary_spend(run),
+        )
+
+    def _budget_blocked_response(run_id: str, run: Dict[str, Any], quality: Dict[str, Any], total_budget_change_pct: float, objective: str) -> Dict[str, Any]:
+        roi_rows = run.get("roi") or []
+        roi_values = [float(row.get("roi") or 0.0) for row in roi_rows if isinstance(row, dict)]
+        return {
+            "run_id": run_id,
+            "objective": objective,
+            "recommendations": [],
+            "decision": {
+                "status": "blocked",
+                "blockers": quality.get("reasons") or ["MMM run quality is not sufficient for budget recommendations."],
+                "actions": [
+                    {
+                        "id": "create_new_mmm_run",
+                        "label": "Create a new MMM run",
+                        "domain": "mmm",
+                        "target_page": "mmm",
+                    }
+                ],
+            },
+            "summary": {
+                "total_budget_change_pct": total_budget_change_pct,
+                "baseline_spend_total": 0,
+                "channels_considered": len(roi_rows),
+                "periods": 0,
+                "weighted_roi": sum(roi_values) / len(roi_values) if roi_values else 0,
+                "quality": quality,
+            },
+        }
+
+    def _assert_run_can_use_budget(run: Dict[str, Any], *, dataset_available: bool | None = None) -> Dict[str, Any]:
+        quality = _run_quality(run, dataset_available=dataset_available)
+        if not quality.get("can_use_budget"):
+            detail = "; ".join(quality.get("reasons") or ["MMM run is not safe for budget actions."])
+            raise HTTPException(status_code=400, detail=detail)
+        return quality
 
     def _parse_run_ts(value: Any) -> datetime | None:
         if not value:
@@ -260,6 +323,8 @@ def create_router(
         for run_id, run in get_runs_obj().items():
             config = run.get("config") or {}
             dataset_id = run.get("dataset_id") or config.get("dataset_id")
+            dataset_available = _dataset_available(dataset_id)
+            quality = _run_quality(run, dataset_available=dataset_available)
             items.append(
                 {
                     "run_id": run_id,
@@ -267,7 +332,7 @@ def create_router(
                     "created_at": run.get("created_at"),
                     "updated_at": run.get("updated_at"),
                     "dataset_id": dataset_id,
-                    "dataset_available": _dataset_available(dataset_id),
+                    "dataset_available": dataset_available,
                     "kpi_mode": run.get("kpi_mode"),
                     "kpi": config.get("kpi"),
                     "n_channels": len(config.get("spend_channels") or []),
@@ -280,21 +345,25 @@ def create_router(
                     "stale_at": run.get("stale_at"),
                     "scenario_count": scenario_counts.get(run_id, 0),
                     "latest_scenario_at": latest_scenario_at.get(run_id),
+                    "quality": quality,
                 }
             )
 
         def list_priority(item: Dict[str, Any]) -> int:
             status = item.get("status")
-            if status == "finished" and item.get("dataset_available") is not False:
+            quality_level = ((item.get("quality") or {}).get("level") or "").lower()
+            if status == "finished" and quality_level == "ready" and item.get("dataset_available") is not False:
                 return 0
-            if status == "finished":
+            if status == "finished" and quality_level == "directional":
                 return 1
             if status in {"queued", "running"}:
                 return 2
-            if status == "stale":
+            if status == "finished":
                 return 3
-            if status == "error":
+            if status == "stale":
                 return 4
+            if status == "error":
+                return 5
             return 5
 
         def list_recency(item: Dict[str, Any]) -> float:
@@ -337,6 +406,7 @@ def create_router(
         out = dict(res)
         dataset_id = out.get("dataset_id") or (out.get("config") or {}).get("dataset_id")
         out["dataset_available"] = _dataset_available(dataset_id)
+        out["quality"] = _run_quality(out, dataset_available=out["dataset_available"])
         scenario_count, latest_scenario_at = (
             db.query(
                 func.count(BudgetScenario.id),
@@ -365,6 +435,10 @@ def create_router(
         run = get_runs_obj().get(run_id)
         if not run:
             raise HTTPException(status_code=404, detail="Model not found")
+        quality = _run_quality(run, dataset_available=_dataset_available(run.get("dataset_id") or (run.get("config") or {}).get("dataset_id")))
+        if not quality.get("can_use_results"):
+            detail = "; ".join(quality.get("reasons") or ["MMM run is not safe for scenario readouts."])
+            raise HTTPException(status_code=400, detail=detail)
         roi_map = {row["channel"]: row["roi"] for row in run.get("roi", [])}
         contrib_map = {row["channel"]: row["mean_share"] for row in run.get("contrib", [])}
         if not roi_map or not contrib_map:
@@ -431,6 +505,10 @@ def create_router(
         run = get_runs_obj().get(run_id)
         if not run:
             raise HTTPException(status_code=404, detail="Model not found")
+        _assert_run_can_use_budget(
+            run,
+            dataset_available=_dataset_available(run.get("dataset_id") or (run.get("config") or {}).get("dataset_id")),
+        )
         roi_map = {row["channel"]: row["roi"] for row in run.get("roi", [])}
         contrib_map = {row["channel"]: row["mean_share"] for row in run.get("contrib", [])}
         baseline = sum(roi_map.get(ch, 0) * contrib_map.get(ch, 0) for ch in roi_map)
@@ -447,6 +525,10 @@ def create_router(
         run = get_runs_obj().get(run_id)
         if not run:
             raise HTTPException(status_code=404, detail="Model not found")
+        _assert_run_can_use_budget(
+            run,
+            dataset_available=_dataset_available(run.get("dataset_id") or (run.get("config") or {}).get("dataset_id")),
+        )
         roi_map = {row["channel"]: row["roi"] for row in run.get("roi", [])}
         contrib_map = {row["channel"]: row["mean_share"] for row in run.get("contrib", [])}
         if not roi_map or not contrib_map:
@@ -546,6 +628,9 @@ def create_router(
                     "weighted_roi": sum(roi_values) / len(roi_values) if roi_values else 0,
                 },
             }
+        quality = _run_quality(run, dataset_available=True)
+        if not quality.get("can_use_budget"):
+            return _budget_blocked_response(run_id, run, quality, total_budget_change_pct, objective)
         return build_budget_recommendations(
             run_id=run_id,
             run=run,
@@ -575,7 +660,8 @@ def create_router(
         db=Depends(get_db_dependency),
     ):
         _ensure_mmm_enabled()
-        _run, _dataset_rows = _load_run_and_dataset_rows(run_id)
+        run, _dataset_rows = _load_run_and_dataset_rows(run_id)
+        _assert_run_can_use_budget(run, dataset_available=True)
         scenario = create_budget_scenario(
             db,
             run_id=run_id,
