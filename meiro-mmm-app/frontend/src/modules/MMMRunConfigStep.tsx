@@ -17,6 +17,8 @@ interface RunSummary {
   n_covariates: number
   r2?: number
   engine?: string
+  stage?: string | null
+  progress_pct?: number | null
 }
 
 interface PendingMapping {
@@ -63,6 +65,10 @@ export default function MMMRunConfigStep({
   const { data: runs = [], refetch } = useQuery<RunSummary[]>({
     queryKey: ['mmm-runs'],
     queryFn: async () => apiGetJson<RunSummary[]>('/api/models', { fallbackMessage: 'Failed to load runs' }),
+    refetchInterval: (query) => {
+      const current = (query.state?.data ?? []) as RunSummary[]
+      return current.some((run) => run.status === 'queued' || run.status === 'running') ? 2000 : false
+    },
   })
 
   const handleRun = () => {
@@ -255,6 +261,8 @@ export default function MMMRunConfigStep({
               {runs.map((run) => {
                 const isSelected = run.run_id === currentRunId
                 const statusColor = run.status === 'finished' ? t.color.success : run.status === 'error' ? t.color.danger : t.color.warning
+                const isActive = run.status === 'queued' || run.status === 'running'
+                const progressPct = Math.max(5, Math.min(95, Number(run.progress_pct ?? (run.status === 'running' ? 45 : 10))))
                 return (
                   <li key={run.run_id} style={{ marginBottom: t.space.sm }}>
                     <button
@@ -280,6 +288,17 @@ export default function MMMRunConfigStep({
                         {run.kpi} · {run.n_channels} ch · {run.dataset_id ?? '—'}
                         {run.r2 != null && ` · R² ${run.r2.toFixed(3)}`}
                       </div>
+                      {isActive ? (
+                        <div style={{ display: 'grid', gap: 4, marginTop: t.space.sm }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, color: t.color.textMuted, fontSize: t.font.sizeXs }}>
+                            <span>{run.stage || 'Processing'}</span>
+                            <span>{progressPct.toFixed(0)}%</span>
+                          </div>
+                          <div style={{ height: 6, borderRadius: 999, background: t.color.surface, overflow: 'hidden', border: `1px solid ${t.color.borderLight}` }}>
+                            <div style={{ width: `${progressPct}%`, height: '100%', background: t.color.warning, transition: 'width 240ms ease' }} />
+                          </div>
+                        </div>
+                      ) : null}
                     </button>
                   </li>
                 )

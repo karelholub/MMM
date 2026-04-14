@@ -163,6 +163,7 @@ def create_router(
             if heartbeat is None or now - heartbeat <= stale_run_after:
                 continue
             run["status"] = "stale"
+            run["stage"] = "Stale"
             run["stale_from_status"] = status
             run["stale_reason"] = "run_heartbeat_expired"
             run["stale_at"] = now_iso_fn()
@@ -285,6 +286,8 @@ def create_router(
         runs = get_runs_obj()
         runs[run_id] = {
             "status": "queued",
+            "stage": "Queued",
+            "progress_pct": 5,
             "config": config_dict,
             "kpi_mode": kpi_mode,
             "created_at": now,
@@ -339,6 +342,8 @@ def create_router(
                     "n_covariates": len(config.get("covariates") or []),
                     "r2": run.get("r2"),
                     "engine": run.get("engine"),
+                    "stage": run.get("stage"),
+                    "progress_pct": run.get("progress_pct"),
                     "detail": run.get("detail"),
                     "stale_from_status": run.get("stale_from_status"),
                     "stale_reason": run.get("stale_reason"),

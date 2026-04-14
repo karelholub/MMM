@@ -354,7 +354,7 @@ export default function App() {
     enabled: !!mmmRunId,
     refetchInterval: (query) => {
       const data = query.state?.data as { status?: string } | undefined
-      return data?.status === 'finished' || data?.status === 'error' ? false : 2000
+      return data?.status === 'finished' || data?.status === 'error' || data?.status === 'stale' ? false : 2000
     },
   })
 

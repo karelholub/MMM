@@ -65,6 +65,8 @@ interface MMMRunSummary {
   n_covariates?: number
   r2?: number
   engine?: string
+  stage?: string | null
+  progress_pct?: number | null
   scenario_count?: number
   latest_scenario_at?: string | null
   stale_from_status?: string | null
@@ -118,6 +120,10 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
   const recentRunsQuery = useQuery<MMMRunSummary[]>({
     queryKey: ['mmm-runs'],
     queryFn: async () => apiGetJson<MMMRunSummary[]>('/api/models', { fallbackMessage: 'Failed to load MMM runs' }),
+    refetchInterval: (query) => {
+      const runs = (query.state?.data ?? []) as MMMRunSummary[]
+      return runs.some((run) => run.status === 'queued' || run.status === 'running') ? 2000 : false
+    },
   })
 
   // Load persisted per-session state
@@ -267,6 +273,11 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
   }, [pendingMmmMapping])
 
   useEffect(() => {
+    if (!runStatus || runStatus === 'queued' || runStatus === 'running') return
+    recentRunsQuery.refetch()
+  }, [recentRunsQuery, runStatus])
+
+  useEffect(() => {
     if (!mmmRunId || typeof window === 'undefined') return
     const view = new URLSearchParams(window.location.search).get('mmm_view')
     if (view !== 'budget' && view !== 'analysis') return
@@ -343,6 +354,8 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
         ? new Date(runData.updated_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
         : null
       const statusText = runStatus === 'running' ? 'Fitting model' : createMmmRunMutation.isPending ? 'Creating run' : 'Queued'
+      const progressPct = Math.max(5, Math.min(95, Number(runData?.progress_pct ?? (runStatus === 'running' ? 45 : 10))))
+      const stageLabel = String(runData?.stage || statusText)
       const spendChannels = Array.isArray(config.spend_channels)
         ? config.spend_channels
         : pendingMmmMapping?.columns.spend_channels ?? []
@@ -360,7 +373,7 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.lg, alignItems: 'flex-start', flexWrap: 'wrap' }}>
             <div style={{ display: 'grid', gap: t.space.xs }}>
               <div style={{ fontSize: t.font.sizeXs, color: t.color.warning, fontWeight: t.font.weightSemibold, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                {statusText}
+                {stageLabel}
               </div>
               <h3 style={{ margin: 0, fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>
                 MMM run is in progress
@@ -384,12 +397,42 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
             </span>
           </div>
 
+          <div style={{ display: 'grid', gap: t.space.xs }}>
+            <div
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={progressPct}
+              aria-label="MMM run progress"
+              style={{
+                height: 10,
+                borderRadius: 999,
+                overflow: 'hidden',
+                background: t.color.surface,
+                border: `1px solid ${t.color.borderLight}`,
+              }}
+            >
+              <div
+                style={{
+                  height: '100%',
+                  width: `${progressPct}%`,
+                  background: t.color.warning,
+                  transition: 'width 240ms ease',
+                }}
+              />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.md, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+              <span>{stageLabel}</span>
+              <span>{progressPct.toFixed(0)}%</span>
+            </div>
+          </div>
+
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: t.space.md }}>
             {[
               { label: 'Run', value: mmmRunId ? mmmRunId.slice(0, 12) : 'Starting...', helper: startedAt ? `Started ${startedAt}` : 'Waiting for run id' },
               { label: 'Dataset', value: String(config.dataset_id || mmmDatasetId || 'Preparing'), helper: `${spendChannels.length.toLocaleString()} spend signals` },
               { label: 'KPI', value: String(config.kpi || pendingMmmMapping?.columns.kpi || 'KPI'), helper: String(config.kpi_mode || 'conversions') },
-              { label: 'Last update', value: updatedAt || 'Polling...', helper: 'Refreshes automatically every few seconds' },
+              { label: 'Last update', value: updatedAt || 'Polling...', helper: 'Refreshes automatically every 2 seconds' },
             ].map((item) => (
               <div key={item.label} style={{ padding: t.space.md, borderRadius: t.radius.md, border: `1px solid ${t.color.borderLight}`, background: t.color.surface, minWidth: 0 }}>
                 <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{item.label}</div>
@@ -1071,6 +1114,7 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
                       <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
                         {run.n_channels.toLocaleString()} channels
                         {run.r2 != null ? ` · R² ${run.r2.toFixed(3)}` : ''}
+                        {run.stage && (run.status === 'queued' || run.status === 'running') ? ` · ${run.stage}` : ''}
                         {run.dataset_id ? ` · dataset ${run.dataset_id.slice(0, 8)}…` : ''}
                         {run.dataset_available === false ? ' · readout only' : ''}
                         {run.quality?.level === 'directional' && run.dataset_available !== false ? ' · directional' : ''}

@@ -4,6 +4,29 @@ from typing import Any, Callable, Dict
 import pandas as pd
 
 
+def _update_run_progress(
+    *,
+    run_id: str,
+    runs_obj: Dict[str, Any],
+    save_runs_fn: Callable[[], None],
+    now_iso_fn: Callable[[], str],
+    status: str | None = None,
+    stage: str,
+    progress_pct: int,
+    detail: str | None = None,
+) -> None:
+    run = {**runs_obj.get(run_id, {})}
+    if status is not None:
+        run["status"] = status
+    run["stage"] = stage
+    run["progress_pct"] = max(0, min(100, int(progress_pct)))
+    run["updated_at"] = now_iso_fn()
+    if detail is not None:
+        run["detail"] = detail
+    runs_obj[run_id] = run
+    save_runs_fn()
+
+
 def fit_model(
     *,
     run_id: str,
@@ -14,46 +37,75 @@ def fit_model(
     save_runs_fn: Callable[[], None],
     mmm_fit_model_fn: Callable[..., Dict[str, Any]],
 ) -> None:
-    now_ts = now_iso_fn()
     dataset_info = datasets_obj.get(cfg.dataset_id)
     if not dataset_info:
-        runs_obj[run_id] = {**runs_obj.get(run_id, {}), "status": "error", "detail": "Dataset not found", "updated_at": now_ts}
-        save_runs_fn()
+        _update_run_progress(
+            run_id=run_id,
+            runs_obj=runs_obj,
+            save_runs_fn=save_runs_fn,
+            now_iso_fn=now_iso_fn,
+            status="error",
+            stage="Dataset unavailable",
+            progress_pct=100,
+            detail="Dataset not found",
+        )
         return
     csv_path = dataset_info.get("path")
     path = Path(csv_path) if isinstance(csv_path, str) else csv_path
     df = pd.read_csv(path, parse_dates=["date"])
     if cfg.kpi not in df.columns:
-        runs_obj[run_id] = {**runs_obj.get(run_id, {}), "status": "error", "detail": f"Column '{cfg.kpi}' missing", "updated_at": now_ts}
-        save_runs_fn()
+        _update_run_progress(
+            run_id=run_id,
+            runs_obj=runs_obj,
+            save_runs_fn=save_runs_fn,
+            now_iso_fn=now_iso_fn,
+            status="error",
+            stage="Mapping failed",
+            progress_pct=100,
+            detail=f"Column '{cfg.kpi}' missing",
+        )
         return
     is_tall = {"channel", "campaign", "spend"}.issubset(set(df.columns))
     if not is_tall:
         for channel in cfg.spend_channels:
             if channel not in df.columns:
-                runs_obj[run_id] = {**runs_obj.get(run_id, {}), "status": "error", "detail": f"Column '{channel}' missing", "updated_at": now_ts}
-                save_runs_fn()
+                _update_run_progress(
+                    run_id=run_id,
+                    runs_obj=runs_obj,
+                    save_runs_fn=save_runs_fn,
+                    now_iso_fn=now_iso_fn,
+                    status="error",
+                    stage="Mapping failed",
+                    progress_pct=100,
+                    detail=f"Column '{channel}' missing",
+                )
                 return
         spend_totals = df[cfg.spend_channels].apply(pd.to_numeric, errors="coerce").fillna(0).sum()
         if float(spend_totals.sum()) <= 0:
-            runs_obj[run_id] = {
-                **runs_obj.get(run_id, {}),
-                "status": "error",
-                "detail": "MMM run cannot start because all selected spend channels have zero spend in the dataset.",
-                "updated_at": now_ts,
-            }
-            save_runs_fn()
+            _update_run_progress(
+                run_id=run_id,
+                runs_obj=runs_obj,
+                save_runs_fn=save_runs_fn,
+                now_iso_fn=now_iso_fn,
+                status="error",
+                stage="Spend validation failed",
+                progress_pct=100,
+                detail="MMM run cannot start because all selected spend channels have zero spend in the dataset.",
+            )
             return
     else:
         total_spend = float(pd.to_numeric(df["spend"], errors="coerce").fillna(0).sum())
         if total_spend <= 0:
-            runs_obj[run_id] = {
-                **runs_obj.get(run_id, {}),
-                "status": "error",
-                "detail": "MMM run cannot start because the dataset has zero spend.",
-                "updated_at": now_ts,
-            }
-            save_runs_fn()
+            _update_run_progress(
+                run_id=run_id,
+                runs_obj=runs_obj,
+                save_runs_fn=save_runs_fn,
+                now_iso_fn=now_iso_fn,
+                status="error",
+                stage="Spend validation failed",
+                progress_pct=100,
+                detail="MMM run cannot start because the dataset has zero spend.",
+            )
             return
     priors = cfg.priors or {}
     adstock_cfg = {
@@ -71,9 +123,15 @@ def fit_model(
     force_engine = "ridge" if (not use_adstock and not use_saturation) else None
     random_seed = getattr(cfg, "random_seed", None)
     try:
-        runs_obj[run_id]["status"] = "running"
-        runs_obj[run_id]["updated_at"] = now_iso_fn()
-        save_runs_fn()
+        _update_run_progress(
+            run_id=run_id,
+            runs_obj=runs_obj,
+            save_runs_fn=save_runs_fn,
+            now_iso_fn=now_iso_fn,
+            status="running",
+            stage="Fitting media response model",
+            progress_pct=45,
+        )
         result = mmm_fit_model_fn(
             df=df,
             target_column=cfg.kpi,
@@ -89,6 +147,8 @@ def fit_model(
         runs_obj[run_id] = {
             **runs_obj[run_id],
             "status": "finished",
+            "stage": "Finished",
+            "progress_pct": 100,
             "r2": result["r2"],
             "contrib": result["contrib"],
             "roi": result["roi"],
@@ -103,6 +163,8 @@ def fit_model(
         runs_obj[run_id] = {
             **runs_obj.get(run_id, {}),
             "status": "error",
+            "stage": "Run failed",
+            "progress_pct": 100,
             "detail": str(exc),
             "config": runs_obj[run_id].get("config", {}),
             "kpi_mode": getattr(cfg, "kpi_mode", "conversions"),
