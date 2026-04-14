@@ -59,6 +59,17 @@ interface MMMRunSummary {
   updated_at: string | null
   dataset_id: string | null
   dataset_available?: boolean
+  config?: {
+    dataset_id?: string
+    kpi?: string
+    spend_channels?: string[]
+    covariates?: string[]
+    kpi_mode?: string
+    use_adstock?: boolean
+    use_saturation?: boolean
+    holdout_weeks?: number
+    random_seed?: number | null
+  }
   kpi: string | null
   kpi_mode?: string | null
   n_channels: number
@@ -89,6 +100,8 @@ const STORAGE_KEY = 'mmm-wizard-state-v1'
 const runCanUseResults = (run: MMMRunSummary) => run.quality?.can_use_results ?? run.quality?.canUseResults ?? run.status === 'finished'
 const runCanUseBudget = (run: MMMRunSummary) =>
   run.quality?.can_use_budget ?? run.quality?.canUseBudget ?? (run.status === 'finished' && run.dataset_available !== false)
+
+type MMMStartConfig = Parameters<MMMWizardShellProps['onMmmStartRun']>[0]
 
 export default function MMMWizardShell(props: MMMWizardShellProps) {
   const t = tokens
@@ -237,6 +250,37 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
     }
   }
 
+  const startConfigFromRun = (runData: any): MMMStartConfig | null => {
+    const config = runData?.config || {}
+    const datasetId = String(runData?.dataset_id || config.dataset_id || '').trim()
+    const kpi = String(config.kpi || runData?.kpi || '').trim()
+    const spendChannels = Array.isArray(config.spend_channels) ? config.spend_channels.map(String).filter(Boolean) : []
+    const covariates = Array.isArray(config.covariates) ? config.covariates.map(String).filter(Boolean) : []
+    if (!datasetId || !kpi || !spendChannels.length) return null
+    return {
+      dataset_id: datasetId,
+      kpi,
+      spend_channels: spendChannels,
+      covariates,
+      kpi_mode: String(config.kpi_mode || runData?.kpi_mode || 'conversions'),
+      use_adstock: config.use_adstock !== false,
+      use_saturation: config.use_saturation !== false,
+      holdout_weeks: Number.isFinite(Number(config.holdout_weeks)) ? Number(config.holdout_weeks) : 8,
+      random_seed: config.random_seed == null ? null : Number(config.random_seed),
+    }
+  }
+
+  const rerunWithSameSetup = (runData: any) => {
+    const cfg = startConfigFromRun(runData)
+    if (!cfg) return
+    setInitialPlatformDraft(null)
+    setShowNewModelWorkflow(false)
+    onMmmStartRun(cfg)
+    window.requestAnimationFrame(() => {
+      document.getElementById('mmm-workspace-top')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }
+
   const startNewModelWorkflow = (draft?: MMMPlatformDraft) => {
     setInitialPlatformDraft(draft ?? null)
     setShowNewModelWorkflow(true)
@@ -275,7 +319,12 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
   useEffect(() => {
     if (!runStatus || runStatus === 'queued' || runStatus === 'running') return
     recentRunsQuery.refetch()
-  }, [recentRunsQuery, runStatus])
+  }, [recentRunsQuery.refetch, runStatus])
+
+  useEffect(() => {
+    if (!mmmRunId) return
+    recentRunsQuery.refetch()
+  }, [mmmRunId, recentRunsQuery.refetch])
 
   useEffect(() => {
     if (!mmmRunId || typeof window === 'undefined') return
@@ -665,6 +714,7 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
         ? `${runData.config.spend_channels.length.toLocaleString()} channels`
         : null,
     ].filter((item): item is string => Boolean(item))
+    const canRerunActive = datasetAvailable && !!startConfigFromRun(runData) && !createMmmRunMutation.isPending
     return (
       <div>
         <SectionHeader
@@ -708,6 +758,23 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
                 }}
               >
                 Budget actions
+              </button>
+              <button
+                type="button"
+                onClick={() => rerunWithSameSetup(runData)}
+                disabled={!canRerunActive}
+                style={{
+                  padding: `${t.space.sm}px ${t.space.lg}px`,
+                  fontSize: t.font.sizeSm,
+                  fontWeight: t.font.weightMedium,
+                  color: canRerunActive ? t.color.text : t.color.textMuted,
+                  backgroundColor: t.color.surface,
+                  border: `1px solid ${t.color.border}`,
+                  borderRadius: t.radius.sm,
+                  cursor: canRerunActive ? 'pointer' : 'not-allowed',
+                }}
+              >
+                Re-run same setup
               </button>
               <button
                 type="button"
@@ -813,8 +880,27 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
                 ))}
               </div>
               {runQuality.level === 'not_usable' ? (
-                <div style={{ fontSize: t.font.sizeSm, color: t.color.danger, lineHeight: 1.5 }}>
-                  This run is not usable for results or budget actions. {runQuality.reasons[0] || 'Create a new run after checking spend and KPI signal.'}
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.md, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.danger, lineHeight: 1.5, maxWidth: 820 }}>
+                    This run is not usable for results or budget actions. {runQuality.reasons[0] || 'Create a new run after checking spend and KPI signal.'}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => rerunWithSameSetup(runData)}
+                    disabled={!canRerunActive}
+                    style={{
+                      padding: `${t.space.sm}px ${t.space.lg}px`,
+                      fontSize: t.font.sizeSm,
+                      fontWeight: t.font.weightSemibold,
+                      color: canRerunActive ? '#ffffff' : t.color.textMuted,
+                      background: canRerunActive ? t.color.accent : t.color.borderLight,
+                      border: 'none',
+                      borderRadius: t.radius.sm,
+                      cursor: canRerunActive ? 'pointer' : 'not-allowed',
+                    }}
+                  >
+                    Re-run with same setup
+                  </button>
                 </div>
               ) : !datasetAvailable ? (
                 <div style={{ fontSize: t.font.sizeSm, color: t.color.warning, lineHeight: 1.5 }}>
@@ -926,6 +1012,11 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
   const latestFinishedRunCanUseBudget = latestFinishedRun ? runCanUseBudget(latestFinishedRun) : false
   const latestFinishedRunQualityLabel = latestFinishedRun?.quality?.label || (latestFinishedRun?.dataset_available === false ? 'Readout only' : 'Decision ready')
   const latestFinishedRunReason = latestFinishedRun?.quality?.reasons?.[0]
+  const latestFinishedRunCanRerun =
+    !!latestFinishedRun &&
+    latestFinishedRun.dataset_available !== false &&
+    !!startConfigFromRun(latestFinishedRun) &&
+    !createMmmRunMutation.isPending
 
   return (
     <DashboardPage
@@ -935,7 +1026,7 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
       filters={null}
       dateRange={null}
     >
-      <div style={{ maxWidth: 1400, margin: '0 auto', display: 'grid', gap: t.space.xl }}>
+      <div id="mmm-workspace-top" style={{ maxWidth: 1400, margin: '0 auto', display: 'grid', gap: t.space.xl }}>
         <SectionCard
           title="Model context"
           subtitle="Weekly MMM setup, KPI mode, and active config context for the current run."
@@ -1071,6 +1162,23 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
                     >
                       Open budget actions
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => rerunWithSameSetup(latestFinishedRun)}
+                      disabled={!latestFinishedRunCanRerun}
+                      style={{
+                        padding: `${t.space.sm}px ${t.space.lg}px`,
+                        borderRadius: t.radius.sm,
+                        border: `1px solid ${t.color.border}`,
+                        background: t.color.surface,
+                        color: latestFinishedRunCanRerun ? t.color.textSecondary : t.color.textMuted,
+                        fontSize: t.font.sizeSm,
+                        fontWeight: t.font.weightSemibold,
+                        cursor: latestFinishedRunCanRerun ? 'pointer' : 'not-allowed',
+                      }}
+                    >
+                      Re-run same setup
+                    </button>
                   </div>
                 </div>
               )}
@@ -1080,6 +1188,7 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
                   const isSelected = run.run_id === mmmRunId
                   const isStale = run.status === 'stale'
                   const canUseBudget = runCanUseBudget(run)
+                  const canRerun = run.dataset_available !== false && !!startConfigFromRun(run) && !createMmmRunMutation.isPending
                   const qualityTone = run.quality?.tone
                   const qualityLabel = run.quality?.label || run.status
                   const statusColor =
@@ -1166,6 +1275,22 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
                           }}
                         >
                           {isSelected ? 'Current budget' : 'Open budget actions'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => rerunWithSameSetup(run)}
+                          disabled={!canRerun}
+                          style={{
+                            padding: `${t.space.xs}px ${t.space.sm}px`,
+                            borderRadius: t.radius.sm,
+                            border: `1px solid ${t.color.borderLight}`,
+                            background: t.color.bg,
+                            color: canRerun ? t.color.textSecondary : t.color.textMuted,
+                            fontSize: t.font.sizeXs,
+                            cursor: canRerun ? 'pointer' : 'not-allowed',
+                          }}
+                        >
+                          Re-run
                         </button>
                       </div>
                     </div>

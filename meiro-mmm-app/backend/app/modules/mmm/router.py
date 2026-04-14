@@ -336,6 +336,7 @@ def create_router(
                     "updated_at": run.get("updated_at"),
                     "dataset_id": dataset_id,
                     "dataset_available": dataset_available,
+                    "config": config,
                     "kpi_mode": run.get("kpi_mode"),
                     "kpi": config.get("kpi"),
                     "n_channels": len(config.get("spend_channels") or []),
