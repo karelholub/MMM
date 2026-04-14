@@ -263,10 +263,6 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
   }, [mmmRunId])
 
   const renderStepContent = () => {
-    if (mmmRunId) {
-      // Run lifecycle: queued / running / error / finished
-      return renderRunContent()
-    }
     if (pendingMmmMapping) {
       return (
         <div>
@@ -283,6 +279,24 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
           />
         </div>
       )
+    }
+    if (showNewModelWorkflow) {
+      return (
+        <div>
+          <SectionHeader
+            title="Prepare MMM dataset"
+            subtitle="Use platform data (journeys + expenses) or upload a CSV. Then proceed to mapping and run."
+          />
+          <MMMDataSourceStep
+            onMappingComplete={onMmmMappingComplete}
+            initialPlatformDraft={initialPlatformDraft ?? undefined}
+          />
+        </div>
+      )
+    }
+    if (mmmRunId) {
+      // Run lifecycle: queued / running / error / finished
+      return renderRunContent()
     }
     return (
       <div>
@@ -998,7 +1012,7 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
           )}
         </SectionCard>
 
-        {mmmRunId ? renderRunContent() : null}
+        {mmmRunId && !shouldShowNewWorkflow ? renderRunContent() : null}
 
         <SectionCard
           title="Create or rebuild MMM model"
@@ -1078,8 +1092,7 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
             ) : (
               <SetupChecklist
                 pendingMapping={pendingMmmMapping}
-                runId={mmmRunId}
-                runStatus={runStatus}
+                runId={null}
               />
             )}
           </div>
