@@ -163,6 +163,23 @@ def _fit_bayesian(
 # Ridge fallback
 # ---------------------------------------------------------------------------
 
+def _safe_r2(model: Any, X: np.ndarray, y: np.ndarray) -> float:
+    try:
+        score = float(model.score(X, y))
+    except Exception:
+        return 0.0
+    if not np.isfinite(score):
+        return 0.0
+    return max(score, 0.0)
+
+
+def _normalize_positive_contributions(raw: Dict[str, float]) -> Dict[str, float]:
+    positive = {key: max(float(value), 0.0) for key, value in raw.items()}
+    total = sum(positive.values())
+    if total <= 0:
+        return {key: 0.0 for key in raw}
+    return {key: value / total for key, value in positive.items()}
+
 def _fit_ridge_wide(
     df: pd.DataFrame,
     target_column: str,
@@ -171,31 +188,57 @@ def _fit_ridge_wide(
     """Fit Ridge regression for wide-format data (channel spend as columns)."""
     from sklearn.linear_model import Ridge
 
-    X = df[channel_columns].fillna(0.0).values
-    y = df[target_column].fillna(0.0).values
+    X_df = df[channel_columns].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+    X = X_df.values
+    y = pd.to_numeric(df[target_column], errors="coerce").fillna(0.0).values
 
-    model = Ridge(alpha=1.0).fit(X, y)
+    model = Ridge(alpha=1.0, positive=True).fit(X, y)
     coef = model.coef_.tolist()
-    denom = float(sum(abs(c) for c in coef)) or 1.0
-    kpi_mean = float(df[target_column].mean())
+    total_spend = {ch: float(X_df[ch].sum()) for ch in channel_columns}
+    mean_spend = {ch: float(X_df[ch].mean()) for ch in channel_columns}
+    total_contribution = {
+        ch: max(float(b), 0.0) * total_spend.get(ch, 0.0)
+        for ch, b in zip(channel_columns, coef)
+    }
+    contribution_share = _normalize_positive_contributions(total_contribution)
+    kpi_mean = float(np.mean(y)) if len(y) else 0.0
 
     contrib = [
-        {"channel": ch, "beta": float(b), "mean_share": float(abs(b)) / denom}
+        {
+            "channel": ch,
+            "beta": float(b),
+            "mean_share": contribution_share.get(ch, 0.0),
+            "mean_contribution": total_contribution.get(ch, 0.0),
+        }
         for ch, b in zip(channel_columns, coef)
     ]
     roi = [
         {
             "channel": ch,
-            "roi": float(b * kpi_mean / (float(df[ch].mean()) + 1e-6)),
+            "roi": float(total_contribution.get(ch, 0.0) / total_spend[ch]) if total_spend[ch] > 0 else 0.0,
         }
         for ch, b in zip(channel_columns, coef)
     ]
+    channel_summary = []
+    for ch, b in zip(channel_columns, coef):
+        roi_val = float(total_contribution.get(ch, 0.0) / total_spend[ch]) if total_spend[ch] > 0 else 0.0
+        channel_summary.append(
+            {
+                "channel": ch,
+                "spend": total_spend[ch],
+                "roi": roi_val,
+                "mroas": roi_val,
+                "elasticity": float(b) * mean_spend.get(ch, 0.0) / (kpi_mean + 1e-6),
+            }
+        )
 
     return {
-        "r2": float(model.score(X, y)),
+        "r2": _safe_r2(model, X, y),
         "contrib": contrib,
         "roi": roi,
         "engine": "ridge-fallback",
+        "channel_summary": channel_summary,
+        "diagnostics": {"ridge_positive": True, "contribution_basis": "coefficient_x_total_spend"},
     }
 
 
@@ -223,19 +266,25 @@ def _fit_ridge_tall(
     y = y_series.values
     features = list(spend_wide.columns)
 
-    model = Ridge(alpha=1.0).fit(X, y)
+    model = Ridge(alpha=1.0, positive=True).fit(X, y)
     coef = model.coef_.tolist()
-    denom = float(sum(abs(c) for c in coef)) or 1.0
     kpi_mean = float(y_series.mean())
 
     feature_mean_spend = {f: float(spend_wide[f].mean()) for f in features}
+    feature_total_spend = {f: float(spend_wide[f].sum()) for f in features}
+    feature_total_contribution = {
+        f: max(float(b), 0.0) * feature_total_spend.get(f, 0.0)
+        for f, b in zip(features, coef)
+    }
+    contribution_share = _normalize_positive_contributions(feature_total_contribution)
 
     campaigns = []
     channel_summary_acc: Dict[str, Dict[str, float]] = {}
     for f, b in zip(features, coef):
         ch_name, camp_name = f.split("|", 1)
-        mean_share = float(abs(b)) / denom
-        roi_val = float(b * kpi_mean / (feature_mean_spend.get(f, 0.0) + 1e-6))
+        mean_share = contribution_share.get(f, 0.0)
+        total_spend = feature_total_spend.get(f, 0.0)
+        roi_val = float(feature_total_contribution.get(f, 0.0) / total_spend) if total_spend > 0 else 0.0
         mroas = roi_val
         elasticity = float(b) * (feature_mean_spend.get(f, 0.0)) / (kpi_mean + 1e-6)
         campaigns.append({
@@ -248,21 +297,22 @@ def _fit_ridge_tall(
             "mroas": mroas,
             "elasticity": elasticity,
             "mean_spend": feature_mean_spend.get(f, 0.0),
+            "spend": total_spend,
+            "mean_contribution": feature_total_contribution.get(f, 0.0),
         })
         acc = channel_summary_acc.setdefault(
-            ch_name, {"spend": 0.0, "roi": 0.0, "mroas": 0.0, "elasticity": 0.0}
+            ch_name, {"spend": 0.0, "contribution": 0.0, "elasticity": 0.0}
         )
-        acc["spend"] += feature_mean_spend.get(f, 0.0)
-        acc["roi"] += max(roi_val, 0.0)
-        acc["mroas"] += max(mroas, 0.0)
+        acc["spend"] += total_spend
+        acc["contribution"] += feature_total_contribution.get(f, 0.0)
         acc["elasticity"] += elasticity
 
     channel_summary = [
         {
             "channel": ch,
             "spend": vals["spend"],
-            "roi": vals["roi"],
-            "mroas": vals["mroas"],
+            "roi": float(vals["contribution"] / vals["spend"]) if vals["spend"] > 0 else 0.0,
+            "mroas": float(vals["contribution"] / vals["spend"]) if vals["spend"] > 0 else 0.0,
             "elasticity": vals["elasticity"],
         }
         for ch, vals in channel_summary_acc.items()
@@ -272,9 +322,12 @@ def _fit_ridge_tall(
     contrib = [
         {
             "channel": ch,
-            "beta": 0.0,
+            "beta": float(sum(c["beta"] for c in campaigns if c["channel"] == ch)),
             "mean_share": float(
                 sum(c["mean_share"] for c in campaigns if c["channel"] == ch)
+            ),
+            "mean_contribution": float(
+                sum(c["mean_contribution"] for c in campaigns if c["channel"] == ch)
             ),
         }
         for ch in channel_summary_acc.keys()
@@ -290,12 +343,13 @@ def _fit_ridge_tall(
     ]
 
     return {
-        "r2": float(model.score(X, y)),
+        "r2": _safe_r2(model, X, y),
         "contrib": contrib,
         "roi": roi,
         "engine": "ridge-fallback",
         "campaigns": campaigns,
         "channel_summary": channel_summary,
+        "diagnostics": {"ridge_positive": True, "contribution_basis": "coefficient_x_total_spend"},
     }
 
 
