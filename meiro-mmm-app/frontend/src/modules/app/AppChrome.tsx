@@ -70,8 +70,8 @@ const ATTRIBUTION_MODELS = [
 function renderNavIcon(page: AppPage, active: boolean) {
   const stroke = active ? tokens.color.accent : tokens.color.textMuted
   const common = {
-    width: 14,
-    height: 14,
+    width: 18,
+    height: 18,
     viewBox: '0 0 16 16',
     fill: 'none',
     stroke,
@@ -143,6 +143,24 @@ function renderNavIcon(page: AppPage, active: boolean) {
   )
 }
 
+function MeiroLogoMark({ compact = false }: { compact?: boolean }) {
+  const size = compact ? 30 : 44
+  return (
+    <svg width={size} height={size} viewBox="0 0 44 44" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <defs>
+        <linearGradient id="meiro-mark-gradient" x1="8" y1="36" x2="36" y2="8" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#ff7a2f" />
+          <stop offset="0.48" stopColor="#ff4f80" />
+          <stop offset="1" stopColor="#963cf2" />
+        </linearGradient>
+      </defs>
+      <circle cx="22" cy="22" r="18" fill="none" stroke="url(#meiro-mark-gradient)" strokeWidth="3" strokeDasharray="82 18" strokeLinecap="round" transform="rotate(-20 22 22)" />
+      <circle cx="22" cy="22" r="12" fill="none" stroke="url(#meiro-mark-gradient)" strokeWidth="3" strokeDasharray="48 16" strokeLinecap="round" transform="rotate(45 22 22)" />
+      <circle cx="22" cy="22" r="6" fill="none" stroke="url(#meiro-mark-gradient)" strokeWidth="3" strokeDasharray="26 12" strokeLinecap="round" transform="rotate(150 22 22)" />
+    </svg>
+  )
+}
+
 interface AppSidebarProps {
   page: AppPage
   navSearch: string
@@ -166,155 +184,139 @@ export function AppSidebar({
   onSetPage,
   onSetPinnedPages,
 }: AppSidebarProps) {
+  const filtered = visibleNavItems.filter((item) => item.label.toLowerCase().includes(navSearch.trim().toLowerCase()))
+
+  const renderItem = (item: NavItem) => {
+    const active = page === item.key
+    const baseStyle: CSSProperties = {
+      display: 'flex',
+      alignItems: 'center',
+      gap: sidebarCollapsed ? 0 : 14,
+      width: '100%',
+      border: 'none',
+      background: active ? tokens.color.accentMuted : 'transparent',
+      color: active ? tokens.color.text : tokens.color.text,
+      padding: sidebarCollapsed ? '10px 0' : '12px 16px',
+      borderRadius: tokens.radius.sm,
+      cursor: 'pointer',
+      fontSize: tokens.font.sizeBase,
+      fontWeight: tokens.font.weightMedium,
+      lineHeight: 1.2,
+      justifyContent: sidebarCollapsed ? 'center' : 'flex-start',
+      minHeight: 48,
+    }
+
+    return (
+      <button type="button" key={item.key} onClick={() => onSetPage(item.key)} style={baseStyle} title={sidebarCollapsed ? item.label : undefined}>
+        <span
+          style={{
+            width: 22,
+            height: 22,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: active ? tokens.color.accent : tokens.color.textMuted,
+            flexShrink: 0,
+          }}
+        >
+          {renderNavIcon(item.key, active)}
+        </span>
+        {!sidebarCollapsed && <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.label}</span>}
+      </button>
+    )
+  }
+
   return (
     <aside
       style={{
-        gridRow: '1 / span 2',
+        gridRow: 1,
         gridColumn: 1,
         background: tokens.color.surface,
         borderRight: `1px solid ${tokens.color.borderLight}`,
         display: 'flex',
         flexDirection: 'column',
+        minHeight: '100vh',
       }}
     >
       <div
         style={{
           display: 'flex',
-          alignItems: 'center',
+          alignItems: sidebarCollapsed ? 'center' : 'flex-start',
           justifyContent: sidebarCollapsed ? 'center' : 'space-between',
-          padding: '12px 10px',
+          gap: 12,
+          padding: sidebarCollapsed ? '18px 10px' : '16px 20px 18px',
           borderBottom: `1px solid ${tokens.color.borderLight}`,
         }}
       >
         {!sidebarCollapsed && (
-          <div>
-            <div style={{ fontSize: tokens.font.sizeSm, fontWeight: tokens.font.weightSemibold, color: tokens.color.text, letterSpacing: '-0.02em' }}>
-              Meiro measurement
+          <div style={{ display: 'grid', gap: 20, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+              <MeiroLogoMark />
+              <div style={{ display: 'grid', lineHeight: 0.92, paddingTop: 1 }}>
+                <span style={{ fontSize: 28, fontWeight: 800, color: '#191d29', letterSpacing: 0 }}>meiro</span>
+                <span style={{ fontSize: 28, fontWeight: 800, color: tokens.color.accent, letterSpacing: 0 }}>mmm</span>
+              </div>
             </div>
-            <div style={{ fontSize: tokens.font.sizeXs, color: tokens.color.textSecondary }}>Workspace</div>
+            <div style={{ display: 'grid', gap: 5, minWidth: 0 }}>
+              <div style={{ fontSize: tokens.font.sizeSm, color: tokens.color.textSecondary, fontWeight: tokens.font.weightMedium }}>Meiro-internal</div>
+              <div style={{ fontSize: tokens.font.sizeSm, color: tokens.color.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>workspace@meiro.io</div>
+            </div>
           </div>
         )}
-        <button
-          type="button"
-          onClick={onToggleCollapse}
-          style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 6, borderRadius: tokens.radius.full, color: tokens.color.textSecondary }}
-          title={sidebarCollapsed ? 'Expand navigation' : 'Collapse navigation'}
-        >
-          {sidebarCollapsed ? '›' : '‹'}
-        </button>
+        {sidebarCollapsed && <MeiroLogoMark compact />}
+        {sidebarCollapsed && (
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            style={{
+              border: `1px solid ${tokens.color.borderLight}`,
+              background: tokens.color.surface,
+              cursor: 'pointer',
+              padding: 4,
+              width: 28,
+              height: 28,
+              borderRadius: tokens.radius.sm,
+              color: tokens.color.textMuted,
+              boxShadow: tokens.shadowXs,
+            }}
+            title="Expand navigation"
+          >
+            ›
+          </button>
+        )}
       </div>
 
-      {!sidebarCollapsed && (
-        <div style={{ padding: '10px 12px 4px', borderBottom: `1px solid ${tokens.color.borderLight}` }}>
-          <input
-            type="text"
-            value={navSearch}
-            onChange={(e) => onNavSearchChange(e.target.value)}
-            placeholder="Search pages…"
-            style={{ width: '100%', padding: '6px 10px', fontSize: tokens.font.sizeSm, borderRadius: tokens.radius.sm, border: `1px solid ${tokens.color.borderLight}`, backgroundColor: tokens.color.bg, color: tokens.color.text }}
-          />
-        </div>
-      )}
-
-      <nav style={{ flex: 1, overflowY: 'auto', padding: sidebarCollapsed ? '8px 4px' : '8px 8px 16px' }}>
-        {(() => {
-          const filtered = visibleNavItems.filter((item) => item.label.toLowerCase().includes(navSearch.trim().toLowerCase()))
-          const pinned = filtered.filter((item) => pinnedPages.includes(item.key))
-          const bySection: Record<NavSection, NavItem[]> = {
-            Overview: [],
-            Analytics: [],
-            Attribution: [],
-            'Causal / Planning': [],
-            Journeys: [],
-            'Data & Ops': [],
-            Admin: [],
-          }
-          filtered.forEach((item) => {
-            bySection[item.section].push(item)
-          })
-
-          const renderItem = (item: NavItem) => {
-            const active = page === item.key
-            const isPinned = pinnedPages.includes(item.key)
-            const baseStyle: CSSProperties = {
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              width: '100%',
-              border: 'none',
-              background: active ? tokens.color.accentMuted : 'transparent',
-              color: active ? tokens.color.accent : tokens.color.textSecondary,
-              padding: sidebarCollapsed ? '6px 6px' : '6px 10px',
-              borderRadius: tokens.radius.md,
-              cursor: 'pointer',
-              fontSize: tokens.font.sizeSm,
-              fontWeight: active ? tokens.font.weightSemibold : tokens.font.weightMedium,
-            }
-            return (
-              <div key={item.key} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <button type="button" onClick={() => onSetPage(item.key)} style={baseStyle} title={sidebarCollapsed ? item.label : undefined}>
-                  <div style={{ width: 24, height: 24, borderRadius: 999, border: `1px solid ${active ? tokens.color.accent : tokens.color.borderLight}`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: tokens.font.sizeXs, color: active ? tokens.color.accent : tokens.color.textMuted, backgroundColor: tokens.color.surface, flexShrink: 0 }}>
-                    {renderNavIcon(item.key, active)}
-                  </div>
-                  {!sidebarCollapsed && <span>{item.label}</span>}
-                </button>
-                {!sidebarCollapsed && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onSetPinnedPages((prev) => {
-                        const next = isPinned ? prev.filter((p) => p !== item.key) : [...prev, item.key]
-                        try {
-                          window.localStorage.setItem('mmm-pinned-pages-v1', JSON.stringify(next))
-                        } catch {
-                          // ignore
-                        }
-                        return next
-                      })
-                    }}
-                    style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 2, fontSize: tokens.font.sizeXs, color: isPinned ? tokens.color.accent : tokens.color.textMuted }}
-                    title={isPinned ? 'Unpin from favorites' : 'Pin to favorites'}
-                  >
-                    {isPinned ? '★' : '☆'}
-                  </button>
-                )}
-              </div>
-            )
-          }
-
-          const sectionsInOrder: NavSection[] = ['Overview', 'Analytics', 'Attribution', 'Journeys', 'Causal / Planning', 'Data & Ops', 'Admin']
-          return (
-            <>
-              {pinned.length > 0 && !sidebarCollapsed && (
-                <div style={{ marginBottom: 12 }}>
-                  <div style={{ fontSize: tokens.font.sizeXs, textTransform: 'uppercase', letterSpacing: '0.08em', color: tokens.color.textMuted, margin: '4px 8px' }}>
-                    Pinned
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    {pinned.map(renderItem)}
-                  </div>
-                </div>
-              )}
-              {sectionsInOrder.map((section) => {
-                const items = bySection[section]
-                if (!items.length) return null
-                return (
-                  <div key={section} style={{ marginBottom: 12 }}>
-                    {!sidebarCollapsed && (
-                      <div style={{ fontSize: tokens.font.sizeXs, textTransform: 'uppercase', letterSpacing: '0.08em', color: tokens.color.textMuted, margin: '6px 8px' }}>
-                        {section}
-                      </div>
-                    )}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      {items.map(renderItem)}
-                    </div>
-                  </div>
-                )
-              })}
-            </>
-          )
-        })()}
+      <nav style={{ flex: 1, overflowY: 'auto', padding: sidebarCollapsed ? '12px 8px' : '18px 10px 16px', display: 'grid', alignContent: 'start', gap: 6 }}>
+        {filtered.map(renderItem)}
       </nav>
+
+      <div style={{ borderTop: `1px solid ${tokens.color.borderLight}`, padding: sidebarCollapsed ? '10px 8px' : '12px 10px' }}>
+        <button
+          type="button"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: sidebarCollapsed ? 'center' : 'flex-start',
+            gap: 14,
+            width: '100%',
+            border: 'none',
+            background: 'transparent',
+            padding: sidebarCollapsed ? '10px 0' : '10px 16px',
+            borderRadius: tokens.radius.sm,
+            cursor: 'pointer',
+            color: tokens.color.text,
+            fontSize: tokens.font.sizeBase,
+            fontWeight: tokens.font.weightMedium,
+          }}
+          title="Documentation"
+        >
+          <svg width="22" height="22" viewBox="0 0 16 16" fill="none" stroke={tokens.color.textMuted} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M2.5 3.2c1.8-.8 3.5-.6 5.5.6v9c-2-1.2-3.7-1.4-5.5-.6v-9Z" />
+            <path d="M13.5 3.2c-1.8-.8-3.5-.6-5.5.6v9c2-1.2 3.7-1.4 5.5-.6v-9Z" />
+          </svg>
+          {!sidebarCollapsed && <span>Documentation</span>}
+        </button>
+      </div>
     </aside>
   )
 }

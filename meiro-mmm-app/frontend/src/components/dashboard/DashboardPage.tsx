@@ -1,5 +1,4 @@
-import { ReactNode, useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { ReactNode, useState } from 'react'
 import { tokens as t } from '../../theme/tokens'
 
 type AlertSeverity = 'info' | 'warning' | 'critical' | string
@@ -248,23 +247,6 @@ function DashboardPage({
   emptyState,
   padding = 'lg',
 }: DashboardPageProps) {
-  const alertsQuery = useQuery<DashboardAlert[]>({
-    queryKey: ['dashboard-alerts-launcher'],
-    queryFn: async () => {
-      const res = await fetch('/api/data-quality/alerts?limit=12')
-      if (!res.ok) return []
-      const data = (await res.json()) as DashboardAlert[]
-      return Array.isArray(data) ? data : []
-    },
-  })
-
-  const alerts = useMemo(
-    () => (alertsQuery.data ?? []).slice(0, 12),
-    [alertsQuery.data],
-  )
-
-  const bodyPadding = padding === 'lg' ? t.space.xl : t.space.lg
-
   let content: ReactNode = children
   if (isLoading) {
     content = loadingState ?? DEFAULT_LOADING
@@ -278,32 +260,39 @@ function DashboardPage({
     <div
       style={{
         display: 'grid',
-        gap: t.space.xl,
-        padding: `${bodyPadding}px`,
+        gap: padding === 'lg' ? 28 : t.space.lg,
+        padding: 0,
       }}
     >
       <div
         style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-          gap: t.space.md,
-          alignItems: 'start',
+          display: 'flex',
+          justifyContent: 'space-between',
+          gap: t.space.xl,
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          padding: '30px 32px',
+          background: t.color.surface,
+          border: `1px solid ${t.color.borderLight}`,
+          borderRadius: t.radius.lg,
+          boxShadow: t.shadow,
         }}
       >
-        <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
+        <div style={{ display: 'grid', gap: 10, minWidth: 0, flex: '1 1 520px' }}>
           <h1
             style={{
               margin: 0,
               fontSize: t.font.size2xl,
               color: t.color.text,
-              fontWeight: t.font.weightSemibold,
-              letterSpacing: '-0.01em',
+              fontWeight: t.font.weightBold,
+              letterSpacing: 0,
+              lineHeight: 1.15,
             }}
           >
             {title}
           </h1>
           {description && (
-            <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+            <p style={{ margin: 0, fontSize: t.font.sizeLg, color: t.color.textSecondary, lineHeight: 1.45 }}>
               {description}
             </p>
           )}
@@ -314,16 +303,14 @@ function DashboardPage({
             alignItems: 'center',
             gap: t.space.md,
             flexWrap: 'wrap',
-            justifyContent: 'flex-start',
+            justifyContent: 'flex-end',
             minWidth: 0,
+            flex: '0 1 auto',
           }}
         >
           {dateRange && <div style={{ minWidth: 0, flex: '0 1 auto' }}>{dateRange}</div>}
           {filters && <div style={{ minWidth: 0, flex: '1 1 220px' }}>{filters}</div>}
           {actions && <div style={{ minWidth: 0, flex: '0 1 auto' }}>{actions}</div>}
-          <div style={{ marginLeft: 'auto' }}>
-            <AlertsBell alerts={alerts} />
-          </div>
         </div>
       </div>
       <div style={{ minHeight: 240, minWidth: 0 }}>{content}</div>
