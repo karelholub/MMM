@@ -307,6 +307,16 @@ def test_mmm_what_if_and_auto_optimizer_use_contribution_and_spend_basis(tmp_pat
             {"channel": "high_roi", "spend": 100.0, "roi": 2.0, "mroas": 2.0, "elasticity": 0.2},
             {"channel": "low_roi", "spend": 200.0, "roi": 1.0, "mroas": 1.0, "elasticity": 0.1},
         ],
+        "campaigns": [
+            {
+                "channel": "high_roi",
+                "campaign": "brand",
+                "spend": 100.0,
+                "mean_spend": 50.0,
+                "roi": 2.0,
+                "mean_contribution": 200.0,
+            }
+        ],
     }
 
     app.dependency_overrides.clear()
@@ -332,6 +342,11 @@ def test_mmm_what_if_and_auto_optimizer_use_contribution_and_spend_basis(tmp_pat
             assert round(auto_body["uplift"], 2) == 25.0
             assert round(auto_body["optimal_mix"]["high_roi"], 2) == 2.0
             assert round(auto_body["optimal_mix"]["low_roi"], 2) == 0.5
+
+            export_resp = client.get("/api/models/mmm_response_basis/export.csv")
+            assert export_resp.status_code == 200
+            export_text = export_resp.text
+            assert "high_roi,brand,100.0000,100.0000,2.000000,200.0000" in export_text
     finally:
         app.dependency_overrides.clear()
         main_module.RUNS.clear()

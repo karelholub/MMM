@@ -558,9 +558,10 @@ def create_router(
         out = io.StringIO()
         out.write("channel,campaign,spend,optimal_spend,roi,expected_conversions\n")
         for row in campaigns:
-            spend = float(row.get("mean_spend", 0.0))
+            spend = float(row.get("spend") or row.get("mean_spend") or 0.0)
             roi_val = float(row.get("roi", 0.0))
-            out.write(f"{row.get('channel')},{row.get('campaign')},{spend:.4f},{spend:.4f},{roi_val:.6f},{spend * roi_val:.4f}\n")
+            expected = float(row.get("mean_contribution") or (spend * roi_val))
+            out.write(f"{row.get('channel')},{row.get('campaign')},{spend:.4f},{spend:.4f},{roi_val:.6f},{expected:.4f}\n")
         return out.getvalue(), 200, {"Content-Type": "text/csv"}
 
     @router.post("/api/models/{run_id}/optimize")

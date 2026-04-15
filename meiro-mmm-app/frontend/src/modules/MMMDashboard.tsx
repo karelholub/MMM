@@ -43,6 +43,7 @@ interface KPI {
 interface Contrib {
   channel: string
   mean_share: number
+  mean_contribution?: number
 }
 
 interface ChannelSummary {
@@ -85,10 +86,15 @@ function formatCurrency(val: number): string {
 }
 
 function exportRoiCSV(roi: KPI[], contrib: Contrib[]) {
-  const headers = ['Channel', 'ROI', 'Contribution Share (%)']
+  const headers = ['Channel', 'ROI', 'Contribution Share (%)', 'Modeled Contribution']
   const rows = roi.map((r) => {
     const c = contrib.find((x) => x.channel === r.channel)
-    return [r.channel, r.roi.toFixed(4), c ? (c.mean_share * 100).toFixed(2) : '']
+    return [
+      r.channel,
+      r.roi.toFixed(4),
+      c ? (c.mean_share * 100).toFixed(2) : '',
+      c?.mean_contribution != null ? Number(c.mean_contribution).toFixed(2) : '',
+    ]
   })
   const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
@@ -108,6 +114,30 @@ function channelDisplayName(
   if (overrides?.[channel]) return overrides[channel]
   if (taxonomyMap?.get(channel)) return taxonomyMap.get(channel)!
   return channel.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+function isTallMmmDataset(rows: Record<string, unknown>[]): boolean {
+  return rows.some((row) => row.channel != null && row.spend != null)
+}
+
+function aggregateTallKpiByDate(rows: Record<string, unknown>[], kpiKey: string): Array<{ date: string; kpi: number }> {
+  const byDate = new Map<string, number[]>()
+  rows.forEach((row) => {
+    const date = String(row.date ?? '').slice(0, 10)
+    if (!date) return
+    const value = Number(row[kpiKey])
+    if (!Number.isFinite(value)) return
+    const values = byDate.get(date) ?? []
+    values.push(value)
+    byDate.set(date, values)
+  })
+  return Array.from(byDate.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, values]) => {
+      const unique = new Set(values.map((value) => value.toFixed(8)))
+      const kpi = unique.size === 1 ? values[0] : values.reduce((sum, value) => sum + value, 0)
+      return { date, kpi }
+    })
 }
 
 function MetricCard(props: {
@@ -259,6 +289,9 @@ export default function MMMDashboard({
   const kpiTotal = useMemo(() => {
     const kpiCol = run?.config?.kpi
     if (!kpiCol) return 0
+    if (isTallMmmDataset(dataset)) {
+      return aggregateTallKpiByDate(dataset, kpiCol).reduce((sum, row) => sum + row.kpi, 0)
+    }
     return dataset.reduce((sum, row) => sum + (Number(row[kpiCol]) || 0), 0)
   }, [dataset, run?.config?.kpi])
 
@@ -266,6 +299,14 @@ export default function MMMDashboard({
     const chs = run?.config?.spend_channels || []
     if (!dataset.length && channelSummary.length) {
       return channelSummary.reduce((sum, row) => sum + (Number(row.spend) || 0), 0)
+    }
+    if (isTallMmmDataset(dataset)) {
+      const selected = new Set(chs.map(String))
+      return dataset.reduce((sum, row) => {
+        const channel = String(row.channel ?? '')
+        if (selected.size && !selected.has(channel)) return sum
+        return sum + (Number(row.spend) || 0)
+      }, 0)
     }
     return dataset.reduce((sum, row) => {
       let rowSpend = 0
@@ -335,7 +376,11 @@ export default function MMMDashboard({
 
   const topContributionChannel = useMemo(() => {
     if (!contrib?.length) return null
-    return [...contrib].sort((a, b) => b.mean_share - a.mean_share)[0] ?? null
+    return [...contrib].sort((a, b) => {
+      const bValue = b.mean_contribution ?? b.mean_share
+      const aValue = a.mean_contribution ?? a.mean_share
+      return bValue - aValue
+    })[0] ?? null
   }, [contrib])
 
   const negativeRoiCount = useMemo(() => roi?.filter((item) => item.roi < 0).length ?? 0, [roi])
@@ -448,7 +493,11 @@ export default function MMMDashboard({
   const topChannelsByShare = useMemo(() => {
     if (!contrib || contrib.length === 0) return []
     return [...contrib]
-      .sort((a, b) => b.mean_share - a.mean_share)
+      .sort((a, b) => {
+        const bValue = b.mean_contribution ?? b.mean_share
+        const aValue = a.mean_contribution ?? a.mean_share
+        return bValue - aValue
+      })
       .slice(0, 5)
       .map((c) => c.channel)
   }, [contrib])
@@ -456,9 +505,12 @@ export default function MMMDashboard({
   const contributionOverTime = useMemo(() => {
     if (!canUseModelResults || !contrib || contrib.length === 0 || !dataset || !kpiKey) return []
     const shareMap = new Map(contrib.map((c) => [c.channel, c.mean_share]))
-    return dataset.map((row) => {
-      const date = (row['date'] as string) || ''
-      const kpiVal = Number(row[kpiKey]) || 0
+    const kpiRows = isTallMmmDataset(dataset)
+      ? aggregateTallKpiByDate(dataset, kpiKey)
+      : dataset.map((row) => ({ date: String(row.date ?? ''), kpi: Number(row[kpiKey]) || 0 }))
+    return kpiRows.map((row) => {
+      const date = row.date || ''
+      const kpiVal = row.kpi
       const entry: any = { date }
       topChannelsByShare.forEach((ch) => {
         const share = shareMap.get(ch) ?? 0
@@ -1383,9 +1435,13 @@ export default function MMMDashboard({
                   const summary = channelSummary.find((s) => s.channel === r.channel)
                   const channelSpend = summary?.spend ?? 0
                   const contributionShare = c ? c.mean_share : 0
-                  const contributionAmount = kpiTotal * contributionShare
+                  const modeledContribution =
+                    c?.mean_contribution != null && Number.isFinite(Number(c.mean_contribution))
+                      ? Number(c.mean_contribution)
+                      : null
+                  const contributionAmount = modeledContribution ?? kpiTotal * contributionShare
                   const contributionDisplay =
-                    c && kpiTotal > 0
+                    c && contributionAmount > 0
                       ? `${contributionAmount.toFixed(0)} (${(contributionShare * 100).toFixed(1)}%)`
                       : c
                         ? `${(contributionShare * 100).toFixed(1)}% share`
@@ -1431,10 +1487,10 @@ export default function MMMDashboard({
                           fontVariantNumeric: 'tabular-nums',
                         }}
                         title={
-                          c && kpiTotal > 0
+                          c && contributionAmount > 0
                             ? `Approx. ${contributionAmount.toFixed(
                                 0,
-                              )} KPI (${(contributionShare * 100).toFixed(1)}% of total).`
+                              )} modeled KPI contribution (${(contributionShare * 100).toFixed(1)}% share).`
                             : c
                               ? 'Contribution share from the saved MMM run. KPI total is unavailable because the linked dataset preview is missing.'
                             : undefined
