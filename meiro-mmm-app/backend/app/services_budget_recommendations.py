@@ -100,16 +100,35 @@ def summarize_run_for_budget(
 
     baseline_spend: Dict[str, float] = {ch: 0.0 for ch in channels}
     observed_ranges: Dict[str, Dict[str, float]] = {ch: {"min": 0.0, "max": 0.0} for ch in channels}
-    row_count = 0
-    for row in dataset_rows:
-        row_count += 1
-        for ch in channels:
-            value = _safe_float(row.get(ch))
+    rows = list(dataset_rows)
+    row_count = len(rows)
+    is_tall = any({"date", "channel", "spend"}.issubset(set(row.keys())) for row in rows)
+    if is_tall:
+        spend_by_date_channel: Dict[tuple[str, str], float] = {}
+        for row in rows:
+            ch = str(row.get("channel") or "")
+            if ch not in baseline_spend:
+                continue
+            value = _safe_float(row.get("spend"))
             baseline_spend[ch] = baseline_spend.get(ch, 0.0) + value
-            if value > 0:
-                current = observed_ranges.setdefault(ch, {"min": 0.0, "max": 0.0})
-                current["min"] = value if current["min"] == 0 else min(current["min"], value)
-                current["max"] = max(current["max"], value)
+            date_key = str(row.get("date") or "")
+            spend_by_date_channel[(date_key, ch)] = spend_by_date_channel.get((date_key, ch), 0.0) + value
+        row_count = len({date for date, _channel in spend_by_date_channel}) or row_count
+        for (_date, ch), value in spend_by_date_channel.items():
+            if value <= 0:
+                continue
+            current = observed_ranges.setdefault(ch, {"min": 0.0, "max": 0.0})
+            current["min"] = value if current["min"] == 0 else min(current["min"], value)
+            current["max"] = max(current["max"], value)
+    else:
+        for row in rows:
+            for ch in channels:
+                value = _safe_float(row.get(ch))
+                baseline_spend[ch] = baseline_spend.get(ch, 0.0) + value
+                if value > 0:
+                    current = observed_ranges.setdefault(ch, {"min": 0.0, "max": 0.0})
+                    current["min"] = value if current["min"] == 0 else min(current["min"], value)
+                    current["max"] = max(current["max"], value)
 
     total_spend = sum(baseline_spend.values())
     weighted_roi = sum(roi_map.get(ch, 0.0) * max(contrib_map.get(ch, 0.0), 0.0) for ch in channels)
@@ -196,6 +215,7 @@ def build_budget_recommendations(
     observed_ranges = summary["observed_ranges"]
     total_spend = summary["total_spend"]
     confidence_score = summary["confidence_score"]
+    modeled_periods = max(int(summary["row_count"] or 0), 1)
 
     scored_channels = []
     for ch in channels:
@@ -235,8 +255,9 @@ def build_budget_recommendations(
         delta_pct = _proposed_delta_pct(objective, index, "increase")
         delta_amount = item["base_spend"] * delta_pct
         new_spend = item["base_spend"] + delta_amount
+        new_spend_per_period = new_spend / modeled_periods
         observed_max = observed_ranges.get(item["channel"], {}).get("max", 0.0)
-        extrapolation = observed_max > 0 and new_spend > observed_max * 1.05
+        extrapolation = observed_max > 0 and new_spend_per_period > observed_max * 1.05
         has_extrapolation = has_extrapolation or extrapolation
         net_reallocated += delta_amount
         actions.append(
@@ -261,8 +282,9 @@ def build_budget_recommendations(
         delta_pct = _proposed_delta_pct(objective, index, "decrease")
         delta_amount = item["base_spend"] * delta_pct
         new_spend = max(0.0, item["base_spend"] + delta_amount)
+        new_spend_per_period = new_spend / modeled_periods
         observed_min = observed_ranges.get(item["channel"], {}).get("min", 0.0)
-        extrapolation = observed_min > 0 and new_spend < observed_min * 0.95
+        extrapolation = observed_min > 0 and new_spend_per_period < observed_min * 0.95
         has_extrapolation = has_extrapolation or extrapolation
         net_reallocated += delta_amount
         actions.append(

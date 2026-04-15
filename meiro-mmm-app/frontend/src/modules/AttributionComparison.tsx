@@ -507,12 +507,21 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
     return `/?${params.toString()}`
   }
 
+  const resultsQueryParams = useMemo(() => {
+    const params = new URLSearchParams()
+    if (comparisonDateFrom) params.set('date_from', comparisonDateFrom)
+    if (comparisonDateTo) params.set('date_to', comparisonDateTo)
+    if (selectedConfigId) params.set('config_id', selectedConfigId)
+    return params.toString()
+  }, [comparisonDateFrom, comparisonDateTo, selectedConfigId])
+
   const resultsQuery = useQuery<Record<string, ModelResult>>({
-    queryKey: ['attribution-results'],
-    queryFn: async () => apiGetJson<Record<string, ModelResult>>('/api/attribution/results', {
-      fallbackMessage: 'Failed to fetch results',
-    }),
-    refetchInterval: 3000,
+    queryKey: ['attribution-results', comparisonDateFrom || 'all', comparisonDateTo || 'all', selectedConfigId ?? 'default'],
+    queryFn: async () =>
+      apiGetJson<Record<string, ModelResult>>(`/api/attribution/results${resultsQueryParams ? `?${resultsQueryParams}` : ''}`, {
+        fallbackMessage: 'Failed to fetch results',
+      }),
+    refetchInterval: false,
   })
 
   const results = resultsQuery.data || {}

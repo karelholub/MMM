@@ -9,6 +9,7 @@ import AnalysisShareActions from '../components/dashboard/AnalysisShareActions'
 import SectionCard from '../components/dashboard/SectionCard'
 import AnalysisNarrativePanel from '../components/dashboard/AnalysisNarrativePanel'
 import { navigateForRecommendedAction } from '../lib/recommendedActions'
+import type { RecommendedActionItem } from '../components/RecommendedActionsList'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import {
   createAdsChangeRequestsFromBudgetRecommendation,
@@ -19,10 +20,14 @@ const t = tokens
 
 interface BudgetOptimizerProps {
   roiData: { channel: string; roi: number }[]
-  contribData: { channel: string; mean_share: number }[]
+  contribData: { channel: string; mean_share: number; mean_contribution?: number }[]
   baselineKPI?: number
   runId?: string | null
   datasetId?: string | null
+  datasetAvailable?: boolean
+  budgetActionsAvailable?: boolean
+  budgetReadoutReason?: string | null
+  onRecommendedActionClick?: (action: RecommendedActionItem) => void
 }
 
 interface ChannelConstraint {
@@ -171,12 +176,20 @@ function providerFromBudgetChannel(channel: string): AdsProviderKey | null {
   return null
 }
 
+function isTallMmmDataset(rows: Record<string, unknown>[]): boolean {
+  return rows.some((row) => row.channel != null && row.spend != null)
+}
+
 export default function BudgetOptimizer({
   roiData,
   contribData,
   baselineKPI = 100,
   runId,
   datasetId,
+  datasetAvailable = true,
+  budgetActionsAvailable = true,
+  budgetReadoutReason,
+  onRecommendedActionClick,
 }: BudgetOptimizerProps) {
   const queryClient = useQueryClient()
   const [multipliers, setMultipliers] = useState<Record<string, number>>(() =>
@@ -193,6 +206,7 @@ export default function BudgetOptimizer({
   const [recommendationObjective, setRecommendationObjective] = useState<
     'protect_efficiency' | 'grow_conversions' | 'hit_target_roas'
   >('protect_efficiency')
+  const [activeSavedScenario, setActiveSavedScenario] = useState<SavedBudgetScenario | null>(null)
   const [optimalMix, setOptimalMix] = useState<Record<string, number> | null>(null)
   const [optimalUplift, setOptimalUplift] = useState<number | null>(null)
   const [optimalPredictedKpi, setOptimalPredictedKpi] = useState<number | null>(null)
@@ -203,6 +217,13 @@ export default function BudgetOptimizer({
   const [showContextPanel, setShowContextPanel] = usePersistentToggle('budget-optimizer:show-context', false)
   const [showEvidencePanel, setShowEvidencePanel] = usePersistentToggle('budget-optimizer:show-evidence', false)
   const [showRealizationPanel, setShowRealizationPanel] = usePersistentToggle('budget-optimizer:show-realization', false)
+  const isDatasetReadoutOnly = datasetAvailable === false
+  const isBudgetReadoutOnly = isDatasetReadoutOnly || budgetActionsAvailable === false
+  const readoutOnlyReason =
+    budgetReadoutReason ||
+    (isDatasetReadoutOnly
+      ? 'The linked MMM dataset is unavailable, so new budget scenarios cannot be created from this run.'
+      : 'This MMM run is available as a readout, but it needs to be refreshed before creating new budget decisions.')
 
   const totalBudgetMultiplier =
     totalBudgetMode === 'constant' ? 1.0 : 1.0 + totalBudgetChangePct / 100
@@ -272,6 +293,9 @@ export default function BudgetOptimizer({
   const saveScenarioMutation = useMutation({
     mutationFn: async () => {
       if (!runId) throw new Error('Missing model run')
+      if (isBudgetReadoutOnly) {
+        throw new Error(readoutOnlyReason)
+      }
       return apiSendJson<SavedBudgetScenario>(
         `/api/models/${runId}/budget/scenarios`,
         'POST',
@@ -293,6 +317,7 @@ export default function BudgetOptimizer({
     mutationFn: async () => {
       if (!runId || !topRecommendation) throw new Error('Recommendation is unavailable')
       const existingScenario =
+        activeSavedScenario ??
         savedScenariosQuery.data?.items?.find(
           (item) =>
             item.objective === recommendationObjective &&
@@ -349,7 +374,7 @@ export default function BudgetOptimizer({
       }).catch(() => ({ preview_rows: [] }))
       return d.preview_rows || []
     },
-    enabled: !!datasetId,
+    enabled: !!datasetId && datasetAvailable,
   })
 
   const channelList = useMemo(() => roiData.map((r) => r.channel), [roiData])
@@ -366,6 +391,14 @@ export default function BudgetOptimizer({
   const baselineSpendByChannel = useMemo(() => {
     const out: Record<string, number> = {}
     const chs = channelList
+    if (isTallMmmDataset(dataset)) {
+      for (const row of dataset) {
+        const channel = String(row.channel ?? '')
+        if (!chs.includes(channel)) continue
+        out[channel] = (out[channel] || 0) + (Number(row.spend) || 0)
+      }
+      return out
+    }
     for (const row of dataset) {
       for (const ch of chs) {
         out[ch] = (out[ch] || 0) + (Number(row[ch]) || 0)
@@ -377,6 +410,27 @@ export default function BudgetOptimizer({
   const observedSpendRangeByChannel = useMemo(() => {
     const out: Record<string, { min: number; max: number }> = {}
     const chs = channelList
+    if (isTallMmmDataset(dataset)) {
+      const spendByDateChannel = new Map<string, number>()
+      for (const row of dataset) {
+        const channel = String(row.channel ?? '')
+        if (!chs.includes(channel)) continue
+        const date = String(row.date ?? '')
+        const key = `${date}|||${channel}`
+        spendByDateChannel.set(key, (spendByDateChannel.get(key) || 0) + (Number(row.spend) || 0))
+      }
+      for (const ch of chs) {
+        const values = Array.from(spendByDateChannel.entries())
+          .filter(([key]) => key.endsWith(`|||${ch}`))
+          .map(([, value]) => value)
+          .filter((value) => value > 0)
+        out[ch] = {
+          min: values.length ? Math.min(...values) : 0,
+          max: values.length ? Math.max(...values) : 0,
+        }
+      }
+      return out
+    }
     for (const ch of chs) {
       const values = dataset.map((row) => Number(row[ch]) || 0).filter((v) => v > 0)
       out[ch] = {
@@ -396,6 +450,16 @@ export default function BudgetOptimizer({
     () => Object.fromEntries(contribData.map((c) => [c.channel, c.mean_share])),
     [contribData]
   )
+  const contributionValueMap = useMemo(
+    () =>
+      Object.fromEntries(
+        contribData.map((c) => [
+          c.channel,
+          Number.isFinite(Number(c.mean_contribution)) ? Number(c.mean_contribution) : undefined,
+        ]),
+      ),
+    [contribData],
+  )
   const roiMap = useMemo(() => Object.fromEntries(roiData.map((r) => [r.channel, r.roi])), [roiData])
 
   const baselineKpiValue = baselineKPI
@@ -403,19 +467,21 @@ export default function BudgetOptimizer({
   const baselineScore = useMemo(() => {
     let s = 0
     for (const ch of channelList) {
-      s += (roiMap[ch] ?? 0) * (contribMap[ch] ?? 0)
+      const contributionValue = contributionValueMap[ch]
+      s += contributionValue ?? (roiMap[ch] ?? 0) * (contribMap[ch] ?? 0)
     }
     return s
-  }, [channelList, roiMap, contribMap])
+  }, [channelList, roiMap, contribMap, contributionValueMap])
 
   const predictedScore = useMemo(() => {
     let s = 0
     for (const ch of channelList) {
       const mult = constraints[ch]?.locked ? 1.0 : (multipliers[ch] ?? 1.0)
-      s += (roiMap[ch] ?? 0) * (contribMap[ch] ?? 0) * mult
+      const contributionValue = contributionValueMap[ch]
+      s += (contributionValue ?? (roiMap[ch] ?? 0) * (contribMap[ch] ?? 0)) * mult
     }
     return s
-  }, [channelList, roiMap, contribMap, multipliers, constraints])
+  }, [channelList, roiMap, contribMap, contributionValueMap, multipliers, constraints])
 
   const predictedKPI = baselineScore > 0 ? (predictedScore / baselineScore) * baselineKpiValue : 0
   const upliftPercent = baselineKpiValue ? ((predictedKPI - baselineKpiValue) / baselineKpiValue) * 100 : 0
@@ -457,14 +523,17 @@ export default function BudgetOptimizer({
   }, [channelList, roiMap, baselineSpendByChannel])
 
   const handleSliderChange = (channel: string, value: number) => {
+    setActiveSavedScenario(null)
     setMultipliers((prev) => ({ ...prev, [channel]: value }))
   }
 
   const handleResetChannel = (channel: string) => {
+    setActiveSavedScenario(null)
     setMultipliers((prev) => ({ ...prev, [channel]: 1.0 }))
   }
 
   const handleResetAll = () => {
+    setActiveSavedScenario(null)
     setMultipliers(channelList.reduce((acc, ch) => ({ ...acc, [ch]: 1.0 }), {}))
     setOptimalMix(null)
     setOptimalUplift(null)
@@ -483,7 +552,7 @@ export default function BudgetOptimizer({
   }
 
   const handleSuggestOptimal = async () => {
-    if (!runId) return
+    if (!runId || isBudgetReadoutOnly) return
     setIsOptimizing(true)
     setOptimalMix(null)
     setOptimalUplift(null)
@@ -521,7 +590,7 @@ export default function BudgetOptimizer({
   }
 
   const handleRunWhatIf = async () => {
-    if (!runId) return
+    if (!runId || isBudgetReadoutOnly) return
     setIsWhatIfLoading(true)
     setWhatIfResult(null)
     try {
@@ -583,7 +652,21 @@ export default function BudgetOptimizer({
     return out
   }, [optimalMix, channelList, baselineSpendByChannel])
 
-  const topRecommendation = recommendationsQuery.data?.recommendations?.[0] ?? null
+  const activeSavedRecommendation = activeSavedScenario?.recommendations?.[0] ?? null
+  const isUsingSavedScenario = !!activeSavedScenario && !!activeSavedRecommendation
+  const topRecommendation = activeSavedRecommendation ?? recommendationsQuery.data?.recommendations?.[0] ?? null
+  const recommendationSummary = isUsingSavedScenario
+    ? {
+        periods: 0,
+        channels_considered: Object.keys(activeSavedScenario?.multipliers || {}).length,
+        weighted_roi: 0,
+      }
+    : recommendationsQuery.data?.summary
+  const canUseDatasetBackedActions =
+    !!runId &&
+    !isBudgetReadoutOnly &&
+    (isUsingSavedScenario || recommendationsQuery.data?.decision?.status !== 'blocked') &&
+    !!topRecommendation
   const savedScenarios = useMemo(
     () =>
       (savedScenariosQuery.data?.items ?? [])
@@ -592,6 +675,7 @@ export default function BudgetOptimizer({
     [savedScenariosQuery.data?.items],
   )
   const latestScenario = savedScenarios[0] ?? null
+  const savedScenariosToShow = savedScenarios.slice(0, 6)
   const rolloutRecords = useMemo(
     () =>
       (realizationQuery.data?.items ?? [])
@@ -600,27 +684,48 @@ export default function BudgetOptimizer({
     [realizationQuery.data?.items],
   )
   const latestRollout = rolloutRecords[0] ?? null
+  const rolloutRecordsToShow = rolloutRecords.slice(0, 6)
 
   const budgetTrustNarrative = useMemo(() => {
     const modeledPeriods = recommendationsQuery.data?.summary.periods ?? 0
     const savedScenarioCount = savedScenariosQuery.data?.total ?? 0
     const realizationCount = realizationQuery.data?.total ?? 0
     const hasLargeExtrapolation = extrapolationWarnings.length > 0
-    const headline = topRecommendation
+    const headline = isBudgetReadoutOnly
+      ? isDatasetReadoutOnly
+        ? 'This MMM run is available as a saved readout, but new budget recommendations need the missing source dataset.'
+        : 'This MMM run is available as a saved readout, but new budget recommendations need a refreshed model run.'
+      : topRecommendation
       ? hasLargeExtrapolation
         ? 'Budget guidance is usable, but the active scenario is stretching beyond observed spend history.'
         : 'Budget guidance is grounded in the active MMM run and is strongest when you stay inside observed spend ranges.'
       : 'Budget guidance is not ready yet because there is no active recommendation for this run.'
 
     const items = [
-      `Basis: this workspace uses the selected MMM run plus ${dataset.length.toLocaleString()} linked dataset preview rows across ${datasetDateCoverage}.`,
-      modeledPeriods > 0
+      isDatasetReadoutOnly
+        ? 'Basis: saved ROI, contribution, scenarios, and rollout records are still readable, but the linked dataset preview is unavailable in this runtime.'
+        : isBudgetReadoutOnly
+        ? `Basis: saved ROI, contribution, scenarios, and rollout records remain readable. ${readoutOnlyReason}`
+        : `Basis: this workspace uses the selected MMM run plus ${dataset.length.toLocaleString()} linked dataset preview rows across ${datasetDateCoverage}.`,
+      isDatasetReadoutOnly
+        ? 'Recommendation engine basis: unavailable until the source MMM dataset is rebuilt or reattached.'
+        : isBudgetReadoutOnly
+        ? 'Recommendation engine basis: paused for this run until a compatible replacement run is created.'
+        : modeledPeriods > 0
         ? `Recommendation engine basis: ${modeledPeriods.toLocaleString()} modeled periods across ${channelList.length.toLocaleString()} channels.`
         : 'Recommendation engine basis is still unavailable, so treat this page as setup and manual planning only.',
-      topRecommendation
+      isDatasetReadoutOnly
+        ? 'Do not use manual sliders or optimizer output for action from this run; create a compatible new run first.'
+        : isBudgetReadoutOnly
+        ? 'Do not create new budget actions from this readout; use it only to review prior scenarios and rollout evidence.'
+        : topRecommendation
         ? `Current top recommendation is ${topRecommendation.confidence.band.toLowerCase()} confidence with ${topRecommendation.risk.extrapolation.toLowerCase()} extrapolation risk.`
         : 'No top recommendation is available yet, so manual budget editing should be treated as exploratory only.',
-      hasLargeExtrapolation
+      isDatasetReadoutOnly
+        ? 'Observed spend ranges are unavailable, so extrapolation guardrails cannot be evaluated.'
+        : isBudgetReadoutOnly
+        ? 'Observed spend ranges may be visible, but optimizer guardrails are disabled until the run is refreshed.'
+        : hasLargeExtrapolation
         ? `Primary trust risk: ${extrapolationWarnings.length.toLocaleString()} channel scenario${extrapolationWarnings.length === 1 ? '' : 's'} exceed observed spend ranges.`
         : 'Current scenario stays inside observed historical spend ranges, so the optimizer is not extrapolating aggressively.',
       savedScenarioCount > 0 || realizationCount > 0
@@ -632,6 +737,9 @@ export default function BudgetOptimizer({
     channelList.length,
     dataset.length,
     datasetDateCoverage,
+    isBudgetReadoutOnly,
+    isDatasetReadoutOnly,
+    readoutOnlyReason,
     extrapolationWarnings.length,
     realizationQuery.data?.total,
     recommendationsQuery.data?.summary.periods,
@@ -655,6 +763,7 @@ export default function BudgetOptimizer({
   }
 
   const loadSavedScenario = (scenario: SavedBudgetScenario) => {
+    setActiveSavedScenario(scenario)
     setMultipliers({
       ...channelList.reduce((acc, ch) => ({ ...acc, [ch]: 1.0 }), {} as Record<string, number>),
       ...(scenario.multipliers || {}),
@@ -672,6 +781,18 @@ export default function BudgetOptimizer({
     setOptimalPredictedKpi(null)
     setOptimizationMessage('Loaded saved scenario')
   }
+  const budgetSourceLabel = isBudgetReadoutOnly
+    ? 'MMM run readout only'
+    : runId
+      ? 'MMM model run + dataset preview'
+      : 'Awaiting model run'
+  const observedRowsLabel = isDatasetReadoutOnly ? 'Unavailable' : dataset.length.toLocaleString()
+  const baselineSpendLabel = isDatasetReadoutOnly ? 'Unavailable' : formatCurrency(totalBaselineSpend)
+  const modeledPeriodsLabel = isDatasetReadoutOnly
+    ? 'Unavailable'
+    : recommendationsQuery.data?.summary.periods != null
+      ? recommendationsQuery.data.summary.periods.toLocaleString()
+      : '—'
 
   return (
     <div
@@ -693,17 +814,11 @@ export default function BudgetOptimizer({
       <div style={{ marginBottom: t.space.lg }}>
         <ContextSummaryStrip
           items={[
-            { label: 'Source', value: runId ? 'MMM model run + dataset preview' : 'Awaiting model run' },
-            { label: 'Observed rows', value: dataset.length.toLocaleString() },
+            { label: 'Source', value: budgetSourceLabel },
+            { label: 'Observed rows', value: observedRowsLabel },
             { label: 'Channels', value: channelList.length.toLocaleString() },
-            { label: 'Baseline spend', value: formatCurrency(totalBaselineSpend) },
-            {
-              label: 'Modeled periods',
-              value:
-                recommendationsQuery.data?.summary.periods != null
-                  ? recommendationsQuery.data.summary.periods.toLocaleString()
-                  : '—',
-            },
+            { label: 'Baseline spend', value: baselineSpendLabel },
+            { label: 'Modeled periods', value: modeledPeriodsLabel },
           ]}
         />
       </div>
@@ -714,9 +829,9 @@ export default function BudgetOptimizer({
           summaryTitle="MMM budget actions"
           summaryLines={[
             `Objective: ${recommendationObjective.replace(/_/g, ' ')}`,
-            `Baseline spend: ${formatCurrency(totalBaselineSpend)}`,
+            `Baseline spend: ${baselineSpendLabel}`,
             `Channels considered: ${channelList.length.toLocaleString()}`,
-            `Observed rows: ${dataset.length.toLocaleString()}`,
+            `Observed rows: ${observedRowsLabel}`,
             `Current predicted uplift: ${upliftPercent >= 0 ? '+' : ''}${upliftPercent.toFixed(1)}%`,
             topRecommendation ? `Top recommendation: ${topRecommendation.title}` : 'Top recommendation: unavailable',
           ]}
@@ -739,7 +854,11 @@ export default function BudgetOptimizer({
         >
           <div style={{ display: 'grid', gap: t.space.md }}>
             <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-              Budget actions here are derived from the active MMM run and its linked dataset preview. Saved scenarios and rollout realization stay tied to that run, so reopening prior work preserves the same model basis instead of forcing a new run setup.
+              {isDatasetReadoutOnly
+                ? 'This workspace is showing saved MMM readouts, scenarios, and rollout realization for a historical run whose linked dataset is unavailable. Rebuild a compatible dataset before creating new optimizer recommendations.'
+                : isBudgetReadoutOnly
+                ? `This workspace is showing saved MMM readouts, scenarios, and rollout realization, but new optimizer actions are paused. ${readoutOnlyReason}`
+                : 'Budget actions here are derived from the active MMM run and its linked dataset preview. Saved scenarios and rollout realization stay tied to that run, so reopening prior work preserves the same model basis instead of forcing a new run setup.'}
             </div>
             <div
               style={{
@@ -894,6 +1013,136 @@ export default function BudgetOptimizer({
             )}
           </div>
         </div>
+        {savedScenariosToShow.length > 1 || rolloutRecordsToShow.length > 1 ? (
+          <div
+            style={{
+              marginTop: t.space.lg,
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+              gap: t.space.md,
+            }}
+          >
+            {savedScenariosToShow.length > 1 ? (
+              <div
+                style={{
+                  padding: t.space.lg,
+                  borderRadius: t.radius.md,
+                  border: `1px solid ${t.color.borderLight}`,
+                  background: t.color.surface,
+                  display: 'grid',
+                  gap: t.space.sm,
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                    Saved scenario history
+                  </div>
+                  <div style={{ marginTop: 2, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                    Load any prior allocation without rerunning MMM.
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gap: t.space.xs }}>
+                  {savedScenariosToShow.map((scenario, idx) => {
+                    const createdAt = scenario.created_at
+                      ? new Date(scenario.created_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+                      : 'Saved scenario'
+                    return (
+                      <div
+                        key={scenario.id}
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'minmax(0, 1fr) auto',
+                          gap: t.space.md,
+                          alignItems: 'center',
+                          padding: t.space.sm,
+                          borderRadius: t.radius.sm,
+                          border: `1px solid ${idx === 0 ? t.color.accent : t.color.borderLight}`,
+                          background: idx === 0 ? t.color.accentMuted : t.color.bg,
+                        }}
+                      >
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightMedium, color: t.color.text, textTransform: 'capitalize' }}>
+                            {scenario.objective.replace(/_/g, ' ')}
+                          </div>
+                          <div style={{ marginTop: 2, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                            {createdAt} · budget {Number(scenario.total_budget_change_pct || 0) >= 0 ? '+' : ''}
+                            {Number(scenario.total_budget_change_pct || 0).toFixed(0)}% · {(scenario.recommendations || []).length.toLocaleString()} recommendation{(scenario.recommendations || []).length === 1 ? '' : 's'}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => loadSavedScenario(scenario)}
+                          style={{
+                            padding: `${t.space.xs}px ${t.space.sm}px`,
+                            borderRadius: t.radius.sm,
+                            border: `1px solid ${t.color.border}`,
+                            background: t.color.surface,
+                            color: t.color.accent,
+                            fontSize: t.font.sizeXs,
+                            fontWeight: t.font.weightSemibold,
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          Load
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            ) : null}
+
+            {rolloutRecordsToShow.length > 1 ? (
+              <div
+                style={{
+                  padding: t.space.lg,
+                  borderRadius: t.radius.md,
+                  border: `1px solid ${t.color.borderLight}`,
+                  background: t.color.surface,
+                  display: 'grid',
+                  gap: t.space.sm,
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                    Rollout history
+                  </div>
+                  <div style={{ marginTop: 2, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                    Recent execution records attached to this MMM run.
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gap: t.space.xs }}>
+                  {rolloutRecordsToShow.map((record, idx) => (
+                    <div
+                      key={`${record.scenario_id}:${record.created_at ?? idx}`}
+                      style={{
+                        padding: t.space.sm,
+                        borderRadius: t.radius.sm,
+                        border: `1px solid ${idx === 0 ? t.color.success : t.color.borderLight}`,
+                        background: idx === 0 ? t.color.successMuted : t.color.bg,
+                        display: 'grid',
+                        gap: 2,
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'baseline' }}>
+                        <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightMedium, color: t.color.text, textTransform: 'capitalize' }}>
+                          {record.objective.replace(/_/g, ' ')}
+                        </div>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                          {record.execution.execution_progress_pct.toFixed(0)}% applied
+                        </div>
+                      </div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                        {record.created_at ? new Date(record.created_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'Tracked rollout'} · {record.execution.counts.total} request{record.execution.counts.total === 1 ? '' : 's'} · {formatCurrency(record.execution.applied_budget_delta_total)} moved
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </SectionCard>
 
       <div style={{ marginBottom: t.space.xl }}>
@@ -930,11 +1179,12 @@ export default function BudgetOptimizer({
           <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', alignItems: 'center' }}>
             <select
               value={recommendationObjective}
-              onChange={(e) =>
+              onChange={(e) => {
+                setActiveSavedScenario(null)
                 setRecommendationObjective(
                   e.target.value as 'protect_efficiency' | 'grow_conversions' | 'hit_target_roas'
                 )
-              }
+              }}
               style={{
                 padding: `${t.space.xs}px ${t.space.sm}px`,
                 border: `1px solid ${t.color.border}`,
@@ -950,14 +1200,14 @@ export default function BudgetOptimizer({
             <button
               type="button"
               onClick={() => saveScenarioMutation.mutate()}
-              disabled={!runId || saveScenarioMutation.isPending}
+              disabled={!canUseDatasetBackedActions || saveScenarioMutation.isPending}
               style={{
                 padding: `${t.space.sm}px ${t.space.md}px`,
                 borderRadius: t.radius.sm,
                 border: `1px solid ${t.color.accent}`,
                 background: 'transparent',
                 color: t.color.accent,
-                cursor: !runId || saveScenarioMutation.isPending ? 'not-allowed' : 'pointer',
+                cursor: !canUseDatasetBackedActions || saveScenarioMutation.isPending ? 'not-allowed' : 'pointer',
                 fontSize: t.font.sizeSm,
                 fontWeight: t.font.weightMedium,
               }}
@@ -967,7 +1217,51 @@ export default function BudgetOptimizer({
           </div>
         }
       >
-        {recommendationsQuery.data?.decision && (
+        {activeSavedScenario ? (
+          <div
+            style={{
+              marginBottom: t.space.md,
+              padding: t.space.md,
+              borderRadius: t.radius.md,
+              border: `1px solid ${t.color.accent}`,
+              background: t.color.accentMuted,
+              display: 'flex',
+              justifyContent: 'space-between',
+              gap: t.space.md,
+              alignItems: 'center',
+              flexWrap: 'wrap',
+            }}
+          >
+            <div style={{ display: 'grid', gap: 2 }}>
+              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                Viewing saved scenario
+              </div>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                {activeSavedScenario.objective.replace(/_/g, ' ')} · saved{' '}
+                {activeSavedScenario.created_at
+                  ? new Date(activeSavedScenario.created_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+                  : 'previously'} · {(activeSavedScenario.recommendations || []).length.toLocaleString()} saved recommendation{(activeSavedScenario.recommendations || []).length === 1 ? '' : 's'}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveSavedScenario(null)}
+              style={{
+                padding: `${t.space.xs}px ${t.space.sm}px`,
+                borderRadius: t.radius.sm,
+                border: `1px solid ${t.color.border}`,
+                background: t.color.surface,
+                color: t.color.textSecondary,
+                fontSize: t.font.sizeXs,
+                fontWeight: t.font.weightSemibold,
+                cursor: 'pointer',
+              }}
+            >
+              Return to live recommendation
+            </button>
+          </div>
+        ) : null}
+        {!activeSavedScenario && recommendationsQuery.data?.decision && (
           <DecisionStatusCard
             title="Budget recommendation status"
             status={recommendationsQuery.data.decision.status ?? undefined}
@@ -975,7 +1269,11 @@ export default function BudgetOptimizer({
             blockers={recommendationsQuery.data.decision.blockers ?? []}
             warnings={recommendationsQuery.data.decision.warnings ?? []}
             actions={recommendationsQuery.data.decision.actions ?? []}
-            onActionClick={(action) => navigateForRecommendedAction(action, { defaultPage: 'mmm' })}
+            onActionClick={(action) =>
+              onRecommendedActionClick
+                ? onRecommendedActionClick(action)
+                : navigateForRecommendedAction(action, { defaultPage: 'mmm' })
+            }
           />
         )}
         {saveScenarioMutation.isError ? (
@@ -989,7 +1287,7 @@ export default function BudgetOptimizer({
           </div>
         ) : null}
 
-        {recommendationsQuery.isLoading ? (
+        {!isUsingSavedScenario && recommendationsQuery.isLoading ? (
           <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
             Loading recommendations…
           </div>
@@ -1119,14 +1417,14 @@ export default function BudgetOptimizer({
                 <button
                   type="button"
                   onClick={() => saveScenarioMutation.mutate()}
-                  disabled={!runId || saveScenarioMutation.isPending}
+                  disabled={!canUseDatasetBackedActions || saveScenarioMutation.isPending}
                   style={{
                     padding: `${t.space.sm}px ${t.space.md}px`,
                     borderRadius: t.radius.sm,
                     border: `1px solid ${t.color.border}`,
                     background: 'transparent',
                     color: t.color.text,
-                    cursor: !runId || saveScenarioMutation.isPending ? 'not-allowed' : 'pointer',
+                    cursor: !canUseDatasetBackedActions || saveScenarioMutation.isPending ? 'not-allowed' : 'pointer',
                   }}
                 >
                   Save recommendation
@@ -1134,14 +1432,14 @@ export default function BudgetOptimizer({
                 <button
                   type="button"
                   onClick={() => createChangeRequestsMutation.mutate()}
-                  disabled={!runId || createChangeRequestsMutation.isPending}
+                  disabled={!canUseDatasetBackedActions || createChangeRequestsMutation.isPending}
                   style={{
                     padding: `${t.space.sm}px ${t.space.md}px`,
                     borderRadius: t.radius.sm,
                     border: `1px solid ${t.color.warning}`,
                     background: 'transparent',
                     color: t.color.warning,
-                    cursor: !runId || createChangeRequestsMutation.isPending ? 'not-allowed' : 'pointer',
+                    cursor: !canUseDatasetBackedActions || createChangeRequestsMutation.isPending ? 'not-allowed' : 'pointer',
                     fontWeight: t.font.weightMedium,
                   }}
                 >
@@ -1179,8 +1477,9 @@ export default function BudgetOptimizer({
                   ))}
                 </div>
                 <div style={{ marginTop: t.space.md, fontSize: t.font.sizeXs, color: t.color.textMuted }}>
-                  Based on {recommendationsQuery.data?.summary.periods ?? 0} modeled periods across{' '}
-                  {recommendationsQuery.data?.summary.channels_considered ?? 0} channels.
+                  {isUsingSavedScenario ? 'Saved recommendation from prior budget work.' : 'Based on'}{' '}
+                  {recommendationSummary?.periods ?? 0} modeled periods across{' '}
+                  {recommendationSummary?.channels_considered ?? 0} channels.
                 </div>
               </CollapsiblePanel>
 
@@ -1239,6 +1538,30 @@ export default function BudgetOptimizer({
         )}
       </SectionCard>
 
+      {isBudgetReadoutOnly ? (
+        <SectionCard
+          title={isDatasetReadoutOnly ? 'Dataset-backed planning paused' : 'New budget actions paused'}
+          subtitle={
+            isDatasetReadoutOnly
+              ? 'The historical model readout is available, but manual allocation and optimizer actions need the linked source rows.'
+              : 'Prior budget work remains readable, but new optimizer actions require a refreshed MMM run.'
+          }
+        >
+          <div style={{ display: 'grid', gap: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+            <div>
+              Saved ROI, contribution, scenarios, and rollout tracking remain visible above.{' '}
+              {isDatasetReadoutOnly
+                ? 'Baseline spend, observed spend ranges, and period-level budget checks are unavailable because the MMM dataset file is missing.'
+                : readoutOnlyReason}
+            </div>
+            <div>
+              Use <strong style={{ color: t.color.text }}>{isDatasetReadoutOnly ? 'Create compatible new run' : 'Re-run same setup'}</strong>{' '}
+              from the MMM workspace to unlock new budget recommendations.
+            </div>
+          </div>
+        </SectionCard>
+      ) : (
+        <>
       <SectionCard
         title="Custom allocation"
         subtitle="Adjust channel budgets manually against the modeled baseline and rollout constraints."
@@ -1251,7 +1574,10 @@ export default function BudgetOptimizer({
               <input
                 type="radio"
                 checked={totalBudgetMode === 'constant'}
-                onChange={() => setTotalBudgetMode('constant')}
+                onChange={() => {
+                  setActiveSavedScenario(null)
+                  setTotalBudgetMode('constant')
+                }}
               />
               Keep total constant
             </label>
@@ -1259,7 +1585,10 @@ export default function BudgetOptimizer({
               <input
                 type="radio"
                 checked={totalBudgetMode === 'change'}
-                onChange={() => setTotalBudgetMode('change')}
+                onChange={() => {
+                  setActiveSavedScenario(null)
+                  setTotalBudgetMode('change')
+                }}
               />
               Change total by %
             </label>
@@ -1271,7 +1600,10 @@ export default function BudgetOptimizer({
                   max={100}
                   step={5}
                   value={totalBudgetChangePct}
-                  onChange={(e) => setTotalBudgetChangePct(Number(e.target.value))}
+                  onChange={(e) => {
+                    setActiveSavedScenario(null)
+                    setTotalBudgetChangePct(Number(e.target.value))
+                  }}
                   style={{ width: 120 }}
                 />
                 <span style={{ fontSize: t.font.sizeSm, fontVariantNumeric: 'tabular-nums' }}>
@@ -1635,6 +1967,8 @@ export default function BudgetOptimizer({
         </div>
       )}
       </SectionCard>
+        </>
+      )}
     </div>
   )
 }

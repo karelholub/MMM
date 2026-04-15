@@ -22,7 +22,6 @@ import {
 } from '../lib/accessControl'
 import {
   AppSidebar,
-  AppTopBar,
   NAV_ITEMS,
   type AppPage,
   type NavItem,
@@ -354,7 +353,7 @@ export default function App() {
     enabled: !!mmmRunId,
     refetchInterval: (query) => {
       const data = query.state?.data as { status?: string } | undefined
-      return data?.status === 'finished' || data?.status === 'error' ? false : 2000
+      return data?.status === 'finished' || data?.status === 'error' || data?.status === 'stale' ? false : 2000
     },
   })
 
@@ -631,8 +630,8 @@ export default function App() {
           minHeight: '100vh',
           backgroundColor: tokens.color.bg,
           display: 'grid',
-          gridTemplateColumns: sidebarCollapsed ? '60px 1fr' : '240px 1fr',
-          gridTemplateRows: 'auto 1fr',
+          gridTemplateColumns: sidebarCollapsed ? '72px 1fr' : '320px 1fr',
+          gridTemplateRows: '1fr',
         }}
       >
         <AppSidebar
@@ -657,67 +656,23 @@ export default function App() {
           onSetPinnedPages={setPinnedPages}
         />
 
-        <AppTopBar
-          currentPage={page}
-          isMobileHeader={isMobileHeader}
-          periodLabel={periodLabel}
-          periodDateFrom={globalDateRange.dateFrom}
-          periodDateTo={globalDateRange.dateTo}
-          conversionLabel={conversionLabel}
-          selectedModel={selectedModel}
-          selectedConfigId={selectedConfigId}
-          modelConfigs={modelConfigsQuery.data ?? []}
-          modelConfigsLoading={modelConfigsQuery.isLoading}
-          journeysLoaded={journeysLoaded}
-          journeyCount={journeyCount}
-          primaryKpiLabel={primaryKpiLabel}
-          primaryKpiCount={primaryKpiCount}
-          convertedCount={convertedCount}
-          loadingSample={loadSampleMutation.isPending}
-          runningModels={runAllMutation.isPending}
-          onModelChange={setSelectedModel}
-          onConfigChange={setSelectedConfigId}
-          onLoadSample={() => loadSampleMutation.mutate()}
-          onRunModels={() => runAllMutation.mutate(selectedConfigId)}
-          onPeriodChange={(next) => {
-            if (!isIsoDateOnly(next.dateFrom) || !isIsoDateOnly(next.dateTo) || next.dateFrom > next.dateTo) return
-            setGlobalDateRange(next)
-            setHasCustomGlobalDateRange(true)
-          }}
-          activeJourneySource={activeJourneySource}
-          journeySourceOptions={journeySourceOptions}
-          sourceSwitching={activateJourneySourceMutation.isPending}
-          onJourneySourceChange={(source) => activateJourneySourceMutation.mutate(source)}
-        />
-
-        {/* Main content with page-level header + breadcrumbs */}
+        {/* Main content with page-level headers */}
         <main
           style={{
-            gridRow: 2,
+            gridRow: 1,
             gridColumn: 2,
-            padding: '20px 24px 28px',
+            padding: '30px 32px 40px',
             overflow: 'auto',
           }}
         >
           <div
             style={{
-              maxWidth: 1400,
+              maxWidth: 'none',
               margin: '0 auto',
             }}
           >
-            {/* Breadcrumb / page meta */}
-            <div
-              style={{
-                marginBottom: 12,
-                fontSize: tokens.font.sizeXs,
-                color: tokens.color.textMuted,
-              }}
-            >
-              {NAV_ITEMS.find((n) => n.key === page)?.breadcrumb ?? ''}
-            </div>
-
-            <Suspense fallback={PAGE_FALLBACK}>
-              <AppErrorBoundary areaLabel={NAV_ITEMS.find((n) => n.key === page)?.label ?? page}>
+            <Suspense key={page} fallback={PAGE_FALLBACK}>
+              <AppErrorBoundary key={page} areaLabel={NAV_ITEMS.find((n) => n.key === page)?.label ?? page}>
                 <ProtectedPage blocked={showNoAccess} reason={blockedReason}>
                   <>
               {page === 'overview' && (

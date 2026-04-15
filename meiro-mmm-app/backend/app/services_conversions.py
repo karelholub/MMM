@@ -756,5 +756,7 @@ def load_journeys_from_db(
             legacy["conversion_value"] = float(revenue_value)
             legacy["_revenue_entries"] = entries
             legacy["conversion_outcome"] = conversion_path_outcome_summary(r)
+            legacy["conversion_id"] = str(getattr(r, "conversion_id", "") or "")
+            legacy["conversion_ts"] = getattr(r, "conversion_ts", None)
             journeys.append(legacy)
     return journeys

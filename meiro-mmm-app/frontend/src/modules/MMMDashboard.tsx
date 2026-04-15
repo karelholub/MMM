@@ -25,12 +25,14 @@ import AnalysisNarrativePanel from '../components/dashboard/AnalysisNarrativePan
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import AnalysisShareActions from '../components/dashboard/AnalysisShareActions'
 import { buildSettingsHref } from '../lib/settingsLinks'
+import { evaluateMMMRunQuality } from '../lib/mmmQuality'
 
 interface MMMDashboardProps {
   runId: string
   datasetId: string
   runMetadata?: { attribution_model?: string; attribution_config_id?: string }
   onOpenDataQuality?: () => void
+  onOpenBudgetActions?: () => void
 }
 
 interface KPI {
@@ -41,6 +43,7 @@ interface KPI {
 interface Contrib {
   channel: string
   mean_share: number
+  mean_contribution?: number
 }
 
 interface ChannelSummary {
@@ -59,9 +62,16 @@ interface RunData {
     kpi_mode?: string
   }
   kpi_mode?: string
+  engine_version?: string | null
   uplift?: number
   r2?: number
   calibration_mape?: number
+  dataset_available?: boolean
+  scenario_count?: number
+  latest_scenario_at?: string | null
+  stale_from_status?: string | null
+  stale_reason?: string | null
+  stale_at?: string | null
   diagnostics?: {
     rhat_max?: number
     ess_bulk_min?: number
@@ -76,10 +86,15 @@ function formatCurrency(val: number): string {
 }
 
 function exportRoiCSV(roi: KPI[], contrib: Contrib[]) {
-  const headers = ['Channel', 'ROI', 'Contribution Share (%)']
+  const headers = ['Channel', 'ROI', 'Contribution Share (%)', 'Modeled Contribution']
   const rows = roi.map((r) => {
     const c = contrib.find((x) => x.channel === r.channel)
-    return [r.channel, r.roi.toFixed(4), c ? (c.mean_share * 100).toFixed(2) : '']
+    return [
+      r.channel,
+      r.roi.toFixed(4),
+      c ? (c.mean_share * 100).toFixed(2) : '',
+      c?.mean_contribution != null ? Number(c.mean_contribution).toFixed(2) : '',
+    ]
   })
   const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
@@ -99,6 +114,30 @@ function channelDisplayName(
   if (overrides?.[channel]) return overrides[channel]
   if (taxonomyMap?.get(channel)) return taxonomyMap.get(channel)!
   return channel.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+function isTallMmmDataset(rows: Record<string, unknown>[]): boolean {
+  return rows.some((row) => row.channel != null && row.spend != null)
+}
+
+function aggregateTallKpiByDate(rows: Record<string, unknown>[], kpiKey: string): Array<{ date: string; kpi: number }> {
+  const byDate = new Map<string, number[]>()
+  rows.forEach((row) => {
+    const date = String(row.date ?? '').slice(0, 10)
+    if (!date) return
+    const value = Number(row[kpiKey])
+    if (!Number.isFinite(value)) return
+    const values = byDate.get(date) ?? []
+    values.push(value)
+    byDate.set(date, values)
+  })
+  return Array.from(byDate.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, values]) => {
+      const unique = new Set(values.map((value) => value.toFixed(8)))
+      const kpi = unique.size === 1 ? values[0] : values.reduce((sum, value) => sum + value, 0)
+      return { date, kpi }
+    })
 }
 
 function MetricCard(props: {
@@ -165,7 +204,13 @@ function MetricCard(props: {
   )
 }
 
-export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenDataQuality }: MMMDashboardProps) {
+export default function MMMDashboard({
+  runId,
+  datasetId,
+  runMetadata,
+  onOpenDataQuality,
+  onOpenBudgetActions,
+}: MMMDashboardProps) {
   const t = tokens
   const [showTrustPanel, setShowTrustPanel] = usePersistentToggle('mmm-dashboard:show-trust-panel', false)
   const [showReconcilePanel, setShowReconcilePanel] = usePersistentToggle('mmm-dashboard:show-reconcile-panel', false)
@@ -215,12 +260,13 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
   const { data: datasetResponse } = useQuery({
     queryKey: ['dataset', datasetId],
     queryFn: async () =>
-      apiGetJson<{ preview_rows?: Record<string, unknown>[]; metadata?: { period_start?: string; period_end?: string } }>(
+      apiGetJson<{ preview_rows?: Record<string, unknown>[]; metadata?: { period_start?: string; period_end?: string }; available?: boolean; detail?: string }>(
         `/api/datasets/${datasetId}?preview_only=false`,
         { fallbackMessage: 'Failed to fetch dataset' },
       ),
-    enabled: !!datasetId,
+    enabled: !!datasetId && !!run && run.dataset_available !== false,
   })
+  const datasetReadoutOnly = run?.dataset_available === false
   const dataset = (datasetResponse?.preview_rows ?? []) as Record<string, unknown>[]
   const datasetMetadata = datasetResponse?.metadata
 
@@ -243,17 +289,31 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
   const kpiTotal = useMemo(() => {
     const kpiCol = run?.config?.kpi
     if (!kpiCol) return 0
+    if (isTallMmmDataset(dataset)) {
+      return aggregateTallKpiByDate(dataset, kpiCol).reduce((sum, row) => sum + row.kpi, 0)
+    }
     return dataset.reduce((sum, row) => sum + (Number(row[kpiCol]) || 0), 0)
   }, [dataset, run?.config?.kpi])
 
   const totalSpend = useMemo(() => {
     const chs = run?.config?.spend_channels || []
+    if (!dataset.length && channelSummary.length) {
+      return channelSummary.reduce((sum, row) => sum + (Number(row.spend) || 0), 0)
+    }
+    if (isTallMmmDataset(dataset)) {
+      const selected = new Set(chs.map(String))
+      return dataset.reduce((sum, row) => {
+        const channel = String(row.channel ?? '')
+        if (selected.size && !selected.has(channel)) return sum
+        return sum + (Number(row.spend) || 0)
+      }, 0)
+    }
     return dataset.reduce((sum, row) => {
       let rowSpend = 0
       chs.forEach((ch: string) => { rowSpend += Number(row[ch]) || 0 })
       return sum + rowSpend
     }, 0)
-  }, [dataset, run?.config?.spend_channels])
+  }, [channelSummary, dataset, run?.config?.spend_channels])
 
   const weightedROI = roi?.length ? roi.reduce((s: number, r: KPI) => s + r.roi, 0) / roi.length : 0
   const weeks = dataset.length
@@ -262,7 +322,9 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
   const datasetPeriodLabel =
     datasetMetadata?.period_start && datasetMetadata?.period_end
       ? `${datasetMetadata.period_start} – ${datasetMetadata.period_end}`
-      : 'Dataset period unavailable'
+      : datasetReadoutOnly
+        ? 'Dataset file unavailable'
+        : 'Dataset period unavailable'
 
   const hasNegativeRoi = !!roi?.some((r) => r.roi < 0)
   const suspiciousFit = !!(r2 !== null && r2 > 0.98 && weeks > 0 && weeks < 26)
@@ -275,16 +337,37 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
   if (diagnostics?.ess_bulk_min && diagnostics.ess_bulk_min < 200) diagnosticsIssues.push('Effective sample size is low for some parameters.')
   if (diagnostics?.divergences && diagnostics.divergences > 0) diagnosticsIssues.push('There are MCMC divergences; results may be unstable.')
 
-  const confidenceLevel: 'ok' | 'warn' =
-    suspiciousFit || manyParamsFewPoints || hasNegativeRoi || diagnosticsIssues.length > 0 ? 'warn' : 'ok'
+  const modelQuality = useMemo(
+    () =>
+      evaluateMMMRunQuality({
+        status: 'finished',
+        engineVersion: run?.engine_version,
+        datasetAvailable: !datasetReadoutOnly,
+        r2,
+        weeks,
+        channelsModeled,
+        totalSpend,
+        roi,
+        contrib,
+        diagnostics,
+      }),
+    [channelsModeled, contrib, datasetReadoutOnly, diagnostics, r2, roi, run?.engine_version, totalSpend, weeks],
+  )
+  const confidenceLevel: 'ok' | 'warn' | 'danger' =
+    modelQuality.level === 'ready' && !suspiciousFit && !manyParamsFewPoints && !hasNegativeRoi && diagnosticsIssues.length === 0
+      ? 'ok'
+      : modelQuality.level === 'not_usable'
+        ? 'danger'
+        : 'warn'
 
-  const confidenceLabel = confidenceLevel === 'ok' ? 'OK' : 'Check model'
+  const confidenceLabel = confidenceLevel === 'ok' ? 'OK' : modelQuality.label
 
-  const confidenceReasons: string[] = []
+  const confidenceReasons: string[] = [...modelQuality.reasons]
   if (suspiciousFit) confidenceReasons.push('Very high R² with short history.')
-  if (manyParamsFewPoints) confidenceReasons.push('Many channels compared to weeks of data.')
-  if (hasNegativeRoi) confidenceReasons.push('Some channels have negative ROI.')
-  confidenceReasons.push(...diagnosticsIssues)
+  diagnosticsIssues.forEach((issue) => {
+    if (!confidenceReasons.includes(issue)) confidenceReasons.push(issue)
+  })
+  const canUseModelResults = modelQuality.canUseResults
 
   const topRoiChannel = useMemo(() => {
     if (!roi?.length) return null
@@ -293,7 +376,11 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
 
   const topContributionChannel = useMemo(() => {
     if (!contrib?.length) return null
-    return [...contrib].sort((a, b) => b.mean_share - a.mean_share)[0] ?? null
+    return [...contrib].sort((a, b) => {
+      const bValue = b.mean_contribution ?? b.mean_share
+      const aValue = a.mean_contribution ?? a.mean_share
+      return bValue - aValue
+    })[0] ?? null
   }, [contrib])
 
   const negativeRoiCount = useMemo(() => roi?.filter((item) => item.roi < 0).length ?? 0, [roi])
@@ -353,12 +440,20 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
   }
 
   const trustNarrative = useMemo(() => {
-    const headline = confidenceLevel === 'ok'
+    const headline = modelQuality.level === 'not_usable'
+      ? 'This MMM run should not be used for ROI, contribution, or budget decisions.'
+      : datasetReadoutOnly
+      ? 'This historical MMM run is open for saved readout, but source-row diagnostics are paused until the dataset is rebuilt.'
+      : confidenceLevel === 'ok'
       ? 'The current MMM run looks usable for directional budget decisions.'
       : 'Use this MMM run directionally, but validate the fragile parts before acting on exact ROI values.'
     const items = [
-      `Basis: this page uses the saved MMM run plus the linked dataset preview for ${datasetPeriodLabel}. ROI, contribution, and response curves all come from that run context.`,
-      weeks < 20
+      datasetReadoutOnly
+        ? 'Basis: ROI, contribution, fit, and saved budget work come from the saved MMM run. Time-series charts, response curves, and dataset reconciliation need the missing source rows.'
+        : `Basis: this page uses the saved MMM run plus the linked dataset preview for ${datasetPeriodLabel}. ROI, contribution, and response curves all come from that run context.`,
+      datasetReadoutOnly
+        ? `The saved model still contains ${channelsModeled.toLocaleString()} modeled channel${channelsModeled === 1 ? '' : 's'}; rebuild a compatible dataset before using it for new optimization.`
+        : weeks < 20
         ? `History is short at ${weeks.toLocaleString()} weeks, so ranking channels is more reliable than trusting precise point estimates.`
         : `The run covers ${weeks.toLocaleString()} modeled weeks across ${channelsModeled.toLocaleString()} channels.`,
       confidenceReasons[0]
@@ -377,7 +472,9 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
     channelsModeled,
     confidenceLevel,
     confidenceReasons,
+    datasetReadoutOnly,
     datasetPeriodLabel,
+    modelQuality.level,
     reconciliationSummary,
     runMetadata?.attribution_model,
     weeks,
@@ -396,17 +493,24 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
   const topChannelsByShare = useMemo(() => {
     if (!contrib || contrib.length === 0) return []
     return [...contrib]
-      .sort((a, b) => b.mean_share - a.mean_share)
+      .sort((a, b) => {
+        const bValue = b.mean_contribution ?? b.mean_share
+        const aValue = a.mean_contribution ?? a.mean_share
+        return bValue - aValue
+      })
       .slice(0, 5)
       .map((c) => c.channel)
   }, [contrib])
 
   const contributionOverTime = useMemo(() => {
-    if (!contrib || contrib.length === 0 || !dataset || !kpiKey) return []
+    if (!canUseModelResults || !contrib || contrib.length === 0 || !dataset || !kpiKey) return []
     const shareMap = new Map(contrib.map((c) => [c.channel, c.mean_share]))
-    return dataset.map((row) => {
-      const date = (row['date'] as string) || ''
-      const kpiVal = Number(row[kpiKey]) || 0
+    const kpiRows = isTallMmmDataset(dataset)
+      ? aggregateTallKpiByDate(dataset, kpiKey)
+      : dataset.map((row) => ({ date: String(row.date ?? ''), kpi: Number(row[kpiKey]) || 0 }))
+    return kpiRows.map((row) => {
+      const date = row.date || ''
+      const kpiVal = row.kpi
       const entry: any = { date }
       topChannelsByShare.forEach((ch) => {
         const share = shareMap.get(ch) ?? 0
@@ -414,10 +518,10 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
       })
       return entry
     })
-  }, [dataset, contrib, kpiKey, topChannelsByShare])
+  }, [canUseModelResults, dataset, contrib, kpiKey, topChannelsByShare])
 
   const responseCurves = useMemo(() => {
-    if (!spendChannels.length || !dataset.length || !roi?.length) return []
+    if (!canUseModelResults || !spendChannels.length || !dataset.length || !roi?.length) return []
     const roiMap = new Map(roi.map((r: KPI) => [r.channel, r.roi]))
     const meanSpend: Record<string, number> = {}
     spendChannels.forEach((ch) => {
@@ -444,7 +548,24 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
       }
       return { channel: ch, points }
     })
-  }, [spendChannels, dataset, roi])
+  }, [canUseModelResults, spendChannels, dataset, roi])
+
+  const decisionTone: 'success' | 'warning' | 'danger' =
+    modelQuality.level === 'not_usable' ? 'danger' : datasetReadoutOnly || confidenceLevel !== 'ok' ? 'warning' : 'success'
+  const decisionLabel = modelQuality.level === 'not_usable'
+    ? 'Do not use for decisions'
+    : datasetReadoutOnly
+    ? 'Readout only'
+    : confidenceLevel === 'ok'
+      ? 'Ready for budget review'
+      : 'Validate before action'
+  const decisionReason = modelQuality.level === 'not_usable'
+    ? confidenceReasons[0] || 'The model output has no usable signal.'
+    : datasetReadoutOnly
+    ? 'Saved results are visible, but source-row diagnostics and new optimization need dataset recovery.'
+    : confidenceLevel === 'ok'
+      ? 'Model outputs and linked dataset checks are available for directional budget planning.'
+      : confidenceReasons[0] || 'Model diagnostics need review before acting on exact ROI values.'
 
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto' }}>
@@ -467,15 +588,187 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
       <div style={{ marginBottom: t.space.md }}>
         <ContextSummaryStrip
           items={[
-            { label: 'Source', value: 'MMM run + dataset preview' },
+            { label: 'Source', value: datasetReadoutOnly ? 'MMM run readout only' : 'MMM run + dataset preview' },
             { label: 'Dataset period', value: datasetPeriodLabel },
             { label: 'KPI', value: getKpiDisplayName() },
             { label: 'Total spend', value: formatCurrency(totalSpend) },
-            { label: 'Weeks', value: weeks.toLocaleString() },
-            { label: 'Confidence', value: confidenceLabel, valueColor: confidenceLevel === 'ok' ? t.color.success : t.color.warning },
+            { label: 'Weeks', value: datasetReadoutOnly ? 'Unavailable' : weeks.toLocaleString() },
+            { label: 'Confidence', value: confidenceLabel, valueColor: confidenceLevel === 'ok' ? t.color.success : confidenceLevel === 'danger' ? t.color.danger : t.color.warning },
           ]}
         />
       </div>
+
+      <div style={{ marginBottom: t.space.xl }}>
+        <SectionCard
+          title="Decision summary"
+          subtitle="The compact MMM readout for what can be trusted and where to go next."
+          actions={
+            <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={() => onOpenBudgetActions?.()}
+                disabled={!onOpenBudgetActions}
+                style={{
+                  padding: `${t.space.sm}px ${t.space.md}px`,
+                  borderRadius: t.radius.sm,
+                  border: `1px solid ${t.color.accent}`,
+                  background: t.color.accent,
+                  color: '#ffffff',
+                  fontSize: t.font.sizeSm,
+                  fontWeight: t.font.weightSemibold,
+                  cursor: onOpenBudgetActions ? 'pointer' : 'not-allowed',
+                }}
+              >
+                Open budget actions
+              </button>
+              <button
+                type="button"
+                onClick={() => onOpenDataQuality?.()}
+                disabled={!onOpenDataQuality}
+                style={{
+                  padding: `${t.space.sm}px ${t.space.md}px`,
+                  borderRadius: t.radius.sm,
+                  border: `1px solid ${t.color.border}`,
+                  background: t.color.surface,
+                  color: onOpenDataQuality ? t.color.textSecondary : t.color.textMuted,
+                  fontSize: t.font.sizeSm,
+                  fontWeight: t.font.weightMedium,
+                  cursor: onOpenDataQuality ? 'pointer' : 'not-allowed',
+                }}
+              >
+                View data quality
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  window.location.assign(buildSettingsHref('mmm'))
+                }}
+                style={{
+                  padding: `${t.space.sm}px ${t.space.md}px`,
+                  borderRadius: t.radius.sm,
+                  border: `1px solid ${t.color.border}`,
+                  background: t.color.surface,
+                  color: t.color.textSecondary,
+                  fontSize: t.font.sizeSm,
+                  fontWeight: t.font.weightMedium,
+                  cursor: 'pointer',
+                }}
+              >
+                MMM settings
+              </button>
+            </div>
+          }
+        >
+          <div style={{ display: 'grid', gap: t.space.lg }}>
+            <div
+              style={{
+                padding: t.space.md,
+                borderRadius: t.radius.md,
+                border: `1px solid ${decisionTone === 'success' ? t.color.success : decisionTone === 'danger' ? t.color.danger : t.color.warning}`,
+                background: decisionTone === 'success' ? t.color.successMuted : decisionTone === 'danger' ? t.color.dangerMuted : t.color.warningMuted,
+                display: 'grid',
+                gap: 4,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: t.font.sizeSm,
+                  fontWeight: t.font.weightSemibold,
+                    color: decisionTone === 'success' ? t.color.success : decisionTone === 'danger' ? t.color.danger : t.color.warning,
+                }}
+              >
+                {decisionLabel}
+              </div>
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                {decisionReason}
+              </div>
+            </div>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gap: t.space.md,
+              }}
+            >
+              {[
+                {
+                  label: 'Top ROI',
+                  value: canUseModelResults && topRoiChannel ? channelDisplay(topRoiChannel.channel) : 'Unavailable',
+                  helper: canUseModelResults && topRoiChannel ? `${topRoiChannel.roi.toFixed(2)}x modeled return` : 'Run quality blocks ROI ranking',
+                },
+                {
+                  label: 'Top contribution',
+                  value: canUseModelResults && topContributionChannel ? channelDisplay(topContributionChannel.channel) : 'Unavailable',
+                  helper: canUseModelResults && topContributionChannel
+                    ? `${(topContributionChannel.mean_share * 100).toFixed(1)}% of modeled KPI`
+                    : 'No contribution output yet',
+                },
+                {
+                  label: 'Model basis',
+                  value: datasetReadoutOnly ? 'Saved readout' : `${weeks.toLocaleString()} weeks`,
+                  helper: `${channelsModeled.toLocaleString()} modeled channel${channelsModeled === 1 ? '' : 's'}`,
+                },
+                {
+                  label: 'Reconcile',
+                  value: reconciliationSummary
+                    ? reconciliationSummary.largeDivergence
+                      ? 'Mismatch'
+                      : 'Aligned'
+                    : 'No overlay',
+                  helper: reconciliationSummary
+                    ? `${reconciliationSummary.pairCount.toLocaleString()} overlapping buckets`
+                    : runMetadata?.attribution_model
+                      ? 'Insufficient overlap'
+                      : 'Direct KPI source',
+                },
+              ].map((item) => (
+                <div
+                  key={item.label}
+                  style={{
+                    padding: t.space.md,
+                    borderRadius: t.radius.md,
+                    border: `1px solid ${t.color.borderLight}`,
+                    background: t.color.bg,
+                    display: 'grid',
+                    gap: 4,
+                    minWidth: 0,
+                  }}
+                >
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    {item.label}
+                  </div>
+                  <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text, overflowWrap: 'anywhere' }}>
+                    {item.value}
+                  </div>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary, overflowWrap: 'anywhere' }}>
+                    {item.helper}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </SectionCard>
+      </div>
+
+      {datasetReadoutOnly ? (
+        <div style={{ marginBottom: t.space.xl }}>
+          <SectionCard
+            title="Readout-only MMM run"
+            subtitle="The model output loaded, but the linked dataset file is missing in this runtime."
+          >
+            <div style={{ display: 'grid', gap: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              <div>
+                Saved fit, ROI, contribution, and budget history are still available. Dataset-preview checks, time-series
+                charts, response curves, attribution reconciliation, and new optimizer recommendations are paused.
+              </div>
+              <div>
+                To make new budget decisions, use the recovery action above to create a compatible new run from the saved
+                model settings.
+              </div>
+            </div>
+          </SectionCard>
+        </div>
+      ) : null}
 
       <div style={{ marginBottom: t.space.xl }}>
         <AnalysisShareActions
@@ -488,8 +781,8 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
             `Channels modeled: ${channelsModeled.toLocaleString()}`,
             `Model fit (R²): ${r2 !== null ? r2.toFixed(3) : 'Unavailable'}`,
             `Confidence: ${confidenceLabel}`,
-            topRoiChannel ? `Top ROI channel: ${channelDisplay(topRoiChannel.channel)} (${topRoiChannel.roi.toFixed(2)}x)` : '',
-            topContributionChannel
+            canUseModelResults && topRoiChannel ? `Top ROI channel: ${channelDisplay(topRoiChannel.channel)} (${topRoiChannel.roi.toFixed(2)}x)` : '',
+            canUseModelResults && topContributionChannel
               ? `Top contribution channel: ${channelDisplay(topContributionChannel.channel)} (${(topContributionChannel.mean_share * 100).toFixed(1)}%)`
               : '',
           ]}
@@ -541,10 +834,14 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
 
             <MetricCard
               label="Data points"
-              value={`${weeks} weeks`}
-              tone={weeks < 20 ? 'warning' : 'neutral'}
+              value={datasetReadoutOnly ? 'Unavailable' : `${weeks} weeks`}
+              tone={weeks < 20 || datasetReadoutOnly ? 'warning' : 'neutral'}
               title="Number of weekly observations used by the model."
-              description="More history increases stability; aim for 26+ weeks."
+              description={
+                datasetReadoutOnly
+                  ? 'Linked dataset preview is unavailable for this saved run.'
+                  : 'More history increases stability; aim for 26+ weeks.'
+              }
             />
 
             <MetricCard
@@ -558,7 +855,7 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
             <MetricCard
               label="Confidence / diagnostics"
               value={confidenceLabel}
-              tone={confidenceLevel === 'ok' ? 'success' : 'warning'}
+              tone={confidenceLevel === 'ok' ? 'success' : confidenceLevel === 'danger' ? 'danger' : 'warning'}
               description={
                 confidenceReasons.length === 0
                   ? 'No major red flags detected. Check data health for details.'
@@ -576,7 +873,9 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
         >
           <div style={{ display: 'grid', gap: t.space.md }}>
             <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-              MMM diagnostics on this page are anchored to the selected run and its linked dataset preview. When attribution is available, the overlay compares overlapping dated totals only. It is a contract check, not a replacement for model fit.
+              {datasetReadoutOnly
+                ? 'MMM diagnostics on this page are anchored to the selected saved run. Dataset-preview and attribution reconciliation checks are unavailable until the source rows are rebuilt or reattached.'
+                : 'MMM diagnostics on this page are anchored to the selected run and its linked dataset preview. When attribution is available, the overlay compares overlapping dated totals only. It is a contract check, not a replacement for model fit.'}
             </div>
             <div
               style={{
@@ -588,7 +887,7 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
               <div style={{ display: 'grid', gap: 2 }}>
                 <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>MMM run basis</div>
                 <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                  <strong style={{ color: t.color.text }}>{weeks.toLocaleString()}</strong> dataset rows
+                  <strong style={{ color: t.color.text }}>{datasetReadoutOnly ? 'Unavailable' : weeks.toLocaleString()}</strong> dataset rows
                 </div>
               </div>
               <div style={{ display: 'grid', gap: 2 }}>
@@ -1077,27 +1376,45 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
         >
           <MetricCard
             label="Top ROI channel"
-            value={topRoiChannel ? channelDisplay(topRoiChannel.channel) : '—'}
-            tone={topRoiChannel && topRoiChannel.roi > 0 ? 'success' : 'neutral'}
-            description={topRoiChannel ? `${topRoiChannel.roi.toFixed(2)}x modeled return` : 'No ROI output for this run yet.'}
+            value={canUseModelResults && topRoiChannel ? channelDisplay(topRoiChannel.channel) : '—'}
+            tone={canUseModelResults && topRoiChannel && topRoiChannel.roi > 0 ? 'success' : 'neutral'}
+            description={canUseModelResults && topRoiChannel ? `${topRoiChannel.roi.toFixed(2)}x modeled return` : 'Run quality blocks ROI ranking.'}
           />
           <MetricCard
             label="Top contribution"
-            value={topContributionChannel ? channelDisplay(topContributionChannel.channel) : '—'}
+            value={canUseModelResults && topContributionChannel ? channelDisplay(topContributionChannel.channel) : '—'}
             tone="neutral"
             description={
-              topContributionChannel
+              canUseModelResults && topContributionChannel
                 ? `${(topContributionChannel.mean_share * 100).toFixed(1)}% of modeled KPI`
-                : 'No contribution output for this run yet.'
+                : 'Run quality blocks contribution ranking.'
             }
           />
           <MetricCard
             label="Channels to review"
-            value={negativeRoiCount.toLocaleString()}
-            tone={negativeRoiCount > 0 ? 'warning' : 'success'}
-            description={negativeRoiCount > 0 ? 'Negative ROI channels need validation before action.' : 'No negative ROI channels detected.'}
+            value={canUseModelResults ? negativeRoiCount.toLocaleString() : 'All'}
+            tone={canUseModelResults ? (negativeRoiCount > 0 ? 'warning' : 'success') : 'danger'}
+            description={canUseModelResults ? (negativeRoiCount > 0 ? 'Negative ROI channels need validation before action.' : 'No negative ROI channels detected.') : confidenceReasons[0] || 'Run is not usable for channel decisions.'}
           />
         </div>
+
+        {!canUseModelResults && (
+          <div
+            style={{
+              marginBottom: t.space.lg,
+              padding: t.space.md,
+              borderRadius: t.radius.md,
+              border: `1px solid ${t.color.danger}`,
+              background: t.color.dangerMuted,
+              color: t.color.textSecondary,
+              fontSize: t.font.sizeSm,
+              lineHeight: 1.5,
+            }}
+          >
+            <strong style={{ color: t.color.danger }}>Model output is not usable.</strong>{' '}
+            {confidenceReasons[0] || 'The run did not produce reliable ROI or contribution signal.'} Create a new run after confirming the dataset has spend and KPI variation.
+          </div>
+        )}
 
         {roi && roi.length > 0 && contrib && contrib.length > 0 && (
           <DashboardTable density="compact">
@@ -1118,16 +1435,33 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
                   const summary = channelSummary.find((s) => s.channel === r.channel)
                   const channelSpend = summary?.spend ?? 0
                   const contributionShare = c ? c.mean_share : 0
-                  const contributionAmount = kpiTotal * contributionShare
+                  const modeledContribution =
+                    c?.mean_contribution != null && Number.isFinite(Number(c.mean_contribution))
+                      ? Number(c.mean_contribution)
+                      : null
+                  const contributionAmount = modeledContribution ?? kpiTotal * contributionShare
+                  const contributionDisplay =
+                    c && contributionAmount > 0
+                      ? `${contributionAmount.toFixed(0)} (${(contributionShare * 100).toFixed(1)}%)`
+                      : c
+                        ? `${(contributionShare * 100).toFixed(1)}% share`
+                        : '—'
                   const marginalRoi = summary?.mroas ?? r.roi
                   const efficiencyTier =
-                    r.roi < 0
+                    !canUseModelResults
+                      ? 'Not usable'
+                      : channelSpend <= 0
+                        ? 'No spend'
+                        : Math.abs(weightedROI) <= 1e-9
+                          ? 'Unavailable'
+                          : r.roi < 0
                       ? 'Unprofitable'
                       : r.roi >= weightedROI * 1.2
                         ? 'High'
                         : r.roi <= weightedROI * 0.8
                           ? 'Low'
                           : 'Medium'
+                  const metricColor = !canUseModelResults || channelSpend <= 0 ? t.color.textMuted : r.roi >= 0 ? t.color.success : t.color.danger
                   return (
                     <tr key={r.channel}>
                       <td
@@ -1153,32 +1487,34 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
                           fontVariantNumeric: 'tabular-nums',
                         }}
                         title={
-                          c
+                          c && contributionAmount > 0
                             ? `Approx. ${contributionAmount.toFixed(
                                 0,
-                              )} KPI (${(contributionShare * 100).toFixed(1)}% of total).`
+                              )} modeled KPI contribution (${(contributionShare * 100).toFixed(1)}% share).`
+                            : c
+                              ? 'Contribution share from the saved MMM run. KPI total is unavailable because the linked dataset preview is missing.'
                             : undefined
                         }
                       >
-                        {c ? `${contributionAmount.toFixed(0)} (${(contributionShare * 100).toFixed(1)}%)` : '—'}
+                        {contributionDisplay}
                       </td>
                       <td
                         style={{
                           textAlign: 'right',
-                          color: r.roi >= 0 ? t.color.success : t.color.danger,
+                          color: metricColor,
                           fontVariantNumeric: 'tabular-nums',
                         }}
                       >
-                        {r.roi.toFixed(3)}×
+                        {canUseModelResults && channelSpend > 0 ? `${r.roi.toFixed(3)}×` : '—'}
                       </td>
                       <td
                         style={{
                           textAlign: 'right',
-                          color: marginalRoi >= 0 ? t.color.success : t.color.danger,
+                          color: !canUseModelResults || channelSpend <= 0 ? t.color.textMuted : marginalRoi >= 0 ? t.color.success : t.color.danger,
                           fontVariantNumeric: 'tabular-nums',
                         }}
                       >
-                        {marginalRoi.toFixed(3)}×
+                        {canUseModelResults && channelSpend > 0 ? `${marginalRoi.toFixed(3)}×` : '—'}
                       </td>
                       <td
                         style={{
@@ -1195,7 +1531,7 @@ export default function MMMDashboard({ runId, datasetId, runMetadata, onOpenData
                           color:
                             efficiencyTier === 'High'
                               ? t.color.success
-                              : efficiencyTier === 'Low' || efficiencyTier === 'Unprofitable'
+                              : efficiencyTier === 'Low' || efficiencyTier === 'Unprofitable' || efficiencyTier === 'Not usable'
                                 ? t.color.danger
                                 : t.color.textSecondary,
                         }}

@@ -1,6 +1,7 @@
 from app.services_metrics import (
     delta_pct,
     derive_efficiency,
+    journey_outcome_summary,
     journey_revenue_value,
     metric_value,
     summarize_rows,
@@ -34,6 +35,22 @@ def test_journey_revenue_value_dedup_entries():
     seen = set()
     assert journey_revenue_value(journey, dedupe_seen=seen) == 150.0
     assert journey_revenue_value(journey, dedupe_seen=seen) == 0.0
+
+
+def test_empty_revenue_entries_fall_back_to_conversion_outcome():
+    journey = {
+        "_revenue_entries": [],
+        "conversion_value": 42.0,
+        "conversion_outcome": {
+            "gross_value": 42.0,
+            "net_value": 35.0,
+            "gross_conversions": 1.0,
+            "net_conversions": 1.0,
+        },
+    }
+    assert journey_revenue_value(journey, value_mode="gross_only") == 42.0
+    assert journey_revenue_value(journey, value_mode="net_only") == 35.0
+    assert journey_outcome_summary(journey)["gross_value"] == 42.0
 
 
 def test_summarize_rows_totals_and_derived():

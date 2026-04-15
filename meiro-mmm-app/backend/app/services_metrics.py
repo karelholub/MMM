@@ -48,7 +48,19 @@ def delta_pct(current: float, previous: float) -> float:
 
 def journey_outcome_summary(journey: Dict[str, Any]) -> Dict[str, float]:
     entries = journey.get("_revenue_entries")
-    if not isinstance(entries, list):
+    if not isinstance(entries, list) or not entries:
+        outcome = journey.get("conversion_outcome")
+        if isinstance(outcome, dict):
+            return {
+                "gross_value": float(outcome.get("gross_value", 0.0) or 0.0),
+                "net_value": float(outcome.get("net_value", outcome.get("gross_value", 0.0)) or 0.0),
+                "refunded_value": float(outcome.get("refunded_value", 0.0) or 0.0),
+                "cancelled_value": float(outcome.get("cancelled_value", 0.0) or 0.0),
+                "gross_conversions": float(outcome.get("gross_conversions", 0.0) or 0.0),
+                "net_conversions": float(outcome.get("net_conversions", outcome.get("gross_conversions", 0.0)) or 0.0),
+                "invalid_leads": float(outcome.get("invalid_leads", 0.0) or 0.0),
+                "valid_leads": float(outcome.get("valid_leads", 0.0) or 0.0),
+            }
         gross = float(journey.get("conversion_value") or 0.0)
         converted = 1.0 if journey.get("converted", True) else 0.0
         return {
@@ -93,7 +105,11 @@ def journey_revenue_value(
     dedupe_seen: Optional[Set[str]] = None,
 ) -> float:
     entries = journey.get("_revenue_entries")
-    if not isinstance(entries, list):
+    if not isinstance(entries, list) or not entries:
+        outcome = journey.get("conversion_outcome")
+        if isinstance(outcome, dict):
+            key = "net_value" if value_mode == "net_only" else "gross_value"
+            return float(outcome.get(key, outcome.get("gross_value", 0.0)) or 0.0)
         return float(journey.get("conversion_value") or 0.0)
     total = 0.0
     for entry in entries:

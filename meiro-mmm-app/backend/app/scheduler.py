@@ -193,6 +193,18 @@ def send_notifications(report: dict) -> None:
     pass
 
 
+def _run_with_db(func, *args, **kwargs):
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        return func(db, *args, **kwargs)
+    finally:
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
+
+
 def start_scheduler() -> None:
     """
     Start APScheduler for in-process scheduling.
@@ -211,7 +223,7 @@ def start_scheduler() -> None:
     
     # Schedule nightly report at 2 AM
     scheduler.add_job(
-        func=lambda: run_nightly_report_task(next(get_db())),
+        func=lambda: _run_with_db(run_nightly_report_task),
         trigger=CronTrigger(hour=2, minute=0),
         id="nightly_experiment_report",
         name="Nightly experiment report",
@@ -220,7 +232,7 @@ def start_scheduler() -> None:
 
     # Schedule alerts engine hourly (default scope)
     scheduler.add_job(
-        func=lambda: run_alerts_task(next(get_db()), "default"),
+        func=lambda: _run_with_db(run_alerts_task, "default"),
         trigger=CronTrigger(minute=5),  # every hour at :05
         id="alerts_engine",
         name="Alerts engine",
@@ -229,7 +241,7 @@ def start_scheduler() -> None:
 
     # Daily digest at 9 AM (respects quiet_hours per user pref)
     scheduler.add_job(
-        func=lambda: run_daily_digest_task(next(get_db())),
+        func=lambda: _run_with_db(run_daily_digest_task),
         trigger=CronTrigger(hour=9, minute=0),
         id="alert_daily_digest",
         name="Alert daily digest",
@@ -238,7 +250,7 @@ def start_scheduler() -> None:
 
     # Daily journey path/transition aggregates shortly after midnight
     scheduler.add_job(
-        func=lambda: run_journey_daily_aggregates_task(next(get_db()), reprocess_days=3),
+        func=lambda: _run_with_db(run_journey_daily_aggregates_task, reprocess_days=3),
         trigger=CronTrigger(hour=0, minute=20),
         id="journey_daily_aggregates",
         name="Journey daily aggregates",
@@ -247,7 +259,7 @@ def start_scheduler() -> None:
 
     # Daily journey/funnel alert evaluation after aggregate build.
     scheduler.add_job(
-        func=lambda: run_journey_alerts_task(next(get_db())),
+        func=lambda: _run_with_db(run_journey_alerts_task),
         trigger=CronTrigger(hour=0, minute=35),
         id="journey_alerts_evaluator",
         name="Journey alerts evaluator",

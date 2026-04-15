@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { tokens } from '../theme/tokens'
 import DatasetUploader from './DatasetUploader'
@@ -17,7 +17,15 @@ interface BuildResponse {
   dataset_id: string
   columns: string[]
   preview_rows: Record<string, unknown>[]
-  coverage: { n_weeks: number; missing_spend_weeks: Record<string, number>; missing_kpi_weeks: number }
+  coverage: {
+    n_weeks: number
+    missing_spend_weeks: Record<string, number>
+    missing_kpi_weeks: number
+    spend_totals?: Record<string, number>
+    channels_with_spend?: string[]
+    all_zero_spend_channels?: string[]
+    total_spend?: number
+  }
   metadata: {
     period_start: string
     period_end: string
@@ -48,9 +56,16 @@ interface MMMDataSourceStepProps {
     dataset_id: string
     columns: { kpi: string; spend_channels: string[]; covariates: string[] }
   }) => void
+  initialPlatformDraft?: {
+    kpiTarget?: 'sales' | 'attribution'
+    spendChannels?: string[]
+    attributionModel?: string
+    attributionConfigId?: string | null
+    notice?: string
+  }
 }
 
-export default function MMMDataSourceStep({ onMappingComplete }: MMMDataSourceStepProps) {
+export default function MMMDataSourceStep({ onMappingComplete, initialPlatformDraft }: MMMDataSourceStepProps) {
   const [sourceType, setSourceType] = useState<DataSourceType>('platform')
   const [kpiTarget, setKpiTarget] = useState<'sales' | 'attribution'>('sales')
   const [dateStart, setDateStart] = useState(() => {
@@ -63,6 +78,7 @@ export default function MMMDataSourceStep({ onMappingComplete }: MMMDataSourceSt
   const [platformResult, setPlatformResult] = useState<BuildResponse | null>(null)
   const [attributionModel, setAttributionModel] = useState<string>('linear')
   const [attributionConfigId, setAttributionConfigId] = useState<string | null>(null)
+  const seededDraftChannelsRef = useRef<string | null>(null)
 
   const { data: platformOptions } = useQuery<PlatformOptions>({
     queryKey: ['mmm-platform-options'],
@@ -89,12 +105,28 @@ export default function MMMDataSourceStep({ onMappingComplete }: MMMDataSourceSt
   const attributionModelOptions = attributionModelsData?.models ?? ['linear', 'last_touch', 'first_touch', 'time_decay', 'position_based', 'markov']
   const spendChannelOptions = platformOptions?.spend_channels ?? []
   const covariateOptions = platformOptions?.covariates ?? []
+  const initialSpendChannelsKey = initialPlatformDraft?.spendChannels?.join(',') ?? ''
 
   useEffect(() => {
-    if (spendChannelOptions.length && !selectedChannels.length) {
-      setSelectedChannels(spendChannelOptions.filter((ch) => ['google_ads', 'meta_ads', 'linkedin_ads'].includes(ch)))
+    if (initialPlatformDraft?.kpiTarget) setKpiTarget(initialPlatformDraft.kpiTarget)
+    if (initialPlatformDraft?.attributionModel) setAttributionModel(initialPlatformDraft.attributionModel)
+    if (initialPlatformDraft?.attributionConfigId !== undefined) setAttributionConfigId(initialPlatformDraft.attributionConfigId)
+  }, [initialPlatformDraft?.kpiTarget, initialPlatformDraft?.attributionModel, initialPlatformDraft?.attributionConfigId])
+
+  useEffect(() => {
+    const draftChannels = initialPlatformDraft?.spendChannels ?? []
+    if (draftChannels.length && spendChannelOptions.length && seededDraftChannelsRef.current !== initialSpendChannelsKey) {
+      const availableDraftChannels = draftChannels.filter((ch) => spendChannelOptions.includes(ch))
+      setSelectedChannels(availableDraftChannels)
+      seededDraftChannelsRef.current = initialSpendChannelsKey
+      return
     }
-  }, [spendChannelOptions.join(','), selectedChannels.length])
+    if (spendChannelOptions.length && !selectedChannels.length) {
+      const preferred = ['paid_search', 'paid_social', 'facebook_ads', 'organic_search', 'referral', 'direct']
+      const preferredAvailable = preferred.filter((ch) => spendChannelOptions.includes(ch))
+      setSelectedChannels(preferredAvailable.length ? preferredAvailable : spendChannelOptions.slice(0, 6))
+    }
+  }, [initialSpendChannelsKey, spendChannelOptions.join(','), selectedChannels.length])
 
   const buildMutation = useMutation({
     mutationFn: async () => {
@@ -161,6 +193,9 @@ export default function MMMDataSourceStep({ onMappingComplete }: MMMDataSourceSt
   // —— Platform: show result (preview + coverage + Use this dataset) ——
   if (platformResult) {
     const { coverage, metadata } = platformResult
+    const totalSpend = Number(coverage.total_spend ?? 0)
+    const allZeroSpendChannels = coverage.all_zero_spend_channels ?? []
+    const hasUsableSpend = totalSpend > 0
     return (
       <div style={{ maxWidth: 920, margin: '0 auto' }}>
         <div style={{ marginBottom: t.space.lg }}>
@@ -236,6 +271,28 @@ export default function MMMDataSourceStep({ onMappingComplete }: MMMDataSourceSt
           ))}
         </div>
 
+        <div
+          style={{
+            marginBottom: t.space.xl,
+            padding: t.space.lg,
+            borderRadius: t.radius.lg,
+            border: `1px solid ${hasUsableSpend && allZeroSpendChannels.length === 0 ? t.color.success : t.color.warning}`,
+            background: hasUsableSpend && allZeroSpendChannels.length === 0 ? t.color.successMuted : t.color.warningMuted,
+            color: t.color.textSecondary,
+            fontSize: t.font.sizeSm,
+          }}
+        >
+          <strong style={{ color: t.color.text }}>Spend coverage:</strong>{' '}
+          {hasUsableSpend
+            ? `$${totalSpend.toLocaleString(undefined, { maximumFractionDigits: 0 })} mapped across ${coverage.channels_with_spend?.length ?? 0} selected channels.`
+            : 'No spend was found for the selected channels and period.'}
+          {allZeroSpendChannels.length > 0 && (
+            <div style={{ marginTop: t.space.xs }}>
+              No spend found for {allZeroSpendChannels.map(channelLabel).join(', ')}. Remove those channels or add expenses before using this dataset.
+            </div>
+          )}
+        </div>
+
         {/* Preview table */}
         <div
           style={{
@@ -295,15 +352,16 @@ export default function MMMDataSourceStep({ onMappingComplete }: MMMDataSourceSt
           <button
             type="button"
             onClick={handleUsePlatformDataset}
+            disabled={!hasUsableSpend}
             style={{
               padding: `${t.space.md}px ${t.space.xl}px`,
               fontSize: t.font.sizeBase,
               fontWeight: t.font.weightSemibold,
               color: '#fff',
-              background: t.color.accent,
+              background: hasUsableSpend ? t.color.accent : t.color.border,
               border: 'none',
               borderRadius: t.radius.sm,
-              cursor: 'pointer',
+              cursor: hasUsableSpend ? 'pointer' : 'not-allowed',
             }}
           >
             Use this dataset →
@@ -369,6 +427,21 @@ export default function MMMDataSourceStep({ onMappingComplete }: MMMDataSourceSt
         <h4 style={{ margin: `0 0 ${t.space.lg}px`, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
           Use platform data
         </h4>
+        {initialPlatformDraft?.notice && (
+          <div
+            style={{
+              marginBottom: t.space.lg,
+              padding: t.space.md,
+              borderRadius: t.radius.md,
+              border: `1px solid ${t.color.warning}`,
+              background: t.color.warningMuted,
+              color: t.color.textSecondary,
+              fontSize: t.font.sizeSm,
+            }}
+          >
+            <strong style={{ color: t.color.text }}>Compatible rebuild:</strong> {initialPlatformDraft.notice}
+          </div>
+        )}
 
         <div style={{ marginBottom: t.space.lg }}>
           <label style={{ display: 'block', fontSize: t.font.sizeSm, fontWeight: t.font.weightMedium, color: t.color.textSecondary, marginBottom: t.space.xs }}>

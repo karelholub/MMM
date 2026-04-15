@@ -1,4 +1,6 @@
 import json
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -28,6 +30,14 @@ from app.services_performance_trends import (
     build_channel_trend_response,
 )
 from app.services_quality import load_config_and_meta
+
+
+_CONSISTENCY_CACHE: dict[tuple, tuple[float, tuple[dict[str, Any] | None, list[str]]]] = {}
+_CONSISTENCY_CACHE_LOCK = threading.RLock()
+_OVERVIEW_SUMMARY_CACHE: dict[tuple, tuple[float, dict[str, Any]]] = {}
+_OVERVIEW_SUMMARY_CACHE_LOCK = threading.RLock()
+_PERFORMANCE_SUMMARY_CACHE: dict[tuple, tuple[float, dict[str, Any]]] = {}
+_PERFORMANCE_SUMMARY_CACHE_LOCK = threading.RLock()
 
 
 def _selected_period_bounds(date_from: str, date_to: str) -> tuple[datetime, datetime]:
@@ -69,37 +79,29 @@ def _resolve_effective_conversion_key(
     date_from: str,
     date_to: str,
 ) -> tuple[Optional[str], Optional[dict[str, Any]]]:
-    if requested_conversion_key is not None:
-        return requested_conversion_key, None
+    requested_key = (requested_conversion_key or "").strip() or None
+    if requested_key is not None:
+        return requested_key, None
     configured_key = (configured_conversion_key or "").strip() or None
     if not configured_key:
         return None, None
-    if _has_canonical_conversions(
-        db,
-        date_from=date_from,
-        date_to=date_to,
-        conversion_key=configured_key,
-    ):
-        return configured_key, None
-    if _has_canonical_conversions(
-        db,
-        date_from=date_from,
-        date_to=date_to,
-        conversion_key=None,
-    ):
-        return None, {
-            "requested_conversion_key": None,
-            "configured_conversion_key": configured_key,
-            "applied_conversion_key": None,
-            "reason": "configured_conversion_key_has_no_data_in_selected_period",
-        }
-    return configured_key, None
+    return None, {
+        "requested_conversion_key": None,
+        "configured_conversion_key": configured_key,
+        "applied_conversion_key": None,
+        "reason": "performance_defaults_to_all_conversions_until_user_selects_a_conversion_key",
+    }
 
 
 def _load_selected_config_meta(db: Any, model_id: Optional[str]) -> tuple[Any, Optional[dict[str, Any]]]:
     if not model_id:
         return None, None
     return load_config_and_meta(db, model_id)
+
+
+def _normalize_performance_attribution_model(model: Optional[str]) -> str:
+    value = (model or "linear").strip().lower()
+    return value if value in {"last_touch", "first_touch", "linear", "time_decay", "position_based", "markov"} else "linear"
 
 
 _SETTINGS_PATH = Path(__file__).resolve().parents[2] / "data" / "settings.json"
@@ -225,6 +227,12 @@ def _add_summary_derivatives(items: list[dict], scope_type: str, diagnostics: di
 
 
 def _build_consistency_payload(db: Any, journeys: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, list[str]]:
+    cache_key = ("performance_consistency", len(journeys or []))
+    now = time.monotonic()
+    with _CONSISTENCY_CACHE_LOCK:
+        cached = _CONSISTENCY_CACHE.get(cache_key)
+        if cached and now - cached[0] < 60:
+            return cached[1]
     try:
         from app.services_journey_readiness import build_journey_readiness
         from app.services_journey_settings import (
@@ -249,7 +257,11 @@ def _build_consistency_payload(db: Any, journeys: list[dict[str, Any]]) -> tuple
             *readiness.get("blockers", []),
             *readiness.get("warnings", []),
         ]
-        return readiness, warnings
+        payload = (readiness, warnings)
+        with _CONSISTENCY_CACHE_LOCK:
+            _CONSISTENCY_CACHE.clear()
+            _CONSISTENCY_CACHE[cache_key] = (now, payload)
+        return payload
     except Exception:
         return None, []
 
@@ -282,6 +294,22 @@ def create_router(
         db=Depends(get_db_dependency),
         _ctx=Depends(require_permission_dependency("attribution.view")),
     ):
+        cache_key = (
+            "overview_summary",
+            date_from,
+            date_to,
+            timezone,
+            currency or "",
+            workspace or "",
+            account or "",
+            model_id or "",
+            channel_group or "",
+        )
+        now = time.monotonic()
+        with _OVERVIEW_SUMMARY_CACHE_LOCK:
+            cached = _OVERVIEW_SUMMARY_CACHE.get(cache_key)
+            if cached and now - cached[0] < 30:
+                return cached[1]
         payload = get_overview_summary(
             db=db,
             date_from=date_from,
@@ -296,6 +324,9 @@ def create_router(
             import_runs_get_last_successful=get_last_successful_run,
         )
         payload["attention_queue"] = get_overview_attention_queue_fn(db)
+        with _OVERVIEW_SUMMARY_CACHE_LOCK:
+            _OVERVIEW_SUMMARY_CACHE.clear()
+            _OVERVIEW_SUMMARY_CACHE[cache_key] = (now, payload)
         return payload
 
     @router.get("/api/overview/drivers")
@@ -370,6 +401,7 @@ def create_router(
         account: Optional[str] = Query(None, description="Account filter (reserved)"),
         channels: Optional[List[str]] = Query(None, description="Optional channel filter list"),
         model_id: Optional[str] = Query(None, description="Optional model config id"),
+        model: str = Query("linear", description="Attribution model for revenue/conversion credit"),
         kpi_key: str = Query("revenue", description="spend|visits|conversions|revenue|cpa|roas"),
         conversion_key: Optional[str] = Query(None, description="Optional conversion key filter"),
         grain: str = Query("auto", description="auto|daily|weekly"),
@@ -401,6 +433,19 @@ def create_router(
                 date_from=query_ctx.date_from,
                 date_to=query_ctx.date_to,
             )
+            attribution_model = _normalize_performance_attribution_model(model)
+            aggregate_overlay = None
+            if attribution_model == "last_touch":
+                aggregate_overlay = build_channel_aggregate_overlay(
+                    db,
+                    date_from=query_ctx.date_from,
+                    date_to=query_ctx.date_to,
+                    timezone=query_ctx.timezone,
+                    compare=query_ctx.compare,
+                    channels=query_ctx.channels,
+                    conversion_key=effective_conversion_key,
+                    grain=query_ctx.grain,
+                )
             out = build_channel_trend_response(
                 journeys=journeys,
                 expenses=expenses_obj,
@@ -412,20 +457,13 @@ def create_router(
                 compare=query_ctx.compare,
                 channels=query_ctx.channels,
                 conversion_key=effective_conversion_key,
-                aggregate_overlay=build_channel_aggregate_overlay(
-                    db,
-                    date_from=query_ctx.date_from,
-                    date_to=query_ctx.date_to,
-                    timezone=query_ctx.timezone,
-                    compare=query_ctx.compare,
-                    channels=query_ctx.channels,
-                    conversion_key=effective_conversion_key,
-                    grain=query_ctx.grain,
-                ),
+                attribution_model=attribution_model,
+                aggregate_overlay=aggregate_overlay,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         out["meta"] = build_meta_fn(ctx=query_ctx, conversion_key=effective_conversion_key, include_kpi=True)
+        out["meta"]["attribution_model"] = _normalize_performance_attribution_model(model)
         if conversion_key_resolution:
             out["meta"]["conversion_key_resolution"] = conversion_key_resolution
         return out
@@ -439,12 +477,32 @@ def create_router(
         workspace: Optional[str] = Query(None, description="Workspace filter (reserved)"),
         account: Optional[str] = Query(None, description="Account filter (reserved)"),
         model_id: Optional[str] = Query(None, description="Optional model config id"),
+        model: str = Query("linear", description="Attribution model for revenue/conversion credit"),
         conversion_key: Optional[str] = Query(None, description="Optional conversion key filter"),
         compare: bool = Query(True, description="Include previous-period summary"),
         channels: Optional[List[str]] = Query(None, description="Optional channel filter list"),
         db=Depends(get_db_dependency),
         _ctx=Depends(require_permission_dependency("attribution.view")),
     ):
+        cache_key = (
+            "channel_summary",
+            date_from,
+            date_to,
+            timezone,
+            currency or "",
+            workspace or "",
+            account or "",
+            model_id or "",
+            _normalize_performance_attribution_model(model),
+            conversion_key or "",
+            bool(compare),
+            tuple(channels or []),
+        )
+        now = time.monotonic()
+        with _PERFORMANCE_SUMMARY_CACHE_LOCK:
+            cached = _PERFORMANCE_SUMMARY_CACHE.get(cache_key)
+            if cached and now - cached[0] < 30:
+                return cached[1]
         journeys = ensure_journeys_loaded_fn(db)
         query_ctx = build_query_context_fn(
             date_from=date_from,
@@ -468,6 +526,19 @@ def create_router(
             date_from=query_ctx.date_from,
             date_to=query_ctx.date_to,
         )
+        attribution_model = _normalize_performance_attribution_model(model)
+        aggregate_overlay = None
+        if attribution_model == "last_touch":
+            aggregate_overlay = build_channel_aggregate_overlay(
+                db,
+                date_from=query_ctx.date_from,
+                date_to=query_ctx.date_to,
+                timezone=query_ctx.timezone,
+                compare=query_ctx.compare,
+                channels=query_ctx.channels,
+                conversion_key=effective_conversion_key,
+                grain="daily",
+            )
         out = build_channel_summary_response(
             journeys=journeys,
             expenses=expenses_obj,
@@ -477,16 +548,8 @@ def create_router(
             compare=query_ctx.compare,
             channels=query_ctx.channels,
             conversion_key=effective_conversion_key,
-            aggregate_overlay=build_channel_aggregate_overlay(
-                db,
-                date_from=query_ctx.date_from,
-                date_to=query_ctx.date_to,
-                timezone=query_ctx.timezone,
-                compare=query_ctx.compare,
-                channels=query_ctx.channels,
-                conversion_key=effective_conversion_key,
-                grain="daily",
-            ),
+            attribution_model=attribution_model,
+            aggregate_overlay=aggregate_overlay,
         )
         diagnostics = build_scope_diagnostics(
             db=db,
@@ -521,8 +584,11 @@ def create_router(
         out["readiness"] = readiness
         out["consistency_warnings"] = consistency_warnings
         out["meta"] = build_meta_fn(ctx=query_ctx, conversion_key=effective_conversion_key)
+        out["meta"]["attribution_model"] = attribution_model
         if conversion_key_resolution:
             out["meta"]["conversion_key_resolution"] = conversion_key_resolution
+        with _PERFORMANCE_SUMMARY_CACHE_LOCK:
+            _PERFORMANCE_SUMMARY_CACHE[cache_key] = (now, out)
         return out
 
     @router.get("/api/performance/channel/lag")
@@ -553,6 +619,7 @@ def create_router(
         account: Optional[str] = Query(None, description="Account filter (reserved)"),
         channels: Optional[List[str]] = Query(None, description="Optional channel filter list"),
         model_id: Optional[str] = Query(None, description="Optional model config id"),
+        model: str = Query("linear", description="Attribution model for revenue/conversion credit"),
         kpi_key: str = Query("revenue", description="spend|visits|conversions|revenue|cpa|roas"),
         conversion_key: Optional[str] = Query(None, description="Optional conversion key filter"),
         grain: str = Query("auto", description="auto|daily|weekly"),
@@ -584,6 +651,18 @@ def create_router(
                 date_from=query_ctx.date_from,
                 date_to=query_ctx.date_to,
             )
+            attribution_model = _normalize_performance_attribution_model(model)
+            aggregate_overlay = None
+            if attribution_model == "last_touch":
+                aggregate_overlay = build_campaign_aggregate_overlay(
+                    db,
+                    date_from=query_ctx.date_from,
+                    date_to=query_ctx.date_to,
+                    timezone=query_ctx.timezone,
+                    compare=query_ctx.compare,
+                    channels=query_ctx.channels,
+                    conversion_key=effective_conversion_key,
+                )
             out = build_campaign_trend_response(
                 journeys=journeys,
                 expenses=expenses_obj,
@@ -595,19 +674,13 @@ def create_router(
                 compare=query_ctx.compare,
                 channels=query_ctx.channels,
                 conversion_key=effective_conversion_key,
-                aggregate_overlay=build_campaign_aggregate_overlay(
-                    db,
-                    date_from=query_ctx.date_from,
-                    date_to=query_ctx.date_to,
-                    timezone=query_ctx.timezone,
-                    compare=query_ctx.compare,
-                    channels=query_ctx.channels,
-                    conversion_key=effective_conversion_key,
-                ),
+                attribution_model=attribution_model,
+                aggregate_overlay=aggregate_overlay,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         out["meta"] = build_meta_fn(ctx=query_ctx, conversion_key=effective_conversion_key, include_kpi=True)
+        out["meta"]["attribution_model"] = _normalize_performance_attribution_model(model)
         if conversion_key_resolution:
             out["meta"]["conversion_key_resolution"] = conversion_key_resolution
         return out
@@ -639,12 +712,32 @@ def create_router(
         workspace: Optional[str] = Query(None, description="Workspace filter (reserved)"),
         account: Optional[str] = Query(None, description="Account filter (reserved)"),
         model_id: Optional[str] = Query(None, description="Optional model config id"),
+        model: str = Query("linear", description="Attribution model for revenue/conversion credit"),
         conversion_key: Optional[str] = Query(None, description="Optional conversion key filter"),
         compare: bool = Query(True, description="Include previous-period summary"),
         channels: Optional[List[str]] = Query(None, description="Optional channel filter list"),
         db=Depends(get_db_dependency),
         _ctx=Depends(require_permission_dependency("attribution.view")),
     ):
+        cache_key = (
+            "campaign_summary",
+            date_from,
+            date_to,
+            timezone,
+            currency or "",
+            workspace or "",
+            account or "",
+            model_id or "",
+            _normalize_performance_attribution_model(model),
+            conversion_key or "",
+            bool(compare),
+            tuple(channels or []),
+        )
+        now = time.monotonic()
+        with _PERFORMANCE_SUMMARY_CACHE_LOCK:
+            cached = _PERFORMANCE_SUMMARY_CACHE.get(cache_key)
+            if cached and now - cached[0] < 30:
+                return cached[1]
         journeys = ensure_journeys_loaded_fn(db)
         query_ctx = build_query_context_fn(
             date_from=date_from,
@@ -668,6 +761,18 @@ def create_router(
             date_from=query_ctx.date_from,
             date_to=query_ctx.date_to,
         )
+        attribution_model = _normalize_performance_attribution_model(model)
+        aggregate_overlay = None
+        if attribution_model == "last_touch":
+            aggregate_overlay = build_campaign_aggregate_overlay(
+                db,
+                date_from=query_ctx.date_from,
+                date_to=query_ctx.date_to,
+                timezone=query_ctx.timezone,
+                compare=query_ctx.compare,
+                channels=query_ctx.channels,
+                conversion_key=effective_conversion_key,
+            )
         out = build_campaign_summary_response(
             journeys=journeys,
             expenses=expenses_obj,
@@ -677,15 +782,8 @@ def create_router(
             compare=query_ctx.compare,
             channels=query_ctx.channels,
             conversion_key=effective_conversion_key,
-            aggregate_overlay=build_campaign_aggregate_overlay(
-                db,
-                date_from=query_ctx.date_from,
-                date_to=query_ctx.date_to,
-                timezone=query_ctx.timezone,
-                compare=query_ctx.compare,
-                channels=query_ctx.channels,
-                conversion_key=effective_conversion_key,
-            ),
+            attribution_model=attribution_model,
+            aggregate_overlay=aggregate_overlay,
         )
         diagnostics = build_scope_diagnostics(
             db=db,
@@ -720,8 +818,11 @@ def create_router(
         out["readiness"] = readiness
         out["consistency_warnings"] = consistency_warnings
         out["meta"] = build_meta_fn(ctx=query_ctx, conversion_key=effective_conversion_key)
+        out["meta"]["attribution_model"] = attribution_model
         if conversion_key_resolution:
             out["meta"]["conversion_key_resolution"] = conversion_key_resolution
+        with _PERFORMANCE_SUMMARY_CACHE_LOCK:
+            _PERFORMANCE_SUMMARY_CACHE[cache_key] = (now, out)
         return out
 
     @router.get("/api/performance/campaign/suggestions")

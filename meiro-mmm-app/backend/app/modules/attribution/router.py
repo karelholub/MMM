@@ -1,4 +1,7 @@
 import json
+import threading
+import time
+from datetime import date, datetime
 from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
@@ -73,6 +76,38 @@ def create_router(
     compute_campaign_trends_fn: Callable[..., Dict[str, Any]],
 ) -> APIRouter:
     router = APIRouter(tags=["attribution"])
+    consistency_cache: Dict[tuple, tuple[float, tuple[Dict[str, Any] | None, List[str]]]] = {}
+    journey_summary_cache: Dict[tuple, tuple[float, Dict[str, Any]]] = {}
+    consistency_cache_lock = threading.RLock()
+
+    def _parse_filter_date(value: Optional[str]) -> Optional[date]:
+        if not value:
+            return None
+        try:
+            return date.fromisoformat(str(value)[:10])
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="date_from/date_to must be YYYY-MM-DD") from exc
+
+    def _timestamp_date(value: Any) -> Optional[date]:
+        if not value:
+            return None
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        raw = str(value).strip()
+        if len(raw) >= 10:
+            try:
+                return date.fromisoformat(raw[:10])
+            except Exception:
+                pass
+        try:
+            parsed = pd.to_datetime(raw, utc=True, errors="coerce")
+        except Exception:
+            return None
+        if pd.isna(parsed):
+            return None
+        return parsed.date()
 
     def _results_store() -> Dict[str, Any]:
         return get_attribution_results_obj()
@@ -81,6 +116,49 @@ def create_router(
         settings = get_settings_obj()
         threshold = int(getattr(settings.attribution, "min_journey_quality_score", 0) or 0)
         return filter_journeys_by_quality(journeys, threshold)
+
+    def _attribution_kwargs_for_model(model: str) -> Dict[str, Any]:
+        settings = get_settings_obj()
+        kwargs: Dict[str, Any] = {
+            "value_mode": str(getattr(settings.attribution, "conversion_value_mode", "gross_only") or "gross_only")
+        }
+        if model == "time_decay":
+            kwargs["half_life_days"] = settings.attribution.time_decay_half_life_days
+        elif model == "position_based":
+            kwargs["first_pct"] = settings.attribution.position_first_pct
+            kwargs["last_pct"] = settings.attribution.position_last_pct
+        return kwargs
+
+    def _with_result_scope(
+        result: Dict[str, Any],
+        *,
+        meta: Optional[Dict[str, Any]],
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        basis: str = "workspace",
+    ) -> Dict[str, Any]:
+        if meta:
+            result["config"] = meta
+        result["scope"] = {
+            "basis": basis,
+            "date_from": str(date_from)[:10] if date_from else None,
+            "date_to": str(date_to)[:10] if date_to else None,
+        }
+        return result
+
+    def _prepare_attribution_journeys(
+        db: Any,
+        *,
+        config_id: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ) -> tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        resolved_cfg, meta = load_config_and_meta_fn(db, config_id)
+        journeys = get_journeys_fn(db)
+        journeys_for_model = apply_model_config_fn(journeys, resolved_cfg.config_json or {}) if resolved_cfg else journeys
+        journeys_for_model = _filter_journeys_to_window(journeys_for_model, date_from=date_from, date_to=date_to)
+        journeys_for_model = _apply_attribution_filters(journeys_for_model)
+        return journeys_for_model, meta
 
     def _apply_journey_dimension_filters(
         journeys: List[Dict[str, Any]],
@@ -119,11 +197,8 @@ def create_router(
     ) -> List[Dict[str, Any]]:
         if not date_from and not date_to:
             return journeys
-        try:
-            start = pd.to_datetime(date_from).to_pydatetime() if date_from else None
-            end = pd.to_datetime(date_to).to_pydatetime() if date_to else None
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail="date_from/date_to must be YYYY-MM-DD") from exc
+        start = _parse_filter_date(date_from)
+        end = _parse_filter_date(date_to)
         if start and end and start > end:
             raise HTTPException(status_code=400, detail="date_from must be <= date_to")
 
@@ -131,37 +206,41 @@ def create_router(
         for journey in journeys or []:
             touchpoints = journey.get("touchpoints") or []
             conversions = journey.get("conversions") or []
-            conv_ts = None
+            conv_ts = _timestamp_date(
+                journey.get("conversion_ts")
+                or journey.get("conversion_timestamp")
+                or journey.get("converted_at")
+            )
             if conversions and isinstance(conversions[0], dict):
                 conv_raw = conversions[0].get("ts") or conversions[0].get("timestamp")
-                if conv_raw:
-                    parsed = pd.to_datetime(conv_raw, utc=True, errors="coerce")
-                    if not pd.isna(parsed):
-                        conv_ts = parsed.to_pydatetime()
+                conv_ts = conv_ts or _timestamp_date(conv_raw)
             if conv_ts is None:
                 tp_times = []
                 for tp in touchpoints:
                     if not isinstance(tp, dict):
                         continue
                     raw = tp.get("ts") or tp.get("timestamp")
-                    if not raw:
-                        continue
-                    parsed = pd.to_datetime(raw, utc=True, errors="coerce")
-                    if pd.isna(parsed):
-                        continue
-                    tp_times.append(parsed.to_pydatetime())
+                    parsed = _timestamp_date(raw)
+                    if parsed is not None:
+                        tp_times.append(parsed)
                 conv_ts = max(tp_times) if tp_times else None
             if conv_ts is None:
                 continue
-            conv_day = conv_ts.date()
-            if start and conv_day < start.date():
+            conv_day = conv_ts
+            if start and conv_day < start:
                 continue
-            if end and conv_day > end.date():
+            if end and conv_day > end:
                 continue
             filtered.append(journey)
         return filtered
 
     def _build_consistency_payload(db: Any, journeys: List[Dict[str, Any]]) -> tuple[Dict[str, Any] | None, List[str]]:
+        cache_key = ("consistency", len(journeys or []))
+        now = time.monotonic()
+        with consistency_cache_lock:
+            cached = consistency_cache.get(cache_key)
+            if cached and now - cached[0] < 60:
+                return cached[1]
         try:
             from app.services_journey_readiness import build_journey_readiness
             from app.services_journey_settings import (
@@ -186,7 +265,11 @@ def create_router(
                 *readiness.get("blockers", []),
                 *readiness.get("warnings", []),
             ]
-            return readiness, warnings
+            payload = (readiness, warnings)
+            with consistency_cache_lock:
+                consistency_cache.clear()
+                consistency_cache[cache_key] = (now, payload)
+            return payload
         except Exception:
             return None, []
 
@@ -200,12 +283,18 @@ def create_router(
         date_to: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
         db=Depends(get_db_dependency),
     ):
+        cache_key = ("journeys_summary", date_from or "", date_to or "")
+        now = time.monotonic()
+        with consistency_cache_lock:
+            cached = journey_summary_cache.get(cache_key)
+            if cached and now - cached[0] < 30:
+                return cached[1]
         journeys = _filter_journeys_to_window(get_journeys_fn(db), date_from=date_from, date_to=date_to)
         if not journeys:
             runs = get_import_runs_fn(limit=1)
             last_run = runs[0] if runs and runs[0].get("status") == "success" else None
             readiness, consistency_warnings = _build_consistency_payload(db, [])
-            return {
+            payload = {
                 "loaded": False,
                 "count": 0,
                 "converted": 0,
@@ -218,6 +307,9 @@ def create_router(
                 "readiness": readiness,
                 "consistency_warnings": consistency_warnings,
             }
+            with consistency_cache_lock:
+                journey_summary_cache[cache_key] = (now, payload)
+            return payload
 
         summary = build_journeys_summary_fn(
             journeys=journeys,
@@ -227,6 +319,8 @@ def create_router(
         readiness, consistency_warnings = _build_consistency_payload(db, journeys)
         summary["readiness"] = readiness
         summary["consistency_warnings"] = consistency_warnings
+        with consistency_cache_lock:
+            journey_summary_cache[cache_key] = (now, summary)
         return summary
 
     @router.get("/api/attribution/journeys/source-state")
@@ -635,50 +729,28 @@ def create_router(
 
     @router.post("/api/attribution/run")
     def run_attribution_model(model: str = "linear", config_id: Optional[str] = None, db=Depends(get_db_dependency)):
-        journeys = get_journeys_fn(db)
-        if not journeys:
-            raise HTTPException(status_code=400, detail="No journeys loaded. Upload, import, or persist data first.")
         if model not in attribution_models_obj:
             raise HTTPException(status_code=400, detail=f"Unknown model: {model}. Available: {attribution_models_obj}")
-        resolved_cfg, meta = load_config_and_meta_fn(db, config_id)
-        journeys_for_model = apply_model_config_fn(journeys, resolved_cfg.config_json or {}) if resolved_cfg else journeys
-        journeys_for_model = _apply_attribution_filters(journeys_for_model)
-        settings = get_settings_obj()
-        kwargs: Dict[str, Any] = {}
-        kwargs["value_mode"] = str(getattr(settings.attribution, "conversion_value_mode", "gross_only") or "gross_only")
-        if model == "time_decay":
-            kwargs["half_life_days"] = settings.attribution.time_decay_half_life_days
-        elif model == "position_based":
-            kwargs["first_pct"] = settings.attribution.position_first_pct
-            kwargs["last_pct"] = settings.attribution.position_last_pct
+        journeys_for_model, meta = _prepare_attribution_journeys(db, config_id=config_id)
+        if not journeys_for_model:
+            raise HTTPException(status_code=400, detail="No journeys loaded. Upload, import, or persist data first.")
+        kwargs = _attribution_kwargs_for_model(model)
         result = run_attribution_fn(journeys_for_model, model=model, **kwargs)
-        if meta:
-            result["config"] = meta
+        _with_result_scope(result, meta=meta, basis="workspace")
         _results_store()[model] = result
         return result
 
     @router.post("/api/attribution/run-all")
     def run_all_attribution_models(config_id: Optional[str] = None, db=Depends(get_db_dependency)):
-        journeys = get_journeys_fn(db)
-        if not journeys:
+        journeys_for_model, meta = _prepare_attribution_journeys(db, config_id=config_id)
+        if not journeys_for_model:
             raise HTTPException(status_code=400, detail="No journeys loaded. Upload, import, or persist data first.")
-        resolved_cfg, meta = load_config_and_meta_fn(db, config_id)
-        journeys_for_model = apply_model_config_fn(journeys, resolved_cfg.config_json or {}) if resolved_cfg else journeys
-        journeys_for_model = _apply_attribution_filters(journeys_for_model)
-        settings = get_settings_obj()
         results = []
         for model in attribution_models_obj:
             try:
-                kwargs: Dict[str, Any] = {}
-                kwargs["value_mode"] = str(getattr(settings.attribution, "conversion_value_mode", "gross_only") or "gross_only")
-                if model == "time_decay":
-                    kwargs["half_life_days"] = settings.attribution.time_decay_half_life_days
-                elif model == "position_based":
-                    kwargs["first_pct"] = settings.attribution.position_first_pct
-                    kwargs["last_pct"] = settings.attribution.position_last_pct
+                kwargs = _attribution_kwargs_for_model(model)
                 result = run_attribution_fn(journeys_for_model, model=model, **kwargs)
-                if meta:
-                    result["config"] = meta
+                _with_result_scope(result, meta=meta, basis="workspace")
                 results.append(result)
                 _results_store()[model] = result
             except Exception as exc:
@@ -686,14 +758,71 @@ def create_router(
         return {"results": results}
 
     @router.get("/api/attribution/results")
-    def get_attribution_results():
-        return _results_store()
+    def get_attribution_results(
+        config_id: Optional[str] = None,
+        date_from: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+        date_to: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+        refresh: bool = False,
+        db=Depends(get_db_dependency),
+    ):
+        if not refresh and not config_id and not date_from and not date_to and _results_store():
+            return _results_store()
+        journeys_for_model, meta = _prepare_attribution_journeys(
+            db,
+            config_id=config_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        if not journeys_for_model:
+            return {}
+        results: Dict[str, Any] = {}
+        basis = "period" if date_from or date_to else "workspace"
+        for model in attribution_models_obj:
+            try:
+                result = run_attribution_fn(journeys_for_model, model=model, **_attribution_kwargs_for_model(model))
+                results[model] = _with_result_scope(
+                    result,
+                    meta=meta,
+                    date_from=date_from,
+                    date_to=date_to,
+                    basis=basis,
+                )
+                if basis == "workspace":
+                    _results_store()[model] = results[model]
+            except Exception as exc:
+                results[model] = {"model": model, "error": str(exc)}
+        if basis == "workspace":
+            return _results_store()
+        return results
 
     @router.get("/api/attribution/results/{model}")
-    def get_attribution_result(model: str):
-        result = _results_store().get(model)
-        if not result:
-            raise HTTPException(status_code=404, detail=f"No results for model '{model}'. Run it first.")
+    def get_attribution_result(
+        model: str,
+        config_id: Optional[str] = None,
+        date_from: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+        date_to: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+        refresh: bool = False,
+        db=Depends(get_db_dependency),
+    ):
+        if model not in attribution_models_obj:
+            raise HTTPException(status_code=400, detail=f"Unknown model: {model}. Available: {attribution_models_obj}")
+        if not refresh and not config_id and not date_from and not date_to:
+            result = _results_store().get(model)
+            if result:
+                return result
+        journeys_for_model, meta = _prepare_attribution_journeys(
+            db,
+            config_id=config_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        if not journeys_for_model:
+            raise HTTPException(status_code=400, detail="No journeys loaded for the selected attribution scope.")
+        basis = "period" if date_from or date_to else "workspace"
+        result = run_attribution_fn(journeys_for_model, model=model, **_attribution_kwargs_for_model(model))
+        _with_result_scope(result, meta=meta, date_from=date_from, date_to=date_to, basis=basis)
+        if basis == "workspace":
+            _results_store()[model] = result
         return result
 
     def _attribution_weekly_series(
@@ -1058,6 +1187,25 @@ def create_router(
         recompute: bool = False,
         db=Depends(get_db_dependency),
     ):
+        pre_cache_key = (
+            "path_archetypes_v2",
+            date_from or "",
+            date_to or "",
+            conversion_key or "",
+            config_id or "",
+            k_mode,
+            int(k) if k is not None else None,
+            int(k_min),
+            int(k_max),
+            (direct_mode or "include").lower(),
+            str(channel_group or ""),
+            str(campaign_id or ""),
+            str(device or ""),
+            str(country or ""),
+            bool(compare_previous),
+        )
+        if not recompute and pre_cache_key in path_archetypes_cache_obj:
+            return path_archetypes_cache_obj[pre_cache_key]
         journeys = get_journeys_fn(db)
         if not journeys:
             raise HTTPException(status_code=400, detail="No journeys loaded.")
@@ -1124,6 +1272,7 @@ def create_router(
             "country": country,
         }
         path_archetypes_cache_obj[cache_key] = result
+        path_archetypes_cache_obj[pre_cache_key] = result
         return result
 
     @router.get("/api/paths/anomalies")
@@ -1197,18 +1346,22 @@ def create_router(
         journeys_for_model = apply_model_config_fn(journeys, resolved_cfg.config_json or {}) if resolved_cfg else journeys
         journeys_for_model = _apply_attribution_filters(journeys_for_model)
         result = _results_store().get(model)
-        if not result:
+        result_config_id = ((result or {}).get("config") or {}).get("config_id")
+        expected_config_id = (meta or {}).get("config_id")
+        result_scope = ((result or {}).get("scope") or {}).get("basis")
+        result_value_mode = (result or {}).get("value_mode")
+        expected_value_mode = _attribution_kwargs_for_model(model).get("value_mode")
+        if (
+            not result
+            or result_config_id != expected_config_id
+            or result_scope not in (None, "workspace")
+            or result_value_mode != expected_value_mode
+        ):
             if not journeys:
                 raise HTTPException(status_code=400, detail="No journeys loaded.")
-            settings = get_settings_obj()
-            kwargs: Dict[str, Any] = {}
-            kwargs["value_mode"] = str(getattr(settings.attribution, "conversion_value_mode", "gross_only") or "gross_only")
-            if model == "time_decay":
-                kwargs["half_life_days"] = settings.attribution.time_decay_half_life_days
-            elif model == "position_based":
-                kwargs["first_pct"] = settings.attribution.position_first_pct
-                kwargs["last_pct"] = settings.attribution.position_last_pct
+            kwargs = _attribution_kwargs_for_model(model)
             result = run_attribution_fn(journeys_for_model, model=model, **kwargs)
+            _with_result_scope(result, meta=meta, basis="workspace")
             _results_store()[model] = result
 
         expense_by_channel: Dict[str, float] = {}

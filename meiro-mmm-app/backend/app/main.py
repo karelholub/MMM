@@ -697,7 +697,7 @@ def _save_runs():
     try:
         out = {}
         for rid, r in RUNS.items():
-            out[rid] = {k: v for k, v in r.items() if k in ("status", "config", "kpi_mode", "created_at", "updated_at", "dataset_id", "r2", "contrib", "roi", "engine", "detail", "uplift", "campaigns", "channel_summary", "adstock_params", "saturation_params", "diagnostics", "attribution_model", "attribution_config_id")}
+            out[rid] = {k: v for k, v in r.items() if k in ("status", "stage", "progress_pct", "config", "kpi_mode", "created_at", "updated_at", "dataset_id", "r2", "contrib", "roi", "engine", "engine_version", "detail", "uplift", "campaigns", "channel_summary", "adstock_params", "saturation_params", "diagnostics", "attribution_model", "attribution_config_id", "stale_from_status", "stale_reason", "stale_at")}
         RUNS_FILE.parent.mkdir(parents=True, exist_ok=True)
         RUNS_FILE.write_text(json.dumps(out, indent=0), encoding="utf-8")
     except Exception:
@@ -1261,11 +1261,24 @@ def _persist_journeys_and_invalidate_cache(
         source_snapshot_id=source_snapshot_id,
     )
     invalidate_journey_cache()
+    with _OVERVIEW_ATTENTION_CACHE_LOCK:
+        _OVERVIEW_ATTENTION_CACHE.clear()
+    PATH_ARCHETYPES_CACHE.clear()
     return inserted
+
+
+_OVERVIEW_ATTENTION_CACHE: Dict[tuple, tuple[float, List[Dict[str, Any]]]] = {}
+_OVERVIEW_ATTENTION_CACHE_LOCK = threading.RLock()
 
 
 def _build_overview_attention_queue(db: Any) -> List[Dict[str, Any]]:
     journeys = _ensure_journeys_loaded(db)
+    cache_key = ("overview_attention", len(journeys or []))
+    now = time.monotonic()
+    with _OVERVIEW_ATTENTION_CACHE_LOCK:
+        cached = _OVERVIEW_ATTENTION_CACHE.get(cache_key)
+        if cached and now - cached[0] < 60:
+            return [dict(item) for item in cached[1]]
     taxonomy = load_taxonomy()
     kpi_config = load_kpi_config()
 
@@ -1322,7 +1335,7 @@ def _build_overview_attention_queue(db: Any) -> List[Dict[str, Any]]:
         journeys_loaded=len(journeys),
     )
 
-    return build_attention_queue(
+    result = build_attention_queue(
         decisions={
             "taxonomy": taxonomy_overview,
             "kpi": kpi_overview,
@@ -1332,6 +1345,10 @@ def _build_overview_attention_queue(db: Any) -> List[Dict[str, Any]]:
         },
         limit=10,
     )
+    with _OVERVIEW_ATTENTION_CACHE_LOCK:
+        _OVERVIEW_ATTENTION_CACHE.clear()
+        _OVERVIEW_ATTENTION_CACHE[cache_key] = (now, [dict(item) for item in result])
+    return result
 
 
 # Initialize sample datasets

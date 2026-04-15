@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from datetime import date, timedelta
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -11,6 +12,7 @@ from app.connectors.ads_ops.base import AdsApplyResult, AdsProviderError
 from app.db import Base, get_db
 from app.main import app
 from app import main as main_module
+from app.mmm_version import CURRENT_MMM_ENGINE_VERSION
 
 
 class _FakeAdsAdapter:
@@ -92,6 +94,7 @@ def test_budget_recommendations_and_scenarios(tmp_path, monkeypatch):
     monkeypatch.setattr("app.services_ads_ops.get_access_token_for_provider", lambda *_args, **_kwargs: "token-1")
     main_module.RUNS["mmm_budget_test"] = {
         "status": "finished",
+        "engine_version": CURRENT_MMM_ENGINE_VERSION,
         "dataset_id": "budget-test-dataset",
         "config": {
             "dataset_id": "budget-test-dataset",
@@ -188,6 +191,554 @@ def test_budget_recommendations_and_scenarios(tmp_path, monkeypatch):
             assert realization["total"] == 1
             assert realization["items"][0]["execution"]["counts"]["pending_approval"] == 1
             assert realization["items"][0]["execution"]["proposed_budget_delta_total"] == 8.0
+    finally:
+        app.dependency_overrides.clear()
+        main_module.RUNS.clear()
+        main_module.RUNS.update(original_runs)
+        main_module._save_runs()
+        main_module.DATASETS.clear()
+        main_module.DATASETS.update(original_datasets)
+        main_module.SETTINGS.feature_flags.mmm_enabled = original_mmm_enabled
+        engine.dispose()
+
+
+def test_budget_recommendations_summarize_tall_campaign_dataset(tmp_path):
+    dataset_rows = []
+    for week in range(12):
+        week_start = (date(2026, 1, 5) + timedelta(days=week * 7)).isoformat()
+        dataset_rows.extend(
+            [
+                {"date": week_start, "channel": "paid_search", "campaign": "brand", "spend": 100.0 + week, "conversions": 10.0 + week},
+                {"date": week_start, "channel": "facebook_ads", "campaign": "prospecting", "spend": 50.0 + week, "conversions": 10.0 + week},
+            ]
+        )
+    paid_spend = sum(100.0 + week for week in range(12))
+    facebook_spend = sum(50.0 + week for week in range(12))
+    run = {
+        "status": "finished",
+        "engine_version": CURRENT_MMM_ENGINE_VERSION,
+        "config": {"kpi": "conversions", "spend_channels": ["paid_search", "facebook_ads"]},
+        "roi": [{"channel": "paid_search", "roi": 1.6}, {"channel": "facebook_ads", "roi": 0.8}],
+        "contrib": [{"channel": "paid_search", "mean_share": 0.7}, {"channel": "facebook_ads", "mean_share": 0.3}],
+        "channel_summary": [
+            {"channel": "paid_search", "spend": paid_spend, "roi": 1.6, "mroas": 1.6, "elasticity": 0.2},
+            {"channel": "facebook_ads", "spend": facebook_spend, "roi": 0.8, "mroas": 0.8, "elasticity": 0.1},
+        ],
+    }
+
+    from app.services_budget_recommendations import build_budget_recommendations
+
+    body = build_budget_recommendations(
+        run_id="tall-budget-test",
+        run=run,
+        dataset_rows=dataset_rows,
+        objective="protect_efficiency",
+        total_budget_change_pct=0,
+    )
+
+    assert body["decision"]["status"] == "ready"
+    assert body["summary"]["periods"] == 12
+    assert body["summary"]["baseline_spend_total"] == paid_spend + facebook_spend
+    assert body["recommendations"]
+    paid_action = next(
+        action
+        for action in body["recommendations"][0]["actions"]
+        if action["channel"] == "paid_search"
+    )
+    assert paid_action["base_spend"] == paid_spend
+
+
+def test_mmm_what_if_and_auto_optimizer_use_contribution_and_spend_basis(tmp_path):
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    def override_get_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    dataset_path = tmp_path / "response-basis.csv"
+    dataset_path.write_text(
+        "\n".join(
+            [
+                "date,high_roi,low_roi,conversions",
+                "2026-01-01,50,100,120",
+                "2026-01-08,50,100,130",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    original_runs = copy.deepcopy(main_module.RUNS)
+    original_datasets = copy.deepcopy(main_module.DATASETS)
+    original_mmm_enabled = getattr(main_module.SETTINGS.feature_flags, "mmm_enabled", False)
+
+    main_module.RUNS.clear()
+    main_module.DATASETS.clear()
+    main_module.SETTINGS.feature_flags.mmm_enabled = True
+    main_module.DATASETS["response-basis-dataset"] = {
+        "path": dataset_path,
+        "type": "sales",
+        "metadata": {"period_start": "2026-01-01", "period_end": "2026-01-08"},
+    }
+    main_module.RUNS["mmm_response_basis"] = {
+        "status": "finished",
+        "engine_version": CURRENT_MMM_ENGINE_VERSION,
+        "dataset_id": "response-basis-dataset",
+        "config": {
+            "dataset_id": "response-basis-dataset",
+            "kpi": "conversions",
+            "spend_channels": ["high_roi", "low_roi"],
+        },
+        "r2": 0.8,
+        "roi": [{"channel": "high_roi", "roi": 2.0}, {"channel": "low_roi", "roi": 1.0}],
+        "contrib": [
+            {"channel": "high_roi", "mean_share": 0.5, "mean_contribution": 200.0},
+            {"channel": "low_roi", "mean_share": 0.5, "mean_contribution": 200.0},
+        ],
+        "channel_summary": [
+            {"channel": "high_roi", "spend": 100.0, "roi": 2.0, "mroas": 2.0, "elasticity": 0.2},
+            {"channel": "low_roi", "spend": 200.0, "roi": 1.0, "mroas": 1.0, "elasticity": 0.1},
+        ],
+        "campaigns": [
+            {
+                "channel": "high_roi",
+                "campaign": "brand",
+                "spend": 100.0,
+                "mean_spend": 50.0,
+                "roi": 2.0,
+                "mean_contribution": 200.0,
+            }
+        ],
+    }
+
+    app.dependency_overrides.clear()
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        with TestClient(app) as client:
+            what_if_resp = client.post("/api/models/mmm_response_basis/what_if", json={"high_roi": 1.5, "low_roi": 1.0})
+            assert what_if_resp.status_code == 200
+            what_if_body = what_if_resp.json()
+            assert what_if_body["baseline"]["total_kpi"] == 400.0
+            assert what_if_body["scenario"]["total_kpi"] == 500.0
+            assert what_if_body["lift"]["percent"] == 25.0
+
+            auto_resp = client.post(
+                "/api/models/mmm_response_basis/optimize/auto",
+                json={"total_budget": 1.0, "min_spend": 0.5, "max_spend": 2.0},
+            )
+            assert auto_resp.status_code == 200
+            auto_body = auto_resp.json()
+            assert auto_body["baseline_kpi"] == 400.0
+            assert round(auto_body["predicted_kpi"], 2) == 500.0
+            assert round(auto_body["uplift"], 2) == 25.0
+            assert round(auto_body["optimal_mix"]["high_roi"], 2) == 2.0
+            assert round(auto_body["optimal_mix"]["low_roi"], 2) == 0.5
+
+            export_resp = client.get("/api/models/mmm_response_basis/export.csv")
+            assert export_resp.status_code == 200
+            export_text = export_resp.text
+            assert "high_roi,brand,100.0000,100.0000,2.000000,200.0000" in export_text
+    finally:
+        app.dependency_overrides.clear()
+        main_module.RUNS.clear()
+        main_module.RUNS.update(original_runs)
+        main_module.DATASETS.clear()
+        main_module.DATASETS.update(original_datasets)
+        main_module.SETTINGS.feature_flags.mmm_enabled = original_mmm_enabled
+        engine.dispose()
+
+
+def test_mmm_run_with_missing_dataset_is_readout_only(tmp_path):
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    def override_get_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    original_runs = copy.deepcopy(main_module.RUNS)
+    original_datasets = copy.deepcopy(main_module.DATASETS)
+    original_mmm_enabled = getattr(main_module.SETTINGS.feature_flags, "mmm_enabled", False)
+
+    main_module.RUNS.clear()
+    main_module.DATASETS.clear()
+    main_module.SETTINGS.feature_flags.mmm_enabled = True
+    main_module.DATASETS["missing-mmm-dataset"] = {
+        "path": tmp_path / "missing-mmm-dataset.csv",
+        "type": "sales",
+        "source": "platform",
+        "metadata": {"period_start": "2026-01-01", "period_end": "2026-03-19"},
+    }
+    main_module.RUNS["mmm_missing_dataset"] = {
+        "status": "finished",
+        "dataset_id": "missing-mmm-dataset",
+        "created_at": "2026-04-01T10:00:00Z",
+        "updated_at": "2026-04-02T10:00:00Z",
+        "config": {
+            "dataset_id": "missing-mmm-dataset",
+            "kpi": "conversions",
+            "spend_channels": ["google_spend", "meta_spend"],
+        },
+        "r2": 0.71,
+        "roi": [
+            {"channel": "google_spend", "roi": 2.1},
+            {"channel": "meta_spend", "roi": 0.9},
+        ],
+        "contrib": [
+            {"channel": "google_spend", "mean_share": 0.62},
+            {"channel": "meta_spend", "mean_share": 0.38},
+        ],
+    }
+
+    app.dependency_overrides.clear()
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        with TestClient(app) as client:
+            list_resp = client.get("/api/models")
+            assert list_resp.status_code == 200
+            listed_run = next(item for item in list_resp.json() if item["run_id"] == "mmm_missing_dataset")
+            assert listed_run["dataset_available"] is False
+            assert listed_run["scenario_count"] == 0
+            assert listed_run["latest_scenario_at"] is None
+            assert listed_run["quality"]["label"] == "Readout only"
+            assert listed_run["quality"]["can_use_results"] is True
+            assert listed_run["quality"]["can_use_budget"] is False
+
+            get_resp = client.get("/api/models/mmm_missing_dataset")
+            assert get_resp.status_code == 200
+            loaded_run = get_resp.json()
+            assert loaded_run["dataset_available"] is False
+            assert loaded_run["roi"]
+            assert loaded_run["quality"]["label"] == "Readout only"
+
+            dataset_resp = client.get("/api/datasets/missing-mmm-dataset", params={"preview_only": True})
+            assert dataset_resp.status_code == 200
+            assert dataset_resp.json()["available"] is False
+
+            recommendation_resp = client.get(
+                "/api/models/mmm_missing_dataset/budget/recommendations",
+                params={"objective": "protect_efficiency", "total_budget_change_pct": 0},
+            )
+            assert recommendation_resp.status_code == 200
+            recommendation_body = recommendation_resp.json()
+            assert recommendation_body["recommendations"] == []
+            assert recommendation_body["decision"]["status"] == "blocked"
+            assert "linked dataset preview" in recommendation_body["decision"]["subtitle"].lower()
+            assert recommendation_body["decision"]["actions"][0]["id"] == "rebuild_mmm_dataset"
+            assert recommendation_body["summary"]["channels_considered"] == 2
+            assert recommendation_body["summary"]["quality"]["label"] == "Readout only"
+    finally:
+        app.dependency_overrides.clear()
+        main_module.RUNS.clear()
+        main_module.RUNS.update(original_runs)
+        main_module.DATASETS.clear()
+        main_module.DATASETS.update(original_datasets)
+        main_module.SETTINGS.feature_flags.mmm_enabled = original_mmm_enabled
+        engine.dispose()
+
+
+def test_models_list_prioritizes_finished_runs_and_marks_stale_jobs(tmp_path):
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    def override_get_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    available_path = tmp_path / "available-mmm-dataset.csv"
+    available_path.write_text(
+        "\n".join(
+            [
+                "date,paid_search_spend,conversions",
+                "2026-01-01,100,10",
+                "2026-01-08,120,12",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    original_runs = copy.deepcopy(main_module.RUNS)
+    original_datasets = copy.deepcopy(main_module.DATASETS)
+    original_mmm_enabled = getattr(main_module.SETTINGS.feature_flags, "mmm_enabled", False)
+
+    main_module.RUNS.clear()
+    main_module.DATASETS.clear()
+    main_module.SETTINGS.feature_flags.mmm_enabled = True
+    main_module.DATASETS["available-mmm-dataset"] = {
+        "path": available_path,
+        "type": "sales",
+        "metadata": {"period_start": "2026-01-01", "period_end": "2026-01-08"},
+    }
+    main_module.DATASETS["missing-mmm-dataset"] = {
+        "path": tmp_path / "missing-mmm-dataset.csv",
+        "type": "sales",
+        "metadata": {"period_start": "2026-01-01", "period_end": "2026-01-08"},
+    }
+    main_module.RUNS.update(
+        {
+            "mmm_stale_running": {
+                "status": "running",
+                "dataset_id": "available-mmm-dataset",
+                "created_at": "2020-01-01T00:00:00Z",
+                "updated_at": "2020-01-01T01:00:00Z",
+                "config": {
+                    "dataset_id": "available-mmm-dataset",
+                    "kpi": "conversions",
+                    "spend_channels": ["paid_search_spend"],
+                },
+            },
+            "mmm_finished_missing_dataset": {
+                "status": "finished",
+                "dataset_id": "missing-mmm-dataset",
+                "created_at": "2026-04-01T00:00:00Z",
+                "updated_at": "2026-04-01T01:00:00Z",
+                "config": {
+                    "dataset_id": "missing-mmm-dataset",
+                    "kpi": "conversions",
+                    "spend_channels": ["paid_search_spend"],
+                },
+                "roi": [{"channel": "paid_search_spend", "roi": 1.2}],
+                "contrib": [{"channel": "paid_search_spend", "mean_share": 1.0}],
+            },
+            "mmm_finished_available_dataset": {
+                "status": "finished",
+                "engine_version": CURRENT_MMM_ENGINE_VERSION,
+                "dataset_id": "available-mmm-dataset",
+                "created_at": "2026-03-01T00:00:00Z",
+                "updated_at": "2026-03-01T01:00:00Z",
+                "config": {
+                    "dataset_id": "available-mmm-dataset",
+                    "kpi": "conversions",
+                    "spend_channels": ["paid_search_spend"],
+                },
+                "roi": [{"channel": "paid_search_spend", "roi": 1.4}],
+                "contrib": [{"channel": "paid_search_spend", "mean_share": 1.0}],
+            },
+            "mmm_error_newer": {
+                "status": "error",
+                "created_at": "2026-04-10T00:00:00Z",
+                "updated_at": "2026-04-10T01:00:00Z",
+                "config": {"kpi": "conversions", "spend_channels": []},
+            },
+        }
+    )
+
+    app.dependency_overrides.clear()
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        with TestClient(app) as client:
+            list_resp = client.get("/api/models")
+            assert list_resp.status_code == 200
+            body = list_resp.json()
+            ordered_ids = [item["run_id"] for item in body]
+
+            assert ordered_ids.index("mmm_finished_available_dataset") < ordered_ids.index("mmm_finished_missing_dataset")
+            assert ordered_ids.index("mmm_finished_missing_dataset") < ordered_ids.index("mmm_stale_running")
+            assert ordered_ids.index("mmm_stale_running") < ordered_ids.index("mmm_error_newer")
+
+            stale_item = next(item for item in body if item["run_id"] == "mmm_stale_running")
+            assert stale_item["status"] == "stale"
+            assert stale_item["stale_from_status"] == "running"
+            assert stale_item["stale_reason"] == "run_heartbeat_expired"
+            assert stale_item["detail"]
+
+            get_resp = client.get("/api/models/mmm_stale_running")
+            assert get_resp.status_code == 200
+            loaded = get_resp.json()
+            assert loaded["status"] == "stale"
+            assert loaded["dataset_available"] is True
+    finally:
+        app.dependency_overrides.clear()
+        main_module.RUNS.clear()
+        main_module.RUNS.update(original_runs)
+        main_module.DATASETS.clear()
+        main_module.DATASETS.update(original_datasets)
+        main_module.SETTINGS.feature_flags.mmm_enabled = original_mmm_enabled
+        engine.dispose()
+
+
+def test_legacy_mmm_run_budget_block_recommends_same_setup_rerun(tmp_path):
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    def override_get_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    dataset_path = tmp_path / "legacy-mmm.csv"
+    dataset_path.write_text(
+        "\n".join(
+            [
+                "date,paid_search_spend,conversions",
+                "2026-01-01,100,12",
+                "2026-01-08,125,15",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    original_runs = copy.deepcopy(main_module.RUNS)
+    original_datasets = copy.deepcopy(main_module.DATASETS)
+    original_mmm_enabled = getattr(main_module.SETTINGS.feature_flags, "mmm_enabled", False)
+
+    main_module.RUNS.clear()
+    main_module.DATASETS.clear()
+    main_module.SETTINGS.feature_flags.mmm_enabled = True
+    main_module.DATASETS["legacy-mmm-dataset"] = {
+        "path": dataset_path,
+        "type": "sales",
+        "metadata": {"period_start": "2026-01-01", "period_end": "2026-01-08"},
+    }
+    main_module.RUNS["mmm_legacy_contract"] = {
+        "status": "finished",
+        "dataset_id": "legacy-mmm-dataset",
+        "created_at": "2026-04-01T00:00:00Z",
+        "updated_at": "2026-04-01T01:00:00Z",
+        "config": {
+            "dataset_id": "legacy-mmm-dataset",
+            "kpi": "conversions",
+            "spend_channels": ["paid_search_spend"],
+        },
+        "r2": 0.62,
+        "roi": [{"channel": "paid_search_spend", "roi": 1.4}],
+        "contrib": [{"channel": "paid_search_spend", "mean_share": 1.0}],
+        "channel_summary": [{"channel": "paid_search_spend", "spend": 225.0}],
+    }
+
+    app.dependency_overrides.clear()
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        with TestClient(app) as client:
+            resp = client.get("/api/models/mmm_legacy_contract/budget/recommendations")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["recommendations"] == []
+            assert body["decision"]["status"] == "blocked"
+            assert body["decision"]["actions"][0]["id"] == "rerun_mmm_same_setup"
+            assert "refreshed" in body["decision"]["subtitle"]
+            assert body["summary"]["quality"]["label"] == "Refresh needed"
+    finally:
+        app.dependency_overrides.clear()
+        main_module.RUNS.clear()
+        main_module.RUNS.update(original_runs)
+        main_module.DATASETS.clear()
+        main_module.DATASETS.update(original_datasets)
+        main_module.SETTINGS.feature_flags.mmm_enabled = original_mmm_enabled
+        engine.dispose()
+
+
+def test_not_usable_mmm_run_blocks_budget_actions(tmp_path):
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    def override_get_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    dataset_path = tmp_path / "zero-signal-mmm.csv"
+    dataset_path.write_text(
+        "\n".join(
+            [
+                "date,paid_search_spend,conversions",
+                "2026-01-01,100,0",
+                "2026-01-08,120,0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    original_runs = copy.deepcopy(main_module.RUNS)
+    original_datasets = copy.deepcopy(main_module.DATASETS)
+    original_mmm_enabled = getattr(main_module.SETTINGS.feature_flags, "mmm_enabled", False)
+
+    main_module.RUNS.clear()
+    main_module.DATASETS.clear()
+    main_module.SETTINGS.feature_flags.mmm_enabled = True
+    main_module.DATASETS["zero-signal-dataset"] = {
+        "path": dataset_path,
+        "type": "sales",
+        "metadata": {"period_start": "2026-01-01", "period_end": "2026-01-08"},
+    }
+    main_module.RUNS["mmm_zero_signal"] = {
+        "status": "finished",
+        "engine_version": CURRENT_MMM_ENGINE_VERSION,
+        "dataset_id": "zero-signal-dataset",
+        "created_at": "2026-04-01T00:00:00Z",
+        "updated_at": "2026-04-01T01:00:00Z",
+        "config": {
+            "dataset_id": "zero-signal-dataset",
+            "kpi": "conversions",
+            "spend_channels": ["paid_search_spend"],
+        },
+        "r2": 0.0,
+        "roi": [{"channel": "paid_search_spend", "roi": 0.0}],
+        "contrib": [{"channel": "paid_search_spend", "mean_share": 0.0}],
+        "channel_summary": [{"channel": "paid_search_spend", "spend": 220.0}],
+    }
+
+    app.dependency_overrides.clear()
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        with TestClient(app) as client:
+            get_resp = client.get("/api/models/mmm_zero_signal")
+            assert get_resp.status_code == 200
+            assert get_resp.json()["quality"]["level"] == "not_usable"
+
+            recommendation_resp = client.get("/api/models/mmm_zero_signal/budget/recommendations")
+            assert recommendation_resp.status_code == 200
+            recommendation_body = recommendation_resp.json()
+            assert recommendation_body["decision"]["status"] == "blocked"
+            assert recommendation_body["recommendations"] == []
+            assert "no usable media signal" in " ".join(recommendation_body["decision"]["blockers"])
+            assert recommendation_body["decision"]["actions"][0]["id"] == "review_mmm_inputs"
+
+            optimize_resp = client.post("/api/models/mmm_zero_signal/optimize", json={"paid_search_spend": 1.0})
+            assert optimize_resp.status_code == 400
     finally:
         app.dependency_overrides.clear()
         main_module.RUNS.clear()

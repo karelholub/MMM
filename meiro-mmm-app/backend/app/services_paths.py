@@ -62,8 +62,21 @@ def _safe_channel(v: Any) -> str:
 def _parse_ts(v: Any) -> Optional[pd.Timestamp]:
     if not v:
         return None
+    if isinstance(v, datetime):
+        dt = v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+        return pd.Timestamp(dt)
+    raw = str(v).strip()
+    if not raw:
+        return None
     try:
-        ts = pd.to_datetime(v, errors="coerce", utc=True)
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return pd.Timestamp(dt)
+    except Exception:
+        pass
+    try:
+        ts = pd.to_datetime(raw, errors="coerce", utc=True)
         if pd.isna(ts):
             return None
         return ts
@@ -378,6 +391,9 @@ def compute_path_archetypes(
         if k_mode == "fixed" and k is not None:
             k_selected = int(max(2, min(int(k), n_paths)))
             sil = None
+        elif n_paths > 500:
+            k_selected = int(max(k_min, min(k_max, round(math.sqrt(n_paths) / 2))))
+            sil = None
         else:
             k_selected, sil = _auto_select_k(
                 X, k_min=k_min, k_max=min(k_max, n_paths - 1), random_state=random_state
@@ -400,7 +416,7 @@ def compute_path_archetypes(
         # Optional stability: run a second clustering with a different seed and
         # compare assignments using adjusted Rand index.
         stability_score: float | None = None
-        if enable_stability and _HAS_ML and adjusted_rand_score is not None:
+        if enable_stability and n_paths <= 2000 and _HAS_ML and adjusted_rand_score is not None:
             try:
                 model2 = MiniBatchKMeans(
                     n_clusters=k_selected,

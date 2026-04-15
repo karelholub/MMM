@@ -390,13 +390,14 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
     return { dateFrom, dateTo, fromJourneys: !!(globalDateFrom && globalDateTo) }
   }, [globalDateFrom, globalDateTo])
   const trendQuery = useQuery<ChannelTrendResponse>({
-    queryKey: ['channel-trend-panel', trendKpi, trendGrain, comparePrevious, trendChannelsParam, configId ?? 'default'],
+    queryKey: ['channel-trend-panel', model, trendDateRange.dateFrom, trendDateRange.dateTo, trendKpi, trendGrain, comparePrevious, trendChannelsParam, configId ?? 'default'],
     queryFn: async () => {
       const params = new URLSearchParams({
         date_from: trendDateRange.dateFrom,
         date_to: trendDateRange.dateTo,
         timezone: 'UTC',
         kpi_key: trendKpi,
+        model,
         grain: trendGrain,
         compare: comparePrevious ? '1' : '0',
       })
@@ -411,12 +412,13 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
   })
 
   const summaryQuery = useQuery<ChannelSummaryResponse>({
-    queryKey: ['channel-summary-panel', trendDateRange.dateFrom, trendDateRange.dateTo, comparePrevious, trendChannelsParam, configId ?? 'default'],
+    queryKey: ['channel-summary-panel', model, trendDateRange.dateFrom, trendDateRange.dateTo, comparePrevious, trendChannelsParam, configId ?? 'default'],
     queryFn: async () => {
       const params = new URLSearchParams({
         date_from: trendDateRange.dateFrom,
         date_to: trendDateRange.dateTo,
         timezone: 'UTC',
+        model,
         compare: comparePrevious ? '1' : '0',
       })
       if (configId) params.set('model_id', configId)
@@ -736,7 +738,6 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
   const conversionLabel =
     summaryQuery.data?.meta?.conversion_key ||
     trendQuery.data?.meta?.conversion_key ||
-    summaryQuery.data?.config?.conversion_key ||
     'All conversions'
   const measurementWindowLabel = summaryQuery.data?.config?.time_window
     ? [
@@ -1389,7 +1390,6 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
                   conversionKey:
                     summaryQuery.data?.meta?.conversion_key ||
                     trendQuery.data?.meta?.conversion_key ||
-                    summaryQuery.data?.config?.conversion_key ||
                     journeysSummary?.primary_kpi_id ||
                     null,
                   startAt: trendDateRange.dateFrom,
@@ -1910,7 +1910,6 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
                 conversionKey:
                   summaryQuery.data?.meta?.conversion_key ??
                   trendQuery.data?.meta?.conversion_key ??
-                  summaryQuery.data?.config?.conversion_key ??
                   null,
                 configVersion: summaryQuery.data?.config?.config_version ?? null,
                 directMode,

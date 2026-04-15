@@ -419,13 +419,14 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
   }, [globalDateFrom, globalDateTo])
 
   const trendQuery = useQuery<CampaignTrendV2Response>({
-    queryKey: ['campaign-performance-trend-v2', trendDateRange.dateFrom, trendDateRange.dateTo, trendKpi, trendGrain, comparePrevious, conversionKey || 'all', configId ?? 'default'],
+    queryKey: ['campaign-performance-trend-v2', model, trendDateRange.dateFrom, trendDateRange.dateTo, trendKpi, trendGrain, comparePrevious, conversionKey || 'all', configId ?? 'default'],
     queryFn: async () => {
       const params = new URLSearchParams({
         date_from: trendDateRange.dateFrom,
         date_to: trendDateRange.dateTo,
         timezone: 'UTC',
         kpi_key: trendKpi,
+        model,
         conversion_key: conversionKey || '',
         grain: trendGrain,
         compare: comparePrevious ? '1' : '0',
@@ -440,12 +441,13 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
   })
 
   const summaryQuery = useQuery<CampaignSummaryResponse>({
-    queryKey: ['campaign-summary-v1', trendDateRange.dateFrom, trendDateRange.dateTo, comparePrevious, conversionKey || 'all', configId ?? 'default'],
+    queryKey: ['campaign-summary-v1', model, trendDateRange.dateFrom, trendDateRange.dateTo, comparePrevious, conversionKey || 'all', configId ?? 'default'],
     queryFn: async () => {
       const params = new URLSearchParams({
         date_from: trendDateRange.dateFrom,
         date_to: trendDateRange.dateTo,
         timezone: 'UTC',
+        model,
         compare: comparePrevious ? '1' : '0',
       })
       if (configId) params.set('model_id', configId)
@@ -1427,12 +1429,12 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
           >
             Attribution model:{' '}
             <strong style={{ color: t.color.accent }}>{MODEL_LABELS[model] || model}</strong>
-            {(summaryQuery.data?.meta?.conversion_key || trendQuery.data?.meta?.conversion_key || summaryQuery.data?.config?.conversion_key) && (
+            {(summaryQuery.data?.meta?.conversion_key || trendQuery.data?.meta?.conversion_key) && (
               <>
                 {' '}
                 · Conversion:{' '}
                 <strong>
-                  {summaryQuery.data?.meta?.conversion_key || trendQuery.data?.meta?.conversion_key || summaryQuery.data?.config?.conversion_key}
+                  {summaryQuery.data?.meta?.conversion_key || trendQuery.data?.meta?.conversion_key}
                 </strong>
               </>
             )}
@@ -2075,7 +2077,6 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
                     conversionKey ||
                     summaryQuery.data?.meta?.conversion_key ||
                     trendQuery.data?.meta?.conversion_key ||
-                    summaryQuery.data?.config?.conversion_key ||
                     journeysSummary?.primary_kpi_id ||
                     null,
                   startAt: trendDateRange.dateFrom,

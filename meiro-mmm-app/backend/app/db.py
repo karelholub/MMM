@@ -18,6 +18,18 @@ from sqlalchemy.orm import declarative_base, sessionmaker, Session
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./meiro_mmm.db")
 IS_SQLITE = DATABASE_URL.startswith("sqlite")
 
+_ENGINE_POOL_KWARGS = {
+    "pool_pre_ping": True,
+}
+if IS_SQLITE:
+    _ENGINE_POOL_KWARGS.update(
+        {
+            "pool_size": int(os.getenv("DB_POOL_SIZE", "20")),
+            "max_overflow": int(os.getenv("DB_MAX_OVERFLOW", "40")),
+            "pool_timeout": int(os.getenv("DB_POOL_TIMEOUT", "60")),
+        }
+    )
+
 engine = create_engine(
     DATABASE_URL,
     echo=False,
@@ -30,6 +42,7 @@ engine = create_engine(
         if IS_SQLITE
         else {}
     ),
+    **_ENGINE_POOL_KWARGS,
 )
 
 if IS_SQLITE:
