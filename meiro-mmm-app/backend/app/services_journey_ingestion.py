@@ -254,6 +254,235 @@ def _extract_event_timestamp(event: Dict[str, Any]) -> Optional[str]:
     )
 
 
+def _compact_dict(value: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: item for key, item in value.items() if item not in (None, "", [])}
+
+
+def _extract_activation_measurement_meta(value: Dict[str, Any]) -> Dict[str, Any]:
+    context = value.get("context") if isinstance(value.get("context"), dict) else {}
+    meta = value.get("meta") if isinstance(value.get("meta"), dict) else {}
+    existing_activation = meta.get("activation") if isinstance(meta.get("activation"), dict) else {}
+    context_activation = (
+        context.get("activationMeasurement")
+        if isinstance(context.get("activationMeasurement"), dict)
+        else context.get("activation")
+        if isinstance(context.get("activation"), dict)
+        else {}
+    )
+    direct_activation = value.get("activationMeasurement") if isinstance(value.get("activationMeasurement"), dict) else {}
+    candidates = {
+        **existing_activation,
+        **context_activation,
+        **direct_activation,
+        "schema_version": _first_present(
+            value.get("schema_version"),
+            value.get("activation_schema_version"),
+            existing_activation.get("schema_version"),
+            context_activation.get("schema_version"),
+            direct_activation.get("schema_version"),
+        ),
+        "source_system": _first_present(
+            value.get("source_system"),
+            existing_activation.get("source_system"),
+            context_activation.get("source_system"),
+            direct_activation.get("source_system"),
+        ),
+        "activation_campaign_id": _first_present(
+            value.get("activation_campaign_id"),
+            value.get("activationCampaignId"),
+            existing_activation.get("activation_campaign_id"),
+            existing_activation.get("activationCampaignId"),
+            context_activation.get("activation_campaign_id"),
+            context_activation.get("activationCampaignId"),
+            direct_activation.get("activation_campaign_id"),
+            direct_activation.get("activationCampaignId"),
+        ),
+        "campaign_id": _first_present(
+            value.get("campaign_id"),
+            existing_activation.get("campaign_id"),
+            context_activation.get("campaign_id"),
+            direct_activation.get("campaign_id"),
+        ),
+        "native_meiro_campaign_id": _first_present(
+            value.get("native_meiro_campaign_id"),
+            value.get("nativeMeiroCampaignId"),
+            existing_activation.get("native_meiro_campaign_id"),
+            existing_activation.get("nativeMeiroCampaignId"),
+            context_activation.get("native_meiro_campaign_id"),
+            context_activation.get("nativeMeiroCampaignId"),
+            direct_activation.get("native_meiro_campaign_id"),
+            direct_activation.get("nativeMeiroCampaignId"),
+        ),
+        "creative_asset_id": _first_present(
+            value.get("creative_asset_id"),
+            value.get("creativeAssetId"),
+            existing_activation.get("creative_asset_id"),
+            existing_activation.get("creativeAssetId"),
+            context_activation.get("creative_asset_id"),
+            context_activation.get("creativeAssetId"),
+            direct_activation.get("creative_asset_id"),
+            direct_activation.get("creativeAssetId"),
+        ),
+        "native_meiro_asset_id": _first_present(
+            value.get("native_meiro_asset_id"),
+            value.get("nativeMeiroAssetId"),
+            existing_activation.get("native_meiro_asset_id"),
+            existing_activation.get("nativeMeiroAssetId"),
+            context_activation.get("native_meiro_asset_id"),
+            context_activation.get("nativeMeiroAssetId"),
+            direct_activation.get("native_meiro_asset_id"),
+            direct_activation.get("nativeMeiroAssetId"),
+        ),
+        "offer_catalog_id": _first_present(
+            value.get("offer_catalog_id"),
+            value.get("offerCatalogId"),
+            existing_activation.get("offer_catalog_id"),
+            existing_activation.get("offerCatalogId"),
+            context_activation.get("offer_catalog_id"),
+            context_activation.get("offerCatalogId"),
+            direct_activation.get("offer_catalog_id"),
+            direct_activation.get("offerCatalogId"),
+        ),
+        "native_meiro_catalog_id": _first_present(
+            value.get("native_meiro_catalog_id"),
+            value.get("nativeMeiroCatalogId"),
+            existing_activation.get("native_meiro_catalog_id"),
+            existing_activation.get("nativeMeiroCatalogId"),
+            context_activation.get("native_meiro_catalog_id"),
+            context_activation.get("nativeMeiroCatalogId"),
+            direct_activation.get("native_meiro_catalog_id"),
+            direct_activation.get("nativeMeiroCatalogId"),
+        ),
+        "decision_key": _first_present(
+            value.get("decision_key"),
+            existing_activation.get("decision_key"),
+            context_activation.get("decision_key"),
+            direct_activation.get("decision_key"),
+        ),
+        "decision_stack_key": _first_present(
+            value.get("decision_stack_key"),
+            value.get("stack_key"),
+            existing_activation.get("decision_stack_key"),
+            existing_activation.get("stack_key"),
+            context_activation.get("decision_stack_key"),
+            context_activation.get("stack_key"),
+            direct_activation.get("decision_stack_key"),
+            direct_activation.get("stack_key"),
+        ),
+        "message_id": _first_present(
+            value.get("message_id"),
+            existing_activation.get("message_id"),
+            context_activation.get("message_id"),
+            direct_activation.get("message_id"),
+        ),
+        "variant_key": _first_present(
+            value.get("variant_key"),
+            value.get("variant_id"),
+            existing_activation.get("variant_key"),
+            existing_activation.get("variant_id"),
+            context_activation.get("variant_key"),
+            context_activation.get("variant_id"),
+            direct_activation.get("variant_key"),
+            direct_activation.get("variant_id"),
+        ),
+        "placement_key": _first_present(
+            value.get("placement_key"),
+            value.get("placement_id"),
+            existing_activation.get("placement_key"),
+            context_activation.get("placement_key"),
+            direct_activation.get("placement_key"),
+        ),
+        "template_key": _first_present(
+            value.get("template_key"),
+            existing_activation.get("template_key"),
+            context_activation.get("template_key"),
+            direct_activation.get("template_key"),
+        ),
+        "content_block_id": _first_present(
+            value.get("content_block_id"),
+            existing_activation.get("content_block_id"),
+            context_activation.get("content_block_id"),
+            direct_activation.get("content_block_id"),
+        ),
+        "offer_id": _first_present(
+            value.get("offer_id"),
+            existing_activation.get("offer_id"),
+            context_activation.get("offer_id"),
+            direct_activation.get("offer_id"),
+        ),
+        "bundle_id": _first_present(
+            value.get("bundle_id"),
+            existing_activation.get("bundle_id"),
+            context_activation.get("bundle_id"),
+            direct_activation.get("bundle_id"),
+        ),
+        "channel": _first_present(
+            value.get("channel"),
+            existing_activation.get("channel"),
+            context_activation.get("channel"),
+            direct_activation.get("channel"),
+        ),
+        "prism_source_id": _first_present(
+            value.get("prism_source_id"),
+            value.get("prismSourceId"),
+            existing_activation.get("prism_source_id"),
+            existing_activation.get("prismSourceId"),
+            context_activation.get("prism_source_id"),
+            context_activation.get("prismSourceId"),
+            direct_activation.get("prism_source_id"),
+            direct_activation.get("prismSourceId"),
+        ),
+        "imported_from": _first_present(
+            value.get("imported_from"),
+            value.get("importedFrom"),
+            existing_activation.get("imported_from"),
+            existing_activation.get("importedFrom"),
+            context_activation.get("imported_from"),
+            context_activation.get("importedFrom"),
+            direct_activation.get("imported_from"),
+            direct_activation.get("importedFrom"),
+        ),
+        "experiment_key": _first_present(
+            value.get("experiment_key"),
+            value.get("experiment_id"),
+            existing_activation.get("experiment_key"),
+            existing_activation.get("experiment_id"),
+            context_activation.get("experiment_key"),
+            context_activation.get("experiment_id"),
+            direct_activation.get("experiment_key"),
+            direct_activation.get("experiment_id"),
+        ),
+        "experiment_version": _first_present(
+            value.get("experiment_version"),
+            existing_activation.get("experiment_version"),
+            context_activation.get("experiment_version"),
+            direct_activation.get("experiment_version"),
+        ),
+        "is_holdout": _first_present(
+            value.get("is_holdout"),
+            existing_activation.get("is_holdout"),
+            context_activation.get("is_holdout"),
+            direct_activation.get("is_holdout"),
+        ),
+        "allocation_id": _first_present(
+            value.get("allocation_id"),
+            existing_activation.get("allocation_id"),
+            context_activation.get("allocation_id"),
+            direct_activation.get("allocation_id"),
+        ),
+    }
+    return _compact_dict(candidates)
+
+
+def _merge_activation_meta(target: Dict[str, Any], source: Dict[str, Any]) -> None:
+    activation_meta = _extract_activation_measurement_meta(source)
+    if not activation_meta:
+        return
+    target_meta = target.get("meta") if isinstance(target.get("meta"), dict) else {}
+    target_meta["activation"] = activation_meta
+    target["meta"] = target_meta
+
+
 def _looks_like_touchpoint_event(event: Dict[str, Any], interaction_type: str) -> bool:
     if interaction_type in {"impression", "click", "visit", "direct"}:
         return True
@@ -396,6 +625,7 @@ def rebuild_profiles_from_meiro_events(
                 "ad_id": event.get("ad_id"),
                 "campaign_id": _first_present(event.get("campaign_id"), event.get("campaign", {}).get("id") if isinstance(event.get("campaign"), dict) else None),
             }
+            _merge_activation_meta(touchpoint, event)
             journey["touchpoints"].append({k: v for k, v in touchpoint.items() if v not in (None, "", [])})
             continue
         if looks_like_conversion:
@@ -412,6 +642,7 @@ def rebuild_profiles_from_meiro_events(
                 "original_conversion_id": event.get("original_conversion_id"),
                 "reason": _first_present(event.get("reason"), event.get("status_reason"), event.get("status")),
             }
+            _merge_activation_meta(conversion, event)
             journey["conversions"].append({k: v for k, v in conversion.items() if v not in (None, "", [])})
             if adjustment_type is None:
                 journey["converted"] = True
@@ -421,7 +652,7 @@ def rebuild_profiles_from_meiro_events(
                     pass
             continue
         journey["touchpoints"].append(
-            {
+            _compact_dict({
                 "id": str(event.get("id") or event.get("event_id") or f"tp_evt_{event_key[:12]}"),
                 "timestamp": timestamp,
                 "channel": _first_present(event.get("channel"), event.get("source"), "unknown"),
@@ -430,7 +661,8 @@ def rebuild_profiles_from_meiro_events(
                 "campaign": _first_present(event.get("campaign"), event.get("campaign_name"), event.get("utm_campaign")),
                 "event_type": _first_present(event.get("event_type"), event.get("type"), event.get("event_name")),
                 "interaction_type": interaction_type if interaction_type != "unknown" else "unknown",
-            }
+                **({"meta": {"activation": _extract_activation_measurement_meta(event)}} if _extract_activation_measurement_meta(event) else {}),
+            })
         )
 
     profiles = list(grouped.values())
@@ -1004,25 +1236,26 @@ def _build_v2_touchpoints(
         for field in ("impression_id", "click_id", "placement_id", "creative_id", "ad_id", "campaign_id"):
             if raw_tp.get(field) not in (None, "", []):
                 tp[field] = raw_tp.get(field)
-        tp["meta"] = {
-            "parser": {
-                "used_inferred_mapping": bool(
-                    timestamp_inferred
-                    or channel_inferred
-                    or source_inferred
-                    or medium_inferred
-                    or campaign_inferred
-                    or interaction_inferred
-                ),
-                "field_sources": {
-                    "timestamp": timestamp_source or ("fallback:generated_now" if raw_timestamp else None),
-                    "channel": channel_source,
-                    "source": source_source,
-                    "medium": medium_source,
-                    "campaign": campaign_source,
-                    "interaction_type": interaction_source,
-                },
-            }
+        raw_meta = dict(raw_tp.get("meta") or {}) if isinstance(raw_tp.get("meta"), dict) else {}
+        tp["meta"] = raw_meta
+        _merge_activation_meta(tp, raw_tp)
+        tp["meta"]["parser"] = {
+            "used_inferred_mapping": bool(
+                timestamp_inferred
+                or channel_inferred
+                or source_inferred
+                or medium_inferred
+                or campaign_inferred
+                or interaction_inferred
+            ),
+            "field_sources": {
+                "timestamp": timestamp_source or ("fallback:generated_now" if raw_timestamp else None),
+                "channel": channel_source,
+                "source": source_source,
+                "medium": medium_source,
+                "campaign": campaign_source,
+                "interaction_type": interaction_source,
+            },
         }
         out.append(tp)
     return out

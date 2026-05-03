@@ -12,6 +12,10 @@ from app.modules.settings.schemas import NBASettings, Settings
 from app.services_canonical_facts import iter_canonical_conversion_rows
 from app.services_import_runs import get_last_successful_run, get_runs as get_import_runs
 from app.services_nba_defaults import filter_nba_recommendations
+from app.services_activation_measurement import (
+    build_activation_measurement_evidence,
+    build_activation_measurement_summary,
+)
 from app.services_overview import (
     get_overview_drivers,
     get_overview_funnels,
@@ -328,6 +332,96 @@ def create_router(
             _OVERVIEW_SUMMARY_CACHE.clear()
             _OVERVIEW_SUMMARY_CACHE[cache_key] = (now, payload)
         return payload
+
+    @router.get("/api/measurement/activation-summary")
+    def activation_measurement_summary(
+        object_type: str = Query(
+            ...,
+            description=(
+                "campaign | decision | decision_stack | asset | offer | content | bundle | "
+                "experiment | variant | placement | template"
+            ),
+        ),
+        object_id: str = Query(..., description="Activation object identifier to match"),
+        date_from: Optional[str] = Query(None, description="Optional start date (YYYY-MM-DD)"),
+        date_to: Optional[str] = Query(None, description="Optional end date (YYYY-MM-DD)"),
+        conversion_key: Optional[str] = Query(None, description="Optional conversion key filter"),
+        activation_campaign_id: Optional[str] = Query(None, description="Optional deciEngine activation campaign alias"),
+        native_meiro_campaign_id: Optional[str] = Query(None, description="Optional native Meiro campaign alias"),
+        creative_asset_id: Optional[str] = Query(None, description="Optional creative/content asset alias"),
+        native_meiro_asset_id: Optional[str] = Query(None, description="Optional native Meiro asset alias"),
+        offer_catalog_id: Optional[str] = Query(None, description="Optional offer catalog alias"),
+        native_meiro_catalog_id: Optional[str] = Query(None, description="Optional native Meiro catalog alias"),
+        db=Depends(get_db_dependency),
+        _ctx=Depends(require_permission_dependency("attribution.view")),
+    ):
+        journeys = ensure_journeys_loaded_fn(db)
+        match_aliases = [
+            activation_campaign_id,
+            native_meiro_campaign_id,
+            creative_asset_id,
+            native_meiro_asset_id,
+            offer_catalog_id,
+            native_meiro_catalog_id,
+        ]
+        try:
+            return build_activation_measurement_summary(
+                journeys=journeys,
+                object_type=object_type,
+                object_id=object_id,
+                match_aliases=match_aliases,
+                date_from=date_from,
+                date_to=date_to,
+                conversion_key=conversion_key,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.get("/api/measurement/activation-evidence")
+    def activation_measurement_evidence(
+        object_type: str = Query(
+            ...,
+            description=(
+                "campaign | decision | decision_stack | asset | offer | content | bundle | "
+                "experiment | variant | placement | template"
+            ),
+        ),
+        object_id: str = Query(..., description="Activation object identifier to match"),
+        date_from: Optional[str] = Query(None, description="Optional start date (YYYY-MM-DD)"),
+        date_to: Optional[str] = Query(None, description="Optional end date (YYYY-MM-DD)"),
+        conversion_key: Optional[str] = Query(None, description="Optional conversion key filter"),
+        activation_campaign_id: Optional[str] = Query(None, description="Optional deciEngine activation campaign alias"),
+        native_meiro_campaign_id: Optional[str] = Query(None, description="Optional native Meiro campaign alias"),
+        creative_asset_id: Optional[str] = Query(None, description="Optional creative/content asset alias"),
+        native_meiro_asset_id: Optional[str] = Query(None, description="Optional native Meiro asset alias"),
+        offer_catalog_id: Optional[str] = Query(None, description="Optional offer catalog alias"),
+        native_meiro_catalog_id: Optional[str] = Query(None, description="Optional native Meiro catalog alias"),
+        limit: int = Query(20, ge=1, le=100, description="Maximum evidence rows to return"),
+        db=Depends(get_db_dependency),
+        _ctx=Depends(require_permission_dependency("attribution.view")),
+    ):
+        journeys = ensure_journeys_loaded_fn(db)
+        match_aliases = [
+            activation_campaign_id,
+            native_meiro_campaign_id,
+            creative_asset_id,
+            native_meiro_asset_id,
+            offer_catalog_id,
+            native_meiro_catalog_id,
+        ]
+        try:
+            return build_activation_measurement_evidence(
+                journeys=journeys,
+                object_type=object_type,
+                object_id=object_id,
+                match_aliases=match_aliases,
+                date_from=date_from,
+                date_to=date_to,
+                conversion_key=conversion_key,
+                limit=limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.get("/api/overview/drivers")
     def overview_drivers(

@@ -1,4 +1,5 @@
 from app.services_journey_ingestion import canonicalize_meiro_profiles, rebuild_profiles_from_meiro_events
+from app.services_conversions import v2_to_legacy
 from app.services_metrics import journey_revenue_value
 
 
@@ -416,3 +417,175 @@ def test_rebuild_profiles_from_meiro_events_groups_touchpoints_and_adjustments()
     journey = result["valid_journeys"][0]
     assert journey["conversions"][0]["status"] == "partially_refunded"
     assert journey["conversions"][0]["adjustments"][0]["type"] == "refund"
+
+
+def test_rebuild_profiles_from_meiro_events_preserves_activation_measurement_metadata():
+    profiles = rebuild_profiles_from_meiro_events(
+        [
+            {
+                "event_payload": {
+                    "event_id": "evt-activation-1",
+                    "customer_id": "cust-activation",
+                    "timestamp": "2026-04-30T10:00:00Z",
+                    "event_type": "campaign_impression",
+                    "channel": "web_inapp",
+                    "campaign_id": "spring_hero",
+                    "variant_id": "default",
+                    "context": {
+                        "activationMeasurement": {
+                            "schema_version": "activation_measurement.v1",
+                            "source_system": "deciEngine",
+                            "activation_campaign_id": "spring_hero",
+                            "nativeMeiroCampaignId": "meiro-native-spring",
+                            "creativeAssetId": "meiro-creative-spring",
+                            "nativeMeiroAssetId": "meiro-asset-spring",
+                            "offerCatalogId": "catalog-spring",
+                            "nativeMeiroCatalogId": "meiro-catalog-spring",
+                            "prismSourceId": "meiro-native-spring",
+                            "importedFrom": "pipes_prism_preview",
+                            "decision_key": "homepage_offer_decision",
+                            "decision_stack_key": "homepage_stack",
+                            "placement_key": "homepage_hero",
+                            "template_key": "hero_banner_v1",
+                            "content_block_id": "spring_copy",
+                            "offer_id": "spring_discount_10",
+                            "experiment_key": "hero_test",
+                            "experiment_version": 2,
+                            "is_holdout": False,
+                        }
+                    },
+                }
+            }
+        ]
+    )
+
+    touchpoint = profiles[0]["touchpoints"][0]
+    activation = touchpoint["meta"]["activation"]
+    assert activation["schema_version"] == "activation_measurement.v1"
+    assert activation["source_system"] == "deciEngine"
+    assert activation["activation_campaign_id"] == "spring_hero"
+    assert activation["native_meiro_campaign_id"] == "meiro-native-spring"
+    assert activation["creative_asset_id"] == "meiro-creative-spring"
+    assert activation["native_meiro_asset_id"] == "meiro-asset-spring"
+    assert activation["offer_catalog_id"] == "catalog-spring"
+    assert activation["native_meiro_catalog_id"] == "meiro-catalog-spring"
+    assert activation["prism_source_id"] == "meiro-native-spring"
+    assert activation["imported_from"] == "pipes_prism_preview"
+    assert activation["decision_key"] == "homepage_offer_decision"
+    assert activation["decision_stack_key"] == "homepage_stack"
+    assert activation["placement_key"] == "homepage_hero"
+    assert activation["content_block_id"] == "spring_copy"
+    assert activation["offer_id"] == "spring_discount_10"
+    assert activation["experiment_key"] == "hero_test"
+    assert activation["experiment_version"] == 2
+    assert activation["is_holdout"] is False
+
+
+def test_canonicalize_meiro_profiles_preserves_activation_metadata_on_touchpoints():
+    result = canonicalize_meiro_profiles(
+        [
+            {
+                "customer_id": "cust-activation",
+                "touchpoints": [
+                    {
+                        "timestamp": "2026-04-30T10:00:00Z",
+                        "channel": "web_inapp",
+                        "campaign_id": "spring_hero",
+                        "variant_id": "default",
+                        "meta": {
+                            "activation": {
+                                "schema_version": "activation_measurement.v1",
+                                "source_system": "deciEngine",
+                                "activation_campaign_id": "spring_hero",
+                                "native_meiro_campaign_id": "meiro-native-spring",
+                                "creative_asset_id": "meiro-creative-spring",
+                                "native_meiro_asset_id": "meiro-asset-spring",
+                                "offer_catalog_id": "catalog-spring",
+                                "native_meiro_catalog_id": "meiro-catalog-spring",
+                                "decision_key": "homepage_offer_decision",
+                                "decision_stack_key": "homepage_stack",
+                                "placement_key": "homepage_hero",
+                                "content_block_id": "spring_copy",
+                                "offer_id": "spring_discount_10",
+                                "experiment_key": "hero_test",
+                            }
+                        },
+                    }
+                ],
+                "conversions": [
+                    {
+                        "conversion_id": "ord-activation",
+                        "timestamp": "2026-04-30T11:00:00Z",
+                        "name": "purchase",
+                        "value": 50,
+                        "currency": "EUR",
+                    }
+                ],
+            }
+        ],
+        revenue_config={"conversion_names": ["purchase"]},
+    )
+
+    journey = result["valid_journeys"][0]
+    activation = journey["touchpoints"][0]["meta"]["activation"]
+    assert activation["activation_campaign_id"] == "spring_hero"
+    assert activation["native_meiro_campaign_id"] == "meiro-native-spring"
+    assert activation["creative_asset_id"] == "meiro-creative-spring"
+    assert activation["native_meiro_asset_id"] == "meiro-asset-spring"
+    assert activation["offer_catalog_id"] == "catalog-spring"
+    assert activation["native_meiro_catalog_id"] == "meiro-catalog-spring"
+    assert activation["decision_key"] == "homepage_offer_decision"
+    assert activation["decision_stack_key"] == "homepage_stack"
+    assert activation["placement_key"] == "homepage_hero"
+    assert activation["content_block_id"] == "spring_copy"
+    assert activation["offer_id"] == "spring_discount_10"
+    assert activation["experiment_key"] == "hero_test"
+    assert journey["touchpoints"][0]["meta"]["parser"]["field_sources"]["channel"] == "configured:channel"
+
+
+def test_v2_to_legacy_preserves_activation_metadata_on_touchpoints():
+    legacy = v2_to_legacy(
+        {
+            "journey_id": "j-activation",
+            "customer": {"id": "cust-activation", "type": "profile_id"},
+            "touchpoints": [
+                {
+                    "id": "tp-activation",
+                    "ts": "2026-04-30T10:00:00Z",
+                    "channel": "web_inapp",
+                    "campaign_id": "spring_hero",
+                    "meta": {
+                        "activation": {
+                            "schema_version": "activation_measurement.v1",
+                            "source_system": "deciEngine",
+                            "activation_campaign_id": "spring_hero",
+                            "decision_key": "homepage_offer_decision",
+                            "decision_stack_key": "homepage_stack",
+                            "placement_key": "homepage_hero",
+                            "content_block_id": "spring_copy",
+                            "offer_id": "spring_discount_10",
+                            "variant_id": "default",
+                        }
+                    },
+                }
+            ],
+            "conversions": [
+                {
+                    "id": "ord-activation",
+                    "ts": "2026-04-30T11:00:00Z",
+                    "name": "purchase",
+                    "value": 50,
+                    "currency": "EUR",
+                }
+            ],
+        }
+    )
+
+    activation = legacy["touchpoints"][0]["meta"]["activation"]
+    assert activation["activation_campaign_id"] == "spring_hero"
+    assert activation["decision_key"] == "homepage_offer_decision"
+    assert activation["decision_stack_key"] == "homepage_stack"
+    assert activation["placement_key"] == "homepage_hero"
+    assert activation["content_block_id"] == "spring_copy"
+    assert activation["offer_id"] == "spring_discount_10"
+    assert activation["variant_id"] == "default"
