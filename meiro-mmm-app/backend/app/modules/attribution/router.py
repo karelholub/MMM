@@ -1,6 +1,8 @@
 import json
 import threading
 import time
+import urllib.parse
+import urllib.request
 from datetime import date, datetime
 from typing import Any, Callable, Dict, List, Optional
 
@@ -724,9 +726,40 @@ def create_router(
             journey_revenue_value_fn=journey_revenue_value_fn,
         )
 
+    def _load_deciengine_events_payload(payload: Any) -> Any:
+        if not isinstance(payload, dict) or not payload.get("source_url"):
+            return payload or {}
+        source_url = str(payload.get("source_url") or "").strip()
+        parsed_url = urllib.parse.urlparse(source_url)
+        if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+            raise HTTPException(status_code=400, detail="source_url must be an absolute http(s) URL")
+        query_params = dict(urllib.parse.parse_qsl(parsed_url.query, keep_blank_values=True))
+        for key in ("campaignKey", "messageId", "profileId", "from", "to", "limit"):
+            if payload.get(key) not in (None, "", []):
+                query_params[key] = str(payload[key])
+        url = urllib.parse.urlunparse(parsed_url._replace(query=urllib.parse.urlencode(query_params)))
+        headers = {"Accept": "application/json"}
+        if payload.get("user_email"):
+            headers["X-User-Email"] = str(payload["user_email"])
+        if payload.get("user_role"):
+            headers["X-User-Role"] = str(payload["user_role"])
+        if payload.get("user_id"):
+            headers["X-User-Id"] = str(payload["user_id"])
+        try:
+            request = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(request, timeout=10) as response:
+                raw = response.read()
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Failed to fetch deciEngine events: {exc}") from exc
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"deciEngine events response was not JSON: {exc}") from exc
+
     @router.post("/api/attribution/journeys/from-deciengine-events")
     def import_journeys_from_deciengine_events(payload: Any = Body(default=None), db=Depends(get_db_dependency)):
-        envelope = deciengine_inapp_events_to_v2_journeys(payload or {})
+        events_payload = _load_deciengine_events_payload(payload)
+        envelope = deciengine_inapp_events_to_v2_journeys(events_payload)
         result = validate_and_normalize_fn(envelope)
         valid = result["valid_journeys"]
         summary = result["import_summary"]
