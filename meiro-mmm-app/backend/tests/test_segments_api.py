@@ -458,6 +458,51 @@ def test_segment_registry_includes_webhook_derived_meiro_segments(client: TestCl
     assert long_lag["size"] == 1
 
 
+def test_meiro_segment_import_uses_one_source_at_a_time(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(meiro_cdp, "is_connected", lambda: True)
+    monkeypatch.setattr(
+        meiro_cdp,
+        "list_segments",
+        lambda: [{"id": "cdp-vip", "name": "CDP VIP buyers", "profiles_count": 11}],
+    )
+
+    db_gen = app.dependency_overrides[get_db]()
+    db = next(db_gen)
+    try:
+        db.add(
+            MeiroEventProfileState(
+                profile_id="cust-profile-1",
+                profile_json={
+                    "customer_id": "cust-profile-1",
+                    "segments": [{"id": "pipes-winback", "name": "Pipes winback"}],
+                },
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
+
+    headers = {"X-User-Role": "editor", "X-User-Id": "qa-editor"}
+    pipes_resp = client.post("/api/segments/import/meiro", headers=headers, json={"source": "pipes_webhook"})
+    assert pipes_resp.status_code == 200
+    pipes_payload = pipes_resp.json()
+    assert pipes_payload["summary"]["source"] == "pipes_webhook"
+    assert [item["external_segment_id"] for item in pipes_payload["items"]] == ["pipes-winback"]
+
+    cdp_resp = client.post("/api/segments/import/meiro", headers=headers, json={"source": "cdp"})
+    assert cdp_resp.status_code == 200
+    cdp_payload = cdp_resp.json()
+    assert cdp_payload["summary"]["source"] == "cdp"
+    assert [item["external_segment_id"] for item in cdp_payload["items"]] == ["cdp-vip"]
+
+    bad_resp = client.post("/api/segments/import/meiro", headers=headers, json={"source": "both_pls"})
+    assert bad_resp.status_code == 400
+
+
 def test_smart_segment_v2_preview_and_compatibility(client: TestClient):
     db_gen = app.dependency_overrides[get_db]()
     db = next(db_gen)

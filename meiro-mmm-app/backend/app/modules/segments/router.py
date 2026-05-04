@@ -2,14 +2,16 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.modules.segments.schemas import LocalSegmentPayload
+from app.modules.segments.schemas import LocalSegmentPayload, MeiroSegmentImportPayload
 from app.services_segments import (
     build_local_segment_analysis,
     build_local_segment_comparison,
     build_local_segment_overlap,
     build_segment_context,
     create_local_segment,
+    import_meiro_segments,
     list_local_segments,
+    list_meiro_segment_registry,
     list_segment_registry,
     set_local_segment_status,
     update_local_segment,
@@ -55,6 +57,28 @@ def create_router(
         _ctx=Depends(require_permission_dependency("journeys.view")),
     ):
         return build_segment_context(db)
+
+    @router.get("/api/segments/meiro")
+    def api_list_meiro_segments(
+        source: str = Query("all"),
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("journeys.view")),
+    ):
+        try:
+            return list_meiro_segment_registry(db, workspace_id=ctx.workspace_id, source=source)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post("/api/segments/import/meiro")
+    def api_import_meiro_segments(
+        body: MeiroSegmentImportPayload,
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("journeys.manage")),
+    ):
+        try:
+            return import_meiro_segments(db, workspace_id=ctx.workspace_id, source=body.source)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.get("/api/segments/local/{segment_id}/analysis")
     def api_local_segment_analysis(

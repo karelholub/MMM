@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { DeciEngineEventsImportPayload, DeciEngineEventsImportResult } from '../../connectors/deciengineConnector'
 import type { MeiroConfig, MeiroImportResult, MeiroMappingState, MeiroPullConfig, MeiroQuarantineReprocessResult, MeiroQuarantineRun, MeiroWebhookSuggestions } from '../../connectors/meiroConnector'
 import { apiGetJson, apiSendJson, withQuery } from '../../lib/apiClient'
+import { buildJourneyHypothesisSeedHref } from '../../lib/journeyLinks'
 import { tokens as t } from '../../theme/tokens'
 import { DEFAULT_MEIRO_PULL_CONFIG, type DryRunResult, type MeiroWebhookArchiveStatus, type MeiroWebhookReprocessResult } from './shared'
 
@@ -164,6 +165,29 @@ type ActivationFeedbackExportRun = {
   payload?: ActivationFeedbackExport
 }
 
+type MeiroSegmentImportResponse = {
+  status?: string
+  message?: string
+  summary?: {
+    source?: string
+    meiro_pipes?: number
+    cdp_segments?: number
+    pipes_webhook_segments?: number
+    activation_ready?: number
+  }
+  items?: Array<{
+    id?: string
+    name?: string
+    source_label?: string
+    size?: number | null
+    external_segment_id?: string | null
+  }>
+}
+
+type JourneyDefinitionsResponse = {
+  items?: Array<{ id?: string; name?: string; conversion_kpi_id?: string | null }>
+}
+
 const ACTIVATION_OBJECT_TYPES = ['campaign', 'asset', 'content', 'bundle', 'offer', 'decision', 'decision_stack', 'experiment', 'variant', 'placement', 'template']
 
 function asCleaningReport(value: unknown): CleaningReportView | null {
@@ -233,6 +257,11 @@ export default function MeiroImportReplay({
   const [activationFeedbackExportRuns, setActivationFeedbackExportRuns] = useState<ActivationFeedbackExportRun[]>([])
   const [activationFeedbackExportPending, setActivationFeedbackExportPending] = useState(false)
   const [activationFeedbackExportError, setActivationFeedbackExportError] = useState<string | null>(null)
+  const [meiroSegmentImportSource, setMeiroSegmentImportSource] = useState<'pipes_webhook' | 'cdp'>('pipes_webhook')
+  const [meiroSegmentImportPending, setMeiroSegmentImportPending] = useState(false)
+  const [meiroSegmentImportError, setMeiroSegmentImportError] = useState<string | null>(null)
+  const [meiroSegmentImportResult, setMeiroSegmentImportResult] = useState<MeiroSegmentImportResponse | null>(null)
+  const [journeySeedDefinition, setJourneySeedDefinition] = useState<{ id?: string; name?: string } | null>(null)
   const latestImportSummary =
     importFromMeiroResult?.import_summary ||
     reprocessWebhookArchiveResult?.import_result?.import_summary ||
@@ -410,11 +439,47 @@ export default function MeiroImportReplay({
       aliases: item.object.aliases || [],
     })
   }
+  const syncMeiroSegments = async () => {
+    setMeiroSegmentImportPending(true)
+    setMeiroSegmentImportError(null)
+    try {
+      const result = await apiSendJson<MeiroSegmentImportResponse>(
+        '/api/segments/import/meiro',
+        'POST',
+        { source: meiroSegmentImportSource },
+        { fallbackMessage: 'Failed to sync Meiro audiences into MMM segments' },
+      )
+      setMeiroSegmentImportResult(result)
+    } catch (error) {
+      setMeiroSegmentImportError((error as Error)?.message || 'Failed to sync Meiro audiences into MMM segments')
+    } finally {
+      setMeiroSegmentImportPending(false)
+    }
+  }
 
   useEffect(() => {
     setSelectedRecordIndices([])
     setShowResolvedRecords(false)
   }, [selectedQuarantineRun?.id])
+
+  useEffect(() => {
+    let cancelled = false
+    apiGetJson<JourneyDefinitionsResponse>(
+      withQuery('/api/journeys/definitions', { limit: 1, sort: 'desc' }),
+      { fallbackMessage: 'Failed to load journey definitions' },
+    )
+      .then((result) => {
+        if (cancelled) return
+        const first = result.items?.[0] || null
+        setJourneySeedDefinition(first ? { id: first.id, name: first.name } : null)
+      })
+      .catch(() => {
+        if (!cancelled) setJourneySeedDefinition(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     void loadActivationObjects()
@@ -446,6 +511,18 @@ export default function MeiroImportReplay({
         ? t.color.warning
         : t.color.textMuted
   const latestActivationFeedbackExportRun = activationFeedbackExportRuns[0] || null
+  const measuredObjectLabel = measurementResult?.object?.id || measurementDraft.object_id
+  const measuredObjectType = measurementResult?.object?.type || measurementDraft.object_type
+  const activationDecisionDraftHref =
+    journeySeedDefinition?.id && measuredObjectLabel && measurementResult?.summary
+      ? buildJourneyHypothesisSeedHref({
+          journeyDefinitionId: journeySeedDefinition.id,
+          title: `Activation decision review: ${measuredObjectLabel}`,
+          hypothesisText: `${measuredObjectType} ${measuredObjectLabel} has ${Number(measurementResult.summary.conversions || 0).toLocaleString()} measured conversions and ${Number(measurementResult.summary.matched_touchpoints || 0).toLocaleString()} matched activation touchpoints. Review whether deciEngine should change audience eligibility, decision priority, or asset treatment for this object.`,
+          supportCount: Number(measurementResult.summary.matched_journeys || 0),
+          baselineRate: measurementResult.summary.conversion_rate ?? null,
+        })
+      : null
 
   return (
     <div style={{ display: 'grid', gap: t.space.md }}>
@@ -592,6 +669,62 @@ export default function MeiroImportReplay({
             ) : null}
           </div>
         ) : null}
+      </div>
+
+      <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.bg, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'grid', gap: 4 }}>
+            <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Sync Meiro audiences into MMM segments</div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Bring one audience source into the MMM segment registry so selectors can use it for experiment setup and operational audience alignment.
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: t.space.sm, alignItems: 'center', flexWrap: 'wrap' }}>
+            <select
+              value={meiroSegmentImportSource}
+              onChange={(event) => setMeiroSegmentImportSource(event.target.value as 'pipes_webhook' | 'cdp')}
+              style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, background: t.color.surface }}
+            >
+              <option value="pipes_webhook">Pipes archive memberships</option>
+              <option value="cdp">CDP connector segments</option>
+            </select>
+            <button
+              type="button"
+              onClick={() => void syncMeiroSegments()}
+              disabled={meiroSegmentImportPending}
+              style={{ border: `1px solid ${t.color.accent}`, background: t.color.accent, color: '#fff', borderRadius: t.radius.sm, padding: '8px 10px', cursor: meiroSegmentImportPending ? 'wait' : 'pointer', opacity: meiroSegmentImportPending ? 0.75 : 1 }}
+            >
+              {meiroSegmentImportPending ? 'Syncing...' : 'Sync audiences'}
+            </button>
+          </div>
+        </div>
+        {meiroSegmentImportError ? (
+          <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{meiroSegmentImportError}</div>
+        ) : meiroSegmentImportResult ? (
+          <div style={{ display: 'grid', gap: t.space.sm }}>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              {meiroSegmentImportResult.message || 'Audience sync completed.'}
+              {' '}Source <strong style={{ color: t.color.text }}>{meiroSegmentImportResult.summary?.source || meiroSegmentImportSource}</strong>
+              {' '}· activation-ready <strong style={{ color: t.color.text }}>{Number(meiroSegmentImportResult.summary?.activation_ready || 0).toLocaleString()}</strong>
+            </div>
+            {meiroSegmentImportResult.items?.length ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: t.space.sm }}>
+                {meiroSegmentImportResult.items.slice(0, 4).map((item) => (
+                  <div key={item.id || item.external_segment_id || item.name} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.surface }}>
+                    <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, overflowWrap: 'anywhere' }}>{item.name || item.external_segment_id || item.id}</div>
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                      {item.source_label || 'Meiro'} · {item.size == null ? 'size unknown' : `${Number(item.size).toLocaleString()} profiles`}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+            Use one source at a time: Pipes archive memberships for CDI-derived operational audiences, or CDP connector segments when Engage is the audience source of truth.
+          </div>
+        )}
       </div>
 
       <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.bg, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
@@ -848,6 +981,24 @@ export default function MeiroImportReplay({
               <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>
                 {measurementResult.recommended_actions.map((action) => action.label || action.reason || action.id).join(' · ')}
               </div>
+            ) : null}
+            {activationDecisionDraftHref ? (
+              <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.surface, display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ display: 'grid', gap: 3 }}>
+                  <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Decision draft ready</div>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                    Seed a journey hypothesis from this measured activation object{journeySeedDefinition?.name ? ` in ${journeySeedDefinition.name}` : ''}.
+                  </div>
+                </div>
+                <a
+                  href={activationDecisionDraftHref}
+                  style={{ border: `1px solid ${t.color.accent}`, background: t.color.accent, color: '#fff', borderRadius: t.radius.sm, padding: '7px 10px', textDecoration: 'none', fontSize: t.font.sizeXs, fontWeight: t.font.weightSemibold }}
+                >
+                  Draft decision hypothesis
+                </a>
+              </div>
+            ) : measurementResult?.summary ? (
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Create a journey definition to turn this measurement into a decision hypothesis draft.</div>
             ) : null}
             {!!measurementEvidence?.items?.length ? (
               <div style={{ display: 'grid', gap: t.space.sm }}>

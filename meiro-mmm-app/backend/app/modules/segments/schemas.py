@@ -7,3 +7,7 @@ class LocalSegmentPayload(BaseModel):
     name: str
     description: Optional[str] = None
     definition: Dict[str, Any] = Field(default_factory=dict)
+
+
+class MeiroSegmentImportPayload(BaseModel):
+    source: str = "pipes_webhook"
