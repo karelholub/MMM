@@ -103,10 +103,25 @@ function statusTone(connected: boolean, warning: boolean) {
   return { color: t.color.success, bg: t.color.successMuted, label: 'Ready' }
 }
 
+function readInitialMeiroTab(): MeiroTab {
+  if (typeof window === 'undefined') return 'overview'
+  const value = new URLSearchParams(window.location.search).get('meiro_tab')
+  return ['overview', 'cdp', 'pipes', 'normalization', 'import'].includes(value || '') ? (value as MeiroTab) : 'overview'
+}
+
 export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegrationPageProps) {
   const queryClient = useQueryClient()
   const permissions = usePermissions()
-  const [meiroTab, setMeiroTab] = useState<MeiroTab>('overview')
+  const [meiroTab, setMeiroTabState] = useState<MeiroTab>(readInitialMeiroTab)
+  const setMeiroTab = (tab: MeiroTab) => {
+    setMeiroTabState(tab)
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    if (tab === 'overview') params.delete('meiro_tab')
+    else params.set('meiro_tab', tab)
+    const next = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}${window.location.hash}`
+    window.history.replaceState(null, '', next)
+  }
   const [meiroUrl, setMeiroUrl] = useState('')
   const [meiroKey, setMeiroKey] = useState('')
   const [webhookSecretValue, setWebhookSecretValue] = useState<string | null>(null)

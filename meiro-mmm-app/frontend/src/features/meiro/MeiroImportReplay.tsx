@@ -190,6 +190,31 @@ type JourneyDefinitionsResponse = {
 
 const ACTIVATION_OBJECT_TYPES = ['campaign', 'asset', 'content', 'bundle', 'offer', 'decision', 'decision_stack', 'experiment', 'variant', 'placement', 'template']
 
+function initialMeasurementDraftFromUrl() {
+  const fallback = {
+    object_type: 'campaign',
+    object_id: '',
+    native_meiro_campaign_id: '',
+    creative_asset_id: '',
+    native_meiro_asset_id: '',
+    offer_catalog_id: '',
+    native_meiro_catalog_id: '',
+  }
+  if (typeof window === 'undefined') return fallback
+  const params = new URLSearchParams(window.location.search)
+  const objectType = params.get('activation_object_type') || fallback.object_type
+  return {
+    ...fallback,
+    object_type: ACTIVATION_OBJECT_TYPES.includes(objectType) ? objectType : fallback.object_type,
+    object_id: params.get('activation_object_id') || '',
+    native_meiro_campaign_id: params.get('native_meiro_campaign_id') || '',
+    creative_asset_id: params.get('creative_asset_id') || '',
+    native_meiro_asset_id: params.get('native_meiro_asset_id') || '',
+    offer_catalog_id: params.get('offer_catalog_id') || '',
+    native_meiro_catalog_id: params.get('native_meiro_catalog_id') || '',
+  }
+}
+
 function asCleaningReport(value: unknown): CleaningReportView | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   return value as CleaningReportView
@@ -236,15 +261,7 @@ export default function MeiroImportReplay({
 }: MeiroImportReplayProps) {
   const [selectedRecordIndices, setSelectedRecordIndices] = useState<number[]>([])
   const [showResolvedRecords, setShowResolvedRecords] = useState(false)
-  const [measurementDraft, setMeasurementDraft] = useState({
-    object_type: 'campaign',
-    object_id: '',
-    native_meiro_campaign_id: '',
-    creative_asset_id: '',
-    native_meiro_asset_id: '',
-    offer_catalog_id: '',
-    native_meiro_catalog_id: '',
-  })
+  const [measurementDraft, setMeasurementDraft] = useState(initialMeasurementDraftFromUrl)
   const [measurementPending, setMeasurementPending] = useState(false)
   const [measurementError, setMeasurementError] = useState<string | null>(null)
   const [measurementResult, setMeasurementResult] = useState<ActivationMeasurementSummary | null>(null)
