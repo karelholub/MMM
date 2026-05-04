@@ -6,6 +6,7 @@ import RecommendedActionsList, { type RecommendedActionItem } from '../component
 import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn } from '../components/dashboard'
 import { navigateForRecommendedAction } from '../lib/recommendedActions'
 import { apiGetJson, apiSendJson, withQuery } from '../lib/apiClient'
+import ActivationMeasurementShortcuts from '../features/meiro/ActivationMeasurementShortcuts'
 
 // --- Types ---
 
@@ -1821,6 +1822,11 @@ export default function DataQuality() {
           </div>
         ) : null}
       </div>
+
+      <ActivationMeasurementShortcuts
+        title="Measured activation evidence"
+        subtitle="Use this after Meiro replay or deciEngine imports to inspect the campaigns, decisions, assets, and offers now backed by journey evidence."
+      />
 
       {/* Alerts */}
       <div

@@ -48,6 +48,7 @@ import { usePermissions } from '../hooks/usePermissions'
 import { useWorkspaceContext, type JourneysSummary } from '../components/WorkspaceContext'
 import { navigateForRecommendedAction } from '../lib/recommendedActions'
 import MeiroIntegrationPanel from '../features/meiro/MeiroIntegrationPanel'
+import ActivationMeasurementShortcuts from '../features/meiro/ActivationMeasurementShortcuts'
 import {
   DEFAULT_MEIRO_PULL_CONFIG,
   normalizeMeiroPullConfig,
@@ -2000,74 +2001,81 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
 
             <div style={{ overflowY: 'auto', padding: t.space.lg, display: 'grid', gap: t.space.md }}>
               {drawerConnector.type === 'meiro' ? (
-                <MeiroIntegrationPanel
-                  meiroTab={meiroTab}
-                  setMeiroTab={setMeiroTab}
-                  meiroUrl={meiroUrl}
-                  setMeiroUrl={setMeiroUrl}
-                  meiroKey={meiroKey}
-                  setMeiroKey={setMeiroKey}
-                  webhookSecretValue={webhookSecretValue}
-                  meiroPullDraft={meiroPullDraft}
-                  setMeiroPullDraft={setMeiroPullDraft}
-                  meiroConfig={meiroConfigQuery.data}
-                  meiroMappingState={meiroMappingQuery.data}
-                  meiroWebhookSuggestions={meiroWebhookSuggestionsQuery.data}
-                  meiroWebhookEvents={meiroWebhookEventsQuery.data}
-                  meiroWebhookArchiveStatus={meiroWebhookArchiveStatusQuery.data}
-                  meiroEventArchiveStatus={meiroEventArchiveStatusQuery.data}
-                  meiroWebhookEventsLoading={meiroWebhookEventsQuery.isLoading}
-                  meiroWebhookEventsError={(meiroWebhookEventsQuery.error as Error | undefined)?.message || null}
-                  meiroWebhookSuggestionsLoading={meiroWebhookSuggestionsQuery.isLoading}
-                  meiroWebhookSuggestionsError={(meiroWebhookSuggestionsQuery.error as Error | undefined)?.message || null}
-                  testMeiroResult={testMeiroMutation.data}
-                  saveMeiroPullPending={saveMeiroPullMutation.isPending}
-                  runMeiroPullPending={runMeiroPullMutation.isPending}
-                  applyMeiroMappingSuggestionPending={applyMeiroMappingSuggestionMutation.isPending}
-                  updateMeiroMappingApprovalPending={updateMeiroMappingApprovalMutation.isPending}
-                  meiroDryRunPending={meiroDryRunMutation.isPending}
-                  meiroDryRunData={meiroDryRunMutation.data}
-                  importFromMeiroPending={importFromMeiroMutation.isPending}
-                  importFromMeiroResult={importFromMeiroMutation.data ?? null}
-                  deciEngineImportDraft={deciEngineImportDraft}
-                  deciEngineImportPending={importDeciEngineEventsMutation.isPending}
-                  deciEngineImportResult={importDeciEngineEventsMutation.data ?? null}
-                  deciEngineImportError={(importDeciEngineEventsMutation.error as Error | undefined)?.message || null}
-                  deciEngineConfigSaving={saveDeciEngineEventsConfigMutation.isPending}
-                  deciEngineConfigSaved={saveDeciEngineEventsConfigMutation.isSuccess}
-                  deciEngineConfigError={(saveDeciEngineEventsConfigMutation.error as Error | undefined)?.message || null}
-                  reprocessWebhookArchivePending={reprocessWebhookArchiveMutation.isPending}
-                  reprocessWebhookArchiveResult={reprocessWebhookArchiveMutation.data ?? null}
-                  quarantineRuns={undefined}
-                  quarantineRunsLoading={false}
-                  quarantineRunsError={null}
-                  selectedQuarantineRun={null}
-                  selectedQuarantineRunLoading={false}
-                  selectedQuarantineRunError={null}
-                  relativeTime={relativeTime}
-                  setOauthToast={setOauthToast}
-                  onTestMeiro={() => testMeiroMutation.mutate()}
-                  onConnectMeiro={() => connectMeiroMutation.mutate()}
-                  onDisconnectMeiro={() => disconnectMeiroMutation.mutate()}
-                  onRotateWebhookSecret={() => rotateWebhookSecretMutation.mutate()}
-                  onSaveMeiroPull={() => saveMeiroPullMutation.mutate(normalizeMeiroPullConfig(meiroPullDraft))}
-                  onRunMeiroPull={() => runMeiroPullMutation.mutate()}
-                  onSaveMeiroMapping={(payload) => saveMeiroMappingMutation.mutate(payload)}
-                  onApplyMeiroMappingSuggestion={() => applyMeiroMappingSuggestionMutation.mutate((meiroWebhookSuggestionsQuery.data as any)?.apply_payloads?.mapping || {})}
-                  onApproveMeiroMapping={() => updateMeiroMappingApprovalMutation.mutate({ status: 'approved', note: 'Approved from normalization review' })}
-                  onRejectMeiroMapping={() => updateMeiroMappingApprovalMutation.mutate({ status: 'rejected', note: 'Rejected from normalization review' })}
-                  onDryRun={() => meiroDryRunMutation.mutate()}
-                  onImportFromMeiro={() => importFromMeiroMutation.mutate()}
-                  onDeciEngineImportDraftChange={setDeciEngineImportDraft}
-                  onImportDeciEngineEvents={() => {
-                    if (window.confirm('This import replaces existing journeys with deciEngine activation events. Continue?')) {
-                      importDeciEngineEventsMutation.mutate()
-                    }
-                  }}
-                  onSaveDeciEngineConfig={() => saveDeciEngineEventsConfigMutation.mutate()}
-                  onReplayArchive={() => reprocessWebhookArchiveMutation.mutate()}
-                  onSelectQuarantineRun={() => {}}
-                />
+                <>
+                  <ActivationMeasurementShortcuts
+                    title="Measured activation objects"
+                    subtitle="Open imported campaigns, decisions, assets, and offers directly in the measurement workspace."
+                    compact
+                  />
+                  <MeiroIntegrationPanel
+                    meiroTab={meiroTab}
+                    setMeiroTab={setMeiroTab}
+                    meiroUrl={meiroUrl}
+                    setMeiroUrl={setMeiroUrl}
+                    meiroKey={meiroKey}
+                    setMeiroKey={setMeiroKey}
+                    webhookSecretValue={webhookSecretValue}
+                    meiroPullDraft={meiroPullDraft}
+                    setMeiroPullDraft={setMeiroPullDraft}
+                    meiroConfig={meiroConfigQuery.data}
+                    meiroMappingState={meiroMappingQuery.data}
+                    meiroWebhookSuggestions={meiroWebhookSuggestionsQuery.data}
+                    meiroWebhookEvents={meiroWebhookEventsQuery.data}
+                    meiroWebhookArchiveStatus={meiroWebhookArchiveStatusQuery.data}
+                    meiroEventArchiveStatus={meiroEventArchiveStatusQuery.data}
+                    meiroWebhookEventsLoading={meiroWebhookEventsQuery.isLoading}
+                    meiroWebhookEventsError={(meiroWebhookEventsQuery.error as Error | undefined)?.message || null}
+                    meiroWebhookSuggestionsLoading={meiroWebhookSuggestionsQuery.isLoading}
+                    meiroWebhookSuggestionsError={(meiroWebhookSuggestionsQuery.error as Error | undefined)?.message || null}
+                    testMeiroResult={testMeiroMutation.data}
+                    saveMeiroPullPending={saveMeiroPullMutation.isPending}
+                    runMeiroPullPending={runMeiroPullMutation.isPending}
+                    applyMeiroMappingSuggestionPending={applyMeiroMappingSuggestionMutation.isPending}
+                    updateMeiroMappingApprovalPending={updateMeiroMappingApprovalMutation.isPending}
+                    meiroDryRunPending={meiroDryRunMutation.isPending}
+                    meiroDryRunData={meiroDryRunMutation.data}
+                    importFromMeiroPending={importFromMeiroMutation.isPending}
+                    importFromMeiroResult={importFromMeiroMutation.data ?? null}
+                    deciEngineImportDraft={deciEngineImportDraft}
+                    deciEngineImportPending={importDeciEngineEventsMutation.isPending}
+                    deciEngineImportResult={importDeciEngineEventsMutation.data ?? null}
+                    deciEngineImportError={(importDeciEngineEventsMutation.error as Error | undefined)?.message || null}
+                    deciEngineConfigSaving={saveDeciEngineEventsConfigMutation.isPending}
+                    deciEngineConfigSaved={saveDeciEngineEventsConfigMutation.isSuccess}
+                    deciEngineConfigError={(saveDeciEngineEventsConfigMutation.error as Error | undefined)?.message || null}
+                    reprocessWebhookArchivePending={reprocessWebhookArchiveMutation.isPending}
+                    reprocessWebhookArchiveResult={reprocessWebhookArchiveMutation.data ?? null}
+                    quarantineRuns={undefined}
+                    quarantineRunsLoading={false}
+                    quarantineRunsError={null}
+                    selectedQuarantineRun={null}
+                    selectedQuarantineRunLoading={false}
+                    selectedQuarantineRunError={null}
+                    relativeTime={relativeTime}
+                    setOauthToast={setOauthToast}
+                    onTestMeiro={() => testMeiroMutation.mutate()}
+                    onConnectMeiro={() => connectMeiroMutation.mutate()}
+                    onDisconnectMeiro={() => disconnectMeiroMutation.mutate()}
+                    onRotateWebhookSecret={() => rotateWebhookSecretMutation.mutate()}
+                    onSaveMeiroPull={() => saveMeiroPullMutation.mutate(normalizeMeiroPullConfig(meiroPullDraft))}
+                    onRunMeiroPull={() => runMeiroPullMutation.mutate()}
+                    onSaveMeiroMapping={(payload) => saveMeiroMappingMutation.mutate(payload)}
+                    onApplyMeiroMappingSuggestion={() => applyMeiroMappingSuggestionMutation.mutate((meiroWebhookSuggestionsQuery.data as any)?.apply_payloads?.mapping || {})}
+                    onApproveMeiroMapping={() => updateMeiroMappingApprovalMutation.mutate({ status: 'approved', note: 'Approved from normalization review' })}
+                    onRejectMeiroMapping={() => updateMeiroMappingApprovalMutation.mutate({ status: 'rejected', note: 'Rejected from normalization review' })}
+                    onDryRun={() => meiroDryRunMutation.mutate()}
+                    onImportFromMeiro={() => importFromMeiroMutation.mutate()}
+                    onDeciEngineImportDraftChange={setDeciEngineImportDraft}
+                    onImportDeciEngineEvents={() => {
+                      if (window.confirm('This import replaces existing journeys with deciEngine activation events. Continue?')) {
+                        importDeciEngineEventsMutation.mutate()
+                      }
+                    }}
+                    onSaveDeciEngineConfig={() => saveDeciEngineEventsConfigMutation.mutate()}
+                    onReplayArchive={() => reprocessWebhookArchiveMutation.mutate()}
+                    onSelectQuarantineRun={() => {}}
+                  />
+                </>
               ) : drawerConnector.category === 'warehouse' && activeDrawerWarehouse ? (
                 <>
                   <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
