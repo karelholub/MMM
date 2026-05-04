@@ -48,7 +48,7 @@ from app.utils.meiro_config import (
     update_mapping_approval,
 )
 from app.services_meiro_readiness import build_meiro_readiness
-from app.services_meiro_event_contract import build_event_contract_readiness
+from app.services_meiro_event_contract import build_event_contract_readiness, build_sample_contract_events
 from app.services_meiro_quarantine import get_quarantine_run, get_quarantine_runs
 from app.services_meiro_raw_batches import (
     MeiroRawBatchUnavailableError,
@@ -57,6 +57,7 @@ from app.services_meiro_raw_batches import (
     rebuild_profiles_from_meiro_profile_batches,
 )
 from app.services_meiro_event_profile_state import (
+    MeiroEventProfileStateUnavailableError,
     list_meiro_event_profile_state,
     upsert_meiro_event_profile_state,
 )
@@ -1933,6 +1934,78 @@ def create_router(
     @router.get("/api/connectors/meiro/events/contract-readiness")
     def meiro_event_contract_readiness(limit: int = Query(200, ge=1, le=5000)):
         return build_event_contract_readiness(query_event_archive_entries(limit=limit))
+
+    @router.post("/api/connectors/meiro/events/contract-sample")
+    def meiro_event_contract_sample(db=Depends(get_db_dependency)):
+        now_iso = datetime.utcnow().isoformat() + "Z"
+        events = build_sample_contract_events()
+        append_event_archive_entry(
+            {
+                "received_at": now_iso,
+                "parser_version": meiro_parser_version,
+                "replace": False,
+                "payload_shape": "contract_sample",
+                "received_count": len(events),
+                "events": events,
+            }
+        )
+        set_webhook_received(count_delta=len(events), last_received_at=now_iso)
+        raw_batch_status = {"ok": True, "stored": True, "warning": None}
+        raw_batch = None
+        try:
+            raw_batch = record_meiro_raw_batch_fn(
+                db,
+                source_kind="events",
+                ingestion_channel="contract_sample",
+                payload_json={
+                    "received_at": now_iso,
+                    "parser_version": meiro_parser_version,
+                    "replace": False,
+                    "payload_shape": "contract_sample",
+                    "received_count": len(events),
+                    "events": events,
+                },
+                received_at=now_iso,
+                parser_version=meiro_parser_version,
+                payload_shape="contract_sample",
+                replace=False,
+                records_count=len(events),
+                metadata_json={"source": "contract_sample"},
+            )
+        except MeiroRawBatchUnavailableError as exc:
+            raw_batch_status = {
+                "ok": False,
+                "stored": False,
+                "warning": "DB raw-batch storage is unavailable. File archive was still updated.",
+                "reason": str(exc),
+            }
+        try:
+            upsert_meiro_event_facts(
+                db,
+                raw_events=events,
+                raw_batch_db_id=(int(raw_batch.id) if getattr(raw_batch, "id", None) is not None else None),
+                reset=False,
+            )
+        except MeiroEventFactsUnavailableError:
+            pass
+        rebuilt_profiles = rebuild_profiles_from_meiro_events_fn(events, dedup_config=get_pull_config())
+        try:
+            upsert_meiro_event_profile_state(
+                db,
+                profiles=rebuilt_profiles,
+                latest_event_batch_db_id=(int(raw_batch.id) if getattr(raw_batch, "id", None) is not None else None),
+                reset=False,
+            )
+        except MeiroEventProfileStateUnavailableError:
+            pass
+        readiness = build_event_contract_readiness(query_event_archive_entries(limit=200))
+        return {
+            "ok": True,
+            "received": len(events),
+            "reconstructed_profiles": len(rebuilt_profiles),
+            "raw_batch": raw_batch_status,
+            "readiness": readiness,
+        }
 
     @router.get("/api/connectors/meiro/quarantine")
     def meiro_quarantine_runs(

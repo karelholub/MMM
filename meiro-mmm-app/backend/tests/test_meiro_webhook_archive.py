@@ -247,6 +247,32 @@ def test_event_contract_readiness_blocks_when_target_sites_missing(monkeypatch, 
     assert payload["blockers"]
 
 
+def test_event_contract_sample_sender_makes_readiness_ready(monkeypatch, tmp_path):
+    monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(meiro_config, "CONFIG_PATH", tmp_path / "meiro_config.json")
+    monkeypatch.setattr(meiro_config, "WEBHOOK_ARCHIVE_PATH", tmp_path / "meiro_webhook_archive.jsonl")
+    monkeypatch.setattr(meiro_config, "EVENT_ARCHIVE_PATH", tmp_path / "meiro_event_archive.jsonl")
+    _clear_meiro_raw_batches()
+    _clear_meiro_event_profile_state()
+    _clear_meiro_event_facts()
+
+    client = TestClient(app)
+    response = client.post("/api/connectors/meiro/events/contract-sample")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["received"] == 2
+    assert payload["readiness"]["status"] == "ready"
+    assert payload["readiness"]["site_counts"]["meiro.io"] == 1
+    assert payload["readiness"]["site_counts"]["meir.store"] == 1
+    assert payload["readiness"]["coverage"]["identity"] == 1.0
+    assert payload["readiness"]["coverage"]["activation_metadata"] == 1.0
+
+    status = client.get("/api/connectors/meiro/events/archive-status")
+    assert status.status_code == 200
+    assert status.json()["events_received"] == 2
+
+
 def test_webhook_suggestions_include_raw_event_ingests(monkeypatch, tmp_path):
     monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(meiro_config, "CONFIG_PATH", tmp_path / "meiro_config.json")
