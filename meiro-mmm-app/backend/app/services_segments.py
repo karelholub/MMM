@@ -1036,15 +1036,17 @@ def _merge_meiro_registry_items(*collections: List[Dict[str, Any]]) -> List[Dict
     )
 
 
-def list_segment_registry(
+def list_meiro_segment_registry(
     db: Session,
     *,
     workspace_id: str,
-    include_archived: bool = False,
+    source: str = "all",
 ) -> Dict[str, Any]:
-    local_segments = list_local_segments(db, workspace_id=workspace_id, include_archived=include_archived)
+    normalized_source = str(source or "all").strip().lower()
+    if normalized_source not in {"all", "cdp", "pipes_webhook"}:
+        raise ValueError("source must be one of: all, cdp, pipes_webhook")
     meiro_cdp_segments: List[Dict[str, Any]] = []
-    if meiro_cdp.is_connected():
+    if normalized_source in {"all", "cdp"} and meiro_cdp.is_connected():
         try:
             raw_segments = meiro_cdp.list_segments()
             if isinstance(raw_segments, list):
@@ -1053,8 +1055,49 @@ def list_segment_registry(
                 ]
         except Exception:
             meiro_cdp_segments = []
-    webhook_meiro_segments = _list_webhook_derived_meiro_segments(db, workspace_id=workspace_id)
+    webhook_meiro_segments = (
+        _list_webhook_derived_meiro_segments(db, workspace_id=workspace_id)
+        if normalized_source in {"all", "pipes_webhook"}
+        else []
+    )
     meiro_segments = _merge_meiro_registry_items(meiro_cdp_segments, webhook_meiro_segments)
+    return {
+        "items": meiro_segments,
+        "summary": {
+            "source": normalized_source,
+            "meiro_pipes": len(meiro_segments),
+            "cdp_segments": len(meiro_cdp_segments),
+            "pipes_webhook_segments": len(webhook_meiro_segments),
+            "activation_ready": sum(1 for item in meiro_segments if item.get("supports_activation")),
+        },
+    }
+
+
+def import_meiro_segments(
+    db: Session,
+    *,
+    workspace_id: str,
+    source: str = "pipes_webhook",
+) -> Dict[str, Any]:
+    payload = list_meiro_segment_registry(db, workspace_id=workspace_id, source=source)
+    items = payload.get("items") or []
+    return {
+        "status": "synced",
+        "message": f"Synced {len(items)} Meiro audience segment{'s' if len(items) != 1 else ''} into the MMM segment registry.",
+        "items": items,
+        "summary": payload.get("summary") or {},
+    }
+
+
+def list_segment_registry(
+    db: Session,
+    *,
+    workspace_id: str,
+    include_archived: bool = False,
+) -> Dict[str, Any]:
+    local_segments = list_local_segments(db, workspace_id=workspace_id, include_archived=include_archived)
+    meiro_payload = list_meiro_segment_registry(db, workspace_id=workspace_id, source="all")
+    meiro_segments = meiro_payload.get("items") or []
     return {
         "items": [*local_segments, *meiro_segments],
         "summary": {
