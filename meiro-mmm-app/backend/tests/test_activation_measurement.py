@@ -6,6 +6,8 @@ from app.services_activation_measurement import (
     build_activation_object_registry,
     build_activation_measurement_evidence,
     build_activation_measurement_summary,
+    list_activation_feedback_exports,
+    record_activation_feedback_export,
 )
 
 
@@ -248,6 +250,24 @@ def test_activation_feedback_export_builds_decision_engine_payload():
     assert signal["object"]["source_systems"] == ["deciEngine"]
     assert signal["metrics"]["conversions"] == 1
     assert signal["decision_engine_hint"]["eligible_for_policy_input"] is True
+
+
+def test_activation_feedback_export_runs_are_persisted(tmp_path, monkeypatch):
+    export_file = tmp_path / "activation_feedback_exports.json"
+    monkeypatch.setattr(
+        "app.services_activation_measurement.ACTIVATION_FEEDBACK_EXPORTS_FILE",
+        export_file,
+    )
+
+    run = record_activation_feedback_export(journeys=_journeys(), limit=5, generated_by="pytest")
+    listing = list_activation_feedback_exports(limit=10)
+
+    assert export_file.exists()
+    assert run["id"].startswith("afe_")
+    assert run["payload"]["schema_version"] == "activation_feedback_export.v1"
+    assert listing["total"] == 1
+    assert listing["items"][0]["id"] == run["id"]
+    assert "payload" not in listing["items"][0]
 
 
 def test_activation_measurement_returns_unavailable_for_no_match():

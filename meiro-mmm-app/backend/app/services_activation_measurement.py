@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import json
+import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from app.services_metrics import journey_revenue_value
 
+
+ACTIVATION_FEEDBACK_EXPORTS_FILE = Path(__file__).resolve().parent / "data" / "activation_feedback_exports.json"
+MAX_ACTIVATION_FEEDBACK_EXPORT_RUNS = 50
 
 SUPPORTED_ACTIVATION_OBJECT_TYPES = {
     "campaign",
@@ -767,3 +773,61 @@ def build_activation_feedback_export(
         "decision": dict(feedback.get("decision") or {}),
         "signals": signals,
     }
+
+
+def _load_activation_feedback_export_runs() -> List[Dict[str, Any]]:
+    if not ACTIVATION_FEEDBACK_EXPORTS_FILE.exists():
+        return []
+    try:
+        payload = json.loads(ACTIVATION_FEEDBACK_EXPORTS_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+    return payload if isinstance(payload, list) else []
+
+
+def _save_activation_feedback_export_runs(runs: List[Dict[str, Any]]) -> None:
+    ACTIVATION_FEEDBACK_EXPORTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ACTIVATION_FEEDBACK_EXPORTS_FILE.write_text(
+        json.dumps(runs[:MAX_ACTIVATION_FEEDBACK_EXPORT_RUNS], indent=2, default=str),
+        encoding="utf-8",
+    )
+
+
+def record_activation_feedback_export(
+    *,
+    journeys: List[Dict[str, Any]],
+    limit: int = 50,
+    generated_by: str = "mmm",
+) -> Dict[str, Any]:
+    payload = build_activation_feedback_export(journeys=journeys, limit=limit, generated_by=generated_by)
+    export_id = f"afe_{uuid.uuid4().hex[:12]}"
+    run = {
+        "id": export_id,
+        "created_at": payload.get("generated_at"),
+        "created_by": generated_by,
+        "schema_version": payload.get("schema_version"),
+        "summary": dict(payload.get("summary") or {}),
+        "decision": dict(payload.get("decision") or {}),
+        "payload": payload,
+    }
+    runs = _load_activation_feedback_export_runs()
+    runs.insert(0, run)
+    _save_activation_feedback_export_runs(runs)
+    return run
+
+
+def list_activation_feedback_exports(limit: int = 20) -> Dict[str, Any]:
+    resolved_limit = max(1, min(int(limit or 20), MAX_ACTIVATION_FEEDBACK_EXPORT_RUNS))
+    runs = _load_activation_feedback_export_runs()
+    items = [
+        {
+            "id": run.get("id"),
+            "created_at": run.get("created_at"),
+            "created_by": run.get("created_by"),
+            "schema_version": run.get("schema_version"),
+            "summary": dict(run.get("summary") or {}),
+            "decision": dict(run.get("decision") or {}),
+        }
+        for run in runs[:resolved_limit]
+    ]
+    return {"items": items, "total": len(runs), "limit": resolved_limit}

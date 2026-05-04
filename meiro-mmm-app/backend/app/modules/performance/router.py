@@ -18,6 +18,8 @@ from app.services_activation_measurement import (
     build_activation_object_registry,
     build_activation_measurement_evidence,
     build_activation_measurement_summary,
+    list_activation_feedback_exports,
+    record_activation_feedback_export,
 )
 from app.services_overview import (
     get_overview_drivers,
@@ -421,6 +423,26 @@ def create_router(
             limit=limit,
             generated_by=getattr(ctx, "user_id", None) or "mmm",
         )
+
+    @router.post("/api/measurement/activation-feedback/exports")
+    def create_activation_measurement_feedback_export(
+        limit: int = Query(50, ge=1, le=200, description="Maximum exported activation feedback signals"),
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("attribution.view")),
+    ):
+        journeys = ensure_journeys_loaded_fn(db)
+        return record_activation_feedback_export(
+            journeys=journeys,
+            limit=limit,
+            generated_by=getattr(ctx, "user_id", None) or "mmm",
+        )
+
+    @router.get("/api/measurement/activation-feedback/exports")
+    def list_activation_measurement_feedback_exports(
+        limit: int = Query(20, ge=1, le=50, description="Maximum export runs to return"),
+        _ctx=Depends(require_permission_dependency("attribution.view")),
+    ):
+        return list_activation_feedback_exports(limit=limit)
 
     @router.get("/api/measurement/activation-evidence")
     def activation_measurement_evidence(

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import type { DeciEngineEventsImportPayload, DeciEngineEventsImportResult } from '../../connectors/deciengineConnector'
 import type { MeiroConfig, MeiroImportResult, MeiroMappingState, MeiroPullConfig, MeiroQuarantineReprocessResult, MeiroQuarantineRun, MeiroWebhookSuggestions } from '../../connectors/meiroConnector'
-import { apiGetJson, withQuery } from '../../lib/apiClient'
+import { apiGetJson, apiSendJson, withQuery } from '../../lib/apiClient'
 import { tokens as t } from '../../theme/tokens'
 import { DEFAULT_MEIRO_PULL_CONFIG, type DryRunResult, type MeiroWebhookArchiveStatus, type MeiroWebhookReprocessResult } from './shared'
 
@@ -154,6 +154,16 @@ type ActivationFeedbackExport = {
   }>
 }
 
+type ActivationFeedbackExportRun = {
+  id?: string
+  created_at?: string | null
+  created_by?: string | null
+  schema_version?: string
+  summary?: { signals?: number; total_candidates?: number; ready?: number; warning?: number; setup?: number }
+  decision?: { status?: string; subtitle?: string; warnings?: string[]; blockers?: string[] }
+  payload?: ActivationFeedbackExport
+}
+
 const ACTIVATION_OBJECT_TYPES = ['campaign', 'asset', 'content', 'bundle', 'offer', 'decision', 'decision_stack', 'experiment', 'variant', 'placement', 'template']
 
 function asCleaningReport(value: unknown): CleaningReportView | null {
@@ -220,6 +230,7 @@ export default function MeiroImportReplay({
   const [activationObjectsError, setActivationObjectsError] = useState<string | null>(null)
   const [activationFeedback, setActivationFeedback] = useState<ActivationFeedbackResponse | null>(null)
   const [activationFeedbackExport, setActivationFeedbackExport] = useState<ActivationFeedbackExport | null>(null)
+  const [activationFeedbackExportRuns, setActivationFeedbackExportRuns] = useState<ActivationFeedbackExportRun[]>([])
   const [activationFeedbackExportPending, setActivationFeedbackExportPending] = useState(false)
   const [activationFeedbackExportError, setActivationFeedbackExportError] = useState<string | null>(null)
   const latestImportSummary =
@@ -280,7 +291,7 @@ export default function MeiroImportReplay({
     setActivationObjectsPending(true)
     setActivationObjectsError(null)
     try {
-      const [objects, feedback] = await Promise.all([
+      const [objects, feedback, exports] = await Promise.all([
         apiGetJson<{ items?: ActivationMeasurementObject[] }>(
           withQuery('/api/measurement/activation-objects', { limit: 12 }),
           { fallbackMessage: 'Failed to load measurable activation objects' },
@@ -289,9 +300,14 @@ export default function MeiroImportReplay({
           withQuery('/api/measurement/activation-feedback', { limit: 5 }),
           { fallbackMessage: 'Failed to load activation feedback' },
         ),
+        apiGetJson<{ items?: ActivationFeedbackExportRun[] }>(
+          withQuery('/api/measurement/activation-feedback/exports', { limit: 3 }),
+          { fallbackMessage: 'Failed to load activation feedback exports' },
+        ).catch(() => ({ items: [] })),
       ])
       setActivationObjects(objects.items || [])
       setActivationFeedback(feedback)
+      setActivationFeedbackExportRuns(exports.items || [])
     } catch (error) {
       setActivationObjectsError((error as Error)?.message || 'Failed to load measurable activation objects')
     } finally {
@@ -323,6 +339,34 @@ export default function MeiroImportReplay({
       setActivationFeedbackExport(result)
     } catch (error) {
       setActivationFeedbackExportError((error as Error)?.message || 'Failed to build activation feedback export')
+    } finally {
+      setActivationFeedbackExportPending(false)
+    }
+  }
+  const createActivationFeedbackExport = async () => {
+    setActivationFeedbackExportPending(true)
+    setActivationFeedbackExportError(null)
+    try {
+      const run = await apiSendJson<ActivationFeedbackExportRun>(
+        withQuery('/api/measurement/activation-feedback/exports', { limit: 20 }),
+        'POST',
+        {},
+        { fallbackMessage: 'Failed to create activation feedback export' },
+      )
+      setActivationFeedbackExport(run.payload || null)
+      setActivationFeedbackExportRuns((prev) => [
+        {
+          id: run.id,
+          created_at: run.created_at,
+          created_by: run.created_by,
+          schema_version: run.schema_version,
+          summary: run.summary,
+          decision: run.decision,
+        },
+        ...prev.filter((item) => item.id !== run.id),
+      ].slice(0, 3))
+    } catch (error) {
+      setActivationFeedbackExportError((error as Error)?.message || 'Failed to create activation feedback export')
     } finally {
       setActivationFeedbackExportPending(false)
     }
@@ -564,7 +608,15 @@ export default function MeiroImportReplay({
                   disabled={activationFeedbackExportPending}
                   style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '5px 8px', cursor: activationFeedbackExportPending ? 'wait' : 'pointer', fontSize: t.font.sizeXs, opacity: activationFeedbackExportPending ? 0.7 : 1 }}
                 >
-                  {activationFeedbackExportPending ? 'Building export...' : 'Build export payload'}
+                  {activationFeedbackExportPending ? 'Building...' : 'Preview export'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void createActivationFeedbackExport()}
+                  disabled={activationFeedbackExportPending}
+                  style={{ border: `1px solid ${t.color.accent}`, background: t.color.accent, color: '#fff', borderRadius: t.radius.sm, padding: '5px 8px', cursor: activationFeedbackExportPending ? 'wait' : 'pointer', fontSize: t.font.sizeXs, opacity: activationFeedbackExportPending ? 0.7 : 1 }}
+                >
+                  {activationFeedbackExportPending ? 'Creating...' : 'Create export run'}
                 </button>
               </div>
               {activationFeedback.decision?.warnings?.length ? (
@@ -578,6 +630,17 @@ export default function MeiroImportReplay({
                     Export payload <strong style={{ color: t.color.text }}>{activationFeedbackExport.schema_version}</strong> · {Number(activationFeedbackExport.summary?.signals || 0).toLocaleString()} signals · generated {activationFeedbackExport.generated_at ? relativeTime(activationFeedbackExport.generated_at) : 'now'}
                   </div>
                   <pre style={{ margin: 0, maxHeight: 180, overflow: 'auto', fontSize: 11, background: t.color.bgSubtle, borderRadius: t.radius.sm, padding: t.space.sm }}>{JSON.stringify({ schema_version: activationFeedbackExport.schema_version, summary: activationFeedbackExport.summary, first_signal: activationFeedbackExport.signals?.[0] || null }, null, 2)}</pre>
+                </div>
+              ) : null}
+              {activationFeedbackExportRuns.length ? (
+                <div style={{ display: 'grid', gap: 5 }}>
+                  <div style={{ fontSize: t.font.sizeXs, fontWeight: t.font.weightSemibold, color: t.color.text }}>Recent export runs</div>
+                  {activationFeedbackExportRuns.map((run) => (
+                    <div key={run.id} style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, flexWrap: 'wrap', fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                      <span>{run.id} · {run.schema_version} · {Number(run.summary?.signals || 0).toLocaleString()} signals</span>
+                      <span>{run.created_at ? relativeTime(run.created_at) : 'recently'}</span>
+                    </div>
+                  ))}
                 </div>
               ) : null}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: t.space.sm }}>
