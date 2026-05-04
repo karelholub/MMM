@@ -14,6 +14,7 @@ from app.modules.attribution.schemas import (
     LoadSampleRequest,
 )
 from app.services_conversions import filter_journeys_by_quality
+from app.services_deciengine_events import deciengine_inapp_events_to_v2_journeys
 from app.services_meiro_import import import_journeys_from_cdp_source
 from app.services_meiro_quarantine import create_quarantine_run, get_quarantine_run, update_quarantine_records
 
@@ -722,6 +723,46 @@ def create_router(
             set_active_journey_source_fn=set_active_journey_source_fn,
             journey_revenue_value_fn=journey_revenue_value_fn,
         )
+
+    @router.post("/api/attribution/journeys/from-deciengine-events")
+    def import_journeys_from_deciengine_events(payload: Any = Body(default=None), db=Depends(get_db_dependency)):
+        envelope = deciengine_inapp_events_to_v2_journeys(payload or {})
+        result = validate_and_normalize_fn(envelope)
+        valid = result["valid_journeys"]
+        summary = result["import_summary"]
+        persist_journeys_fn(db, valid, replace=True, import_source="deciengine_inapp_events")
+        refresh_journey_aggregates_fn(db)
+        save_last_import_result_fn(result)
+        errs = [item for item in result.get("validation_items", []) if item.get("severity") == "error"]
+        warns = [item for item in result.get("validation_items", []) if item.get("severity") == "warning"]
+        append_import_run_fn(
+            "deciengine_inapp_events",
+            len(valid),
+            "success",
+            total=summary.get("total", 0),
+            valid=summary.get("valid", 0),
+            invalid=summary.get("invalid", 0),
+            converted=summary.get("converted", 0),
+            channels_detected=summary.get("channels_detected"),
+            validation_summary={"top_errors": errs[:10], "top_warnings": warns[:10]},
+            config_snapshot={"schema_version": "2.0", "source": "deciengine_inapp_events"},
+            preview_rows=[
+                {
+                    "customer_id": journey.get("customer", {}).get("id", "?"),
+                    "touchpoints": len(journey.get("touchpoints", [])),
+                    "converted": bool(journey.get("conversions")),
+                }
+                for journey in valid[:20]
+            ],
+            import_note="Imported from deciEngine in-app activation events",
+        )
+        set_active_journey_source_fn("deciengine_inapp_events")
+        return {
+            "count": len(valid),
+            "message": f"Loaded {len(valid)} journeys from deciEngine activation events",
+            "import_summary": summary,
+            "validation_items": result["validation_items"],
+        }
 
     @router.post("/api/attribution/journeys/load-sample")
     def load_sample_journeys(req: LoadSampleRequest = Body(default=LoadSampleRequest()), db=Depends(get_db_dependency)):
