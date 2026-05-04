@@ -266,6 +266,7 @@ export default function MeiroImportReplay({
   const [measurementError, setMeasurementError] = useState<string | null>(null)
   const [measurementResult, setMeasurementResult] = useState<ActivationMeasurementSummary | null>(null)
   const [measurementEvidence, setMeasurementEvidence] = useState<ActivationMeasurementEvidence | null>(null)
+  const [autoMeasurementStarted, setAutoMeasurementStarted] = useState(false)
   const [activationObjects, setActivationObjects] = useState<ActivationMeasurementObject[]>([])
   const [activationObjectsPending, setActivationObjectsPending] = useState(false)
   const [activationObjectsError, setActivationObjectsError] = useState<string | null>(null)
@@ -501,6 +502,12 @@ export default function MeiroImportReplay({
   useEffect(() => {
     void loadActivationObjects()
   }, [deciEngineImportResult?.count])
+
+  useEffect(() => {
+    if (autoMeasurementStarted || !measurementDraft.object_id.trim()) return
+    setAutoMeasurementStarted(true)
+    void runActivationMeasurement(measurementDraft)
+  }, [autoMeasurementStarted, measurementDraft])
 
   useEffect(() => {
     setSelectedRecordIndices((prev) => {
