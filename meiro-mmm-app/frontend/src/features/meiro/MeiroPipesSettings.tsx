@@ -2,7 +2,7 @@ import { useEffect, useState, type Dispatch, type SetStateAction } from 'react'
 
 import { AnalyticsTable, type AnalyticsTableColumn } from '../../components/dashboard'
 import type { MeiroConfig, MeiroEventArchiveBatch, MeiroPullConfig, MeiroWebhookDiagnostics, MeiroWebhookEvent } from '../../connectors/meiroConnector'
-import { apiGetJson } from '../../lib/apiClient'
+import { apiGetJson, apiSendJson } from '../../lib/apiClient'
 import { tokens as t } from '../../theme/tokens'
 import { DEFAULT_MEIRO_PULL_CONFIG, type MeiroWebhookArchiveStatus } from './shared'
 
@@ -84,6 +84,7 @@ export default function MeiroPipesSettings({
   const [contractReadiness, setContractReadiness] = useState<EventContractReadiness | null>(null)
   const [contractReadinessPending, setContractReadinessPending] = useState(false)
   const [contractReadinessError, setContractReadinessError] = useState<string | null>(null)
+  const [contractSamplePending, setContractSamplePending] = useState(false)
 
   useEffect(() => {
     setAliasDraft(aliasText)
@@ -106,6 +107,27 @@ export default function MeiroPipesSettings({
       setContractReadinessError((error as Error)?.message || 'Failed to load raw-event contract readiness')
     } finally {
       setContractReadinessPending(false)
+    }
+  }
+  const sendContractSample = async () => {
+    setContractSamplePending(true)
+    setContractReadinessError(null)
+    try {
+      const result = await apiSendJson<{ readiness?: EventContractReadiness }>(
+        '/api/connectors/meiro/events/contract-sample',
+        'POST',
+        {},
+        { fallbackMessage: 'Failed to send raw-event contract sample' },
+      )
+      if (result.readiness) {
+        setContractReadiness(result.readiness)
+      } else {
+        await loadContractReadiness()
+      }
+    } catch (error) {
+      setContractReadinessError((error as Error)?.message || 'Failed to send raw-event contract sample')
+    } finally {
+      setContractSamplePending(false)
     }
   }
   useEffect(() => {
@@ -272,10 +294,18 @@ export default function MeiroPipesSettings({
           <button
             type="button"
             onClick={() => void loadContractReadiness()}
-            disabled={contractReadinessPending}
+            disabled={contractReadinessPending || contractSamplePending}
             style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '8px 10px', cursor: contractReadinessPending ? 'wait' : 'pointer', opacity: contractReadinessPending ? 0.7 : 1 }}
           >
             {contractReadinessPending ? 'Checking...' : 'Refresh readiness'}
+          </button>
+          <button
+            type="button"
+            onClick={() => void sendContractSample()}
+            disabled={contractSamplePending}
+            style={{ border: `1px solid ${t.color.accent}`, background: t.color.accent, color: '#fff', borderRadius: t.radius.sm, padding: '8px 10px', cursor: contractSamplePending ? 'wait' : 'pointer', opacity: contractSamplePending ? 0.75 : 1 }}
+          >
+            {contractSamplePending ? 'Sending sample...' : 'Send contract sample'}
           </button>
         </div>
         {contractReadinessError ? (

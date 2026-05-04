@@ -1,11 +1,96 @@
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import urlparse
 
 
 TARGET_SITES = ("meiro.io", "meir.store")
+
+
+def build_sample_contract_events(*, batch_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    suffix = _text(batch_id) or now.replace(":", "").replace("-", "")
+    profile_id = f"contract-profile-{suffix}"
+    session_id = f"contract-session-{suffix}"
+    campaign_id = f"contract_campaign_{suffix}"
+    return [
+        {
+            "event_id": f"contract-meiro-click-{suffix}",
+            "customer_id": profile_id,
+            "anonymous_id": f"contract-anon-{suffix}",
+            "session_id": session_id,
+            "timestamp": now,
+            "event_name": "campaign_click",
+            "event_type": "click",
+            "interaction_type": "click",
+            "site": "meiro.io",
+            "page_url": "https://meiro.io/product",
+            "page_path": "/product",
+            "referrer": "https://google.com/search?q=meiro",
+            "channel": "paid_search",
+            "source": "google",
+            "medium": "cpc",
+            "campaign": campaign_id,
+            "utm_source": "google",
+            "utm_medium": "cpc",
+            "utm_campaign": campaign_id,
+            "utm_content": "contract_sample",
+            "campaign_id": campaign_id,
+            "creative_id": f"contract_asset_{suffix}",
+            "placement_id": "meiro_io_product_hero",
+            "segments": [{"id": "contract_high_intent", "name": "Contract high intent"}],
+            "activationMeasurement": {
+                "schema_version": "activation_measurement.v1",
+                "source_system": "meiro_pipes",
+                "activation_campaign_id": campaign_id,
+                "native_meiro_campaign_id": f"meiro_native_{campaign_id}",
+                "creative_asset_id": f"contract_asset_{suffix}",
+                "native_meiro_asset_id": f"meiro_asset_{suffix}",
+                "decision_key": "contract_homepage_offer_decision",
+                "variant_key": "variant_contract",
+                "placement_key": "meiro_io_product_hero",
+                "experiment_key": "contract_hero_offer_test",
+                "is_holdout": False,
+            },
+        },
+        {
+            "event_id": f"contract-store-purchase-{suffix}",
+            "customer_id": profile_id,
+            "anonymous_id": f"contract-anon-{suffix}",
+            "session_id": session_id,
+            "timestamp": now,
+            "event_name": "purchase",
+            "event_type": "conversion",
+            "site": "meir.store",
+            "page_url": "https://meir.store/checkout/success",
+            "page_path": "/checkout/success",
+            "channel": "paid_search",
+            "source": "google",
+            "medium": "cpc",
+            "campaign": campaign_id,
+            "utm_source": "google",
+            "utm_medium": "cpc",
+            "utm_campaign": campaign_id,
+            "conversion_id": f"contract-conversion-{suffix}",
+            "order_id": f"contract-order-{suffix}",
+            "value": 99.0,
+            "currency": "EUR",
+            "segments": [{"id": "contract_high_intent", "name": "Contract high intent"}],
+            "activationMeasurement": {
+                "schema_version": "activation_measurement.v1",
+                "source_system": "meiro_pipes",
+                "activation_campaign_id": campaign_id,
+                "native_meiro_campaign_id": f"meiro_native_{campaign_id}",
+                "decision_key": "contract_homepage_offer_decision",
+                "variant_key": "variant_contract",
+                "placement_key": "meir_store_checkout",
+                "experiment_key": "contract_hero_offer_test",
+                "is_holdout": False,
+            },
+        },
+    ]
 
 
 def _event_payload(item: Any) -> Dict[str, Any]:
