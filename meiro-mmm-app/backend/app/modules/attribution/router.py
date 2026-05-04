@@ -734,9 +734,14 @@ def create_router(
         if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
             raise HTTPException(status_code=400, detail="source_url must be an absolute http(s) URL")
         query_params = dict(urllib.parse.parse_qsl(parsed_url.query, keep_blank_values=True))
-        for key in ("campaignKey", "messageId", "profileId", "from", "to", "limit"):
+        for key in ("campaignKey", "messageId", "profileId", "from", "to"):
             if payload.get(key) not in (None, "", []):
                 query_params[key] = str(payload[key])
+        if payload.get("limit") not in (None, "", []):
+            try:
+                query_params["limit"] = str(max(1, min(int(payload["limit"]), 500)))
+            except (TypeError, ValueError):
+                query_params["limit"] = "500"
         url = urllib.parse.urlunparse(parsed_url._replace(query=urllib.parse.urlencode(query_params)))
         headers = {"Accept": "application/json"}
         if payload.get("user_email"):

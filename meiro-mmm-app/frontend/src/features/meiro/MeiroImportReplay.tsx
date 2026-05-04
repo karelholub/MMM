@@ -308,7 +308,7 @@ export default function MeiroImportReplay({
           </label>
           <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
             Limit
-            <input type="number" min={1} max={5000} value={deciEngineImportDraft.limit || 1000} onChange={(e) => updateDeciEngineImportDraft({ limit: Number(e.target.value || 1000) })} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+            <input type="number" min={1} max={500} value={deciEngineImportDraft.limit || 500} onChange={(e) => updateDeciEngineImportDraft({ limit: Math.max(1, Math.min(Number(e.target.value || 500), 500)) })} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
           </label>
         </div>
         {deciEngineImportError ? (

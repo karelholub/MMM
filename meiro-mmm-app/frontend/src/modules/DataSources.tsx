@@ -283,7 +283,7 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
   const [meiroPullDraft, setMeiroPullDraft] = useState<MeiroPullConfig>(DEFAULT_MEIRO_PULL_CONFIG)
   const [deciEngineImportDraft, setDeciEngineImportDraft] = useState<DeciEngineEventsImportPayload>({
     source_url: 'http://host.docker.internal:3001/v1/inapp/events',
-    limit: 1000,
+    limit: 500,
   })
 
   const [wizardOpen, setWizardOpen] = useState(false)
