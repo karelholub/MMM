@@ -2,7 +2,7 @@ import { useEffect, useState, type Dispatch, type SetStateAction } from 'react'
 
 import { AnalyticsTable, type AnalyticsTableColumn } from '../../components/dashboard'
 import type { MeiroConfig, MeiroEventArchiveBatch, MeiroPullConfig, MeiroWebhookDiagnostics, MeiroWebhookEvent } from '../../connectors/meiroConnector'
-import { apiGetJson, apiSendJson } from '../../lib/apiClient'
+import { apiGetJson, apiSendJson, withQuery } from '../../lib/apiClient'
 import { tokens as t } from '../../theme/tokens'
 import { DEFAULT_MEIRO_PULL_CONFIG, type MeiroWebhookArchiveStatus, type MeiroWebhookReprocessResult } from './shared'
 
@@ -44,6 +44,43 @@ interface EventContractReadiness {
     campaign?: string | null
     activation_keys?: string[]
   }>
+}
+
+type ActivationMeasurementObject = {
+  object_type?: string
+  object_id?: string
+  label?: string
+  aliases?: string[]
+  matched_touchpoints?: number
+  matched_journeys?: number
+  matched_profiles?: number
+  conversions?: number
+  revenue?: number
+  source_systems?: string[]
+  last_touchpoint_at?: string | null
+}
+
+type ActivationMeasurementSummary = {
+  object?: { type?: string; id?: string }
+  summary?: {
+    matched_touchpoints?: number
+    matched_journeys?: number
+    matched_profiles?: number
+    conversions?: number
+    revenue?: number
+    activation_metadata_coverage?: number
+  }
+  evidence?: {
+    data_quality?: { status?: string; warnings?: string[] }
+  }
+  recommended_actions?: Array<{ id?: string; label?: string; reason?: string }>
+}
+
+function activationMeasurementHref(item: ActivationMeasurementObject) {
+  const params = new URLSearchParams({ page: 'meiro', meiro_tab: 'import' })
+  if (item.object_type) params.set('activation_object_type', item.object_type)
+  if (item.object_id) params.set('activation_object_id', item.object_id)
+  return `/?${params.toString()}`
 }
 
 export default function MeiroPipesSettings({
@@ -88,6 +125,12 @@ export default function MeiroPipesSettings({
   const [contractReplayPending, setContractReplayPending] = useState(false)
   const [contractReplayResult, setContractReplayResult] = useState<MeiroWebhookReprocessResult | null>(null)
   const [contractReplayError, setContractReplayError] = useState<string | null>(null)
+  const [activationObjects, setActivationObjects] = useState<ActivationMeasurementObject[]>([])
+  const [activationObjectsPending, setActivationObjectsPending] = useState(false)
+  const [activationObjectsError, setActivationObjectsError] = useState<string | null>(null)
+  const [activationMeasurementPending, setActivationMeasurementPending] = useState(false)
+  const [activationMeasurementResult, setActivationMeasurementResult] = useState<ActivationMeasurementSummary | null>(null)
+  const [activationMeasurementError, setActivationMeasurementError] = useState<string | null>(null)
 
   useEffect(() => {
     setAliasDraft(aliasText)
@@ -133,6 +176,40 @@ export default function MeiroPipesSettings({
       setContractSamplePending(false)
     }
   }
+  const loadActivationObjects = async () => {
+    setActivationObjectsPending(true)
+    setActivationObjectsError(null)
+    try {
+      const result = await apiGetJson<{ items?: ActivationMeasurementObject[] }>(
+        withQuery('/api/measurement/activation-objects', { limit: 8 }),
+        { fallbackMessage: 'Failed to load imported activation objects' },
+      )
+      setActivationObjects(result.items || [])
+    } catch (error) {
+      setActivationObjectsError((error as Error)?.message || 'Failed to load imported activation objects')
+    } finally {
+      setActivationObjectsPending(false)
+    }
+  }
+  const measureActivationObject = async (item: ActivationMeasurementObject) => {
+    if (!item.object_type || !item.object_id) return
+    setActivationMeasurementPending(true)
+    setActivationMeasurementError(null)
+    try {
+      const result = await apiGetJson<ActivationMeasurementSummary>(
+        withQuery('/api/measurement/activation-summary', {
+          object_type: item.object_type,
+          object_id: item.object_id,
+        }),
+        { fallbackMessage: 'Failed to measure activation object' },
+      )
+      setActivationMeasurementResult(result)
+    } catch (error) {
+      setActivationMeasurementError((error as Error)?.message || 'Failed to measure activation object')
+    } finally {
+      setActivationMeasurementPending(false)
+    }
+  }
   const replayLatestContractEvents = async () => {
     setContractReplayPending(true)
     setContractReplayError(null)
@@ -151,6 +228,7 @@ export default function MeiroPipesSettings({
       )
       setContractReplayResult(result)
       await loadContractReadiness()
+      await loadActivationObjects()
     } catch (error) {
       setContractReplayError((error as Error)?.message || 'Failed to import latest raw events into attribution')
     } finally {
@@ -363,6 +441,89 @@ export default function MeiroPipesSettings({
               <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Attribution</div>
               <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: contractReplayResult.persisted_to_attribution ? t.color.success : t.color.warning }}>{contractReplayResult.persisted_to_attribution ? 'Updated' : 'Not persisted'}</div>
             </div>
+          </div>
+        ) : null}
+        {(activationObjectsPending || activationObjectsError || activationObjects.length > 0 || activationMeasurementResult || activationMeasurementError) ? (
+          <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.surface, display: 'grid', gap: t.space.sm }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'center', flexWrap: 'wrap' }}>
+              <div>
+                <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Imported activation objects</div>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>Objects found in imported journeys are ready for measurement evidence review.</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => void loadActivationObjects()}
+                disabled={activationObjectsPending}
+                style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '6px 10px', cursor: activationObjectsPending ? 'wait' : 'pointer', opacity: activationObjectsPending ? 0.7 : 1 }}
+              >
+                {activationObjectsPending ? 'Refreshing...' : 'Refresh objects'}
+              </button>
+            </div>
+            {activationObjectsError ? (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{activationObjectsError}</div>
+            ) : activationObjects.length ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: t.space.sm }}>
+                {activationObjects.slice(0, 8).map((item) => (
+                  <div key={`${item.object_type || 'object'}:${item.object_id || item.label || 'unknown'}`} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, display: 'grid', gap: 5, background: t.color.bg }}>
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase' }}>{item.object_type || 'object'}</div>
+                    <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, overflowWrap: 'anywhere' }}>{item.label || item.object_id || 'Unknown object'}</div>
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                      {Number(item.matched_touchpoints || 0).toLocaleString()} touchpoints · {Number(item.conversions || 0).toLocaleString()} conversions
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void measureActivationObject(item)}
+                      disabled={activationMeasurementPending || !item.object_id}
+                      style={{ justifySelf: 'flex-start', border: `1px solid ${t.color.accent}`, background: t.color.surface, color: t.color.accent, borderRadius: t.radius.sm, padding: '5px 8px', cursor: activationMeasurementPending ? 'wait' : 'pointer', opacity: activationMeasurementPending || !item.object_id ? 0.7 : 1, fontSize: t.font.sizeXs }}
+                    >
+                      {activationMeasurementPending ? 'Measuring...' : 'Measure'}
+                    </button>
+                    {item.object_id ? (
+                      <a
+                        href={activationMeasurementHref(item)}
+                        style={{ justifySelf: 'flex-start', color: t.color.textSecondary, fontSize: t.font.sizeXs, textDecoration: 'none' }}
+                      >
+                        Open measurement workspace
+                      </a>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : activationObjectsPending ? (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading imported activation objects...</div>
+            ) : (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>No activation objects are measurable yet. Import a raw batch with activation metadata first.</div>
+            )}
+            {activationMeasurementError ? (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{activationMeasurementError}</div>
+            ) : activationMeasurementResult?.summary ? (
+              <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.bg, display: 'grid', gap: t.space.sm }}>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  Measurement evidence for <strong style={{ color: t.color.text }}>{activationMeasurementResult.object?.type}</strong>{' '}
+                  <strong style={{ color: t.color.text }}>{activationMeasurementResult.object?.id}</strong>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: t.space.sm }}>
+                  {[
+                    { label: 'Touchpoints', value: Number(activationMeasurementResult.summary.matched_touchpoints || 0).toLocaleString() },
+                    { label: 'Journeys', value: Number(activationMeasurementResult.summary.matched_journeys || 0).toLocaleString() },
+                    { label: 'Profiles', value: Number(activationMeasurementResult.summary.matched_profiles || 0).toLocaleString() },
+                    { label: 'Conversions', value: Number(activationMeasurementResult.summary.conversions || 0).toLocaleString() },
+                    { label: 'Revenue', value: Number(activationMeasurementResult.summary.revenue || 0).toLocaleString(undefined, { maximumFractionDigits: 2 }) },
+                    { label: 'Metadata', value: `${(Number(activationMeasurementResult.summary.activation_metadata_coverage || 0) * 100).toFixed(0)}%` },
+                  ].map((item) => (
+                    <div key={item.label}>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                      <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>{item.value}</div>
+                    </div>
+                  ))}
+                </div>
+                {activationMeasurementResult.recommended_actions?.length ? (
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                    {activationMeasurementResult.recommended_actions.map((action) => action.label || action.reason || action.id).join(' · ')}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         ) : null}
         {contractReadinessError ? (
