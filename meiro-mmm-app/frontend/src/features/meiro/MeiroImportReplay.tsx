@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 
+import type { DeciEngineEventsImportPayload, DeciEngineEventsImportResult } from '../../connectors/deciengineConnector'
 import type { MeiroConfig, MeiroImportResult, MeiroMappingState, MeiroPullConfig, MeiroQuarantineReprocessResult, MeiroQuarantineRun, MeiroWebhookSuggestions } from '../../connectors/meiroConnector'
+import { apiGetJson, withQuery } from '../../lib/apiClient'
 import { tokens as t } from '../../theme/tokens'
 import { DEFAULT_MEIRO_PULL_CONFIG, type DryRunResult, type MeiroWebhookArchiveStatus, type MeiroWebhookReprocessResult } from './shared'
 
@@ -15,6 +17,13 @@ interface MeiroImportReplayProps {
   meiroDryRunData?: DryRunResult
   importFromMeiroPending: boolean
   importFromMeiroResult?: MeiroImportResult | null
+  deciEngineImportDraft: DeciEngineEventsImportPayload
+  deciEngineImportPending: boolean
+  deciEngineImportResult?: DeciEngineEventsImportResult | null
+  deciEngineImportError?: string | null
+  deciEngineConfigSaving?: boolean
+  deciEngineConfigSaved?: boolean
+  deciEngineConfigError?: string | null
   reprocessWebhookArchivePending: boolean
   reprocessWebhookArchiveResult?: MeiroWebhookReprocessResult | null
   reprocessQuarantinePending: boolean
@@ -29,6 +38,9 @@ interface MeiroImportReplayProps {
   relativeTime: (iso?: string | null) => string
   onDryRun: () => void
   onImportFromMeiro: () => void
+  onDeciEngineImportDraftChange: (draft: DeciEngineEventsImportPayload) => void
+  onImportDeciEngineEvents: () => void
+  onSaveDeciEngineConfig: () => void
   onReplayArchive: () => void
   onReprocessSelectedQuarantine: (recordIndices?: number[]) => void
   onSelectQuarantineRun: (runId: string) => void
@@ -48,6 +60,88 @@ type CleaningReportView = {
   }>
 }
 
+type ActivationMeasurementSummary = {
+  object?: { type?: string; id?: string; match_aliases?: string[] }
+  summary?: {
+    matched_touchpoints?: number
+    matched_journeys?: number
+    matched_profiles?: number
+    conversions?: number
+    revenue?: number
+    conversion_rate?: number | null
+    activation_metadata_coverage?: number
+    variants?: string[]
+    experiments?: string[]
+    placements?: string[]
+  }
+  evidence?: {
+    data_quality?: { status?: string; warnings?: string[]; activation_metadata_coverage?: number }
+  }
+  recommended_actions?: Array<{ id?: string; label?: string; reason?: string }>
+}
+
+type ActivationMeasurementEvidence = {
+  total_matches?: number
+  limit?: number
+  items?: Array<{
+    journey_id?: string
+    profile_id?: string
+    touchpoint_ts?: string
+    conversion_ts?: string
+    converted?: boolean
+    revenue?: number
+    channel?: string
+    campaign?: string
+    campaign_id?: string
+    activation?: Record<string, unknown>
+  }>
+}
+
+type ActivationMeasurementObject = {
+  object_type: string
+  object_id: string
+  label?: string
+  aliases?: string[]
+  matched_touchpoints?: number
+  matched_journeys?: number
+  matched_profiles?: number
+  conversions?: number
+  revenue?: number
+  source_systems?: string[]
+  last_touchpoint_at?: string | null
+}
+
+type ActivationFeedbackItem = {
+  object?: {
+    type?: string
+    id?: string
+    label?: string
+    aliases?: string[]
+    source_systems?: string[]
+  }
+  recommendation?: string
+  status?: string
+  title?: string
+  reason?: string
+  action?: { id?: string; label?: string; target?: string }
+  evidence?: {
+    matched_touchpoints?: number
+    matched_journeys?: number
+    conversions?: number
+    conversion_rate?: number
+    revenue?: number
+    last_touchpoint_at?: string | null
+  }
+}
+
+type ActivationFeedbackResponse = {
+  items?: ActivationFeedbackItem[]
+  decision?: { status?: string; subtitle?: string; warnings?: string[]; blockers?: string[] }
+  summary?: { ready?: number; warning?: number; setup?: number }
+}
+
+const ACTIVATION_OBJECT_TYPES = ['campaign', 'asset', 'content', 'bundle', 'offer', 'decision', 'decision_stack', 'experiment', 'variant', 'placement', 'template']
+
 function asCleaningReport(value: unknown): CleaningReportView | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   return value as CleaningReportView
@@ -64,6 +158,13 @@ export default function MeiroImportReplay({
   meiroDryRunData,
   importFromMeiroPending,
   importFromMeiroResult,
+  deciEngineImportDraft,
+  deciEngineImportPending,
+  deciEngineImportResult,
+  deciEngineImportError,
+  deciEngineConfigSaving = false,
+  deciEngineConfigSaved = false,
+  deciEngineConfigError,
   reprocessWebhookArchivePending,
   reprocessWebhookArchiveResult,
   reprocessQuarantinePending,
@@ -78,12 +179,32 @@ export default function MeiroImportReplay({
   relativeTime,
   onDryRun,
   onImportFromMeiro,
+  onDeciEngineImportDraftChange,
+  onImportDeciEngineEvents,
+  onSaveDeciEngineConfig,
   onReplayArchive,
   onReprocessSelectedQuarantine,
   onSelectQuarantineRun,
 }: MeiroImportReplayProps) {
   const [selectedRecordIndices, setSelectedRecordIndices] = useState<number[]>([])
   const [showResolvedRecords, setShowResolvedRecords] = useState(false)
+  const [measurementDraft, setMeasurementDraft] = useState({
+    object_type: 'campaign',
+    object_id: '',
+    native_meiro_campaign_id: '',
+    creative_asset_id: '',
+    native_meiro_asset_id: '',
+    offer_catalog_id: '',
+    native_meiro_catalog_id: '',
+  })
+  const [measurementPending, setMeasurementPending] = useState(false)
+  const [measurementError, setMeasurementError] = useState<string | null>(null)
+  const [measurementResult, setMeasurementResult] = useState<ActivationMeasurementSummary | null>(null)
+  const [measurementEvidence, setMeasurementEvidence] = useState<ActivationMeasurementEvidence | null>(null)
+  const [activationObjects, setActivationObjects] = useState<ActivationMeasurementObject[]>([])
+  const [activationObjectsPending, setActivationObjectsPending] = useState(false)
+  const [activationObjectsError, setActivationObjectsError] = useState<string | null>(null)
+  const [activationFeedback, setActivationFeedback] = useState<ActivationFeedbackResponse | null>(null)
   const latestImportSummary =
     importFromMeiroResult?.import_summary ||
     reprocessWebhookArchiveResult?.import_result?.import_summary ||
@@ -132,11 +253,78 @@ export default function MeiroImportReplay({
   )
   const openRecordCount = openRecordIndices.length
   const remediatedRecordCount = Math.max(0, indexedRecords.length - openRecordCount)
+  const canImportDeciEngineEvents = Boolean(
+    deciEngineImportDraft.source_url.trim() && (deciEngineImportDraft.user_email || '').trim(),
+  )
+  const updateDeciEngineImportDraft = (patch: Partial<DeciEngineEventsImportPayload>) => {
+    onDeciEngineImportDraftChange({ ...deciEngineImportDraft, ...patch })
+  }
+  const loadActivationObjects = async () => {
+    setActivationObjectsPending(true)
+    setActivationObjectsError(null)
+    try {
+      const [objects, feedback] = await Promise.all([
+        apiGetJson<{ items?: ActivationMeasurementObject[] }>(
+          withQuery('/api/measurement/activation-objects', { limit: 12 }),
+          { fallbackMessage: 'Failed to load measurable activation objects' },
+        ),
+        apiGetJson<ActivationFeedbackResponse>(
+          withQuery('/api/measurement/activation-feedback', { limit: 5 }),
+          { fallbackMessage: 'Failed to load activation feedback' },
+        ),
+      ])
+      setActivationObjects(objects.items || [])
+      setActivationFeedback(feedback)
+    } catch (error) {
+      setActivationObjectsError((error as Error)?.message || 'Failed to load measurable activation objects')
+    } finally {
+      setActivationObjectsPending(false)
+    }
+  }
+  const selectActivationObject = (item: ActivationMeasurementObject) => {
+    setMeasurementDraft((prev) => {
+      const alias = (item.aliases || []).find((value) => value.startsWith('meiro-')) || ''
+      return {
+        ...prev,
+        object_type: item.object_type,
+        object_id: item.object_id,
+        native_meiro_campaign_id: item.object_type === 'campaign' ? alias : prev.native_meiro_campaign_id,
+        creative_asset_id: item.object_type === 'asset' ? item.object_id : prev.creative_asset_id,
+        native_meiro_asset_id: item.object_type === 'asset' ? alias : prev.native_meiro_asset_id,
+        offer_catalog_id: item.object_type === 'bundle' ? item.object_id : prev.offer_catalog_id,
+      }
+    })
+  }
+  const runActivationMeasurement = async () => {
+    setMeasurementPending(true)
+    setMeasurementError(null)
+    try {
+      const result = await apiGetJson<ActivationMeasurementSummary>(
+        withQuery('/api/measurement/activation-summary', measurementDraft),
+        { fallbackMessage: 'Failed to load activation measurement summary' },
+      )
+      const evidence = await apiGetJson<ActivationMeasurementEvidence>(
+        withQuery('/api/measurement/activation-evidence', { ...measurementDraft, limit: 5 }),
+        { fallbackMessage: 'Failed to load activation measurement evidence' },
+      )
+      setMeasurementResult(result)
+      setMeasurementEvidence(evidence)
+    } catch (error) {
+      setMeasurementError((error as Error)?.message || 'Failed to load activation measurement summary')
+      setMeasurementEvidence(null)
+    } finally {
+      setMeasurementPending(false)
+    }
+  }
 
   useEffect(() => {
     setSelectedRecordIndices([])
     setShowResolvedRecords(false)
   }, [selectedQuarantineRun?.id])
+
+  useEffect(() => {
+    void loadActivationObjects()
+  }, [deciEngineImportResult?.count])
 
   useEffect(() => {
     setSelectedRecordIndices((prev) => {
@@ -201,6 +389,253 @@ export default function MeiroImportReplay({
                 Top unresolved: {cleaningReport.top_unresolved_patterns.map((item: any) => `${item.code} (${item.count})`).join(' · ')}
               </div>
             )}
+          </div>
+        ) : null}
+      </div>
+
+      <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.bg, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Import deciEngine activation events</div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Pull persisted in-app events from deciEngine and replace attribution journeys with that activation stream.</div>
+          </div>
+          <button
+            type="button"
+            onClick={onImportDeciEngineEvents}
+            disabled={deciEngineImportPending || !canImportDeciEngineEvents}
+            style={{ border: `1px solid ${t.color.accent}`, background: t.color.accent, color: '#fff', borderRadius: t.radius.sm, padding: '8px 10px', cursor: deciEngineImportPending ? 'wait' : 'pointer', opacity: deciEngineImportPending || !canImportDeciEngineEvents ? 0.7 : 1 }}
+          >
+            {deciEngineImportPending ? 'Importing…' : canImportDeciEngineEvents ? 'Import activation events' : 'Enter user email'}
+          </button>
+          <button
+            type="button"
+            onClick={onSaveDeciEngineConfig}
+            disabled={deciEngineConfigSaving || !deciEngineImportDraft.source_url.trim()}
+            style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '8px 10px', cursor: deciEngineConfigSaving ? 'wait' : 'pointer', opacity: deciEngineConfigSaving || !deciEngineImportDraft.source_url.trim() ? 0.7 : 1 }}
+          >
+            {deciEngineConfigSaving ? 'Saving…' : 'Save source settings'}
+          </button>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: t.space.sm }}>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
+            Source URL
+            <input value={deciEngineImportDraft.source_url} onChange={(e) => updateDeciEngineImportDraft({ source_url: e.target.value })} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
+            User email
+            <input type="email" value={deciEngineImportDraft.user_email || ''} onChange={(e) => updateDeciEngineImportDraft({ user_email: e.target.value })} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
+            Profile filter
+            <input value={deciEngineImportDraft.profileId || ''} onChange={(e) => updateDeciEngineImportDraft({ profileId: e.target.value })} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
+            Campaign filter
+            <input value={deciEngineImportDraft.campaignKey || ''} onChange={(e) => updateDeciEngineImportDraft({ campaignKey: e.target.value })} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
+            Limit
+            <input type="number" min={1} max={500} value={deciEngineImportDraft.limit || 500} onChange={(e) => updateDeciEngineImportDraft({ limit: Math.max(1, Math.min(Number(e.target.value || 500), 500)) })} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+          </label>
+        </div>
+        {deciEngineImportError ? (
+          <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{deciEngineImportError}</div>
+        ) : deciEngineConfigError ? (
+          <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{deciEngineConfigError}</div>
+        ) : !canImportDeciEngineEvents ? (
+          <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>User email is required because deciEngine authorizes the event feed through `X-User-Email`.</div>
+        ) : deciEngineConfigSaved ? (
+          <div style={{ fontSize: t.font.sizeSm, color: t.color.success }}>deciEngine event-source settings saved.</div>
+        ) : deciEngineImportResult ? (
+          <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+            {deciEngineImportResult.message || `Loaded ${Number(deciEngineImportResult.count || 0).toLocaleString()} journeys from deciEngine activation events`}.
+            {deciEngineImportResult.import_summary ? <> Valid {Number(deciEngineImportResult.import_summary.valid || 0).toLocaleString()} · invalid {Number(deciEngineImportResult.import_summary.invalid || 0).toLocaleString()} · converted {Number(deciEngineImportResult.import_summary.converted || 0).toLocaleString()}</> : null}
+          </div>
+        ) : null}
+      </div>
+
+      <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.bg, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Activation measurement lookup</div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Check whether imported journeys can measure a campaign, asset, offer, or decision object by Prism/deciEngine IDs.</div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void runActivationMeasurement()}
+            disabled={measurementPending || !measurementDraft.object_id.trim()}
+            style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '8px 10px', cursor: measurementPending ? 'wait' : 'pointer', opacity: measurementPending || !measurementDraft.object_id.trim() ? 0.7 : 1 }}
+          >
+            {measurementPending ? 'Checking…' : 'Check measurement'}
+          </button>
+        </div>
+        <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Measured objects</div>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>Select a discovered campaign, asset, offer, or decision from the imported activation stream.</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => void loadActivationObjects()}
+              disabled={activationObjectsPending}
+              style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '6px 9px', cursor: activationObjectsPending ? 'wait' : 'pointer', opacity: activationObjectsPending ? 0.7 : 1 }}
+            >
+              {activationObjectsPending ? 'Refreshing...' : 'Refresh objects'}
+            </button>
+          </div>
+          {activationObjectsError ? (
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{activationObjectsError}</div>
+          ) : activationObjectsPending && !activationObjects.length ? (
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading measurable activation objects...</div>
+          ) : activationObjects.length ? (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: t.space.sm }}>
+              {activationObjects.map((item) => (
+                <button
+                  key={`${item.object_type}:${item.object_id}`}
+                  type="button"
+                  onClick={() => selectActivationObject(item)}
+                  style={{
+                    border: `1px solid ${measurementDraft.object_type === item.object_type && measurementDraft.object_id === item.object_id ? t.color.accent : t.color.borderLight}`,
+                    background: measurementDraft.object_type === item.object_type && measurementDraft.object_id === item.object_id ? t.color.accentMuted : t.color.surface,
+                    borderRadius: t.radius.sm,
+                    padding: t.space.sm,
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    display: 'grid',
+                    gap: 4,
+                  }}
+                >
+                  <span style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, overflowWrap: 'anywhere' }}>{item.label || item.object_id}</span>
+                  <span style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                    {item.object_type} · {Number(item.matched_touchpoints || 0).toLocaleString()} touchpoints · {Number(item.conversions || 0).toLocaleString()} conversions
+                  </span>
+                  {!!item.aliases?.length ? (
+                    <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, overflowWrap: 'anywhere' }}>{item.aliases.slice(0, 2).join(' · ')}</span>
+                  ) : null}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>No measurable activation objects found in the currently loaded journeys.</div>
+          )}
+          {activationFeedback?.items?.length ? (
+            <div style={{ display: 'grid', gap: t.space.sm }}>
+              <div style={{ display: 'flex', gap: t.space.sm, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Activation feedback</div>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                  Ready {Number(activationFeedback.summary?.ready || 0).toLocaleString()} · review {Number(activationFeedback.summary?.warning || 0).toLocaleString()} · setup {Number(activationFeedback.summary?.setup || 0).toLocaleString()}
+                </div>
+              </div>
+              {activationFeedback.decision?.warnings?.length ? (
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.warning }}>{activationFeedback.decision.warnings.join(' · ')}</div>
+              ) : null}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: t.space.sm }}>
+                {activationFeedback.items.map((item, index) => {
+                  const statusColor = item.status === 'ready' ? t.color.success : item.status === 'warning' ? t.color.warning : t.color.textMuted
+                  return (
+                    <button
+                      key={`${item.object?.type || 'object'}:${item.object?.id || index}:feedback`}
+                      type="button"
+                      onClick={() => item.object?.type && item.object?.id && selectActivationObject({ object_type: item.object.type, object_id: item.object.id, label: item.object.label, aliases: item.object.aliases || [] })}
+                      style={{ border: `1px solid ${t.color.borderLight}`, background: t.color.surface, borderRadius: t.radius.sm, padding: t.space.sm, cursor: item.object?.id ? 'pointer' : 'default', display: 'grid', gap: 5, textAlign: 'left' }}
+                    >
+                      <span style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, overflowWrap: 'anywhere' }}>{item.title || item.object?.label || item.object?.id || 'Activation feedback'}</span>
+                      <span style={{ fontSize: t.font.sizeXs, color: statusColor, fontWeight: t.font.weightSemibold }}>{item.status || 'setup'} · {item.recommendation || 'review'}</span>
+                      <span style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>{item.reason}</span>
+                      <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                        {Number(item.evidence?.matched_touchpoints || 0).toLocaleString()} touchpoints · {Number(item.evidence?.conversions || 0).toLocaleString()} conversions · revenue {Number(item.evidence?.revenue || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          ) : activationFeedback?.decision?.status === 'blocked' ? (
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{activationFeedback.decision.subtitle}</div>
+          ) : null}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: t.space.sm }}>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
+            Object type
+            <select value={measurementDraft.object_type} onChange={(e) => setMeasurementDraft((prev) => ({ ...prev, object_type: e.target.value }))} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, background: t.color.surface }}>
+              {ACTIVATION_OBJECT_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+            </select>
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
+            Object ID
+            <input value={measurementDraft.object_id} onChange={(e) => setMeasurementDraft((prev) => ({ ...prev, object_id: e.target.value }))} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
+            Native campaign ID
+            <input value={measurementDraft.native_meiro_campaign_id} onChange={(e) => setMeasurementDraft((prev) => ({ ...prev, native_meiro_campaign_id: e.target.value }))} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
+            Creative asset ID
+            <input value={measurementDraft.creative_asset_id} onChange={(e) => setMeasurementDraft((prev) => ({ ...prev, creative_asset_id: e.target.value }))} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
+            Offer catalog ID
+            <input value={measurementDraft.offer_catalog_id} onChange={(e) => setMeasurementDraft((prev) => ({ ...prev, offer_catalog_id: e.target.value }))} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+          </label>
+        </div>
+        {measurementError ? (
+          <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{measurementError}</div>
+        ) : measurementResult?.summary ? (
+          <div style={{ display: 'grid', gap: t.space.sm }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: t.space.sm }}>
+              {[
+                { label: 'Touchpoints', value: Number(measurementResult.summary.matched_touchpoints || 0).toLocaleString() },
+                { label: 'Journeys', value: Number(measurementResult.summary.matched_journeys || 0).toLocaleString() },
+                { label: 'Profiles', value: Number(measurementResult.summary.matched_profiles || 0).toLocaleString() },
+                { label: 'Conversions', value: Number(measurementResult.summary.conversions || 0).toLocaleString() },
+                { label: 'Revenue', value: Number(measurementResult.summary.revenue || 0).toLocaleString(undefined, { maximumFractionDigits: 2 }) },
+                { label: 'Metadata coverage', value: `${(Number(measurementResult.summary.activation_metadata_coverage || 0) * 100).toFixed(1)}%` },
+              ].map((item) => (
+                <div key={item.label} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                  <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold }}>{item.value}</div>
+                </div>
+              ))}
+            </div>
+            {!!measurementResult.recommended_actions?.length ? (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>
+                {measurementResult.recommended_actions.map((action) => action.label || action.reason || action.id).join(' · ')}
+              </div>
+            ) : null}
+            {!!measurementEvidence?.items?.length ? (
+              <div style={{ display: 'grid', gap: t.space.sm }}>
+                <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                  Evidence rows ({Number(measurementEvidence.total_matches || 0).toLocaleString()} matched)
+                </div>
+                {measurementEvidence.items.map((item, index) => {
+                  const activation = item.activation || {}
+                  const key = `${item.journey_id || item.profile_id || 'journey'}-${index}`
+                  const ids = [
+                    activation.activation_campaign_id ? `activation ${activation.activation_campaign_id}` : '',
+                    activation.native_meiro_campaign_id ? `native campaign ${activation.native_meiro_campaign_id}` : '',
+                    activation.creative_asset_id ? `creative ${activation.creative_asset_id}` : '',
+                    activation.native_meiro_asset_id ? `native asset ${activation.native_meiro_asset_id}` : '',
+                    activation.offer_catalog_id ? `catalog ${activation.offer_catalog_id}` : '',
+                    activation.native_meiro_catalog_id ? `native catalog ${activation.native_meiro_catalog_id}` : '',
+                  ].filter(Boolean).join(' · ')
+                  return (
+                    <div key={key} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, display: 'grid', gap: 4 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, flexWrap: 'wrap' }}>
+                        <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>{item.profile_id || item.journey_id || 'Unknown profile'}</div>
+                        <div style={{ fontSize: t.font.sizeXs, color: item.converted ? t.color.success : t.color.textMuted }}>{item.converted ? 'Converted' : 'Not converted'} · revenue {Number(item.revenue || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
+                      </div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                        {item.channel || 'unknown channel'} · {item.campaign || item.campaign_id || 'unknown campaign'} · touchpoint {item.touchpoint_ts ? relativeTime(item.touchpoint_ts) : '—'}
+                      </div>
+                      {ids ? <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{ids}</div> : null}
+                    </div>
+                  )
+                })}
+              </div>
+            ) : measurementEvidence ? (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>No evidence rows matched this activation object.</div>
+            ) : null}
           </div>
         ) : null}
       </div>

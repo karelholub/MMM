@@ -351,10 +351,10 @@ interface AppTopBarProps {
   onLoadSample: () => void
   onRunModels: () => void
   onPeriodChange: (next: { dateFrom: string; dateTo: string }) => void
-  activeJourneySource: 'sample' | 'upload' | 'meiro' | null
-  journeySourceOptions: Array<{ key: 'sample' | 'upload' | 'meiro'; label: string; available: boolean }>
+  activeJourneySource: 'sample' | 'upload' | 'meiro' | 'deciengine_inapp_events' | null
+  journeySourceOptions: Array<{ key: 'sample' | 'upload' | 'meiro' | 'deciengine_inapp_events'; label: string; available: boolean }>
   sourceSwitching: boolean
-  onJourneySourceChange: (value: 'sample' | 'upload' | 'meiro') => void
+  onJourneySourceChange: (value: 'sample' | 'upload' | 'meiro' | 'deciengine_inapp_events') => void
 }
 
 export function AppTopBar({
@@ -603,7 +603,7 @@ export function AppTopBar({
                 <span style={{ fontSize: tokens.font.sizeXs, color: 'rgba(226,232,240,0.72)' }}>Source</span>
                 <select
                   value={activeJourneySource || ''}
-                  onChange={(e) => onJourneySourceChange(e.target.value as 'sample' | 'upload' | 'meiro')}
+                  onChange={(e) => onJourneySourceChange(e.target.value as 'sample' | 'upload' | 'meiro' | 'deciengine_inapp_events')}
                   disabled={sourceSwitching || !activeJourneySource}
                   style={{ ...selectStyle, cursor: sourceSwitching ? 'wait' : 'pointer' }}
                 >

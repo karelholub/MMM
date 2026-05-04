@@ -923,6 +923,8 @@ def _normalize_journey_source(value: Optional[str]) -> Optional[str]:
     raw = (value or "").strip().lower()
     if raw in {"meiro", "meiro_webhook", "meiro_pull"}:
         return "meiro"
+    if raw in {"deciengine", "decision_engine", "deciengine_inapp_events"}:
+        return "deciengine_inapp_events"
     if raw in {"sample", "upload"}:
         return raw
     return None
@@ -959,10 +961,12 @@ def _journey_source_availability() -> List[Dict[str, Any]]:
     meiro_available = (DATA_DIR / "meiro_cdp_profiles.json").exists() or (DATA_DIR / "meiro_cdp.csv").exists()
     upload_available = LATEST_UPLOAD_FILE.exists()
     sample_available = (SAMPLE_DIR / "sample-conversion-paths.json").exists()
+    deciengine_available = (DATA_DIR / "deciengine_events_config.json").exists()
     return [
         {"key": "sample", "label": "Sample data", "available": sample_available},
         {"key": "upload", "label": "Uploaded JSON", "available": upload_available},
         {"key": "meiro", "label": "Meiro CDP", "available": meiro_available},
+        {"key": "deciengine_inapp_events", "label": "deciEngine activation events", "available": deciengine_available},
     ]
 
 

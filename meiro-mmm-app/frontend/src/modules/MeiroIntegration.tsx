@@ -29,6 +29,7 @@ import {
   type MeiroQuarantineRun,
   type MeiroWebhookDiagnostics,
 } from '../connectors/meiroConnector'
+import { getDeciEngineEventsConfig, importDeciEngineActivationEvents, saveDeciEngineEventsConfig, type DeciEngineEventsImportPayload } from '../connectors/deciengineConnector'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
 import {
   DEFAULT_MEIRO_PULL_CONFIG,
@@ -37,6 +38,7 @@ import {
   type MeiroWebhookArchiveStatus,
   type MeiroWebhookReprocessResult,
 } from '../features/meiro/shared'
+import { usePermissions } from '../hooks/usePermissions'
 
 interface MeiroIntegrationPageProps {
   onJourneysImported: () => void
@@ -103,11 +105,16 @@ function statusTone(connected: boolean, warning: boolean) {
 
 export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegrationPageProps) {
   const queryClient = useQueryClient()
+  const permissions = usePermissions()
   const [meiroTab, setMeiroTab] = useState<MeiroTab>('overview')
   const [meiroUrl, setMeiroUrl] = useState('')
   const [meiroKey, setMeiroKey] = useState('')
   const [webhookSecretValue, setWebhookSecretValue] = useState<string | null>(null)
   const [meiroPullDraft, setMeiroPullDraft] = useState<MeiroPullConfig>(DEFAULT_MEIRO_PULL_CONFIG)
+  const [deciEngineImportDraft, setDeciEngineImportDraft] = useState<DeciEngineEventsImportPayload>({
+    source_url: 'http://host.docker.internal:3001/v1/inapp/events',
+    limit: 500,
+  })
   const [oauthToast, setOauthToast] = useState<string | null>(null)
   const [selectedQuarantineRunId, setSelectedQuarantineRunId] = useState<string | null>(null)
 
@@ -160,6 +167,22 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
     queryFn: () => getMeiroQuarantineRun(String(selectedQuarantineRunId)),
     enabled: Boolean(selectedQuarantineRunId),
   })
+  const deciEngineEventsConfigQuery = useQuery({
+    queryKey: ['deciengine-events-config-page'],
+    queryFn: getDeciEngineEventsConfig,
+  })
+
+  useEffect(() => {
+    const email = (permissions.auth?.user?.email || '').trim()
+    if (!email || deciEngineImportDraft.user_email) return
+    setDeciEngineImportDraft((prev) => ({ ...prev, user_email: email }))
+  }, [permissions.auth?.user?.email, deciEngineImportDraft.user_email])
+
+  useEffect(() => {
+    if (!deciEngineEventsConfigQuery.data) return
+    const email = deciEngineEventsConfigQuery.data.user_email || permissions.auth?.user?.email || ''
+    setDeciEngineImportDraft({ ...deciEngineEventsConfigQuery.data, user_email: email, limit: deciEngineEventsConfigQuery.data.limit || 500 })
+  }, [deciEngineEventsConfigQuery.data, permissions.auth?.user?.email])
 
   const invalidateJourneyState = async () => {
     onJourneysImported()
@@ -228,6 +251,19 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
       }),
     onSuccess: async () => {
       await invalidateJourneyState()
+    },
+  })
+  const importDeciEngineEventsMutation = useMutation({
+    mutationFn: async () => importDeciEngineActivationEvents(deciEngineImportDraft),
+    onSuccess: async () => {
+      await invalidateJourneyState()
+    },
+  })
+  const saveDeciEngineEventsConfigMutation = useMutation({
+    mutationFn: async () => saveDeciEngineEventsConfig(deciEngineImportDraft),
+    onSuccess: async (config) => {
+      setDeciEngineImportDraft(config)
+      await queryClient.invalidateQueries({ queryKey: ['deciengine-events-config-page'] })
     },
   })
   const buildReplayPayload = () => {
@@ -482,6 +518,13 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
               meiroDryRunData={meiroDryRunMutation.data}
               importFromMeiroPending={importFromMeiroMutation.isPending}
               importFromMeiroResult={importFromMeiroMutation.data ?? null}
+              deciEngineImportDraft={deciEngineImportDraft}
+              deciEngineImportPending={importDeciEngineEventsMutation.isPending}
+              deciEngineImportResult={importDeciEngineEventsMutation.data ?? null}
+              deciEngineImportError={(importDeciEngineEventsMutation.error as Error | undefined)?.message || null}
+              deciEngineConfigSaving={saveDeciEngineEventsConfigMutation.isPending}
+              deciEngineConfigSaved={saveDeciEngineEventsConfigMutation.isSuccess}
+              deciEngineConfigError={(saveDeciEngineEventsConfigMutation.error as Error | undefined)?.message || null}
               reprocessWebhookArchivePending={reprocessWebhookArchiveMutation.isPending}
               reprocessWebhookArchiveResult={reprocessWebhookArchiveMutation.data ?? null}
               reprocessQuarantinePending={reprocessSelectedQuarantineMutation.isPending}
@@ -507,6 +550,13 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
               onRejectMeiroMapping={() => updateMeiroMappingApprovalMutation.mutate({ status: 'rejected', note: 'Rejected from normalization review' })}
               onDryRun={() => meiroDryRunMutation.mutate()}
               onImportFromMeiro={() => importFromMeiroMutation.mutate()}
+              onDeciEngineImportDraftChange={setDeciEngineImportDraft}
+              onImportDeciEngineEvents={() => {
+                if (window.confirm('This import replaces existing journeys with deciEngine activation events. Continue?')) {
+                  importDeciEngineEventsMutation.mutate()
+                }
+              }}
+              onSaveDeciEngineConfig={() => saveDeciEngineEventsConfigMutation.mutate()}
               onReplayArchive={() => reprocessWebhookArchiveMutation.mutate()}
               onReprocessSelectedQuarantine={(recordIndices) => reprocessSelectedQuarantineMutation.mutate(recordIndices)}
               onSelectQuarantineRun={(runId) => setSelectedQuarantineRunId(runId)}

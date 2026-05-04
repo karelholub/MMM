@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class JourneySourceActivatePayload(BaseModel):
-    source: str = Field(..., pattern="^(sample|upload|meiro)$")
+    source: str = Field(..., pattern="^(sample|upload|meiro|deciengine_inapp_events)$")
     import_note: Optional[str] = None
 
 

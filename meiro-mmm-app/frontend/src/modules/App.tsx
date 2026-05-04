@@ -116,7 +116,7 @@ function isIsoDateOnly(value?: string | null): value is string {
   return !Number.isNaN(d.getTime())
 }
 
-type JourneySourceKey = 'sample' | 'upload' | 'meiro'
+type JourneySourceKey = 'sample' | 'upload' | 'meiro' | 'deciengine_inapp_events'
 
 export default function App() {
   const [page, setPage] = useState<AppPage>(() => {
@@ -474,6 +474,7 @@ export default function App() {
     { key: 'sample' as const, label: 'Sample data', available: true },
     { key: 'upload' as const, label: 'Uploaded JSON', available: false },
     { key: 'meiro' as const, label: 'Meiro CDP', available: false },
+    { key: 'deciengine_inapp_events' as const, label: 'deciEngine activation events', available: false },
   ]
   const activeJourneySource =
     journeySourceStateQuery.data?.active_source ||
@@ -561,8 +562,9 @@ export default function App() {
   }, [])
   const onJourneysImported = useCallback(() => {
     void journeysQuery.refetch()
+    void journeySourceStateQuery.refetch()
     runAllMutation.mutate(selectedConfigId)
-  }, [selectedConfigId])
+  }, [journeySourceStateQuery, selectedConfigId])
   const onMmmMappingComplete = useCallback(
     (mapping: { dataset_id: string; columns: { kpi: string; spend_channels: string[]; covariates?: string[] } }) => {
       setPendingMmmMapping(mapping)

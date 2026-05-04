@@ -162,6 +162,44 @@ interface BudgetRealizationResponse {
   total: number
 }
 
+interface ActivationFeedbackItem {
+  object?: {
+    type?: string
+    id?: string
+    label?: string
+    aliases?: string[]
+    source_systems?: string[]
+  }
+  recommendation?: string
+  status?: string
+  title?: string
+  reason?: string
+  evidence?: {
+    matched_touchpoints?: number
+    matched_journeys?: number
+    conversions?: number
+    conversion_rate?: number
+    revenue?: number
+    last_touchpoint_at?: string | null
+  }
+}
+
+interface ActivationFeedbackResponse {
+  items?: ActivationFeedbackItem[]
+  total?: number
+  summary?: { ready?: number; warning?: number; setup?: number }
+  decision?: {
+    status?: string
+    subtitle?: string
+    warnings?: string[]
+    blockers?: string[]
+  }
+}
+
+interface BudgetRecommendationsWithActivationFeedback extends BudgetRecommendationsResponse {
+  activation_feedback?: ActivationFeedbackResponse
+}
+
 function formatCurrency(val: number): string {
   if (val >= 1_000_000) return `$${(val / 1_000_000).toFixed(1)}M`
   if (val >= 1_000) return `$${(val / 1_000).toFixed(0)}K`
@@ -228,7 +266,7 @@ export default function BudgetOptimizer({
   const totalBudgetMultiplier =
     totalBudgetMode === 'constant' ? 1.0 : 1.0 + totalBudgetChangePct / 100
 
-  const recommendationsQuery = useQuery<BudgetRecommendationsResponse>({
+  const recommendationsQuery = useQuery<BudgetRecommendationsWithActivationFeedback>({
     queryKey: ['budget-recommendations', runId, recommendationObjective, totalBudgetChangePct],
     queryFn: async () => {
       if (!runId) {
@@ -662,6 +700,8 @@ export default function BudgetOptimizer({
         weighted_roi: 0,
       }
     : recommendationsQuery.data?.summary
+  const activationFeedback = recommendationsQuery.data?.activation_feedback
+  const activationFeedbackItems = activationFeedback?.items ?? []
   const canUseDatasetBackedActions =
     !!runId &&
     !isBudgetReadoutOnly &&
@@ -845,6 +885,56 @@ export default function BudgetOptimizer({
           headline={budgetTrustNarrative.headline}
           items={budgetTrustNarrative.items}
         />
+      </div>
+
+      <div style={{ marginBottom: t.space.xl }}>
+        <SectionCard
+          title="Activation feedback bridge"
+          subtitle="Measured Prism and deciEngine objects that can inform budget, campaign, and asset decisions."
+        >
+          {activationFeedbackItems.length ? (
+            <div style={{ display: 'grid', gap: t.space.md }}>
+              <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                <span>Ready <strong style={{ color: t.color.text }}>{Number(activationFeedback?.summary?.ready || 0).toLocaleString()}</strong></span>
+                <span>Review <strong style={{ color: t.color.text }}>{Number(activationFeedback?.summary?.warning || 0).toLocaleString()}</strong></span>
+                <span>Setup <strong style={{ color: t.color.text }}>{Number(activationFeedback?.summary?.setup || 0).toLocaleString()}</strong></span>
+              </div>
+              {activationFeedback?.decision?.warnings?.length ? (
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>
+                  {activationFeedback.decision.warnings.join(' · ')}
+                </div>
+              ) : null}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: t.space.sm }}>
+                {activationFeedbackItems.slice(0, 5).map((item, index) => {
+                  const statusColor = item.status === 'ready' ? t.color.success : item.status === 'warning' ? t.color.warning : t.color.textMuted
+                  return (
+                    <div
+                      key={`${item.object?.type || 'object'}:${item.object?.id || index}:budget-feedback`}
+                      style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, background: t.color.surface, padding: t.space.sm, display: 'grid', gap: 5 }}
+                    >
+                      <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, overflowWrap: 'anywhere' }}>
+                        {item.title || item.object?.label || item.object?.id || 'Activation feedback'}
+                      </div>
+                      <div style={{ fontSize: t.font.sizeXs, color: statusColor, fontWeight: t.font.weightSemibold }}>
+                        {item.status || 'setup'} · {item.recommendation || 'review'}
+                      </div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                        {item.reason}
+                      </div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                        {item.object?.type || 'object'} · {Number(item.evidence?.matched_touchpoints || 0).toLocaleString()} touchpoints · {Number(item.evidence?.conversions || 0).toLocaleString()} conversions
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              {activationFeedback?.decision?.subtitle || 'No activation feedback is attached to this budget recommendation yet.'}
+            </div>
+          )}
+        </SectionCard>
       </div>
 
       <div style={{ marginBottom: t.space.xl }}>
