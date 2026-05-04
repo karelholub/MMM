@@ -1,6 +1,7 @@
 import pytest
 
 from app.services_activation_measurement import (
+    build_activation_feedback_export,
     build_activation_feedback_recommendations,
     build_activation_object_registry,
     build_activation_measurement_evidence,
@@ -234,6 +235,19 @@ def test_activation_feedback_blocks_without_objects():
     assert feedback["items"] == []
     assert feedback["decision"]["status"] == "blocked"
     assert feedback["decision"]["actions"][0]["id"] == "import-activation-events"
+
+
+def test_activation_feedback_export_builds_decision_engine_payload():
+    payload = build_activation_feedback_export(journeys=_journeys(), limit=5, generated_by="pytest")
+
+    assert payload["schema_version"] == "activation_feedback_export.v1"
+    assert payload["generated_by"] == "pytest"
+    assert payload["summary"]["signals"] == len(payload["signals"])
+    signal = payload["signals"][0]
+    assert signal["signal_id"].startswith("activation_feedback:")
+    assert signal["object"]["source_systems"] == ["deciEngine"]
+    assert signal["metrics"]["conversions"] == 1
+    assert signal["decision_engine_hint"]["eligible_for_policy_input"] is True
 
 
 def test_activation_measurement_returns_unavailable_for_no_match():
