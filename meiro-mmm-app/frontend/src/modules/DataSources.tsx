@@ -396,6 +396,12 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
     enabled: meiroDrawerOpen,
   })
 
+  useEffect(() => {
+    const email = (permissions.auth?.user?.email || '').trim()
+    if (!email || deciEngineImportDraft.user_email) return
+    setDeciEngineImportDraft((prev) => ({ ...prev, user_email: email }))
+  }, [permissions.auth?.user?.email, deciEngineImportDraft.user_email])
+
   const uploadMutation = useMutation({
     mutationFn: async (file: File) => {
       const fd = new FormData()

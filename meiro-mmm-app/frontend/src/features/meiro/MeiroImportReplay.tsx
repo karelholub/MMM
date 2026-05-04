@@ -180,6 +180,9 @@ export default function MeiroImportReplay({
   )
   const openRecordCount = openRecordIndices.length
   const remediatedRecordCount = Math.max(0, indexedRecords.length - openRecordCount)
+  const canImportDeciEngineEvents = Boolean(
+    deciEngineImportDraft.source_url.trim() && (deciEngineImportDraft.user_email || '').trim(),
+  )
   const updateDeciEngineImportDraft = (patch: Partial<DeciEngineEventsImportPayload>) => {
     onDeciEngineImportDraftChange({ ...deciEngineImportDraft, ...patch })
   }
@@ -280,10 +283,10 @@ export default function MeiroImportReplay({
           <button
             type="button"
             onClick={onImportDeciEngineEvents}
-            disabled={deciEngineImportPending || !deciEngineImportDraft.source_url.trim()}
-            style={{ border: `1px solid ${t.color.accent}`, background: t.color.accent, color: '#fff', borderRadius: t.radius.sm, padding: '8px 10px', cursor: deciEngineImportPending ? 'wait' : 'pointer', opacity: deciEngineImportPending || !deciEngineImportDraft.source_url.trim() ? 0.7 : 1 }}
+            disabled={deciEngineImportPending || !canImportDeciEngineEvents}
+            style={{ border: `1px solid ${t.color.accent}`, background: t.color.accent, color: '#fff', borderRadius: t.radius.sm, padding: '8px 10px', cursor: deciEngineImportPending ? 'wait' : 'pointer', opacity: deciEngineImportPending || !canImportDeciEngineEvents ? 0.7 : 1 }}
           >
-            {deciEngineImportPending ? 'Importing…' : 'Import activation events'}
+            {deciEngineImportPending ? 'Importing…' : canImportDeciEngineEvents ? 'Import activation events' : 'Enter user email'}
           </button>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: t.space.sm }}>
@@ -293,7 +296,7 @@ export default function MeiroImportReplay({
           </label>
           <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
             User email
-            <input value={deciEngineImportDraft.user_email || ''} onChange={(e) => updateDeciEngineImportDraft({ user_email: e.target.value })} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+            <input type="email" value={deciEngineImportDraft.user_email || ''} onChange={(e) => updateDeciEngineImportDraft({ user_email: e.target.value })} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
           </label>
           <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
             Profile filter
@@ -310,6 +313,8 @@ export default function MeiroImportReplay({
         </div>
         {deciEngineImportError ? (
           <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{deciEngineImportError}</div>
+        ) : !canImportDeciEngineEvents ? (
+          <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>User email is required because deciEngine authorizes the event feed through `X-User-Email`.</div>
         ) : deciEngineImportResult ? (
           <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
             {deciEngineImportResult.message || `Loaded ${Number(deciEngineImportResult.count || 0).toLocaleString()} journeys from deciEngine activation events`}.

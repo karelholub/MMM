@@ -38,6 +38,7 @@ import {
   type MeiroWebhookArchiveStatus,
   type MeiroWebhookReprocessResult,
 } from '../features/meiro/shared'
+import { usePermissions } from '../hooks/usePermissions'
 
 interface MeiroIntegrationPageProps {
   onJourneysImported: () => void
@@ -104,6 +105,7 @@ function statusTone(connected: boolean, warning: boolean) {
 
 export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegrationPageProps) {
   const queryClient = useQueryClient()
+  const permissions = usePermissions()
   const [meiroTab, setMeiroTab] = useState<MeiroTab>('overview')
   const [meiroUrl, setMeiroUrl] = useState('')
   const [meiroKey, setMeiroKey] = useState('')
@@ -165,6 +167,12 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
     queryFn: () => getMeiroQuarantineRun(String(selectedQuarantineRunId)),
     enabled: Boolean(selectedQuarantineRunId),
   })
+
+  useEffect(() => {
+    const email = (permissions.auth?.user?.email || '').trim()
+    if (!email || deciEngineImportDraft.user_email) return
+    setDeciEngineImportDraft((prev) => ({ ...prev, user_email: email }))
+  }, [permissions.auth?.user?.email, deciEngineImportDraft.user_email])
 
   const invalidateJourneyState = async () => {
     onJourneysImported()
