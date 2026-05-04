@@ -58,6 +58,25 @@ interface CampaignSuggestionResponse {
   reason?: string
 }
 
+interface ActivationFeedbackItem {
+  object?: { type?: string; id?: string; label?: string }
+  recommendation?: string
+  status?: string
+  title?: string
+  reason?: string
+  evidence?: {
+    matched_touchpoints?: number
+    conversions?: number
+    revenue?: number
+  }
+}
+
+interface ActivationFeedbackResponse {
+  items?: ActivationFeedbackItem[]
+  summary?: { ready?: number; warning?: number; setup?: number }
+  decision?: { warnings?: string[] }
+}
+
 interface CampaignData {
   campaign: string
   channel: string
@@ -475,6 +494,15 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       })
     },
     enabled: !!trendDateRange.dateFrom && !!trendDateRange.dateTo,
+    refetchInterval: false,
+  })
+
+  const activationFeedbackQuery = useQuery<ActivationFeedbackResponse>({
+    queryKey: ['campaign-performance', 'activation-feedback'],
+    queryFn: async () =>
+      apiGetJson<ActivationFeedbackResponse>('/api/measurement/activation-feedback?limit=4', {
+        fallbackMessage: 'Failed to load activation feedback',
+      }),
     refetchInterval: false,
   })
 
@@ -1367,6 +1395,13 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       channel: campaign.channel,
       spendAllocatedShare: campaign.spend_source?.current?.allocated_share ?? 0,
     }))
+  const activationFeedbackItems = activationFeedbackQuery.data?.items ?? []
+  const activationMeasurementHref = (item: ActivationFeedbackItem) => {
+    const params = new URLSearchParams({ page: 'meiro', meiro_tab: 'import' })
+    if (item.object?.type) params.set('activation_object_type', item.object.type)
+    if (item.object?.id) params.set('activation_object_id', item.object.id)
+    return `/?${params.toString()}`
+  }
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto' }}>
       {!!summaryQuery.data?.notes?.length && (
@@ -1458,6 +1493,52 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
           Why?
         </button>
       </div>
+
+      {(activationFeedbackItems.length > 0 || activationFeedbackQuery.isLoading || activationFeedbackQuery.isError) ? (
+        <div style={{ marginBottom: t.space.md }}>
+          <SectionCard
+            title="Measured activation feedback"
+            subtitle="Activation objects with imported journey evidence that can inform campaign, MMM, and MTA decisions."
+          >
+            {activationFeedbackQuery.isLoading ? (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Loading measured activation feedback...</div>
+            ) : activationFeedbackQuery.isError ? (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>{(activationFeedbackQuery.error as Error)?.message || 'Activation feedback is unavailable.'}</div>
+            ) : (
+              <div style={{ display: 'grid', gap: t.space.sm }}>
+                <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                  <span>Ready {Number(activationFeedbackQuery.data?.summary?.ready || 0).toLocaleString()}</span>
+                  <span>Review {Number(activationFeedbackQuery.data?.summary?.warning || 0).toLocaleString()}</span>
+                  <span>Setup {Number(activationFeedbackQuery.data?.summary?.setup || 0).toLocaleString()}</span>
+                </div>
+                {activationFeedbackQuery.data?.decision?.warnings?.length ? (
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.warning }}>{activationFeedbackQuery.data.decision.warnings.join(' · ')}</div>
+                ) : null}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: t.space.sm }}>
+                  {activationFeedbackItems.map((item, index) => {
+                    const color = item.status === 'ready' ? t.color.success : item.status === 'warning' ? t.color.warning : t.color.textMuted
+                    return (
+                      <a
+                        key={`${item.object?.type || 'object'}:${item.object?.id || index}`}
+                        href={activationMeasurementHref(item)}
+                        style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.surface, textDecoration: 'none', display: 'grid', gap: 5 }}
+                      >
+                        <span style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, overflowWrap: 'anywhere' }}>{item.title || item.object?.label || item.object?.id || 'Activation object'}</span>
+                        <span style={{ fontSize: t.font.sizeXs, color, fontWeight: t.font.weightSemibold }}>{item.status || 'setup'} · {item.recommendation || 'review'}</span>
+                        <span style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>{item.reason || 'Review activation measurement evidence.'}</span>
+                        <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                          {Number(item.evidence?.matched_touchpoints || 0).toLocaleString()} touchpoints · {Number(item.evidence?.conversions || 0).toLocaleString()} conversions · revenue {Number(item.evidence?.revenue || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                        </span>
+                        <span style={{ fontSize: t.font.sizeXs, color: t.color.accent, fontWeight: t.font.weightSemibold }}>Open evidence</span>
+                      </a>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+          </SectionCard>
+        </div>
+      ) : null}
 
       {focusedSegmentSummary ? (
         <div style={{ marginBottom: t.space.xl }}>
