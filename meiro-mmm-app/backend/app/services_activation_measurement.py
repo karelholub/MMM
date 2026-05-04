@@ -431,3 +431,147 @@ def build_activation_measurement_evidence(
         "limit": resolved_limit,
         "items": items,
     }
+
+
+def build_activation_object_registry(
+    *,
+    journeys: List[Dict[str, Any]],
+    object_type: Optional[str] = None,
+    q: Optional[str] = None,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    resolved_type = _as_text(object_type).lower()
+    if resolved_type and resolved_type not in SUPPORTED_ACTIVATION_OBJECT_TYPES:
+        raise ValueError(f"Unsupported activation object_type '{object_type}'")
+    query = _as_text(q).lower()
+    resolved_limit = max(1, min(int(limit or 50), 200))
+    objects: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+    def add_object(
+        *,
+        typ: str,
+        object_id: Any,
+        journey: Dict[str, Any],
+        touchpoint: Dict[str, Any],
+        aliases: Optional[Sequence[Any]] = None,
+        label: Optional[str] = None,
+    ) -> None:
+        oid = _as_text(object_id)
+        if not oid:
+            return
+        if resolved_type and typ != resolved_type:
+            return
+        activation = _activation_meta(touchpoint)
+        haystack = " ".join([typ, oid, _as_text(label), *[_as_text(alias) for alias in aliases or []]]).lower()
+        if query and query not in haystack:
+            return
+        key = (typ, oid)
+        item = objects.setdefault(
+            key,
+            {
+                "object_type": typ,
+                "object_id": oid,
+                "label": _as_text(label) or oid,
+                "aliases": set(),
+                "matched_touchpoints": 0,
+                "journey_ids": set(),
+                "profile_ids": set(),
+                "converted_journey_ids": set(),
+                "revenue": 0.0,
+                "source_systems": set(),
+                "last_touchpoint_at": None,
+            },
+        )
+        item["matched_touchpoints"] += 1
+        journey_id = _journey_id(journey)
+        if journey_id:
+            item["journey_ids"].add(journey_id)
+        profile_id = _profile_id(journey)
+        if profile_id:
+            item["profile_ids"].add(profile_id)
+        if _journey_is_converted(journey) and journey_id and journey_id not in item["converted_journey_ids"]:
+            item["converted_journey_ids"].add(journey_id)
+            item["revenue"] += float(journey_revenue_value(journey) or 0.0)
+        for alias in aliases or []:
+            text = _as_text(alias)
+            if text and text != oid:
+                item["aliases"].add(text)
+        source_system = _as_text(activation.get("source_system"))
+        if source_system:
+            item["source_systems"].add(source_system)
+        touchpoint_at = _as_text(touchpoint.get("ts") or touchpoint.get("timestamp"))
+        if touchpoint_at and (not item["last_touchpoint_at"] or touchpoint_at > item["last_touchpoint_at"]):
+            item["last_touchpoint_at"] = touchpoint_at
+
+    for journey, touchpoint, _index in _iter_touchpoints(journeys):
+        activation = _activation_meta(touchpoint)
+        campaign_id = activation.get("activation_campaign_id") or activation.get("campaign_id") or touchpoint.get("campaign_id") or _touchpoint_campaign_name(touchpoint)
+        add_object(
+            typ="campaign",
+            object_id=campaign_id,
+            journey=journey,
+            touchpoint=touchpoint,
+            aliases=[activation.get("native_meiro_campaign_id"), touchpoint.get("campaign_id"), _touchpoint_campaign_name(touchpoint)],
+            label=_touchpoint_campaign_name(touchpoint) or _as_text(campaign_id),
+        )
+        add_object(
+            typ="asset",
+            object_id=activation.get("creative_asset_id") or activation.get("native_meiro_asset_id") or activation.get("asset_id"),
+            journey=journey,
+            touchpoint=touchpoint,
+            aliases=[activation.get("asset_id"), activation.get("native_meiro_asset_id"), activation.get("offer_id"), activation.get("content_block_id"), activation.get("bundle_id")],
+        )
+        add_object(
+            typ="offer",
+            object_id=activation.get("offer_id"),
+            journey=journey,
+            touchpoint=touchpoint,
+        )
+        add_object(
+            typ="content",
+            object_id=activation.get("content_block_id"),
+            journey=journey,
+            touchpoint=touchpoint,
+            aliases=[activation.get("creative_asset_id"), activation.get("native_meiro_asset_id")],
+        )
+        add_object(
+            typ="bundle",
+            object_id=activation.get("bundle_id") or activation.get("offer_catalog_id") or activation.get("native_meiro_catalog_id"),
+            journey=journey,
+            touchpoint=touchpoint,
+            aliases=[activation.get("offer_catalog_id"), activation.get("native_meiro_catalog_id")],
+        )
+        for typ, field in [
+            ("decision", "decision_key"),
+            ("decision_stack", "decision_stack_key"),
+            ("experiment", "experiment_key"),
+            ("variant", "variant_key"),
+            ("placement", "placement_key"),
+            ("template", "template_key"),
+        ]:
+            add_object(
+                typ=typ,
+                object_id=activation.get(field),
+                journey=journey,
+                touchpoint=touchpoint,
+            )
+
+    items = []
+    for item in objects.values():
+        items.append(
+            {
+                "object_type": item["object_type"],
+                "object_id": item["object_id"],
+                "label": item["label"],
+                "aliases": sorted(item["aliases"]),
+                "matched_touchpoints": item["matched_touchpoints"],
+                "matched_journeys": len(item["journey_ids"]),
+                "matched_profiles": len(item["profile_ids"]),
+                "conversions": len(item["converted_journey_ids"]),
+                "revenue": round(float(item["revenue"] or 0.0), 6),
+                "source_systems": sorted(item["source_systems"]),
+                "last_touchpoint_at": item["last_touchpoint_at"],
+            }
+        )
+    items.sort(key=lambda item: (-(item["matched_touchpoints"] or 0), item["object_type"], item["object_id"]))
+    return {"items": items[:resolved_limit], "total": len(items), "limit": resolved_limit}

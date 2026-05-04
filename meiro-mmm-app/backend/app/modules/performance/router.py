@@ -13,6 +13,7 @@ from app.services_canonical_facts import iter_canonical_conversion_rows
 from app.services_import_runs import get_last_successful_run, get_runs as get_import_runs
 from app.services_nba_defaults import filter_nba_recommendations
 from app.services_activation_measurement import (
+    build_activation_object_registry,
     build_activation_measurement_evidence,
     build_activation_measurement_summary,
 )
@@ -374,6 +375,26 @@ def create_router(
                 date_to=date_to,
                 conversion_key=conversion_key,
             )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.get("/api/measurement/activation-objects")
+    def activation_measurement_objects(
+        object_type: Optional[str] = Query(
+            None,
+            description=(
+                "Optional object type filter: campaign | decision | decision_stack | asset | offer | content | "
+                "bundle | experiment | variant | placement | template"
+            ),
+        ),
+        q: Optional[str] = Query(None, description="Optional substring search over object ids, labels, and aliases"),
+        limit: int = Query(50, ge=1, le=200, description="Maximum objects to return"),
+        db=Depends(get_db_dependency),
+        _ctx=Depends(require_permission_dependency("attribution.view")),
+    ):
+        journeys = ensure_journeys_loaded_fn(db)
+        try:
+            return build_activation_object_registry(journeys=journeys, object_type=object_type, q=q, limit=limit)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

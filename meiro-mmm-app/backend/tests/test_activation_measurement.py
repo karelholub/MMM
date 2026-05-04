@@ -1,6 +1,10 @@
 import pytest
 
-from app.services_activation_measurement import build_activation_measurement_evidence, build_activation_measurement_summary
+from app.services_activation_measurement import (
+    build_activation_object_registry,
+    build_activation_measurement_evidence,
+    build_activation_measurement_summary,
+)
 
 
 def _journeys():
@@ -179,6 +183,35 @@ def test_activation_measurement_evidence_returns_capped_rows():
     assert item["activation"]["activation_campaign_id"] == "spring_hero"
     assert item["activation"]["decision_key"] == "homepage_offer_decision"
     assert item["activation"]["offer_id"] == "spring_discount_10"
+
+
+def test_activation_object_registry_discovers_measurable_objects():
+    registry = build_activation_object_registry(journeys=_journeys(), limit=20)
+
+    campaign = next(item for item in registry["items"] if item["object_type"] == "campaign" and item["object_id"] == "spring_hero")
+    assert campaign["matched_touchpoints"] == 2
+    assert campaign["matched_journeys"] == 2
+    assert campaign["matched_profiles"] == 2
+    assert campaign["conversions"] == 1
+    assert campaign["revenue"] == 50
+    assert campaign["aliases"] == ["meiro-native-spring"]
+    assert campaign["source_systems"] == ["deciEngine"]
+
+    asset = next(item for item in registry["items"] if item["object_type"] == "asset" and item["object_id"] == "meiro-creative-spring")
+    assert asset["matched_touchpoints"] == 1
+    assert asset["aliases"] == ["meiro-asset-spring", "spring_copy", "spring_discount_10"]
+
+
+def test_activation_object_registry_filters_by_type_and_query():
+    decisions = build_activation_object_registry(journeys=_journeys(), object_type="decision")
+    assert [item["object_id"] for item in decisions["items"]] == ["homepage_offer_decision"]
+
+    native_campaigns = build_activation_object_registry(journeys=_journeys(), q="native-spring")
+    assert [
+        (item["object_type"], item["object_id"])
+        for item in native_campaigns["items"]
+        if item["object_type"] == "campaign"
+    ] == [("campaign", "spring_hero")]
 
 
 def test_activation_measurement_returns_unavailable_for_no_match():
