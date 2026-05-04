@@ -273,6 +273,42 @@ def test_event_contract_sample_sender_makes_readiness_ready(monkeypatch, tmp_pat
     assert status.json()["events_received"] == 2
 
 
+def test_event_contract_sample_can_replay_latest_raw_batch_to_attribution(monkeypatch, tmp_path):
+    monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(meiro_config, "CONFIG_PATH", tmp_path / "meiro_config.json")
+    monkeypatch.setattr(meiro_config, "WEBHOOK_ARCHIVE_PATH", tmp_path / "meiro_webhook_archive.jsonl")
+    monkeypatch.setattr(meiro_config, "EVENT_ARCHIVE_PATH", tmp_path / "meiro_event_archive.jsonl")
+    _clear_meiro_raw_batches()
+    _clear_meiro_replay_runs()
+    _clear_conversion_paths()
+    _clear_meiro_event_profile_state()
+    _clear_meiro_event_facts()
+
+    client = TestClient(app)
+    sample = client.post("/api/connectors/meiro/events/contract-sample")
+    assert sample.status_code == 200
+
+    replay = client.post(
+        "/api/connectors/meiro/webhook/reprocess",
+        json={
+            "archive_source": "events",
+            "replay_mode": "last_n",
+            "archive_limit": 1,
+            "persist_to_attribution": True,
+            "import_note": "Test contract sample replay",
+        },
+    )
+
+    assert replay.status_code == 200
+    payload = replay.json()
+    assert payload["archive_source"] == "events"
+    assert payload["persisted_to_attribution"] is True
+    assert payload["archive_entries_used"] == 1
+    assert payload["event_reconstruction_diagnostics"]["touchpoints_reconstructed"] >= 1
+    assert payload["event_reconstruction_diagnostics"]["conversions_reconstructed"] >= 1
+    assert payload["import_result"]["count"] >= 1
+
+
 def test_webhook_suggestions_include_raw_event_ingests(monkeypatch, tmp_path):
     monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(meiro_config, "CONFIG_PATH", tmp_path / "meiro_config.json")

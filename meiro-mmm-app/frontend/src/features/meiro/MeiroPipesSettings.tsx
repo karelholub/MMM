@@ -4,7 +4,7 @@ import { AnalyticsTable, type AnalyticsTableColumn } from '../../components/dash
 import type { MeiroConfig, MeiroEventArchiveBatch, MeiroPullConfig, MeiroWebhookDiagnostics, MeiroWebhookEvent } from '../../connectors/meiroConnector'
 import { apiGetJson, apiSendJson } from '../../lib/apiClient'
 import { tokens as t } from '../../theme/tokens'
-import { DEFAULT_MEIRO_PULL_CONFIG, type MeiroWebhookArchiveStatus } from './shared'
+import { DEFAULT_MEIRO_PULL_CONFIG, type MeiroWebhookArchiveStatus, type MeiroWebhookReprocessResult } from './shared'
 
 interface MeiroPipesSettingsProps {
   meiroConfig?: MeiroConfig
@@ -85,6 +85,9 @@ export default function MeiroPipesSettings({
   const [contractReadinessPending, setContractReadinessPending] = useState(false)
   const [contractReadinessError, setContractReadinessError] = useState<string | null>(null)
   const [contractSamplePending, setContractSamplePending] = useState(false)
+  const [contractReplayPending, setContractReplayPending] = useState(false)
+  const [contractReplayResult, setContractReplayResult] = useState<MeiroWebhookReprocessResult | null>(null)
+  const [contractReplayError, setContractReplayError] = useState<string | null>(null)
 
   useEffect(() => {
     setAliasDraft(aliasText)
@@ -128,6 +131,30 @@ export default function MeiroPipesSettings({
       setContractReadinessError((error as Error)?.message || 'Failed to send raw-event contract sample')
     } finally {
       setContractSamplePending(false)
+    }
+  }
+  const replayLatestContractEvents = async () => {
+    setContractReplayPending(true)
+    setContractReplayError(null)
+    try {
+      const result = await apiSendJson<MeiroWebhookReprocessResult>(
+        '/api/connectors/meiro/webhook/reprocess',
+        'POST',
+        {
+          archive_source: 'events',
+          replay_mode: 'last_n',
+          archive_limit: 1,
+          persist_to_attribution: true,
+          import_note: 'Imported latest raw-event contract batch from Pipes readiness',
+        },
+        { fallbackMessage: 'Failed to import latest raw events into attribution' },
+      )
+      setContractReplayResult(result)
+      await loadContractReadiness()
+    } catch (error) {
+      setContractReplayError((error as Error)?.message || 'Failed to import latest raw events into attribution')
+    } finally {
+      setContractReplayPending(false)
     }
   }
   useEffect(() => {
@@ -294,7 +321,7 @@ export default function MeiroPipesSettings({
           <button
             type="button"
             onClick={() => void loadContractReadiness()}
-            disabled={contractReadinessPending || contractSamplePending}
+            disabled={contractReadinessPending || contractSamplePending || contractReplayPending}
             style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '8px 10px', cursor: contractReadinessPending ? 'wait' : 'pointer', opacity: contractReadinessPending ? 0.7 : 1 }}
           >
             {contractReadinessPending ? 'Checking...' : 'Refresh readiness'}
@@ -307,7 +334,37 @@ export default function MeiroPipesSettings({
           >
             {contractSamplePending ? 'Sending sample...' : 'Send contract sample'}
           </button>
+          <button
+            type="button"
+            onClick={() => void replayLatestContractEvents()}
+            disabled={contractReplayPending || !Number(meiroEventArchiveStatus?.events_received || 0)}
+            style={{ border: `1px solid ${t.color.success}`, background: contractReplayPending || !Number(meiroEventArchiveStatus?.events_received || 0) ? t.color.surface : t.color.success, color: contractReplayPending || !Number(meiroEventArchiveStatus?.events_received || 0) ? t.color.textSecondary : '#fff', borderRadius: t.radius.sm, padding: '8px 10px', cursor: contractReplayPending ? 'wait' : 'pointer', opacity: contractReplayPending || !Number(meiroEventArchiveStatus?.events_received || 0) ? 0.75 : 1 }}
+          >
+            {contractReplayPending ? 'Importing...' : 'Import latest raw batch'}
+          </button>
         </div>
+        {contractReplayError ? (
+          <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{contractReplayError}</div>
+        ) : contractReplayResult ? (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: t.space.sm }}>
+            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.surface }}>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Replay source</div>
+              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>{contractReplayResult.archive_source || 'events'}</div>
+            </div>
+            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.surface }}>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Profiles rebuilt</div>
+              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>{Number(contractReplayResult.reprocessed_profiles || 0).toLocaleString()}</div>
+            </div>
+            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.surface }}>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Journeys imported</div>
+              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>{Number(contractReplayResult.import_result?.count || contractReplayResult.event_reconstruction_diagnostics?.journeys_persisted || 0).toLocaleString()}</div>
+            </div>
+            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.surface }}>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Attribution</div>
+              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: contractReplayResult.persisted_to_attribution ? t.color.success : t.color.warning }}>{contractReplayResult.persisted_to_attribution ? 'Updated' : 'Not persisted'}</div>
+            </div>
+          </div>
+        ) : null}
         {contractReadinessError ? (
           <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{contractReadinessError}</div>
         ) : contractReadiness ? (
