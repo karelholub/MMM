@@ -16,6 +16,7 @@ from app.modules.mmm.schemas import (
     OptimizeRequest,
     ValidateMappingRequest,
 )
+from app.services_activation_measurement import build_activation_feedback_recommendations
 from app.services_budget_recommendations import (
     build_budget_recommendations,
     create_budget_scenario,
@@ -141,7 +142,7 @@ def create_router(
         roi_rows = run.get("roi") or []
         roi_values = [float(row.get("roi") or 0.0) for row in roi_rows if isinstance(row, dict)]
         action = _budget_blocked_action(quality)
-        return {
+        response = {
             "run_id": run_id,
             "objective": objective,
             "recommendations": [],
@@ -160,6 +161,26 @@ def create_router(
                 "quality": quality,
             },
         }
+        return response
+
+    def _budget_activation_feedback(db: Any) -> Dict[str, Any]:
+        try:
+            journeys = ensure_journeys_loaded_fn(db)
+            return build_activation_feedback_recommendations(journeys=journeys, limit=5)
+        except Exception:
+            return {
+                "items": [],
+                "total": 0,
+                "limit": 5,
+                "summary": {"ready": 0, "warning": 0, "setup": 0},
+                "decision": {
+                    "status": "unavailable",
+                    "subtitle": "Activation feedback is unavailable for this budget run.",
+                    "blockers": [],
+                    "warnings": ["Activation feedback could not be loaded from the current journey source."],
+                    "actions": [],
+                },
+            }
 
     def _assert_run_can_use_budget(run: Dict[str, Any], *, dataset_available: bool | None = None) -> Dict[str, Any]:
         quality = _run_quality(run, dataset_available=dataset_available)
@@ -659,6 +680,7 @@ def create_router(
         run_id: str,
         objective: str = "protect_efficiency",
         total_budget_change_pct: float = 0.0,
+        db=Depends(get_db_dependency),
     ):
         _ensure_mmm_enabled()
         try:
@@ -670,17 +692,23 @@ def create_router(
             if not run:
                 raise
             quality = _run_quality(run, dataset_available=False)
-            return _budget_blocked_response(run_id, run, quality, total_budget_change_pct, objective)
+            response = _budget_blocked_response(run_id, run, quality, total_budget_change_pct, objective)
+            response["activation_feedback"] = _budget_activation_feedback(db)
+            return response
         quality = _run_quality(run, dataset_available=True)
         if not quality.get("can_use_budget"):
-            return _budget_blocked_response(run_id, run, quality, total_budget_change_pct, objective)
-        return build_budget_recommendations(
+            response = _budget_blocked_response(run_id, run, quality, total_budget_change_pct, objective)
+            response["activation_feedback"] = _budget_activation_feedback(db)
+            return response
+        response = build_budget_recommendations(
             run_id=run_id,
             run=run,
             dataset_rows=dataset_rows,
             objective=objective,
             total_budget_change_pct=total_budget_change_pct,
         )
+        response["activation_feedback"] = _budget_activation_feedback(db)
+        return response
 
     @router.get("/api/models/{run_id}/budget/scenarios")
     def list_budget_scenarios(run_id: str, db=Depends(get_db_dependency)):
