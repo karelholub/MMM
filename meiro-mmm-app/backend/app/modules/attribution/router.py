@@ -381,7 +381,7 @@ def create_router(
     @router.post("/api/attribution/journeys/activate-source")
     def activate_journey_source(payload: JourneySourceActivatePayload, db=Depends(get_db_dependency)):
         source = normalize_journey_source_fn(payload.source)
-        if source not in {"sample", "upload", "meiro"}:
+        if source not in {"sample", "upload", "meiro", "deciengine_inapp_events"}:
             raise HTTPException(status_code=400, detail="Unsupported source")
 
         if source == "sample":
@@ -393,6 +393,11 @@ def create_router(
             result = import_journeys_from_cdp_fn(from_cdp_request_factory(import_note=payload.import_note), db)
             set_active_journey_source_fn("meiro")
             return {"ok": True, "active_source": "meiro", "result": result}
+
+        if source == "deciengine_inapp_events":
+            result = import_journeys_from_deciengine_events({"use_saved_config": True}, db)
+            set_active_journey_source_fn("deciengine_inapp_events")
+            return {"ok": True, "active_source": "deciengine_inapp_events", "result": result}
 
         if not latest_upload_file_obj.exists():
             raise HTTPException(status_code=404, detail="No uploaded JSON source available. Upload a file first.")
