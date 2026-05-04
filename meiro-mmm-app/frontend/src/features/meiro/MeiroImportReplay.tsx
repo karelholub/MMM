@@ -287,6 +287,21 @@ export default function MeiroImportReplay({
   const updateDeciEngineImportDraft = (patch: Partial<DeciEngineEventsImportPayload>) => {
     onDeciEngineImportDraftChange({ ...deciEngineImportDraft, ...patch })
   }
+  const measurementDraftForObject = (
+    item: ActivationMeasurementObject,
+    prev = measurementDraft,
+  ) => {
+    const alias = (item.aliases || []).find((value) => value.startsWith('meiro-')) || ''
+    return {
+      ...prev,
+      object_type: item.object_type,
+      object_id: item.object_id,
+      native_meiro_campaign_id: item.object_type === 'campaign' ? alias : prev.native_meiro_campaign_id,
+      creative_asset_id: item.object_type === 'asset' ? item.object_id : prev.creative_asset_id,
+      native_meiro_asset_id: item.object_type === 'asset' ? alias : prev.native_meiro_asset_id,
+      offer_catalog_id: item.object_type === 'bundle' ? item.object_id : prev.offer_catalog_id,
+    }
+  }
   const loadActivationObjects = async () => {
     setActivationObjectsPending(true)
     setActivationObjectsError(null)
@@ -315,18 +330,7 @@ export default function MeiroImportReplay({
     }
   }
   const selectActivationObject = (item: ActivationMeasurementObject) => {
-    setMeasurementDraft((prev) => {
-      const alias = (item.aliases || []).find((value) => value.startsWith('meiro-')) || ''
-      return {
-        ...prev,
-        object_type: item.object_type,
-        object_id: item.object_id,
-        native_meiro_campaign_id: item.object_type === 'campaign' ? alias : prev.native_meiro_campaign_id,
-        creative_asset_id: item.object_type === 'asset' ? item.object_id : prev.creative_asset_id,
-        native_meiro_asset_id: item.object_type === 'asset' ? alias : prev.native_meiro_asset_id,
-        offer_catalog_id: item.object_type === 'bundle' ? item.object_id : prev.offer_catalog_id,
-      }
-    })
+    setMeasurementDraft((prev) => measurementDraftForObject(item, prev))
   }
   const loadActivationFeedbackExport = async () => {
     setActivationFeedbackExportPending(true)
@@ -371,16 +375,16 @@ export default function MeiroImportReplay({
       setActivationFeedbackExportPending(false)
     }
   }
-  const runActivationMeasurement = async () => {
+  const runActivationMeasurement = async (draft = measurementDraft) => {
     setMeasurementPending(true)
     setMeasurementError(null)
     try {
       const result = await apiGetJson<ActivationMeasurementSummary>(
-        withQuery('/api/measurement/activation-summary', measurementDraft),
+        withQuery('/api/measurement/activation-summary', draft),
         { fallbackMessage: 'Failed to load activation measurement summary' },
       )
       const evidence = await apiGetJson<ActivationMeasurementEvidence>(
-        withQuery('/api/measurement/activation-evidence', { ...measurementDraft, limit: 5 }),
+        withQuery('/api/measurement/activation-evidence', { ...draft, limit: 5 }),
         { fallbackMessage: 'Failed to load activation measurement evidence' },
       )
       setMeasurementResult(result)
@@ -391,6 +395,20 @@ export default function MeiroImportReplay({
     } finally {
       setMeasurementPending(false)
     }
+  }
+  const measureActivationObject = (item: ActivationMeasurementObject) => {
+    const nextDraft = measurementDraftForObject(item)
+    setMeasurementDraft(nextDraft)
+    void runActivationMeasurement(nextDraft)
+  }
+  const measureActivationFeedbackItem = (item: ActivationFeedbackItem) => {
+    if (!item.object?.type || !item.object?.id) return
+    measureActivationObject({
+      object_type: item.object.type,
+      object_id: item.object.id,
+      label: item.object.label,
+      aliases: item.object.aliases || [],
+    })
   }
 
   useEffect(() => {
@@ -643,6 +661,26 @@ export default function MeiroImportReplay({
                   ))}
                 </div>
               ) : null}
+              {activationFeedback.items[0] ? (
+                <div style={{ border: `1px solid ${t.color.accent}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.accentMuted, display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <div style={{ display: 'grid', gap: 3 }}>
+                    <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                      Next best activation review
+                    </div>
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                      {activationFeedback.items[0].title || activationFeedback.items[0].object?.label || activationFeedback.items[0].object?.id} · {activationFeedback.items[0].reason}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => measureActivationFeedbackItem(activationFeedback.items![0])}
+                    disabled={measurementPending}
+                    style={{ border: `1px solid ${t.color.accent}`, background: t.color.accent, color: '#fff', borderRadius: t.radius.sm, padding: '7px 10px', cursor: measurementPending ? 'wait' : 'pointer', fontSize: t.font.sizeXs, fontWeight: t.font.weightSemibold, opacity: measurementPending ? 0.75 : 1 }}
+                  >
+                    {measurementPending ? 'Measuring...' : 'Measure now'}
+                  </button>
+                </div>
+              ) : null}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: t.space.sm }}>
                 {activationFeedback.items.map((item, index) => {
                   const statusColor = item.status === 'ready' ? t.color.success : item.status === 'warning' ? t.color.warning : t.color.textMuted
@@ -650,14 +688,18 @@ export default function MeiroImportReplay({
                     <button
                       key={`${item.object?.type || 'object'}:${item.object?.id || index}:feedback`}
                       type="button"
-                      onClick={() => item.object?.type && item.object?.id && selectActivationObject({ object_type: item.object.type, object_id: item.object.id, label: item.object.label, aliases: item.object.aliases || [] })}
-                      style={{ border: `1px solid ${t.color.borderLight}`, background: t.color.surface, borderRadius: t.radius.sm, padding: t.space.sm, cursor: item.object?.id ? 'pointer' : 'default', display: 'grid', gap: 5, textAlign: 'left' }}
+                      onClick={() => measureActivationFeedbackItem(item)}
+                      disabled={measurementPending || !item.object?.id}
+                      style={{ border: `1px solid ${t.color.borderLight}`, background: t.color.surface, borderRadius: t.radius.sm, padding: t.space.sm, cursor: measurementPending ? 'wait' : item.object?.id ? 'pointer' : 'default', display: 'grid', gap: 5, textAlign: 'left', opacity: measurementPending ? 0.82 : 1 }}
                     >
                       <span style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, overflowWrap: 'anywhere' }}>{item.title || item.object?.label || item.object?.id || 'Activation feedback'}</span>
                       <span style={{ fontSize: t.font.sizeXs, color: statusColor, fontWeight: t.font.weightSemibold }}>{item.status || 'setup'} · {item.recommendation || 'review'}</span>
                       <span style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>{item.reason}</span>
                       <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
                         {Number(item.evidence?.matched_touchpoints || 0).toLocaleString()} touchpoints · {Number(item.evidence?.conversions || 0).toLocaleString()} conversions · revenue {Number(item.evidence?.revenue || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                      </span>
+                      <span style={{ fontSize: t.font.sizeXs, color: t.color.accent, fontWeight: t.font.weightSemibold }}>
+                        Measure this object
                       </span>
                     </button>
                   )
@@ -696,6 +738,10 @@ export default function MeiroImportReplay({
           <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{measurementError}</div>
         ) : measurementResult?.summary ? (
           <div style={{ display: 'grid', gap: t.space.sm }}>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Measurement result for <strong style={{ color: t.color.text }}>{measurementResult.object?.type || measurementDraft.object_type}</strong>{' '}
+              <strong style={{ color: t.color.text }}>{measurementResult.object?.id || measurementDraft.object_id}</strong>
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: t.space.sm }}>
               {[
                 { label: 'Touchpoints', value: Number(measurementResult.summary.matched_touchpoints || 0).toLocaleString() },
