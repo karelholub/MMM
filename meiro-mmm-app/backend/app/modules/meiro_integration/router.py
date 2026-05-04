@@ -48,6 +48,7 @@ from app.utils.meiro_config import (
     update_mapping_approval,
 )
 from app.services_meiro_readiness import build_meiro_readiness
+from app.services_meiro_event_contract import build_event_contract_readiness
 from app.services_meiro_quarantine import get_quarantine_run, get_quarantine_runs
 from app.services_meiro_raw_batches import (
     MeiroRawBatchUnavailableError,
@@ -1928,6 +1929,10 @@ def create_router(
         if not items:
             items = _get_event_archive_entries(db, limit=limit)
         return {"items": items, "total": len(items)}
+
+    @router.get("/api/connectors/meiro/events/contract-readiness")
+    def meiro_event_contract_readiness(limit: int = Query(200, ge=1, le=5000)):
+        return build_event_contract_readiness(query_event_archive_entries(limit=limit))
 
     @router.get("/api/connectors/meiro/quarantine")
     def meiro_quarantine_runs(
