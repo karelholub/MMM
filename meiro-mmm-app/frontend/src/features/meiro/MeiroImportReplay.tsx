@@ -76,6 +76,23 @@ type ActivationMeasurementSummary = {
   recommended_actions?: Array<{ id?: string; label?: string; reason?: string }>
 }
 
+type ActivationMeasurementEvidence = {
+  total_matches?: number
+  limit?: number
+  items?: Array<{
+    journey_id?: string
+    profile_id?: string
+    touchpoint_ts?: string
+    conversion_ts?: string
+    converted?: boolean
+    revenue?: number
+    channel?: string
+    campaign?: string
+    campaign_id?: string
+    activation?: Record<string, unknown>
+  }>
+}
+
 const ACTIVATION_OBJECT_TYPES = ['campaign', 'asset', 'content', 'bundle', 'offer', 'decision', 'decision_stack', 'experiment', 'variant', 'placement', 'template']
 
 function asCleaningReport(value: unknown): CleaningReportView | null {
@@ -132,6 +149,7 @@ export default function MeiroImportReplay({
   const [measurementPending, setMeasurementPending] = useState(false)
   const [measurementError, setMeasurementError] = useState<string | null>(null)
   const [measurementResult, setMeasurementResult] = useState<ActivationMeasurementSummary | null>(null)
+  const [measurementEvidence, setMeasurementEvidence] = useState<ActivationMeasurementEvidence | null>(null)
   const latestImportSummary =
     importFromMeiroResult?.import_summary ||
     reprocessWebhookArchiveResult?.import_result?.import_summary ||
@@ -194,9 +212,15 @@ export default function MeiroImportReplay({
         withQuery('/api/measurement/activation-summary', measurementDraft),
         { fallbackMessage: 'Failed to load activation measurement summary' },
       )
+      const evidence = await apiGetJson<ActivationMeasurementEvidence>(
+        withQuery('/api/measurement/activation-evidence', { ...measurementDraft, limit: 5 }),
+        { fallbackMessage: 'Failed to load activation measurement evidence' },
+      )
       setMeasurementResult(result)
+      setMeasurementEvidence(evidence)
     } catch (error) {
       setMeasurementError((error as Error)?.message || 'Failed to load activation measurement summary')
+      setMeasurementEvidence(null)
     } finally {
       setMeasurementPending(false)
     }
@@ -385,6 +409,39 @@ export default function MeiroImportReplay({
               <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>
                 {measurementResult.recommended_actions.map((action) => action.label || action.reason || action.id).join(' · ')}
               </div>
+            ) : null}
+            {!!measurementEvidence?.items?.length ? (
+              <div style={{ display: 'grid', gap: t.space.sm }}>
+                <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+                  Evidence rows ({Number(measurementEvidence.total_matches || 0).toLocaleString()} matched)
+                </div>
+                {measurementEvidence.items.map((item, index) => {
+                  const activation = item.activation || {}
+                  const key = `${item.journey_id || item.profile_id || 'journey'}-${index}`
+                  const ids = [
+                    activation.activation_campaign_id ? `activation ${activation.activation_campaign_id}` : '',
+                    activation.native_meiro_campaign_id ? `native campaign ${activation.native_meiro_campaign_id}` : '',
+                    activation.creative_asset_id ? `creative ${activation.creative_asset_id}` : '',
+                    activation.native_meiro_asset_id ? `native asset ${activation.native_meiro_asset_id}` : '',
+                    activation.offer_catalog_id ? `catalog ${activation.offer_catalog_id}` : '',
+                    activation.native_meiro_catalog_id ? `native catalog ${activation.native_meiro_catalog_id}` : '',
+                  ].filter(Boolean).join(' · ')
+                  return (
+                    <div key={key} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, display: 'grid', gap: 4 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, flexWrap: 'wrap' }}>
+                        <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>{item.profile_id || item.journey_id || 'Unknown profile'}</div>
+                        <div style={{ fontSize: t.font.sizeXs, color: item.converted ? t.color.success : t.color.textMuted }}>{item.converted ? 'Converted' : 'Not converted'} · revenue {Number(item.revenue || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
+                      </div>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                        {item.channel || 'unknown channel'} · {item.campaign || item.campaign_id || 'unknown campaign'} · touchpoint {item.touchpoint_ts ? relativeTime(item.touchpoint_ts) : '—'}
+                      </div>
+                      {ids ? <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{ids}</div> : null}
+                    </div>
+                  )
+                })}
+              </div>
+            ) : measurementEvidence ? (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>No evidence rows matched this activation object.</div>
             ) : null}
           </div>
         ) : null}
