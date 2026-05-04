@@ -433,6 +433,20 @@ export default function MeiroImportReplay({
     })
   }, [indexedRecords, reprocessableRecordIndices, showResolvedRecords])
 
+  const topActivationFeedback = activationFeedback?.items?.[0] || null
+  const topActivationMeasured =
+    !!topActivationFeedback?.object?.type &&
+    !!topActivationFeedback.object.id &&
+    measurementResult?.object?.type === topActivationFeedback.object.type &&
+    measurementResult?.object?.id === topActivationFeedback.object.id
+  const topActivationStatusColor =
+    topActivationFeedback?.status === 'ready'
+      ? t.color.success
+      : topActivationFeedback?.status === 'warning'
+        ? t.color.warning
+        : t.color.textMuted
+  const latestActivationFeedbackExportRun = activationFeedbackExportRuns[0] || null
+
   return (
     <div style={{ display: 'grid', gap: t.space.md }}>
       <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.bg, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
@@ -483,6 +497,99 @@ export default function MeiroImportReplay({
                 Top unresolved: {cleaningReport.top_unresolved_patterns.map((item: any) => `${item.code} (${item.count})`).join(' · ')}
               </div>
             )}
+          </div>
+        ) : null}
+      </div>
+
+      <div style={{ border: `1px solid ${topActivationFeedback ? t.color.accent : t.color.borderLight}`, borderRadius: t.radius.md, background: topActivationFeedback ? t.color.accentMuted : t.color.bg, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'grid', gap: 4 }}>
+            <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Activation decision queue</div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              {topActivationFeedback
+                ? topActivationFeedback.title || topActivationFeedback.object?.label || topActivationFeedback.object?.id
+                : activationFeedback?.decision?.subtitle || 'Import activation events to surface the next campaign, asset, or decision to review.'}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={() => void loadActivationObjects()}
+              disabled={activationObjectsPending}
+              style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '8px 10px', cursor: activationObjectsPending ? 'wait' : 'pointer', opacity: activationObjectsPending ? 0.7 : 1 }}
+            >
+              {activationObjectsPending ? 'Refreshing...' : 'Refresh queue'}
+            </button>
+            {topActivationFeedback ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => measureActivationFeedbackItem(topActivationFeedback)}
+                  disabled={measurementPending}
+                  style={{ border: `1px solid ${t.color.accent}`, background: t.color.accent, color: '#fff', borderRadius: t.radius.sm, padding: '8px 10px', cursor: measurementPending ? 'wait' : 'pointer', opacity: measurementPending ? 0.75 : 1 }}
+                >
+                  {measurementPending ? 'Measuring...' : 'Measure top object'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void createActivationFeedbackExport()}
+                  disabled={activationFeedbackExportPending}
+                  style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '8px 10px', cursor: activationFeedbackExportPending ? 'wait' : 'pointer', opacity: activationFeedbackExportPending ? 0.7 : 1 }}
+                >
+                  {activationFeedbackExportPending ? 'Creating...' : 'Create export run'}
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={onImportDeciEngineEvents}
+                disabled={deciEngineImportPending || !canImportDeciEngineEvents}
+                style={{ border: `1px solid ${t.color.accent}`, background: t.color.accent, color: '#fff', borderRadius: t.radius.sm, padding: '8px 10px', cursor: deciEngineImportPending ? 'wait' : 'pointer', opacity: deciEngineImportPending || !canImportDeciEngineEvents ? 0.7 : 1 }}
+              >
+                {deciEngineImportPending ? 'Importing...' : canImportDeciEngineEvents ? 'Import activation events' : 'Enter user email'}
+              </button>
+            )}
+          </div>
+        </div>
+        {topActivationFeedback ? (
+          <div style={{ display: 'grid', gap: t.space.sm }}>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{topActivationFeedback.reason}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: t.space.sm }}>
+              <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.surface }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Status</div>
+                <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: topActivationStatusColor }}>{topActivationFeedback.status || 'setup'} · {topActivationFeedback.recommendation || 'review'}</div>
+              </div>
+              <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.surface }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Evidence</div>
+                <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>{Number(topActivationFeedback.evidence?.matched_touchpoints || 0).toLocaleString()} touchpoints · {Number(topActivationFeedback.evidence?.conversions || 0).toLocaleString()} conversions</div>
+              </div>
+              <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.surface }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Object</div>
+                <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, overflowWrap: 'anywhere' }}>{topActivationFeedback.object?.type} · {topActivationFeedback.object?.id}</div>
+              </div>
+              <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.surface }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Last measurement</div>
+                <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>
+                  {topActivationMeasured
+                    ? `${Number(measurementResult?.summary?.matched_touchpoints || 0).toLocaleString()} matched · ${Number(measurementResult?.summary?.conversions || 0).toLocaleString()} conversions`
+                    : 'Not measured in this session'}
+                </div>
+              </div>
+            </div>
+            {topActivationMeasured && measurementResult?.summary ? (
+              <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.surface, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                Current result: <strong style={{ color: t.color.text }}>{Number(measurementResult.summary.conversions || 0).toLocaleString()}</strong> conversions · revenue <strong style={{ color: t.color.text }}>{Number(measurementResult.summary.revenue || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</strong> · metadata coverage <strong style={{ color: t.color.text }}>{(Number(measurementResult.summary.activation_metadata_coverage || 0) * 100).toFixed(1)}%</strong>
+              </div>
+            ) : null}
+            {latestActivationFeedbackExportRun ? (
+              <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.surface, display: 'flex', justifyContent: 'space-between', gap: t.space.sm, flexWrap: 'wrap', fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                <span>Latest export: <strong style={{ color: t.color.text }}>{latestActivationFeedbackExportRun.id}</strong> · {Number(latestActivationFeedbackExportRun.summary?.signals || 0).toLocaleString()} signals</span>
+                <span>{latestActivationFeedbackExportRun.created_at ? relativeTime(latestActivationFeedbackExportRun.created_at) : 'recently'}</span>
+              </div>
+            ) : null}
+            {activationFeedbackExportError ? (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{activationFeedbackExportError}</div>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -659,26 +766,6 @@ export default function MeiroImportReplay({
                       <span>{run.created_at ? relativeTime(run.created_at) : 'recently'}</span>
                     </div>
                   ))}
-                </div>
-              ) : null}
-              {activationFeedback.items[0] ? (
-                <div style={{ border: `1px solid ${t.color.accent}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.accentMuted, display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <div style={{ display: 'grid', gap: 3 }}>
-                    <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>
-                      Next best activation review
-                    </div>
-                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
-                      {activationFeedback.items[0].title || activationFeedback.items[0].object?.label || activationFeedback.items[0].object?.id} · {activationFeedback.items[0].reason}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => measureActivationFeedbackItem(activationFeedback.items![0])}
-                    disabled={measurementPending}
-                    style={{ border: `1px solid ${t.color.accent}`, background: t.color.accent, color: '#fff', borderRadius: t.radius.sm, padding: '7px 10px', cursor: measurementPending ? 'wait' : 'pointer', fontSize: t.font.sizeXs, fontWeight: t.font.weightSemibold, opacity: measurementPending ? 0.75 : 1 }}
-                  >
-                    {measurementPending ? 'Measuring...' : 'Measure now'}
-                  </button>
                 </div>
               ) : null}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: t.space.sm }}>
