@@ -2,6 +2,7 @@ import { useEffect, useState, type Dispatch, type SetStateAction } from 'react'
 
 import { AnalyticsTable, type AnalyticsTableColumn } from '../../components/dashboard'
 import type { MeiroConfig, MeiroEventArchiveBatch, MeiroPullConfig, MeiroWebhookDiagnostics, MeiroWebhookEvent } from '../../connectors/meiroConnector'
+import { apiGetJson } from '../../lib/apiClient'
 import { tokens as t } from '../../theme/tokens'
 import { DEFAULT_MEIRO_PULL_CONFIG, type MeiroWebhookArchiveStatus } from './shared'
 
@@ -23,6 +24,26 @@ interface MeiroPipesSettingsProps {
   onRotateWebhookSecret: () => void
   onSaveMeiroPull: () => void
   saveMeiroPullPending: boolean
+}
+
+interface EventContractReadiness {
+  status: 'ready' | 'warning' | 'blocked' | string
+  target_sites: string[]
+  events_analyzed: number
+  target_events: number
+  site_counts: Record<string, number>
+  coverage: Record<string, number>
+  counts: Record<string, number>
+  warnings: string[]
+  blockers: string[]
+  samples: Array<{
+    event_name?: string | null
+    site?: string | null
+    timestamp?: string | null
+    identity?: string | null
+    campaign?: string | null
+    activation_keys?: string[]
+  }>
 }
 
 export default function MeiroPipesSettings({
@@ -60,6 +81,9 @@ export default function MeiroPipesSettings({
   const [aliasDraft, setAliasDraft] = useState(aliasText)
   const [interactionAliasDraft, setInteractionAliasDraft] = useState(interactionAliasText)
   const [adjustmentAliasDraft, setAdjustmentAliasDraft] = useState(adjustmentAliasText)
+  const [contractReadiness, setContractReadiness] = useState<EventContractReadiness | null>(null)
+  const [contractReadinessPending, setContractReadinessPending] = useState(false)
+  const [contractReadinessError, setContractReadinessError] = useState<string | null>(null)
 
   useEffect(() => {
     setAliasDraft(aliasText)
@@ -70,6 +94,31 @@ export default function MeiroPipesSettings({
   useEffect(() => {
     setAdjustmentAliasDraft(adjustmentAliasText)
   }, [adjustmentAliasText])
+  const loadContractReadiness = async () => {
+    setContractReadinessPending(true)
+    setContractReadinessError(null)
+    try {
+      const result = await apiGetJson<EventContractReadiness>('/api/connectors/meiro/events/contract-readiness', {
+        fallbackMessage: 'Failed to load raw-event contract readiness',
+      })
+      setContractReadiness(result)
+    } catch (error) {
+      setContractReadinessError((error as Error)?.message || 'Failed to load raw-event contract readiness')
+    } finally {
+      setContractReadinessPending(false)
+    }
+  }
+  useEffect(() => {
+    void loadContractReadiness()
+  }, [meiroEventArchiveStatus?.entries, meiroEventArchiveStatus?.events_received])
+
+  const pct = (value?: number) => `${(Number(value || 0) * 100).toFixed(0)}%`
+  const contractStatusColor =
+    contractReadiness?.status === 'ready'
+      ? t.color.success
+      : contractReadiness?.status === 'blocked'
+        ? t.color.danger
+        : t.color.warning
 
   const webhookEventColumns: AnalyticsTableColumn<MeiroWebhookEvent>[] = [
     {
@@ -210,6 +259,78 @@ export default function MeiroPipesSettings({
         <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
           Uses the same <code>X-Meiro-Webhook-Secret</code> as the profile webhook.
         </div>
+      </div>
+
+      <div style={{ border: `1px solid ${contractReadiness?.status === 'ready' ? t.color.success : contractReadiness?.status === 'blocked' ? t.color.danger : t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.bg, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'grid', gap: 4 }}>
+            <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Raw-event contract readiness</div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Validates recent meiro.io and meir.store raw events against the MMM / decision measurement contract.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void loadContractReadiness()}
+            disabled={contractReadinessPending}
+            style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '8px 10px', cursor: contractReadinessPending ? 'wait' : 'pointer', opacity: contractReadinessPending ? 0.7 : 1 }}
+          >
+            {contractReadinessPending ? 'Checking...' : 'Refresh readiness'}
+          </button>
+        </div>
+        {contractReadinessError ? (
+          <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{contractReadinessError}</div>
+        ) : contractReadiness ? (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(145px, 1fr))', gap: t.space.sm }}>
+              {[
+                { label: 'Status', value: contractReadiness.status, color: contractStatusColor },
+                { label: 'Target events', value: Number(contractReadiness.target_events || 0).toLocaleString() },
+                { label: 'Identity', value: pct(contractReadiness.coverage.identity) },
+                { label: 'Attribution', value: pct(contractReadiness.coverage.attribution) },
+                { label: 'Conversions', value: pct(contractReadiness.coverage.conversion_linkage) },
+                { label: 'Activation keys', value: pct(contractReadiness.coverage.activation_metadata) },
+                { label: 'Segments', value: pct(contractReadiness.coverage.segments) },
+              ].map((item) => (
+                <div key={item.label} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.surface }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                  <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: item.color || t.color.text }}>{item.value}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Site coverage: {contractReadiness.target_sites.map((site) => `${site} ${Number(contractReadiness.site_counts[site] || 0).toLocaleString()}`).join(' · ')}
+            </div>
+            {[...(contractReadiness.blockers || []), ...(contractReadiness.warnings || [])].length ? (
+              <div style={{ display: 'grid', gap: 4 }}>
+                {[...(contractReadiness.blockers || []), ...(contractReadiness.warnings || [])].map((item, index) => (
+                  <div key={`${item}-${index}`} style={{ fontSize: t.font.sizeXs, color: index < (contractReadiness.blockers || []).length ? t.color.danger : t.color.warning }}>
+                    {item}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.success }}>Recent raw events include target-site traffic and the core measurement fields.</div>
+            )}
+            {contractReadiness.samples?.length ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: t.space.sm }}>
+                {contractReadiness.samples.slice(0, 4).map((sample, index) => (
+                  <div key={`${sample.event_name || 'event'}-${index}`} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.surface }}>
+                    <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>{sample.event_name || 'unnamed event'}</div>
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                      {sample.site || 'unknown site'} · {sample.timestamp ? relativeTime(sample.timestamp) : 'time unknown'}
+                    </div>
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, overflowWrap: 'anywhere' }}>
+                      {sample.campaign || 'no campaign'} · {(sample.activation_keys || []).slice(0, 3).join(', ') || 'no activation keys'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>No readiness result loaded yet.</div>
+        )}
       </div>
 
       <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.bg, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>

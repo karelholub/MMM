@@ -163,6 +163,90 @@ def test_event_archive_status_counts_events(monkeypatch, tmp_path):
     assert items[0]["received_at"] == "2026-03-26T10:05:00Z"
 
 
+def test_event_contract_readiness_reports_target_site_coverage(monkeypatch, tmp_path):
+    monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(meiro_config, "CONFIG_PATH", tmp_path / "meiro_config.json")
+    monkeypatch.setattr(meiro_config, "WEBHOOK_ARCHIVE_PATH", tmp_path / "meiro_webhook_archive.jsonl")
+    monkeypatch.setattr(meiro_config, "EVENT_ARCHIVE_PATH", tmp_path / "meiro_event_archive.jsonl")
+
+    meiro_config.append_event_archive_entry(
+        {
+            "received_at": "2026-05-04T10:00:00Z",
+            "parser_version": "v1",
+            "replace": False,
+            "events": [
+                {
+                    "event_id": "evt-meiro-click",
+                    "customer_id": "profile-1",
+                    "timestamp": "2026-05-04T09:59:00Z",
+                    "event_name": "campaign_click",
+                    "site": "meiro.io",
+                    "source": "google",
+                    "medium": "cpc",
+                    "campaign": "brand",
+                    "segments": [{"id": "high_intent", "name": "High intent"}],
+                    "activationMeasurement": {
+                        "activation_campaign_id": "brand",
+                        "creative_asset_id": "hero",
+                    },
+                },
+                {
+                    "event_id": "evt-store-purchase",
+                    "customer_id": "profile-1",
+                    "timestamp": "2026-05-04T10:02:00Z",
+                    "event_name": "purchase",
+                    "page_url": "https://meir.store/checkout/success",
+                    "order_id": "order-1",
+                    "value": 99,
+                    "currency": "EUR",
+                    "utm_source": "google",
+                    "utm_medium": "cpc",
+                    "utm_campaign": "brand",
+                },
+            ],
+            "received_count": 2,
+        }
+    )
+
+    client = TestClient(app)
+    response = client.get("/api/connectors/meiro/events/contract-readiness")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ready"
+    assert payload["target_events"] == 2
+    assert payload["site_counts"]["meiro.io"] == 1
+    assert payload["site_counts"]["meir.store"] == 1
+    assert payload["coverage"]["identity"] == 1.0
+    assert payload["coverage"]["attribution"] == 1.0
+    assert payload["coverage"]["conversion_linkage"] == 0.5
+    assert payload["coverage"]["activation_metadata"] == 0.5
+
+
+def test_event_contract_readiness_blocks_when_target_sites_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(meiro_config, "CONFIG_PATH", tmp_path / "meiro_config.json")
+    monkeypatch.setattr(meiro_config, "WEBHOOK_ARCHIVE_PATH", tmp_path / "meiro_webhook_archive.jsonl")
+    monkeypatch.setattr(meiro_config, "EVENT_ARCHIVE_PATH", tmp_path / "meiro_event_archive.jsonl")
+
+    meiro_config.append_event_archive_entry(
+        {
+            "received_at": "2026-05-04T10:00:00Z",
+            "parser_version": "v1",
+            "replace": False,
+            "events": [{"event_id": "evt-other", "event_name": "page_view", "site": "example.com"}],
+            "received_count": 1,
+        }
+    )
+
+    client = TestClient(app)
+    response = client.get("/api/connectors/meiro/events/contract-readiness")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "blocked"
+    assert payload["target_events"] == 0
+    assert payload["blockers"]
+
+
 def test_webhook_suggestions_include_raw_event_ingests(monkeypatch, tmp_path):
     monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(meiro_config, "CONFIG_PATH", tmp_path / "meiro_config.json")
