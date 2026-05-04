@@ -165,6 +165,19 @@ type ActivationFeedbackExportRun = {
   payload?: ActivationFeedbackExport
 }
 
+type ActivationFeedbackDeciEngineHandoff = {
+  status?: string
+  message?: string
+  target?: {
+    system?: string
+    source_url?: string
+    handoff_url?: string
+    receiver_available?: boolean
+    receiver_note?: string
+  }
+  run?: ActivationFeedbackExportRun
+}
+
 type MeiroSegmentImportResponse = {
   status?: string
   message?: string
@@ -275,6 +288,9 @@ export default function MeiroImportReplay({
   const [activationFeedbackExportRuns, setActivationFeedbackExportRuns] = useState<ActivationFeedbackExportRun[]>([])
   const [activationFeedbackExportPending, setActivationFeedbackExportPending] = useState(false)
   const [activationFeedbackExportError, setActivationFeedbackExportError] = useState<string | null>(null)
+  const [activationFeedbackHandoffPending, setActivationFeedbackHandoffPending] = useState(false)
+  const [activationFeedbackHandoff, setActivationFeedbackHandoff] = useState<ActivationFeedbackDeciEngineHandoff | null>(null)
+  const [activationFeedbackHandoffError, setActivationFeedbackHandoffError] = useState<string | null>(null)
   const [meiroSegmentImportSource, setMeiroSegmentImportSource] = useState<'pipes_webhook' | 'cdp'>('pipes_webhook')
   const [meiroSegmentImportPending, setMeiroSegmentImportPending] = useState(false)
   const [meiroSegmentImportError, setMeiroSegmentImportError] = useState<string | null>(null)
@@ -420,6 +436,37 @@ export default function MeiroImportReplay({
       setActivationFeedbackExportError((error as Error)?.message || 'Failed to create activation feedback export')
     } finally {
       setActivationFeedbackExportPending(false)
+    }
+  }
+  const prepareActivationFeedbackHandoff = async () => {
+    setActivationFeedbackHandoffPending(true)
+    setActivationFeedbackHandoffError(null)
+    try {
+      const result = await apiSendJson<ActivationFeedbackDeciEngineHandoff>(
+        withQuery('/api/measurement/activation-feedback/deciengine-handoff', { limit: 20 }),
+        'POST',
+        {},
+        { fallbackMessage: 'Failed to prepare deciEngine feedback handoff' },
+      )
+      setActivationFeedbackHandoff(result)
+      if (result.run?.payload) setActivationFeedbackExport(result.run.payload)
+      if (result.run) {
+        setActivationFeedbackExportRuns((prev) => [
+          {
+            id: result.run?.id,
+            created_at: result.run?.created_at,
+            created_by: result.run?.created_by,
+            schema_version: result.run?.schema_version,
+            summary: result.run?.summary,
+            decision: result.run?.decision,
+          },
+          ...prev.filter((item) => item.id !== result.run?.id),
+        ].slice(0, 3))
+      }
+    } catch (error) {
+      setActivationFeedbackHandoffError((error as Error)?.message || 'Failed to prepare deciEngine feedback handoff')
+    } finally {
+      setActivationFeedbackHandoffPending(false)
     }
   }
   const runActivationMeasurement = async (draft = measurementDraft) => {
@@ -639,6 +686,14 @@ export default function MeiroImportReplay({
                 >
                   {activationFeedbackExportPending ? 'Creating...' : 'Create export run'}
                 </button>
+                <button
+                  type="button"
+                  onClick={() => void prepareActivationFeedbackHandoff()}
+                  disabled={activationFeedbackHandoffPending}
+                  style={{ border: `1px solid ${t.color.success}`, background: activationFeedbackHandoffPending ? t.color.surface : t.color.success, color: activationFeedbackHandoffPending ? t.color.textSecondary : '#fff', borderRadius: t.radius.sm, padding: '8px 10px', cursor: activationFeedbackHandoffPending ? 'wait' : 'pointer', opacity: activationFeedbackHandoffPending ? 0.75 : 1 }}
+                >
+                  {activationFeedbackHandoffPending ? 'Preparing...' : 'Prepare deciEngine handoff'}
+                </button>
               </>
             ) : (
               <button
@@ -690,6 +745,15 @@ export default function MeiroImportReplay({
             ) : null}
             {activationFeedbackExportError ? (
               <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{activationFeedbackExportError}</div>
+            ) : null}
+            {activationFeedbackHandoffError ? (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{activationFeedbackHandoffError}</div>
+            ) : activationFeedbackHandoff ? (
+              <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.surface, display: 'grid', gap: 4, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                <div>{activationFeedbackHandoff.message || 'deciEngine handoff prepared.'}</div>
+                <div style={{ overflowWrap: 'anywhere' }}>Target: <strong style={{ color: t.color.text }}>{activationFeedbackHandoff.target?.handoff_url || 'not configured'}</strong></div>
+                <div>{activationFeedbackHandoff.target?.receiver_note || 'Receiver status unknown.'}</div>
+              </div>
             ) : null}
           </div>
         ) : null}
@@ -900,18 +964,35 @@ export default function MeiroImportReplay({
                 >
                   {activationFeedbackExportPending ? 'Creating...' : 'Create export run'}
                 </button>
+                <button
+                  type="button"
+                  onClick={() => void prepareActivationFeedbackHandoff()}
+                  disabled={activationFeedbackHandoffPending}
+                  style={{ border: `1px solid ${t.color.success}`, background: activationFeedbackHandoffPending ? t.color.surface : t.color.success, color: activationFeedbackHandoffPending ? t.color.textSecondary : '#fff', borderRadius: t.radius.sm, padding: '5px 8px', cursor: activationFeedbackHandoffPending ? 'wait' : 'pointer', fontSize: t.font.sizeXs, opacity: activationFeedbackHandoffPending ? 0.7 : 1 }}
+                >
+                  {activationFeedbackHandoffPending ? 'Preparing...' : 'deciEngine handoff'}
+                </button>
               </div>
               {activationFeedback.decision?.warnings?.length ? (
                 <div style={{ fontSize: t.font.sizeXs, color: t.color.warning }}>{activationFeedback.decision.warnings.join(' · ')}</div>
               ) : null}
               {activationFeedbackExportError ? (
                 <div style={{ fontSize: t.font.sizeXs, color: t.color.danger }}>{activationFeedbackExportError}</div>
+              ) : activationFeedbackHandoffError ? (
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.danger }}>{activationFeedbackHandoffError}</div>
               ) : activationFeedbackExport ? (
                 <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.bg, display: 'grid', gap: 4 }}>
                   <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
                     Export payload <strong style={{ color: t.color.text }}>{activationFeedbackExport.schema_version}</strong> · {Number(activationFeedbackExport.summary?.signals || 0).toLocaleString()} signals · generated {activationFeedbackExport.generated_at ? relativeTime(activationFeedbackExport.generated_at) : 'now'}
                   </div>
                   <pre style={{ margin: 0, maxHeight: 180, overflow: 'auto', fontSize: 11, background: t.color.bgSubtle, borderRadius: t.radius.sm, padding: t.space.sm }}>{JSON.stringify({ schema_version: activationFeedbackExport.schema_version, summary: activationFeedbackExport.summary, first_signal: activationFeedbackExport.signals?.[0] || null }, null, 2)}</pre>
+                </div>
+              ) : null}
+              {activationFeedbackHandoff ? (
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.surface, display: 'grid', gap: 4, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                  <div>{activationFeedbackHandoff.message || 'deciEngine handoff prepared.'}</div>
+                  <div style={{ overflowWrap: 'anywhere' }}>Target: <strong style={{ color: t.color.text }}>{activationFeedbackHandoff.target?.handoff_url || 'not configured'}</strong></div>
+                  <div>{activationFeedbackHandoff.target?.receiver_note || 'Receiver status unknown.'}</div>
                 </div>
               ) : null}
               {activationFeedbackExportRuns.length ? (

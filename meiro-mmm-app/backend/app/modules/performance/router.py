@@ -1,6 +1,7 @@
 import json
 import threading
 import time
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -47,6 +48,7 @@ _OVERVIEW_SUMMARY_CACHE: dict[tuple, tuple[float, dict[str, Any]]] = {}
 _OVERVIEW_SUMMARY_CACHE_LOCK = threading.RLock()
 _PERFORMANCE_SUMMARY_CACHE: dict[tuple, tuple[float, dict[str, Any]]] = {}
 _PERFORMANCE_SUMMARY_CACHE_LOCK = threading.RLock()
+_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 
 
 def _selected_period_bounds(date_from: str, date_to: str) -> tuple[datetime, datetime]:
@@ -290,6 +292,27 @@ def create_router(
 ) -> APIRouter:
     router = APIRouter(tags=["performance"])
 
+    def _deciengine_events_config_path() -> Path:
+        return _DATA_DIR / "deciengine_events_config.json"
+
+    def _load_deciengine_source_url() -> str:
+        path = _deciengine_events_config_path()
+        if path.exists():
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(payload, dict) and str(payload.get("source_url") or "").strip():
+                    return str(payload.get("source_url")).strip()
+            except Exception:
+                pass
+        return "http://host.docker.internal:3001/v1/inapp/events"
+
+    def _activation_feedback_target_url(source_url: str) -> str:
+        parsed = urllib.parse.urlparse(source_url)
+        if parsed.scheme and parsed.netloc:
+            base_path = parsed.path.split("/v1/", 1)[0]
+            return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, f"{base_path}/v1/measurement/activation-feedback/import", "", "", ""))
+        return source_url
+
     @router.get("/api/overview/summary")
     def overview_summary(
         date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
@@ -436,6 +459,33 @@ def create_router(
             limit=limit,
             generated_by=getattr(ctx, "user_id", None) or "mmm",
         )
+
+    @router.post("/api/measurement/activation-feedback/deciengine-handoff")
+    def create_activation_measurement_feedback_deciengine_handoff(
+        limit: int = Query(50, ge=1, le=200, description="Maximum exported activation feedback signals"),
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("attribution.view")),
+    ):
+        journeys = ensure_journeys_loaded_fn(db)
+        run = record_activation_feedback_export(
+            journeys=journeys,
+            limit=limit,
+            generated_by=getattr(ctx, "user_id", None) or "mmm",
+        )
+        source_url = _load_deciengine_source_url()
+        target_url = _activation_feedback_target_url(source_url)
+        return {
+            "status": "ready",
+            "message": "Activation feedback export is ready for deciEngine import.",
+            "target": {
+                "system": "deciEngine",
+                "source_url": source_url,
+                "handoff_url": target_url,
+                "receiver_available": False,
+                "receiver_note": "Create the matching deciEngine receiver before enabling automatic POST delivery.",
+            },
+            "run": run,
+        }
 
     @router.get("/api/measurement/activation-feedback/exports")
     def list_activation_measurement_feedback_exports(
