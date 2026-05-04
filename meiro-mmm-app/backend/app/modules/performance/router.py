@@ -1,7 +1,10 @@
 import json
+import os
 import threading
 import time
 import urllib.parse
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -306,12 +309,71 @@ def create_router(
                 pass
         return "http://host.docker.internal:3001/v1/inapp/events"
 
+    def _load_deciengine_api_key() -> Optional[str]:
+        for key in ("DECIENGINE_API_KEY", "DECIENGINE_WRITE_KEY"):
+            value = os.getenv(key)
+            if value and value.strip():
+                return value.strip()
+        path = _deciengine_events_config_path()
+        if path.exists():
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(payload, dict):
+                    for key in ("api_key", "write_key"):
+                        value = payload.get(key)
+                        if isinstance(value, str) and value.strip():
+                            return value.strip()
+            except Exception:
+                pass
+        return None
+
     def _activation_feedback_target_url(source_url: str) -> str:
         parsed = urllib.parse.urlparse(source_url)
         if parsed.scheme and parsed.netloc:
             base_path = parsed.path.split("/v1/", 1)[0]
             return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, f"{base_path}/v1/measurement/activation-feedback/import", "", "", ""))
         return source_url
+
+    def _deliver_activation_feedback_to_deciengine(target_url: str, payload: dict[str, Any], api_key: str) -> dict[str, Any]:
+        parsed = urllib.parse.urlparse(target_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return {
+                "status": "failed",
+                "reason": "deciEngine handoff URL must be an absolute http(s) URL.",
+            }
+        body = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(
+            target_url,
+            data=body,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "X-API-Key": api_key,
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                response_body = response.read(65536).decode("utf-8", errors="replace")
+                receiver_payload = json.loads(response_body) if response_body else {}
+                return {
+                    "status": "delivered",
+                    "receiver_status": response.status,
+                    "receiver_run": receiver_payload.get("run") if isinstance(receiver_payload, dict) else None,
+                    "receiver_summary": receiver_payload.get("summary") if isinstance(receiver_payload, dict) else None,
+                }
+        except urllib.error.HTTPError as exc:
+            response_body = exc.read(4096).decode("utf-8", errors="replace")
+            return {
+                "status": "failed",
+                "receiver_status": exc.code,
+                "reason": response_body or str(exc),
+            }
+        except Exception as exc:
+            return {
+                "status": "failed",
+                "reason": str(exc),
+            }
 
     @router.get("/api/overview/summary")
     def overview_summary(
@@ -474,16 +536,36 @@ def create_router(
         )
         source_url = _load_deciengine_source_url()
         target_url = _activation_feedback_target_url(source_url)
+        api_key = _load_deciengine_api_key()
+        delivery = (
+            _deliver_activation_feedback_to_deciengine(target_url, run.get("payload") or {}, api_key)
+            if api_key
+            else {
+                "status": "not_configured",
+                "reason": "Set DECIENGINE_API_KEY or DECIENGINE_WRITE_KEY in the MMM API container to enable automatic delivery.",
+            }
+        )
+        status = "delivered" if delivery.get("status") == "delivered" else "ready"
         return {
-            "status": "ready",
-            "message": "Activation feedback export is ready for deciEngine import.",
+            "status": status,
+            "message": (
+                "Activation feedback delivered to deciEngine."
+                if status == "delivered"
+                else "Activation feedback export is ready for deciEngine import."
+            ),
             "target": {
                 "system": "deciEngine",
                 "source_url": source_url,
                 "handoff_url": target_url,
-                "receiver_available": False,
-                "receiver_note": "Create the matching deciEngine receiver before enabling automatic POST delivery.",
+                "receiver_available": True,
+                "authenticated_delivery_configured": bool(api_key),
+                "receiver_note": (
+                    "Automatic POST delivery is enabled."
+                    if api_key
+                    else "Set DECIENGINE_API_KEY or DECIENGINE_WRITE_KEY in the MMM API container to enable automatic POST delivery."
+                ),
             },
+            "delivery": delivery,
             "run": run,
         }
 

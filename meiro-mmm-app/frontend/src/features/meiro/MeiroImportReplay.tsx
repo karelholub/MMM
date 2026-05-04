@@ -173,7 +173,15 @@ type ActivationFeedbackDeciEngineHandoff = {
     source_url?: string
     handoff_url?: string
     receiver_available?: boolean
+    authenticated_delivery_configured?: boolean
     receiver_note?: string
+  }
+  delivery?: {
+    status?: string
+    receiver_status?: number
+    reason?: string
+    receiver_run?: { id?: string; signalCount?: number; receivedAt?: string }
+    receiver_summary?: { signal_count?: number; object_ids?: string[]; object_types?: string[] }
   }
   run?: ActivationFeedbackExportRun
 }
@@ -753,6 +761,14 @@ export default function MeiroImportReplay({
                 <div>{activationFeedbackHandoff.message || 'deciEngine handoff prepared.'}</div>
                 <div style={{ overflowWrap: 'anywhere' }}>Target: <strong style={{ color: t.color.text }}>{activationFeedbackHandoff.target?.handoff_url || 'not configured'}</strong></div>
                 <div>{activationFeedbackHandoff.target?.receiver_note || 'Receiver status unknown.'}</div>
+                {activationFeedbackHandoff.delivery?.status ? (
+                  <div>
+                    Delivery: <strong style={{ color: activationFeedbackHandoff.delivery.status === 'delivered' ? t.color.success : t.color.text }}>{activationFeedbackHandoff.delivery.status}</strong>
+                    {activationFeedbackHandoff.delivery.receiver_status ? ` · HTTP ${activationFeedbackHandoff.delivery.receiver_status}` : ''}
+                    {activationFeedbackHandoff.delivery.receiver_summary?.signal_count ? ` · ${activationFeedbackHandoff.delivery.receiver_summary.signal_count} signals accepted` : ''}
+                    {activationFeedbackHandoff.delivery.reason ? ` · ${activationFeedbackHandoff.delivery.reason}` : ''}
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -993,6 +1009,14 @@ export default function MeiroImportReplay({
                   <div>{activationFeedbackHandoff.message || 'deciEngine handoff prepared.'}</div>
                   <div style={{ overflowWrap: 'anywhere' }}>Target: <strong style={{ color: t.color.text }}>{activationFeedbackHandoff.target?.handoff_url || 'not configured'}</strong></div>
                   <div>{activationFeedbackHandoff.target?.receiver_note || 'Receiver status unknown.'}</div>
+                  {activationFeedbackHandoff.delivery?.status ? (
+                    <div>
+                      Delivery: <strong style={{ color: activationFeedbackHandoff.delivery.status === 'delivered' ? t.color.success : t.color.text }}>{activationFeedbackHandoff.delivery.status}</strong>
+                      {activationFeedbackHandoff.delivery.receiver_status ? ` · HTTP ${activationFeedbackHandoff.delivery.receiver_status}` : ''}
+                      {activationFeedbackHandoff.delivery.receiver_summary?.signal_count ? ` · ${activationFeedbackHandoff.delivery.receiver_summary.signal_count} signals accepted` : ''}
+                      {activationFeedbackHandoff.delivery.reason ? ` · ${activationFeedbackHandoff.delivery.reason}` : ''}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
               {activationFeedbackExportRuns.length ? (
