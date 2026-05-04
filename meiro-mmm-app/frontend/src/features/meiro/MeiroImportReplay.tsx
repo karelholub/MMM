@@ -111,6 +111,35 @@ type ActivationMeasurementObject = {
   last_touchpoint_at?: string | null
 }
 
+type ActivationFeedbackItem = {
+  object?: {
+    type?: string
+    id?: string
+    label?: string
+    aliases?: string[]
+    source_systems?: string[]
+  }
+  recommendation?: string
+  status?: string
+  title?: string
+  reason?: string
+  action?: { id?: string; label?: string; target?: string }
+  evidence?: {
+    matched_touchpoints?: number
+    matched_journeys?: number
+    conversions?: number
+    conversion_rate?: number
+    revenue?: number
+    last_touchpoint_at?: string | null
+  }
+}
+
+type ActivationFeedbackResponse = {
+  items?: ActivationFeedbackItem[]
+  decision?: { status?: string; subtitle?: string; warnings?: string[]; blockers?: string[] }
+  summary?: { ready?: number; warning?: number; setup?: number }
+}
+
 const ACTIVATION_OBJECT_TYPES = ['campaign', 'asset', 'content', 'bundle', 'offer', 'decision', 'decision_stack', 'experiment', 'variant', 'placement', 'template']
 
 function asCleaningReport(value: unknown): CleaningReportView | null {
@@ -175,6 +204,7 @@ export default function MeiroImportReplay({
   const [activationObjects, setActivationObjects] = useState<ActivationMeasurementObject[]>([])
   const [activationObjectsPending, setActivationObjectsPending] = useState(false)
   const [activationObjectsError, setActivationObjectsError] = useState<string | null>(null)
+  const [activationFeedback, setActivationFeedback] = useState<ActivationFeedbackResponse | null>(null)
   const latestImportSummary =
     importFromMeiroResult?.import_summary ||
     reprocessWebhookArchiveResult?.import_result?.import_summary ||
@@ -233,11 +263,18 @@ export default function MeiroImportReplay({
     setActivationObjectsPending(true)
     setActivationObjectsError(null)
     try {
-      const result = await apiGetJson<{ items?: ActivationMeasurementObject[] }>(
-        withQuery('/api/measurement/activation-objects', { limit: 12 }),
-        { fallbackMessage: 'Failed to load measurable activation objects' },
-      )
-      setActivationObjects(result.items || [])
+      const [objects, feedback] = await Promise.all([
+        apiGetJson<{ items?: ActivationMeasurementObject[] }>(
+          withQuery('/api/measurement/activation-objects', { limit: 12 }),
+          { fallbackMessage: 'Failed to load measurable activation objects' },
+        ),
+        apiGetJson<ActivationFeedbackResponse>(
+          withQuery('/api/measurement/activation-feedback', { limit: 5 }),
+          { fallbackMessage: 'Failed to load activation feedback' },
+        ),
+      ])
+      setActivationObjects(objects.items || [])
+      setActivationFeedback(feedback)
     } catch (error) {
       setActivationObjectsError((error as Error)?.message || 'Failed to load measurable activation objects')
     } finally {
@@ -482,6 +519,41 @@ export default function MeiroImportReplay({
           ) : (
             <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>No measurable activation objects found in the currently loaded journeys.</div>
           )}
+          {activationFeedback?.items?.length ? (
+            <div style={{ display: 'grid', gap: t.space.sm }}>
+              <div style={{ display: 'flex', gap: t.space.sm, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Activation feedback</div>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                  Ready {Number(activationFeedback.summary?.ready || 0).toLocaleString()} · review {Number(activationFeedback.summary?.warning || 0).toLocaleString()} · setup {Number(activationFeedback.summary?.setup || 0).toLocaleString()}
+                </div>
+              </div>
+              {activationFeedback.decision?.warnings?.length ? (
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.warning }}>{activationFeedback.decision.warnings.join(' · ')}</div>
+              ) : null}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: t.space.sm }}>
+                {activationFeedback.items.map((item, index) => {
+                  const statusColor = item.status === 'ready' ? t.color.success : item.status === 'warning' ? t.color.warning : t.color.textMuted
+                  return (
+                    <button
+                      key={`${item.object?.type || 'object'}:${item.object?.id || index}:feedback`}
+                      type="button"
+                      onClick={() => item.object?.type && item.object?.id && selectActivationObject({ object_type: item.object.type, object_id: item.object.id, label: item.object.label, aliases: item.object.aliases || [] })}
+                      style={{ border: `1px solid ${t.color.borderLight}`, background: t.color.surface, borderRadius: t.radius.sm, padding: t.space.sm, cursor: item.object?.id ? 'pointer' : 'default', display: 'grid', gap: 5, textAlign: 'left' }}
+                    >
+                      <span style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, overflowWrap: 'anywhere' }}>{item.title || item.object?.label || item.object?.id || 'Activation feedback'}</span>
+                      <span style={{ fontSize: t.font.sizeXs, color: statusColor, fontWeight: t.font.weightSemibold }}>{item.status || 'setup'} · {item.recommendation || 'review'}</span>
+                      <span style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>{item.reason}</span>
+                      <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                        {Number(item.evidence?.matched_touchpoints || 0).toLocaleString()} touchpoints · {Number(item.evidence?.conversions || 0).toLocaleString()} conversions · revenue {Number(item.evidence?.revenue || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          ) : activationFeedback?.decision?.status === 'blocked' ? (
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>{activationFeedback.decision.subtitle}</div>
+          ) : null}
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: t.space.sm }}>
           <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>

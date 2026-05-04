@@ -13,6 +13,7 @@ from app.services_canonical_facts import iter_canonical_conversion_rows
 from app.services_import_runs import get_last_successful_run, get_runs as get_import_runs
 from app.services_nba_defaults import filter_nba_recommendations
 from app.services_activation_measurement import (
+    build_activation_feedback_recommendations,
     build_activation_object_registry,
     build_activation_measurement_evidence,
     build_activation_measurement_summary,
@@ -397,6 +398,15 @@ def create_router(
             return build_activation_object_registry(journeys=journeys, object_type=object_type, q=q, limit=limit)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.get("/api/measurement/activation-feedback")
+    def activation_measurement_feedback(
+        limit: int = Query(10, ge=1, le=50, description="Maximum feedback recommendations to return"),
+        db=Depends(get_db_dependency),
+        _ctx=Depends(require_permission_dependency("attribution.view")),
+    ):
+        journeys = ensure_journeys_loaded_fn(db)
+        return build_activation_feedback_recommendations(journeys=journeys, limit=limit)
 
     @router.get("/api/measurement/activation-evidence")
     def activation_measurement_evidence(

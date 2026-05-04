@@ -575,3 +575,126 @@ def build_activation_object_registry(
         )
     items.sort(key=lambda item: (-(item["matched_touchpoints"] or 0), item["object_type"], item["object_id"]))
     return {"items": items[:resolved_limit], "total": len(items), "limit": resolved_limit}
+
+
+def build_activation_feedback_recommendations(
+    *,
+    journeys: List[Dict[str, Any]],
+    limit: int = 10,
+) -> Dict[str, Any]:
+    resolved_limit = max(1, min(int(limit or 10), 50))
+    registry = build_activation_object_registry(journeys=journeys, limit=200)
+    candidates = []
+    for item in registry.get("items") or []:
+        matched_journeys = int(item.get("matched_journeys") or 0)
+        conversions = int(item.get("conversions") or 0)
+        revenue = float(item.get("revenue") or 0.0)
+        matched_touchpoints = int(item.get("matched_touchpoints") or 0)
+        conversion_rate = conversions / matched_journeys if matched_journeys else 0.0
+        source_systems = item.get("source_systems") or []
+        object_type = item.get("object_type")
+
+        if conversions > 0:
+            recommendation = "compare"
+            status = "ready"
+            title = f"Compare {object_type} performance in MMM/MTA"
+            reason = "This activation object has conversion evidence in imported journeys."
+            action_label = "Use as measured activation input"
+        elif matched_touchpoints >= 2:
+            recommendation = "review"
+            status = "warning"
+            title = f"Review {object_type} before scaling"
+            reason = "This activation object has repeated delivery evidence but no matched conversions yet."
+            action_label = "Inspect audience, asset, and decision fit"
+        else:
+            recommendation = "collect_more_data"
+            status = "setup"
+            title = f"Collect more {object_type} evidence"
+            reason = "This activation object has too little journey evidence for a reliable decision."
+            action_label = "Keep collecting activation events"
+
+        if not source_systems:
+            status = "warning"
+            reason = "Activation metadata is present, but the source system is missing; verify event mapping before using this object in decisions."
+
+        candidates.append(
+            {
+                "object": {
+                    "type": object_type,
+                    "id": item.get("object_id"),
+                    "label": item.get("label"),
+                    "aliases": item.get("aliases") or [],
+                    "source_systems": source_systems,
+                },
+                "recommendation": recommendation,
+                "status": status,
+                "title": title,
+                "reason": reason,
+                "action": {
+                    "id": f"{recommendation}:{object_type}:{item.get('object_id')}",
+                    "label": action_label,
+                    "target": "activation_measurement",
+                },
+                "evidence": {
+                    "matched_touchpoints": matched_touchpoints,
+                    "matched_journeys": matched_journeys,
+                    "matched_profiles": int(item.get("matched_profiles") or 0),
+                    "conversions": conversions,
+                    "conversion_rate": round(conversion_rate, 6),
+                    "revenue": round(revenue, 6),
+                    "last_touchpoint_at": item.get("last_touchpoint_at"),
+                },
+                "score": round((conversions * 4.0) + (conversion_rate * 3.0) + min(matched_touchpoints, 20) * 0.1 + min(revenue / 1000.0, 5.0), 6),
+            }
+        )
+
+    candidates.sort(key=lambda item: (-float(item.get("score") or 0.0), item["object"]["type"], item["object"]["id"]))
+    selected = candidates[:resolved_limit]
+    ready_count = sum(1 for item in selected if item.get("status") == "ready")
+    warning_count = sum(1 for item in selected if item.get("status") == "warning")
+    if not candidates:
+        decision = {
+            "status": "blocked",
+            "subtitle": "No activation objects are available from the current journey source.",
+            "blockers": ["Import deciEngine activation events or replay Prism events before building feedback actions."],
+            "warnings": [],
+            "actions": [
+                {
+                    "id": "import-activation-events",
+                    "label": "Import activation events",
+                    "benefit": "Creates measurable campaign, asset, offer, and decision objects for MMM/MTA feedback.",
+                    "domain": "measurement",
+                    "target_page": "meiro",
+                }
+            ],
+        }
+    else:
+        decision = {
+            "status": "ready" if ready_count else "warning",
+            "subtitle": "Activation feedback links deciEngine/Prism objects to journey evidence before using them in MMM/MTA decisions.",
+            "blockers": [],
+            "warnings": [
+                f"{warning_count} activation object{'s' if warning_count != 1 else ''} need review before scaling."
+            ] if warning_count else [],
+            "actions": [
+                {
+                    "id": "review-activation-feedback",
+                    "label": "Review activation feedback",
+                    "benefit": "Prioritize measured campaigns, assets, offers, and decisions before creating budget or content actions.",
+                    "domain": "measurement",
+                    "target_page": "meiro",
+                }
+            ],
+        }
+
+    return {
+        "items": selected,
+        "total": len(candidates),
+        "limit": resolved_limit,
+        "summary": {
+            "ready": ready_count,
+            "warning": warning_count,
+            "setup": sum(1 for item in selected if item.get("status") == "setup"),
+        },
+        "decision": decision,
+    }

@@ -1,6 +1,7 @@
 import pytest
 
 from app.services_activation_measurement import (
+    build_activation_feedback_recommendations,
     build_activation_object_registry,
     build_activation_measurement_evidence,
     build_activation_measurement_summary,
@@ -212,6 +213,27 @@ def test_activation_object_registry_filters_by_type_and_query():
         for item in native_campaigns["items"]
         if item["object_type"] == "campaign"
     ] == [("campaign", "spring_hero")]
+
+
+def test_activation_feedback_recommends_measured_objects():
+    feedback = build_activation_feedback_recommendations(journeys=_journeys(), limit=5)
+
+    assert feedback["decision"]["status"] == "ready"
+    assert feedback["summary"]["ready"] >= 1
+    top = feedback["items"][0]
+    assert top["recommendation"] == "compare"
+    assert top["status"] == "ready"
+    assert top["object"]["source_systems"] == ["deciEngine"]
+    assert top["evidence"]["conversions"] == 1
+    assert top["action"]["target"] == "activation_measurement"
+
+
+def test_activation_feedback_blocks_without_objects():
+    feedback = build_activation_feedback_recommendations(journeys=[])
+
+    assert feedback["items"] == []
+    assert feedback["decision"]["status"] == "blocked"
+    assert feedback["decision"]["actions"][0]["id"] == "import-activation-events"
 
 
 def test_activation_measurement_returns_unavailable_for_no_match():
