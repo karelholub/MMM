@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 
+import type { DeciEngineEventsImportPayload, DeciEngineEventsImportResult } from '../../connectors/deciengineConnector'
 import type { MeiroConfig, MeiroImportResult, MeiroMappingState, MeiroPullConfig, MeiroQuarantineReprocessResult, MeiroQuarantineRun, MeiroWebhookSuggestions } from '../../connectors/meiroConnector'
+import { apiGetJson, withQuery } from '../../lib/apiClient'
 import { tokens as t } from '../../theme/tokens'
 import { DEFAULT_MEIRO_PULL_CONFIG, type DryRunResult, type MeiroWebhookArchiveStatus, type MeiroWebhookReprocessResult } from './shared'
 
@@ -15,6 +17,10 @@ interface MeiroImportReplayProps {
   meiroDryRunData?: DryRunResult
   importFromMeiroPending: boolean
   importFromMeiroResult?: MeiroImportResult | null
+  deciEngineImportDraft: DeciEngineEventsImportPayload
+  deciEngineImportPending: boolean
+  deciEngineImportResult?: DeciEngineEventsImportResult | null
+  deciEngineImportError?: string | null
   reprocessWebhookArchivePending: boolean
   reprocessWebhookArchiveResult?: MeiroWebhookReprocessResult | null
   reprocessQuarantinePending: boolean
@@ -29,6 +35,8 @@ interface MeiroImportReplayProps {
   relativeTime: (iso?: string | null) => string
   onDryRun: () => void
   onImportFromMeiro: () => void
+  onDeciEngineImportDraftChange: (draft: DeciEngineEventsImportPayload) => void
+  onImportDeciEngineEvents: () => void
   onReplayArchive: () => void
   onReprocessSelectedQuarantine: (recordIndices?: number[]) => void
   onSelectQuarantineRun: (runId: string) => void
@@ -48,6 +56,28 @@ type CleaningReportView = {
   }>
 }
 
+type ActivationMeasurementSummary = {
+  object?: { type?: string; id?: string; match_aliases?: string[] }
+  summary?: {
+    matched_touchpoints?: number
+    matched_journeys?: number
+    matched_profiles?: number
+    conversions?: number
+    revenue?: number
+    conversion_rate?: number | null
+    activation_metadata_coverage?: number
+    variants?: string[]
+    experiments?: string[]
+    placements?: string[]
+  }
+  evidence?: {
+    data_quality?: { status?: string; warnings?: string[]; activation_metadata_coverage?: number }
+  }
+  recommended_actions?: Array<{ id?: string; label?: string; reason?: string }>
+}
+
+const ACTIVATION_OBJECT_TYPES = ['campaign', 'asset', 'content', 'bundle', 'offer', 'decision', 'decision_stack', 'experiment', 'variant', 'placement', 'template']
+
 function asCleaningReport(value: unknown): CleaningReportView | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   return value as CleaningReportView
@@ -64,6 +94,10 @@ export default function MeiroImportReplay({
   meiroDryRunData,
   importFromMeiroPending,
   importFromMeiroResult,
+  deciEngineImportDraft,
+  deciEngineImportPending,
+  deciEngineImportResult,
+  deciEngineImportError,
   reprocessWebhookArchivePending,
   reprocessWebhookArchiveResult,
   reprocessQuarantinePending,
@@ -78,12 +112,26 @@ export default function MeiroImportReplay({
   relativeTime,
   onDryRun,
   onImportFromMeiro,
+  onDeciEngineImportDraftChange,
+  onImportDeciEngineEvents,
   onReplayArchive,
   onReprocessSelectedQuarantine,
   onSelectQuarantineRun,
 }: MeiroImportReplayProps) {
   const [selectedRecordIndices, setSelectedRecordIndices] = useState<number[]>([])
   const [showResolvedRecords, setShowResolvedRecords] = useState(false)
+  const [measurementDraft, setMeasurementDraft] = useState({
+    object_type: 'campaign',
+    object_id: '',
+    native_meiro_campaign_id: '',
+    creative_asset_id: '',
+    native_meiro_asset_id: '',
+    offer_catalog_id: '',
+    native_meiro_catalog_id: '',
+  })
+  const [measurementPending, setMeasurementPending] = useState(false)
+  const [measurementError, setMeasurementError] = useState<string | null>(null)
+  const [measurementResult, setMeasurementResult] = useState<ActivationMeasurementSummary | null>(null)
   const latestImportSummary =
     importFromMeiroResult?.import_summary ||
     reprocessWebhookArchiveResult?.import_result?.import_summary ||
@@ -132,6 +180,24 @@ export default function MeiroImportReplay({
   )
   const openRecordCount = openRecordIndices.length
   const remediatedRecordCount = Math.max(0, indexedRecords.length - openRecordCount)
+  const updateDeciEngineImportDraft = (patch: Partial<DeciEngineEventsImportPayload>) => {
+    onDeciEngineImportDraftChange({ ...deciEngineImportDraft, ...patch })
+  }
+  const runActivationMeasurement = async () => {
+    setMeasurementPending(true)
+    setMeasurementError(null)
+    try {
+      const result = await apiGetJson<ActivationMeasurementSummary>(
+        withQuery('/api/measurement/activation-summary', measurementDraft),
+        { fallbackMessage: 'Failed to load activation measurement summary' },
+      )
+      setMeasurementResult(result)
+    } catch (error) {
+      setMeasurementError((error as Error)?.message || 'Failed to load activation measurement summary')
+    } finally {
+      setMeasurementPending(false)
+    }
+  }
 
   useEffect(() => {
     setSelectedRecordIndices([])
@@ -201,6 +267,120 @@ export default function MeiroImportReplay({
                 Top unresolved: {cleaningReport.top_unresolved_patterns.map((item: any) => `${item.code} (${item.count})`).join(' · ')}
               </div>
             )}
+          </div>
+        ) : null}
+      </div>
+
+      <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.bg, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Import deciEngine activation events</div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Pull persisted in-app events from deciEngine and replace attribution journeys with that activation stream.</div>
+          </div>
+          <button
+            type="button"
+            onClick={onImportDeciEngineEvents}
+            disabled={deciEngineImportPending || !deciEngineImportDraft.source_url.trim()}
+            style={{ border: `1px solid ${t.color.accent}`, background: t.color.accent, color: '#fff', borderRadius: t.radius.sm, padding: '8px 10px', cursor: deciEngineImportPending ? 'wait' : 'pointer', opacity: deciEngineImportPending || !deciEngineImportDraft.source_url.trim() ? 0.7 : 1 }}
+          >
+            {deciEngineImportPending ? 'Importing…' : 'Import activation events'}
+          </button>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: t.space.sm }}>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
+            Source URL
+            <input value={deciEngineImportDraft.source_url} onChange={(e) => updateDeciEngineImportDraft({ source_url: e.target.value })} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
+            User email
+            <input value={deciEngineImportDraft.user_email || ''} onChange={(e) => updateDeciEngineImportDraft({ user_email: e.target.value })} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
+            Profile filter
+            <input value={deciEngineImportDraft.profileId || ''} onChange={(e) => updateDeciEngineImportDraft({ profileId: e.target.value })} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
+            Campaign filter
+            <input value={deciEngineImportDraft.campaignKey || ''} onChange={(e) => updateDeciEngineImportDraft({ campaignKey: e.target.value })} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
+            Limit
+            <input type="number" min={1} max={5000} value={deciEngineImportDraft.limit || 1000} onChange={(e) => updateDeciEngineImportDraft({ limit: Number(e.target.value || 1000) })} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+          </label>
+        </div>
+        {deciEngineImportError ? (
+          <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{deciEngineImportError}</div>
+        ) : deciEngineImportResult ? (
+          <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+            {deciEngineImportResult.message || `Loaded ${Number(deciEngineImportResult.count || 0).toLocaleString()} journeys from deciEngine activation events`}.
+            {deciEngineImportResult.import_summary ? <> Valid {Number(deciEngineImportResult.import_summary.valid || 0).toLocaleString()} · invalid {Number(deciEngineImportResult.import_summary.invalid || 0).toLocaleString()} · converted {Number(deciEngineImportResult.import_summary.converted || 0).toLocaleString()}</> : null}
+          </div>
+        ) : null}
+      </div>
+
+      <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, background: t.color.bg, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Activation measurement lookup</div>
+            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Check whether imported journeys can measure a campaign, asset, offer, or decision object by Prism/deciEngine IDs.</div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void runActivationMeasurement()}
+            disabled={measurementPending || !measurementDraft.object_id.trim()}
+            style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '8px 10px', cursor: measurementPending ? 'wait' : 'pointer', opacity: measurementPending || !measurementDraft.object_id.trim() ? 0.7 : 1 }}
+          >
+            {measurementPending ? 'Checking…' : 'Check measurement'}
+          </button>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: t.space.sm }}>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
+            Object type
+            <select value={measurementDraft.object_type} onChange={(e) => setMeasurementDraft((prev) => ({ ...prev, object_type: e.target.value }))} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, background: t.color.surface }}>
+              {ACTIVATION_OBJECT_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+            </select>
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
+            Object ID
+            <input value={measurementDraft.object_id} onChange={(e) => setMeasurementDraft((prev) => ({ ...prev, object_id: e.target.value }))} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
+            Native campaign ID
+            <input value={measurementDraft.native_meiro_campaign_id} onChange={(e) => setMeasurementDraft((prev) => ({ ...prev, native_meiro_campaign_id: e.target.value }))} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
+            Creative asset ID
+            <input value={measurementDraft.creative_asset_id} onChange={(e) => setMeasurementDraft((prev) => ({ ...prev, creative_asset_id: e.target.value }))} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
+            Offer catalog ID
+            <input value={measurementDraft.offer_catalog_id} onChange={(e) => setMeasurementDraft((prev) => ({ ...prev, offer_catalog_id: e.target.value }))} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+          </label>
+        </div>
+        {measurementError ? (
+          <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{measurementError}</div>
+        ) : measurementResult?.summary ? (
+          <div style={{ display: 'grid', gap: t.space.sm }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: t.space.sm }}>
+              {[
+                { label: 'Touchpoints', value: Number(measurementResult.summary.matched_touchpoints || 0).toLocaleString() },
+                { label: 'Journeys', value: Number(measurementResult.summary.matched_journeys || 0).toLocaleString() },
+                { label: 'Profiles', value: Number(measurementResult.summary.matched_profiles || 0).toLocaleString() },
+                { label: 'Conversions', value: Number(measurementResult.summary.conversions || 0).toLocaleString() },
+                { label: 'Revenue', value: Number(measurementResult.summary.revenue || 0).toLocaleString(undefined, { maximumFractionDigits: 2 }) },
+                { label: 'Metadata coverage', value: `${(Number(measurementResult.summary.activation_metadata_coverage || 0) * 100).toFixed(1)}%` },
+              ].map((item) => (
+                <div key={item.label} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                  <div style={{ fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold }}>{item.value}</div>
+                </div>
+              ))}
+            </div>
+            {!!measurementResult.recommended_actions?.length ? (
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>
+                {measurementResult.recommended_actions.map((action) => action.label || action.reason || action.id).join(' · ')}
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>

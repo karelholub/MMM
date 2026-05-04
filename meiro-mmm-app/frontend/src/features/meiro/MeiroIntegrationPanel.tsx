@@ -12,6 +12,7 @@ import type {
   MeiroWebhookDiagnostics,
   MeiroWebhookSuggestions,
 } from '../../connectors/meiroConnector'
+import type { DeciEngineEventsImportPayload, DeciEngineEventsImportResult } from '../../connectors/deciengineConnector'
 import { AnalyticsToolbar } from '../../components/dashboard'
 import { tokens as t } from '../../theme/tokens'
 import MeiroCdpSettings from './MeiroCdpSettings'
@@ -54,6 +55,10 @@ interface MeiroIntegrationPanelProps {
   meiroDryRunData?: DryRunResult
   importFromMeiroPending: boolean
   importFromMeiroResult?: MeiroImportResult | null
+  deciEngineImportDraft: DeciEngineEventsImportPayload
+  deciEngineImportPending: boolean
+  deciEngineImportResult?: DeciEngineEventsImportResult | null
+  deciEngineImportError?: string | null
   reprocessWebhookArchivePending: boolean
   reprocessWebhookArchiveResult?: MeiroWebhookReprocessResult | null
   reprocessQuarantinePending?: boolean
@@ -79,6 +84,8 @@ interface MeiroIntegrationPanelProps {
   onRejectMeiroMapping: () => void
   onDryRun: () => void
   onImportFromMeiro: () => void
+  onDeciEngineImportDraftChange: (draft: DeciEngineEventsImportPayload) => void
+  onImportDeciEngineEvents: () => void
   onReplayArchive: () => void
   onReprocessSelectedQuarantine?: (recordIndices?: number[]) => void
   onSelectQuarantineRun: (runId: string) => void
@@ -212,6 +219,10 @@ export default function MeiroIntegrationPanel(props: MeiroIntegrationPanelProps)
           meiroDryRunData={props.meiroDryRunData}
           importFromMeiroPending={props.importFromMeiroPending}
           importFromMeiroResult={props.importFromMeiroResult}
+          deciEngineImportDraft={props.deciEngineImportDraft}
+          deciEngineImportPending={props.deciEngineImportPending}
+          deciEngineImportResult={props.deciEngineImportResult}
+          deciEngineImportError={props.deciEngineImportError}
           reprocessWebhookArchivePending={props.reprocessWebhookArchivePending}
           reprocessWebhookArchiveResult={props.reprocessWebhookArchiveResult}
           reprocessQuarantinePending={props.reprocessQuarantinePending || false}
@@ -226,6 +237,8 @@ export default function MeiroIntegrationPanel(props: MeiroIntegrationPanelProps)
           relativeTime={props.relativeTime}
           onDryRun={props.onDryRun}
           onImportFromMeiro={props.onImportFromMeiro}
+          onDeciEngineImportDraftChange={props.onDeciEngineImportDraftChange}
+          onImportDeciEngineEvents={props.onImportDeciEngineEvents}
           onReplayArchive={props.onReplayArchive}
           onReprocessSelectedQuarantine={props.onReprocessSelectedQuarantine || (() => {})}
           onSelectQuarantineRun={props.onSelectQuarantineRun}
