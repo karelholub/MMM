@@ -214,6 +214,13 @@ function providerFromBudgetChannel(channel: string): AdsProviderKey | null {
   return null
 }
 
+function activationMeasurementHref(item?: ActivationFeedbackItem | null): string {
+  const params = new URLSearchParams({ page: 'meiro', meiro_tab: 'import' })
+  if (item?.object?.type) params.set('activation_object_type', item.object.type)
+  if (item?.object?.id) params.set('activation_object_id', item.object.id)
+  return `/?${params.toString()}`
+}
+
 function isTallMmmDataset(rows: Record<string, unknown>[]): boolean {
   return rows.some((row) => row.channel != null && row.spend != null)
 }
@@ -924,14 +931,28 @@ export default function BudgetOptimizer({
                       <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
                         {item.object?.type || 'object'} · {Number(item.evidence?.matched_touchpoints || 0).toLocaleString()} touchpoints · {Number(item.evidence?.conversions || 0).toLocaleString()} conversions
                       </div>
+                      <a
+                        href={activationMeasurementHref(item)}
+                        style={{ justifySelf: 'flex-start', color: t.color.accent, fontSize: t.font.sizeXs, fontWeight: t.font.weightSemibold, textDecoration: 'none' }}
+                      >
+                        Open measurement evidence
+                      </a>
                     </div>
                   )
                 })}
               </div>
             </div>
           ) : (
-            <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-              {activationFeedback?.decision?.subtitle || 'No activation feedback is attached to this budget recommendation yet.'}
+            <div style={{ display: 'grid', gap: t.space.sm }}>
+              <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                {activationFeedback?.decision?.subtitle || 'No activation feedback is attached to this budget recommendation yet.'}
+              </div>
+              <a
+                href={activationMeasurementHref(null)}
+                style={{ justifySelf: 'flex-start', color: t.color.accent, fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, textDecoration: 'none' }}
+              >
+                Open activation measurement workspace
+              </a>
             </div>
           )}
         </SectionCard>
