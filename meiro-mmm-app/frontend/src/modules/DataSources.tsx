@@ -21,7 +21,7 @@ import {
   testMeiroConnection,
   type MeiroPullConfig,
 } from '../connectors/meiroConnector'
-import { importDeciEngineActivationEvents, type DeciEngineEventsImportPayload } from '../connectors/deciengineConnector'
+import { getDeciEngineEventsConfig, importDeciEngineActivationEvents, saveDeciEngineEventsConfig, type DeciEngineEventsImportPayload } from '../connectors/deciengineConnector'
 import {
   createDataSource,
   deleteDataSource,
@@ -395,12 +395,23 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
       }),
     enabled: meiroDrawerOpen,
   })
+  const deciEngineEventsConfigQuery = useQuery({
+    queryKey: ['deciengine-events-config-datasources'],
+    queryFn: getDeciEngineEventsConfig,
+    enabled: meiroDrawerOpen,
+  })
 
   useEffect(() => {
     const email = (permissions.auth?.user?.email || '').trim()
     if (!email || deciEngineImportDraft.user_email) return
     setDeciEngineImportDraft((prev) => ({ ...prev, user_email: email }))
   }, [permissions.auth?.user?.email, deciEngineImportDraft.user_email])
+
+  useEffect(() => {
+    if (!deciEngineEventsConfigQuery.data) return
+    const email = deciEngineEventsConfigQuery.data.user_email || permissions.auth?.user?.email || ''
+    setDeciEngineImportDraft({ ...deciEngineEventsConfigQuery.data, user_email: email, limit: deciEngineEventsConfigQuery.data.limit || 500 })
+  }, [deciEngineEventsConfigQuery.data, permissions.auth?.user?.email])
 
   const uploadMutation = useMutation({
     mutationFn: async (file: File) => {
@@ -453,6 +464,13 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
       await queryClient.invalidateQueries({ queryKey: ['journeys-validation-summary'] })
       await queryClient.invalidateQueries({ queryKey: ['journeys-preview-20'] })
       await queryClient.invalidateQueries({ queryKey: ['import-log-recent'] })
+    },
+  })
+  const saveDeciEngineEventsConfigMutation = useMutation({
+    mutationFn: async () => saveDeciEngineEventsConfig(deciEngineImportDraft),
+    onSuccess: async (config) => {
+      setDeciEngineImportDraft(config)
+      await queryClient.invalidateQueries({ queryKey: ['deciengine-events-config-datasources'] })
     },
   })
 
@@ -2015,6 +2033,9 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
                   deciEngineImportPending={importDeciEngineEventsMutation.isPending}
                   deciEngineImportResult={importDeciEngineEventsMutation.data ?? null}
                   deciEngineImportError={(importDeciEngineEventsMutation.error as Error | undefined)?.message || null}
+                  deciEngineConfigSaving={saveDeciEngineEventsConfigMutation.isPending}
+                  deciEngineConfigSaved={saveDeciEngineEventsConfigMutation.isSuccess}
+                  deciEngineConfigError={(saveDeciEngineEventsConfigMutation.error as Error | undefined)?.message || null}
                   reprocessWebhookArchivePending={reprocessWebhookArchiveMutation.isPending}
                   reprocessWebhookArchiveResult={reprocessWebhookArchiveMutation.data ?? null}
                   quarantineRuns={undefined}
@@ -2043,6 +2064,7 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
                       importDeciEngineEventsMutation.mutate()
                     }
                   }}
+                  onSaveDeciEngineConfig={() => saveDeciEngineEventsConfigMutation.mutate()}
                   onReplayArchive={() => reprocessWebhookArchiveMutation.mutate()}
                   onSelectQuarantineRun={() => {}}
                 />

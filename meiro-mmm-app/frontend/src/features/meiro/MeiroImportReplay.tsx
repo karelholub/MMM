@@ -21,6 +21,9 @@ interface MeiroImportReplayProps {
   deciEngineImportPending: boolean
   deciEngineImportResult?: DeciEngineEventsImportResult | null
   deciEngineImportError?: string | null
+  deciEngineConfigSaving?: boolean
+  deciEngineConfigSaved?: boolean
+  deciEngineConfigError?: string | null
   reprocessWebhookArchivePending: boolean
   reprocessWebhookArchiveResult?: MeiroWebhookReprocessResult | null
   reprocessQuarantinePending: boolean
@@ -37,6 +40,7 @@ interface MeiroImportReplayProps {
   onImportFromMeiro: () => void
   onDeciEngineImportDraftChange: (draft: DeciEngineEventsImportPayload) => void
   onImportDeciEngineEvents: () => void
+  onSaveDeciEngineConfig: () => void
   onReplayArchive: () => void
   onReprocessSelectedQuarantine: (recordIndices?: number[]) => void
   onSelectQuarantineRun: (runId: string) => void
@@ -115,6 +119,9 @@ export default function MeiroImportReplay({
   deciEngineImportPending,
   deciEngineImportResult,
   deciEngineImportError,
+  deciEngineConfigSaving = false,
+  deciEngineConfigSaved = false,
+  deciEngineConfigError,
   reprocessWebhookArchivePending,
   reprocessWebhookArchiveResult,
   reprocessQuarantinePending,
@@ -131,6 +138,7 @@ export default function MeiroImportReplay({
   onImportFromMeiro,
   onDeciEngineImportDraftChange,
   onImportDeciEngineEvents,
+  onSaveDeciEngineConfig,
   onReplayArchive,
   onReprocessSelectedQuarantine,
   onSelectQuarantineRun,
@@ -312,6 +320,14 @@ export default function MeiroImportReplay({
           >
             {deciEngineImportPending ? 'Importing…' : canImportDeciEngineEvents ? 'Import activation events' : 'Enter user email'}
           </button>
+          <button
+            type="button"
+            onClick={onSaveDeciEngineConfig}
+            disabled={deciEngineConfigSaving || !deciEngineImportDraft.source_url.trim()}
+            style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '8px 10px', cursor: deciEngineConfigSaving ? 'wait' : 'pointer', opacity: deciEngineConfigSaving || !deciEngineImportDraft.source_url.trim() ? 0.7 : 1 }}
+          >
+            {deciEngineConfigSaving ? 'Saving…' : 'Save source settings'}
+          </button>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: t.space.sm }}>
           <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
@@ -337,8 +353,12 @@ export default function MeiroImportReplay({
         </div>
         {deciEngineImportError ? (
           <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{deciEngineImportError}</div>
+        ) : deciEngineConfigError ? (
+          <div style={{ fontSize: t.font.sizeSm, color: t.color.danger }}>{deciEngineConfigError}</div>
         ) : !canImportDeciEngineEvents ? (
           <div style={{ fontSize: t.font.sizeSm, color: t.color.warning }}>User email is required because deciEngine authorizes the event feed through `X-User-Email`.</div>
+        ) : deciEngineConfigSaved ? (
+          <div style={{ fontSize: t.font.sizeSm, color: t.color.success }}>deciEngine event-source settings saved.</div>
         ) : deciEngineImportResult ? (
           <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
             {deciEngineImportResult.message || `Loaded ${Number(deciEngineImportResult.count || 0).toLocaleString()} journeys from deciEngine activation events`}.

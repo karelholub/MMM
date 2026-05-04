@@ -149,6 +149,43 @@ def create_router(
         }
         return result
 
+    def _deciengine_events_config_path():
+        return get_data_dir_obj() / "deciengine_events_config.json"
+
+    def _normalize_deciengine_events_config(payload: Any) -> Dict[str, Any]:
+        raw = payload if isinstance(payload, dict) else {}
+        source_url = str(raw.get("source_url") or "http://host.docker.internal:3001/v1/inapp/events").strip()
+        user_email = str(raw.get("user_email") or "").strip()
+        user_role = str(raw.get("user_role") or "").strip()
+        user_id = str(raw.get("user_id") or "").strip()
+        try:
+            limit = int(raw.get("limit") or 500)
+        except (TypeError, ValueError):
+            limit = 500
+        return {
+            "source_url": source_url,
+            "user_email": user_email or None,
+            "user_role": user_role or None,
+            "user_id": user_id or None,
+            "limit": max(1, min(limit, 500)),
+        }
+
+    def _load_deciengine_events_config() -> Dict[str, Any]:
+        path = _deciengine_events_config_path()
+        if not path.exists():
+            return _normalize_deciengine_events_config({})
+        try:
+            return _normalize_deciengine_events_config(json.loads(path.read_text()))
+        except Exception:
+            return _normalize_deciengine_events_config({})
+
+    def _save_deciengine_events_config(payload: Any) -> Dict[str, Any]:
+        config = _normalize_deciengine_events_config(payload)
+        path = _deciengine_events_config_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(config, indent=2, sort_keys=True))
+        return config
+
     def _prepare_attribution_journeys(
         db: Any,
         *,
@@ -727,29 +764,36 @@ def create_router(
         )
 
     def _load_deciengine_events_payload(payload: Any) -> Any:
-        if not isinstance(payload, dict) or not payload.get("source_url"):
+        if not isinstance(payload, dict):
             return payload or {}
-        source_url = str(payload.get("source_url") or "").strip()
+        stored_config = _load_deciengine_events_config()
+        if payload.get("use_saved_config") is True:
+            merged_payload = {**stored_config, **{k: v for k, v in payload.items() if v not in (None, "", [])}}
+        else:
+            merged_payload = {**stored_config, **payload}
+        if not merged_payload.get("source_url"):
+            return payload or {}
+        source_url = str(merged_payload.get("source_url") or "").strip()
         parsed_url = urllib.parse.urlparse(source_url)
         if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
             raise HTTPException(status_code=400, detail="source_url must be an absolute http(s) URL")
         query_params = dict(urllib.parse.parse_qsl(parsed_url.query, keep_blank_values=True))
         for key in ("campaignKey", "messageId", "profileId", "from", "to"):
-            if payload.get(key) not in (None, "", []):
-                query_params[key] = str(payload[key])
-        if payload.get("limit") not in (None, "", []):
+            if merged_payload.get(key) not in (None, "", []):
+                query_params[key] = str(merged_payload[key])
+        if merged_payload.get("limit") not in (None, "", []):
             try:
-                query_params["limit"] = str(max(1, min(int(payload["limit"]), 500)))
+                query_params["limit"] = str(max(1, min(int(merged_payload["limit"]), 500)))
             except (TypeError, ValueError):
                 query_params["limit"] = "500"
         url = urllib.parse.urlunparse(parsed_url._replace(query=urllib.parse.urlencode(query_params)))
         headers = {"Accept": "application/json"}
-        if payload.get("user_email"):
-            headers["X-User-Email"] = str(payload["user_email"])
-        if payload.get("user_role"):
-            headers["X-User-Role"] = str(payload["user_role"])
-        if payload.get("user_id"):
-            headers["X-User-Id"] = str(payload["user_id"])
+        if merged_payload.get("user_email"):
+            headers["X-User-Email"] = str(merged_payload["user_email"])
+        if merged_payload.get("user_role"):
+            headers["X-User-Role"] = str(merged_payload["user_role"])
+        if merged_payload.get("user_id"):
+            headers["X-User-Id"] = str(merged_payload["user_id"])
         try:
             request = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(request, timeout=10) as response:
@@ -760,6 +804,14 @@ def create_router(
             return json.loads(raw.decode("utf-8"))
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"deciEngine events response was not JSON: {exc}") from exc
+
+    @router.get("/api/attribution/deciengine-events/config")
+    def get_deciengine_events_config():
+        return _load_deciengine_events_config()
+
+    @router.post("/api/attribution/deciengine-events/config")
+    def save_deciengine_events_config(payload: Any = Body(default=None)):
+        return _save_deciengine_events_config(payload)
 
     @router.post("/api/attribution/journeys/from-deciengine-events")
     def import_journeys_from_deciengine_events(payload: Any = Body(default=None), db=Depends(get_db_dependency)):

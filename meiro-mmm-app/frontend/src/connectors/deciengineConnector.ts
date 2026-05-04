@@ -1,4 +1,4 @@
-import { apiSendJson } from '../lib/apiClient'
+import { apiGetJson, apiSendJson } from '../lib/apiClient'
 
 export interface DeciEngineEventsImportPayload {
   source_url: string
@@ -30,5 +30,23 @@ export async function importDeciEngineActivationEvents(
     'POST',
     payload,
     { fallbackMessage: 'Failed to import deciEngine activation events' },
+  )
+}
+
+export async function getDeciEngineEventsConfig(): Promise<DeciEngineEventsImportPayload> {
+  return apiGetJson<DeciEngineEventsImportPayload>(
+    '/api/attribution/deciengine-events/config',
+    { fallbackMessage: 'Failed to load deciEngine event-source settings' },
+  )
+}
+
+export async function saveDeciEngineEventsConfig(
+  payload: DeciEngineEventsImportPayload,
+): Promise<DeciEngineEventsImportPayload> {
+  return apiSendJson<DeciEngineEventsImportPayload>(
+    '/api/attribution/deciengine-events/config',
+    'POST',
+    payload,
+    { fallbackMessage: 'Failed to save deciEngine event-source settings' },
   )
 }

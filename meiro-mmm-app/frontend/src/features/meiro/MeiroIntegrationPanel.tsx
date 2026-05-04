@@ -59,6 +59,9 @@ interface MeiroIntegrationPanelProps {
   deciEngineImportPending: boolean
   deciEngineImportResult?: DeciEngineEventsImportResult | null
   deciEngineImportError?: string | null
+  deciEngineConfigSaving?: boolean
+  deciEngineConfigSaved?: boolean
+  deciEngineConfigError?: string | null
   reprocessWebhookArchivePending: boolean
   reprocessWebhookArchiveResult?: MeiroWebhookReprocessResult | null
   reprocessQuarantinePending?: boolean
@@ -86,6 +89,7 @@ interface MeiroIntegrationPanelProps {
   onImportFromMeiro: () => void
   onDeciEngineImportDraftChange: (draft: DeciEngineEventsImportPayload) => void
   onImportDeciEngineEvents: () => void
+  onSaveDeciEngineConfig: () => void
   onReplayArchive: () => void
   onReprocessSelectedQuarantine?: (recordIndices?: number[]) => void
   onSelectQuarantineRun: (runId: string) => void
@@ -223,6 +227,9 @@ export default function MeiroIntegrationPanel(props: MeiroIntegrationPanelProps)
           deciEngineImportPending={props.deciEngineImportPending}
           deciEngineImportResult={props.deciEngineImportResult}
           deciEngineImportError={props.deciEngineImportError}
+          deciEngineConfigSaving={props.deciEngineConfigSaving}
+          deciEngineConfigSaved={props.deciEngineConfigSaved}
+          deciEngineConfigError={props.deciEngineConfigError}
           reprocessWebhookArchivePending={props.reprocessWebhookArchivePending}
           reprocessWebhookArchiveResult={props.reprocessWebhookArchiveResult}
           reprocessQuarantinePending={props.reprocessQuarantinePending || false}
@@ -239,6 +246,7 @@ export default function MeiroIntegrationPanel(props: MeiroIntegrationPanelProps)
           onImportFromMeiro={props.onImportFromMeiro}
           onDeciEngineImportDraftChange={props.onDeciEngineImportDraftChange}
           onImportDeciEngineEvents={props.onImportDeciEngineEvents}
+          onSaveDeciEngineConfig={props.onSaveDeciEngineConfig}
           onReplayArchive={props.onReplayArchive}
           onReprocessSelectedQuarantine={props.onReprocessSelectedQuarantine || (() => {})}
           onSelectQuarantineRun={props.onSelectQuarantineRun}
