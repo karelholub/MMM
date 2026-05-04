@@ -140,6 +140,20 @@ type ActivationFeedbackResponse = {
   summary?: { ready?: number; warning?: number; setup?: number }
 }
 
+type ActivationFeedbackExport = {
+  schema_version?: string
+  generated_at?: string
+  generated_by?: string
+  summary?: { signals?: number; total_candidates?: number; ready?: number; warning?: number; setup?: number }
+  signals?: Array<{
+    signal_id?: string
+    object?: { type?: string; id?: string; label?: string; aliases?: string[]; source_systems?: string[] }
+    recommendation?: string
+    status?: string
+    decision_engine_hint?: { suggested_action?: string; eligible_for_policy_input?: boolean; requires_human_review?: boolean }
+  }>
+}
+
 const ACTIVATION_OBJECT_TYPES = ['campaign', 'asset', 'content', 'bundle', 'offer', 'decision', 'decision_stack', 'experiment', 'variant', 'placement', 'template']
 
 function asCleaningReport(value: unknown): CleaningReportView | null {
@@ -205,6 +219,9 @@ export default function MeiroImportReplay({
   const [activationObjectsPending, setActivationObjectsPending] = useState(false)
   const [activationObjectsError, setActivationObjectsError] = useState<string | null>(null)
   const [activationFeedback, setActivationFeedback] = useState<ActivationFeedbackResponse | null>(null)
+  const [activationFeedbackExport, setActivationFeedbackExport] = useState<ActivationFeedbackExport | null>(null)
+  const [activationFeedbackExportPending, setActivationFeedbackExportPending] = useState(false)
+  const [activationFeedbackExportError, setActivationFeedbackExportError] = useState<string | null>(null)
   const latestImportSummary =
     importFromMeiroResult?.import_summary ||
     reprocessWebhookArchiveResult?.import_result?.import_summary ||
@@ -294,6 +311,21 @@ export default function MeiroImportReplay({
         offer_catalog_id: item.object_type === 'bundle' ? item.object_id : prev.offer_catalog_id,
       }
     })
+  }
+  const loadActivationFeedbackExport = async () => {
+    setActivationFeedbackExportPending(true)
+    setActivationFeedbackExportError(null)
+    try {
+      const result = await apiGetJson<ActivationFeedbackExport>(
+        withQuery('/api/measurement/activation-feedback/export', { limit: 20 }),
+        { fallbackMessage: 'Failed to build activation feedback export' },
+      )
+      setActivationFeedbackExport(result)
+    } catch (error) {
+      setActivationFeedbackExportError((error as Error)?.message || 'Failed to build activation feedback export')
+    } finally {
+      setActivationFeedbackExportPending(false)
+    }
   }
   const runActivationMeasurement = async () => {
     setMeasurementPending(true)
@@ -526,9 +558,27 @@ export default function MeiroImportReplay({
                 <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
                   Ready {Number(activationFeedback.summary?.ready || 0).toLocaleString()} · review {Number(activationFeedback.summary?.warning || 0).toLocaleString()} · setup {Number(activationFeedback.summary?.setup || 0).toLocaleString()}
                 </div>
+                <button
+                  type="button"
+                  onClick={() => void loadActivationFeedbackExport()}
+                  disabled={activationFeedbackExportPending}
+                  style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '5px 8px', cursor: activationFeedbackExportPending ? 'wait' : 'pointer', fontSize: t.font.sizeXs, opacity: activationFeedbackExportPending ? 0.7 : 1 }}
+                >
+                  {activationFeedbackExportPending ? 'Building export...' : 'Build export payload'}
+                </button>
               </div>
               {activationFeedback.decision?.warnings?.length ? (
                 <div style={{ fontSize: t.font.sizeXs, color: t.color.warning }}>{activationFeedback.decision.warnings.join(' · ')}</div>
+              ) : null}
+              {activationFeedbackExportError ? (
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.danger }}>{activationFeedbackExportError}</div>
+              ) : activationFeedbackExport ? (
+                <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.bg, display: 'grid', gap: 4 }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                    Export payload <strong style={{ color: t.color.text }}>{activationFeedbackExport.schema_version}</strong> · {Number(activationFeedbackExport.summary?.signals || 0).toLocaleString()} signals · generated {activationFeedbackExport.generated_at ? relativeTime(activationFeedbackExport.generated_at) : 'now'}
+                  </div>
+                  <pre style={{ margin: 0, maxHeight: 180, overflow: 'auto', fontSize: 11, background: t.color.bgSubtle, borderRadius: t.radius.sm, padding: t.space.sm }}>{JSON.stringify({ schema_version: activationFeedbackExport.schema_version, summary: activationFeedbackExport.summary, first_signal: activationFeedbackExport.signals?.[0] || null }, null, 2)}</pre>
+                </div>
               ) : null}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: t.space.sm }}>
                 {activationFeedback.items.map((item, index) => {

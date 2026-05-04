@@ -698,3 +698,72 @@ def build_activation_feedback_recommendations(
         },
         "decision": decision,
     }
+
+
+def build_activation_feedback_export(
+    *,
+    journeys: List[Dict[str, Any]],
+    limit: int = 50,
+    generated_by: str = "mmm",
+) -> Dict[str, Any]:
+    feedback = build_activation_feedback_recommendations(journeys=journeys, limit=limit)
+    signals: List[Dict[str, Any]] = []
+    for item in feedback.get("items") or []:
+        obj = item.get("object") or {}
+        evidence = item.get("evidence") or {}
+        recommendation = item.get("recommendation") or "review"
+        object_type = _as_text(obj.get("type"))
+        object_id = _as_text(obj.get("id"))
+        signal_id = f"activation_feedback:{object_type}:{object_id}"
+        signals.append(
+            {
+                "signal_id": signal_id,
+                "object": {
+                    "type": object_type,
+                    "id": object_id,
+                    "label": obj.get("label") or object_id,
+                    "aliases": list(obj.get("aliases") or []),
+                    "source_systems": list(obj.get("source_systems") or []),
+                },
+                "recommendation": recommendation,
+                "status": item.get("status"),
+                "title": item.get("title"),
+                "reason": item.get("reason"),
+                "metrics": {
+                    "matched_touchpoints": int(evidence.get("matched_touchpoints") or 0),
+                    "matched_journeys": int(evidence.get("matched_journeys") or 0),
+                    "matched_profiles": int(evidence.get("matched_profiles") or 0),
+                    "conversions": int(evidence.get("conversions") or 0),
+                    "conversion_rate": float(evidence.get("conversion_rate") or 0.0),
+                    "revenue": float(evidence.get("revenue") or 0.0),
+                    "last_touchpoint_at": evidence.get("last_touchpoint_at"),
+                },
+                "decision_engine_hint": {
+                    "suggested_action": {
+                        "compare": "prioritize_for_measurement_review",
+                        "review": "inspect_before_scaling",
+                        "collect_more_data": "keep_collecting_events",
+                    }.get(recommendation, "review"),
+                    "eligible_for_policy_input": recommendation == "compare",
+                    "requires_human_review": recommendation != "compare",
+                },
+            }
+        )
+
+    return {
+        "schema_version": "activation_feedback_export.v1",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_by": generated_by,
+        "source": {
+            "system": "meiro_mmm_app",
+            "journey_source": "activation_measurement",
+            "intended_consumers": ["deciEngine", "Meiro Prism", "MMM/MTA"],
+        },
+        "summary": {
+            **dict(feedback.get("summary") or {}),
+            "signals": len(signals),
+            "total_candidates": int(feedback.get("total") or 0),
+        },
+        "decision": dict(feedback.get("decision") or {}),
+        "signals": signals,
+    }

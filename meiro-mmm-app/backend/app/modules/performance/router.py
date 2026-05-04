@@ -13,6 +13,7 @@ from app.services_canonical_facts import iter_canonical_conversion_rows
 from app.services_import_runs import get_last_successful_run, get_runs as get_import_runs
 from app.services_nba_defaults import filter_nba_recommendations
 from app.services_activation_measurement import (
+    build_activation_feedback_export,
     build_activation_feedback_recommendations,
     build_activation_object_registry,
     build_activation_measurement_evidence,
@@ -407,6 +408,19 @@ def create_router(
     ):
         journeys = ensure_journeys_loaded_fn(db)
         return build_activation_feedback_recommendations(journeys=journeys, limit=limit)
+
+    @router.get("/api/measurement/activation-feedback/export")
+    def activation_measurement_feedback_export(
+        limit: int = Query(50, ge=1, le=200, description="Maximum exported activation feedback signals"),
+        db=Depends(get_db_dependency),
+        ctx=Depends(require_permission_dependency("attribution.view")),
+    ):
+        journeys = ensure_journeys_loaded_fn(db)
+        return build_activation_feedback_export(
+            journeys=journeys,
+            limit=limit,
+            generated_by=getattr(ctx, "user_id", None) or "mmm",
+        )
 
     @router.get("/api/measurement/activation-evidence")
     def activation_measurement_evidence(
