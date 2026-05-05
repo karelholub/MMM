@@ -9,6 +9,7 @@ from sqlalchemy.pool import StaticPool
 from app.db import Base, get_db
 from app.main import app
 from app.models_config_dq import JourneyDefinition, JourneyDefinitionInstanceFact, JourneyPathDaily
+from app import services_journey_dimensions, services_journey_path_outputs
 
 ADMIN_HEADERS = {
     "X-User-Id": "test-admin",
@@ -241,6 +242,118 @@ def test_journey_paths_pagination_and_limits(client):
         headers=ADMIN_HEADERS,
     )
     assert invalid_limit.status_code == 422
+
+
+def test_journey_paths_exclude_out_of_scope_campaigns_from_daily_outputs(client, monkeypatch):
+    test_client, session_factory = client
+    _seed(session_factory)
+    monkeypatch.setattr(services_journey_path_outputs, "site_scope_is_strict", lambda: True)
+    monkeypatch.setattr(services_journey_path_outputs, "get_out_of_scope_campaign_labels", lambda: {"cmp-1"})
+
+    resp = test_client.get(
+        "/api/journeys/jd-1/paths",
+        params={
+            "date_from": "2026-01-01",
+            "date_to": "2026-01-31",
+            "mode": "all_journeys",
+            "limit": 50,
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["campaign_id"] == "cmp-2"
+    assert body["summary"]["count_journeys"] == 15
+
+
+def test_journey_dimensions_exclude_out_of_scope_campaigns_from_selectors(client, monkeypatch):
+    test_client, session_factory = client
+    db = session_factory()
+    try:
+        db.add(
+            JourneyDefinition(
+                id="jd-dim-scope",
+                name="Journey Dimensions Scope",
+                description="",
+                conversion_kpi_id="purchase",
+                lookback_window_days=30,
+                mode_default="conversion_only",
+                created_by="seed",
+                updated_by="seed",
+                is_archived=False,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            )
+        )
+        db.add_all(
+            [
+                JourneyDefinitionInstanceFact(
+                    date=date(2026, 1, 10),
+                    journey_definition_id="jd-dim-scope",
+                    conversion_id="conv-target",
+                    profile_id="p-1",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2026, 1, 10, 12, 0, 0),
+                    path_hash="target",
+                    steps_json=["target"],
+                    path_length=1,
+                    channel_group="paid_search",
+                    last_touch_channel="google_ads",
+                    campaign_id="meiro-brand",
+                    device="desktop",
+                    country="CZ",
+                    interaction_path_type="click_through",
+                    time_to_convert_sec=60.0,
+                    gross_conversions_total=1.0,
+                    net_conversions_total=1.0,
+                    gross_revenue_total=100.0,
+                    net_revenue_total=100.0,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow(),
+                ),
+                JourneyDefinitionInstanceFact(
+                    date=date(2026, 1, 11),
+                    journey_definition_id="jd-dim-scope",
+                    conversion_id="conv-legacy",
+                    profile_id="p-2",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2026, 1, 11, 12, 0, 0),
+                    path_hash="legacy",
+                    steps_json=["legacy"],
+                    path_length=1,
+                    channel_group="paid_social",
+                    last_touch_channel="facebook_ads",
+                    campaign_id="mytimi legacy",
+                    device="mobile",
+                    country="CZ",
+                    interaction_path_type="click_through",
+                    time_to_convert_sec=120.0,
+                    gross_conversions_total=1.0,
+                    net_conversions_total=1.0,
+                    gross_revenue_total=100.0,
+                    net_revenue_total=100.0,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow(),
+                ),
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    monkeypatch.setattr(services_journey_dimensions, "site_scope_is_strict", lambda: True)
+    monkeypatch.setattr(services_journey_dimensions, "get_out_of_scope_campaign_labels", lambda: {"mytimi legacy"})
+
+    resp = test_client.get(
+        "/api/journeys/jd-dim-scope/dimensions",
+        params={"date_from": "2026-01-01", "date_to": "2026-01-31"},
+        headers=ADMIN_HEADERS,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["summary"]["journey_rows"] == 1
+    assert body["campaigns"] == [{"value": "meiro-brand", "count": 1}]
 
 
 def test_journey_paths_fall_back_to_definition_instance_facts_when_daily_rows_absent(client):

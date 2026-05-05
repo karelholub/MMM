@@ -3,10 +3,20 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Dict, Optional
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Query, Session
 
 from .models_config_dq import JourneyDefinitionInstanceFact
+from .utils.meiro_config import get_out_of_scope_campaign_labels, site_scope_is_strict
+
+
+def _exclude_out_of_scope_campaigns(query: Query, column: Any) -> Query:
+    if not site_scope_is_strict():
+        return query
+    labels = get_out_of_scope_campaign_labels()
+    if not labels:
+        return query
+    return query.filter(or_(column.is_(None), column == "", func.lower(func.trim(column)).notin_(labels)))
 
 
 def _apply_dimension_filters(
@@ -30,6 +40,7 @@ def _apply_dimension_filters(
         query = query.filter(JourneyDefinitionInstanceFact.channel_group == channel_group)
     if campaign_id and exclude_dimension != "campaign_id":
         query = query.filter(JourneyDefinitionInstanceFact.campaign_id == campaign_id)
+    query = _exclude_out_of_scope_campaigns(query, JourneyDefinitionInstanceFact.campaign_id)
     if device and exclude_dimension != "device":
         query = query.filter(JourneyDefinitionInstanceFact.device == device)
     if country and exclude_dimension != "country":

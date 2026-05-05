@@ -3,11 +3,25 @@ from __future__ import annotations
 from datetime import date, datetime, time as dt_time, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from .models_config_dq import JourneyDefinition, JourneyTransitionDaily, JourneyTransitionFact
 from .services_journey_transition_facts import iter_journey_transition_rows
+from .utils.meiro_config import campaign_label_matches_target_site_scope, get_out_of_scope_campaign_labels, site_scope_is_strict
+
+
+def _exclude_out_of_scope_campaigns(q, column):
+    if not site_scope_is_strict():
+        return q
+    labels = get_out_of_scope_campaign_labels()
+    if not labels:
+        return q
+    return q.filter(or_(column.is_(None), column == "", func.lower(func.trim(column)).notin_(labels)))
+
+
+def _row_campaign_in_scope(row) -> bool:
+    return campaign_label_matches_target_site_scope(getattr(row, "campaign_id", None), allow_unknown=True)
 
 
 def can_use_transition_fact_fallback(db: Session, *, journey_definition: JourneyDefinition) -> bool:
@@ -52,6 +66,7 @@ def _daily_transition_query(
         q = q.filter(JourneyTransitionDaily.channel_group == channel_group)
     if campaign_id:
         q = q.filter(JourneyTransitionDaily.campaign_id == campaign_id)
+    q = _exclude_out_of_scope_campaigns(q, JourneyTransitionDaily.campaign_id)
     if device:
         q = q.filter(JourneyTransitionDaily.device == device)
     if country:
@@ -91,6 +106,7 @@ def list_transition_edges_from_outputs(
         q = q.filter(JourneyTransitionDaily.channel_group == channel_group)
     if campaign_id:
         q = q.filter(JourneyTransitionDaily.campaign_id == campaign_id)
+    q = _exclude_out_of_scope_campaigns(q, JourneyTransitionDaily.campaign_id)
     if device:
         q = q.filter(JourneyTransitionDaily.device == device)
     if country:
@@ -138,6 +154,8 @@ def list_transition_edges_from_outputs(
         end_dt=end_dt,
         conversion_key=journey_definition.conversion_kpi_id,
     ):
+        if not _row_campaign_in_scope(row):
+            continue
         if channel_group and str(row.channel_group or "") != channel_group:
             continue
         if campaign_id and str(row.campaign_id or "") != campaign_id:
@@ -228,6 +246,8 @@ def compute_transition_pair_counts_from_outputs(
         end_dt=end_dt,
         conversion_key=journey_definition.conversion_kpi_id,
     ):
+        if not _row_campaign_in_scope(row):
+            continue
         if str(row.from_step or "") != from_step:
             continue
         if channel_group and str(row.channel_group or "") != channel_group:
@@ -305,6 +325,8 @@ def list_transition_breakdowns_from_outputs(
         end_dt=end_dt,
         conversion_key=journey_definition.conversion_kpi_id,
     ):
+        if not _row_campaign_in_scope(row):
+            continue
         if str(row.from_step or "") != from_step or str(row.to_step or "") != to_step:
             continue
         if channel_group and str(row.channel_group or "") != channel_group:

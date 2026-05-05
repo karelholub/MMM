@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Dict, Optional
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Query, Session
 
 from .models_config_dq import JourneyDefinitionInstanceFact, JourneyPathDaily
@@ -12,6 +12,16 @@ from .services_journey_definition_facts import (
     has_definition_instance_facts,
     list_paths_from_definition_facts,
 )
+from .utils.meiro_config import get_out_of_scope_campaign_labels, site_scope_is_strict
+
+
+def _exclude_out_of_scope_campaigns(query: Query, column: Any) -> Query:
+    if not site_scope_is_strict():
+        return query
+    labels = get_out_of_scope_campaign_labels()
+    if not labels:
+        return query
+    return query.filter(or_(column.is_(None), column == "", func.lower(func.trim(column)).notin_(labels)))
 
 
 def query_path_daily_outputs(
@@ -38,6 +48,7 @@ def query_path_daily_outputs(
         q = q.filter(JourneyPathDaily.channel_group == channel_group)
     if campaign_id:
         q = q.filter(JourneyPathDaily.campaign_id == campaign_id)
+    q = _exclude_out_of_scope_campaigns(q, JourneyPathDaily.campaign_id)
     if device:
         q = q.filter(JourneyPathDaily.device == device)
     if country:

@@ -12,6 +12,11 @@ from .models_config_dq import (
     JourneyExampleFact,
     JourneyInstanceFact,
 )
+from .utils.meiro_config import campaign_label_matches_target_site_scope
+
+
+def _campaign_in_scope(value: Optional[str]) -> bool:
+    return campaign_label_matches_target_site_scope(value, allow_unknown=True)
 
 
 def _query_example_outputs(
@@ -134,6 +139,8 @@ def list_examples_from_outputs(
     if fact_count >= source_count and fact_count > 0:
         items: List[Dict[str, Any]] = []
         for row in fact_query.limit(max(50, int(limit) * 8)).all():
+            if not _campaign_in_scope(row.campaign_id):
+                continue
             steps = [str(step) for step in (row.steps_json or [])]
             if path_hash and str(row.path_hash or "") != path_hash:
                 continue
@@ -189,6 +196,8 @@ def list_examples_from_outputs(
 
     items: List[Dict[str, Any]] = []
     for row in definition_fact_rows:
+        if not _campaign_in_scope(row.campaign_id):
+            continue
         steps = [str(step) for step in (row.steps_json or []) if str(step)]
         resolved_hash = str(row.path_hash or "")
         if path_hash and resolved_hash != path_hash:

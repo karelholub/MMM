@@ -35,6 +35,7 @@ from app.utils.meiro_config import (
     get_mapping_state,
     get_auto_replay_state,
     get_auto_replay_history,
+    event_matches_target_site_scope,
     get_pull_config,
     query_webhook_archive_entries,
     get_webhook_archive_status,
@@ -49,6 +50,7 @@ from app.utils.meiro_config import (
     save_pull_config,
     set_webhook_received,
     instance_scope,
+    site_scope_is_strict,
     update_auto_replay_state,
     update_mapping_approval,
 )
@@ -2330,6 +2332,8 @@ def create_router(
         total_conversions = 0
         total_touchpoints = 0
         raw_events_analyzed = 0
+        raw_events_seen = 0
+        raw_events_excluded_by_site_scope = 0
 
         def _merge_counts(target: Dict[str, int], incoming: Dict[str, Any]) -> None:
             for key, value in (incoming or {}).items():
@@ -2346,9 +2350,16 @@ def create_router(
                 continue
             entry_events = entry.get("events") or []
             if isinstance(entry_events, list):
-                raw_events_analyzed += len(entry_events)
+                raw_events_seen += len(entry_events)
+                scoped_events = [
+                    event
+                    for event in entry_events
+                    if not site_scope_is_strict() or event_matches_target_site_scope(event, allow_unknown=True)
+                ]
+                raw_events_analyzed += len(scoped_events)
+                raw_events_excluded_by_site_scope += len(entry_events) - len(scoped_events)
                 raw_event_profiles.extend(
-                    rebuild_profiles_from_meiro_events_fn(entry_events, dedup_config=current_pull_config)
+                    rebuild_profiles_from_meiro_events_fn(scoped_events, dedup_config=current_pull_config)
                 )
         raw_event_analysis = _analyze_payload(raw_event_profiles) if raw_event_profiles else None
         stored_payload_analyses = [
@@ -2356,7 +2367,11 @@ def create_router(
             for event in events
             if isinstance(event, dict) and isinstance(event.get("payload_analysis"), dict)
         ]
-        analysis_sources = [raw_event_analysis] if isinstance(raw_event_analysis, dict) and int(raw_event_analysis.get("touchpoint_count") or 0) > 0 else stored_payload_analyses
+        analysis_sources = (
+            [raw_event_analysis]
+            if isinstance(raw_event_analysis, dict) and int(raw_event_analysis.get("touchpoint_count") or 0) > 0
+            else ([] if raw_events_seen > 0 else stored_payload_analyses)
+        )
 
         for analysis in analysis_sources:
             if not isinstance(analysis, dict):
@@ -2758,6 +2773,10 @@ def create_router(
             "total_conversions_observed": total_conversions,
             "total_touchpoints_observed": total_touchpoints,
             "event_stream_diagnostics": raw_event_diagnostics,
+            "site_scope": {
+                "strict": site_scope_is_strict(),
+                "events_excluded": raw_events_excluded_by_site_scope,
+            },
             "dedup_key_suggestion": best_dedup_key,
             "dedup_key_candidates": dedup_key_candidates,
             "kpi_suggestions": kpi_suggestions,

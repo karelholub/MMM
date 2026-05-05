@@ -10,6 +10,7 @@ from datetime import date, datetime, time as dt_time, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from .attribution_engine import ATTRIBUTION_MODELS, run_attribution, run_attribution_campaign
@@ -17,6 +18,7 @@ from .models_config_dq import ConversionPath, JourneyDefinition, JourneyDefiniti
 from .services_canonical_facts import load_preferred_journey_rows
 from .services_conversions import conversion_path_payload, v2_to_legacy
 from .services_journey_aggregates import _build_journey_steps, _path_hash
+from .utils.meiro_config import get_out_of_scope_campaign_labels, site_scope_is_strict
 
 PAID_CHANNEL_TOKENS = {
     "google_ads",
@@ -32,6 +34,15 @@ PAID_CHANNEL_TOKENS = {
     "display",
     "affiliate",
 }
+
+
+def _exclude_out_of_scope_campaigns(q, column):
+    if not site_scope_is_strict():
+        return q
+    labels = get_out_of_scope_campaign_labels()
+    if not labels:
+        return q
+    return q.filter(or_(column.is_(None), column == "", func.lower(func.trim(column)).notin_(labels)))
 
 
 def _is_paid_channel(channel: str) -> bool:
@@ -288,6 +299,7 @@ def _load_definition_instance_rows(
         q = q.filter(JourneyDefinitionInstanceFact.channel_group == channel_group)
     if campaign_id:
         q = q.filter(JourneyDefinitionInstanceFact.campaign_id == campaign_id)
+    q = _exclude_out_of_scope_campaigns(q, JourneyDefinitionInstanceFact.campaign_id)
     if device:
         q = q.filter(JourneyDefinitionInstanceFact.device == device)
     if country:
@@ -357,6 +369,7 @@ def _build_step_fact_summary(
             q = q.filter(JourneyInstanceFact.channel_group == channel_group)
         if campaign_id:
             q = q.filter(JourneyInstanceFact.campaign_id == campaign_id)
+        q = _exclude_out_of_scope_campaigns(q, JourneyInstanceFact.campaign_id)
         if device:
             q = q.filter(JourneyInstanceFact.device == device)
         if country:
@@ -606,6 +619,8 @@ def _build_role_fact_summary(
         q = q.filter(JourneyRoleFact.channel_group == channel_group)
     if not definition_conversion_ids and campaign_id:
         q = q.filter(JourneyRoleFact.campaign == campaign_id)
+    if not definition_conversion_ids:
+        q = _exclude_out_of_scope_campaigns(q, JourneyRoleFact.campaign)
     if not definition_conversion_ids and device:
         q = q.filter(JourneyRoleFact.device == device)
     if not definition_conversion_ids and country:

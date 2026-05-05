@@ -174,6 +174,13 @@ def _normalized_campaign_label(value: Any) -> str:
     return " ".join(str(value or "").strip().lower().split())
 
 
+def normalize_campaign_label(value: Any) -> str:
+    raw = str(value or "").strip()
+    if ":" in raw:
+        raw = raw.split(":", 1)[1]
+    return _normalized_campaign_label(raw)
+
+
 def get_out_of_scope_campaign_labels() -> set[str]:
     global _OUT_OF_SCOPE_CAMPAIGN_CACHE
     now = datetime.now(timezone.utc).timestamp()
@@ -193,6 +200,48 @@ def get_out_of_scope_campaign_labels() -> set[str]:
     labels.discard("")
     _OUT_OF_SCOPE_CAMPAIGN_CACHE = (now, labels)
     return set(labels)
+
+
+def campaign_label_matches_target_site_scope(value: Any, *, allow_unknown: bool = True) -> bool:
+    normalized = normalize_campaign_label(value)
+    if not normalized:
+        return bool(allow_unknown)
+    if not site_scope_is_strict():
+        return True
+    return normalized not in get_out_of_scope_campaign_labels()
+
+
+def touchpoint_matches_target_site_scope(value: Any, *, allow_unknown: bool = True) -> bool:
+    scope = event_site_scope(value)
+    status = scope.get("status")
+    if status == "out_of_scope":
+        return False
+    if status == "target_site":
+        return True
+    for label in _event_campaign_labels(value):
+        if not campaign_label_matches_target_site_scope(label, allow_unknown=allow_unknown):
+            return False
+    return bool(allow_unknown)
+
+
+def journey_matches_target_site_scope(value: Any, *, allow_unknown: bool = True) -> bool:
+    if not site_scope_is_strict():
+        return True
+    if not isinstance(value, dict):
+        return bool(allow_unknown)
+    touchpoints = value.get("touchpoints") or []
+    if touchpoints:
+        return all(touchpoint_matches_target_site_scope(tp, allow_unknown=allow_unknown) for tp in touchpoints if isinstance(tp, dict))
+    return campaign_label_matches_target_site_scope(
+        _first_present(value.get("campaign"), value.get("campaign_name"), value.get("campaign_id")),
+        allow_unknown=allow_unknown,
+    )
+
+
+def filter_journeys_to_target_site_scope(journeys: list[dict[str, Any]], *, allow_unknown: bool = True) -> list[dict[str, Any]]:
+    if not site_scope_is_strict():
+        return list(journeys or [])
+    return [journey for journey in (journeys or []) if journey_matches_target_site_scope(journey, allow_unknown=allow_unknown)]
 
 
 def expense_site_scope(value: Any) -> Dict[str, Any]:

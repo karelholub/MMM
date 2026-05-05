@@ -3,10 +3,21 @@ from __future__ import annotations
 from datetime import date, datetime, time as dt_time, timedelta
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from .models_config_dq import JourneyDefinitionInstanceFact
+from .utils.meiro_config import get_out_of_scope_campaign_labels, site_scope_is_strict
+
+
+def _exclude_out_of_scope_campaigns(q):
+    if not site_scope_is_strict():
+        return q
+    labels = get_out_of_scope_campaign_labels()
+    if not labels:
+        return q
+    column = JourneyDefinitionInstanceFact.campaign_id
+    return q.filter(or_(column.is_(None), column == "", func.lower(func.trim(column)).notin_(labels)))
 
 
 def _percentile(values: List[float], q: float) -> Optional[float]:
@@ -96,6 +107,7 @@ def _query_definition_instance_facts(
         q = q.filter(JourneyDefinitionInstanceFact.channel_group == channel_group)
     if campaign_id:
         q = q.filter(JourneyDefinitionInstanceFact.campaign_id == campaign_id)
+    q = _exclude_out_of_scope_campaigns(q)
     if device:
         q = q.filter(JourneyDefinitionInstanceFact.device == device)
     if country:
@@ -331,5 +343,6 @@ def iter_definition_instance_rows(
         JourneyDefinitionInstanceFact.conversion_ts >= start_dt,
         JourneyDefinitionInstanceFact.conversion_ts < end_dt,
     )
+    q = _exclude_out_of_scope_campaigns(q)
     for row in q.order_by(JourneyDefinitionInstanceFact.conversion_ts.asc()).yield_per(1000):
         yield row

@@ -19,6 +19,11 @@ from app.services_conversions import filter_journeys_by_quality
 from app.services_deciengine_events import deciengine_inapp_events_to_v2_journeys
 from app.services_meiro_import import import_journeys_from_cdp_source
 from app.services_meiro_quarantine import create_quarantine_run, get_quarantine_run, update_quarantine_records
+from app.utils.meiro_config import (
+    campaign_label_matches_target_site_scope,
+    expense_matches_target_site_scope,
+    filter_journeys_to_target_site_scope,
+)
 
 
 def create_router(
@@ -120,6 +125,20 @@ def create_router(
         threshold = int(getattr(settings.attribution, "min_journey_quality_score", 0) or 0)
         return filter_journeys_by_quality(journeys, threshold)
 
+    def _scoped_journeys(journeys: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return filter_journeys_to_target_site_scope(journeys, allow_unknown=True)
+
+    def _scoped_expense_by_channel() -> Dict[str, float]:
+        expense_by_channel: Dict[str, float] = {}
+        for exp in expenses_obj.values():
+            if getattr(exp, "status", "active") == "deleted":
+                continue
+            if not expense_matches_target_site_scope(exp, allow_unknown=True):
+                continue
+            converted = exp.converted_amount if getattr(exp, "converted_amount", None) is not None else exp.amount
+            expense_by_channel[exp.channel] = expense_by_channel.get(exp.channel, 0) + converted
+        return expense_by_channel
+
     def _attribution_kwargs_for_model(model: str) -> Dict[str, Any]:
         settings = get_settings_obj()
         kwargs: Dict[str, Any] = {
@@ -194,7 +213,7 @@ def create_router(
         date_to: Optional[str] = None,
     ) -> tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
         resolved_cfg, meta = load_config_and_meta_fn(db, config_id)
-        journeys = get_journeys_fn(db)
+        journeys = _scoped_journeys(get_journeys_fn(db))
         journeys_for_model = apply_model_config_fn(journeys, resolved_cfg.config_json or {}) if resolved_cfg else journeys
         journeys_for_model = _filter_journeys_to_window(journeys_for_model, date_from=date_from, date_to=date_to)
         journeys_for_model = _apply_attribution_filters(journeys_for_model)
@@ -440,7 +459,7 @@ def create_router(
 
     @router.get("/api/attribution/journeys/preview")
     def get_journeys_preview(limit: int = Query(20, ge=1, le=100), db=Depends(get_db_dependency)):
-        journeys = get_journeys_fn(db)
+        journeys = _scoped_journeys(get_journeys_fn(db))
         if not journeys:
             return {"rows": [], "columns": [], "total": 0}
         return build_journeys_preview_fn(journeys=journeys, limit=limit)
@@ -1024,7 +1043,7 @@ def create_router(
         config_id: Optional[str] = Query(None),
         db=Depends(get_db_dependency),
     ):
-        journeys = get_journeys_fn(db)
+        journeys = _scoped_journeys(get_journeys_fn(db))
         series = _attribution_weekly_series(journeys, model, date_start, date_end, config_id, db)
         return {"model": model, "config_id": config_id, "series": series}
 
@@ -1035,7 +1054,7 @@ def create_router(
         path_scope: str = "converted",
         db=Depends(get_db_dependency),
     ):
-        journeys = get_journeys_fn(db)
+        journeys = _scoped_journeys(get_journeys_fn(db))
         if not journeys:
             raise HTTPException(status_code=400, detail="No journeys loaded.")
         resolved_cfg, meta = load_config_and_meta_fn(db, config_id)
@@ -1125,7 +1144,7 @@ def create_router(
         if not path:
             raise HTTPException(status_code=400, detail="path is required")
 
-        journeys = get_journeys_fn(db)
+        journeys = _scoped_journeys(get_journeys_fn(db))
         if not journeys:
             raise HTTPException(status_code=400, detail="No journeys loaded.")
 
@@ -1342,7 +1361,7 @@ def create_router(
         )
         if not recompute and pre_cache_key in path_archetypes_cache_obj:
             return path_archetypes_cache_obj[pre_cache_key]
-        journeys = get_journeys_fn(db)
+        journeys = _scoped_journeys(get_journeys_fn(db))
         if not journeys:
             raise HTTPException(status_code=400, detail="No journeys loaded.")
         journeys = _filter_journeys_to_window(journeys, date_from=date_from, date_to=date_to)
@@ -1413,7 +1432,7 @@ def create_router(
 
     @router.get("/api/paths/anomalies")
     def get_path_anomalies(conversion_key: Optional[str] = None, config_id: Optional[str] = None, db=Depends(get_db_dependency)):
-        journeys = get_journeys_fn(db)
+        journeys = _scoped_journeys(get_journeys_fn(db))
         if not journeys:
             return {"anomalies": []}
         resolved_cfg, _meta = load_config_and_meta_fn(db, config_id)
@@ -1470,7 +1489,7 @@ def create_router(
     @router.get("/api/attribution/next-best-action")
     @router.get("/api/attribution/next_best_action")
     def get_next_best_action(path_so_far: str = "", level: str = "channel", db=Depends(get_db_dependency)):
-        journeys = get_journeys_fn(db)
+        journeys = _scoped_journeys(get_journeys_fn(db))
         if not journeys:
             raise HTTPException(status_code=400, detail="No journeys loaded.")
         return _next_best_action_impl(journeys=journeys, path_so_far=path_so_far, level=level)
@@ -1478,7 +1497,7 @@ def create_router(
     @router.get("/api/attribution/performance")
     def get_channel_performance(model: str = "linear", config_id: Optional[str] = None, db=Depends(get_db_dependency)):
         resolved_cfg, meta = load_config_and_meta_fn(db, config_id)
-        journeys = get_journeys_fn(db)
+        journeys = _scoped_journeys(get_journeys_fn(db))
         journeys_for_model = apply_model_config_fn(journeys, resolved_cfg.config_json or {}) if resolved_cfg else journeys
         journeys_for_model = _apply_attribution_filters(journeys_for_model)
         result = _results_store().get(model)
@@ -1490,22 +1509,17 @@ def create_router(
         if (
             not result
             or result_config_id != expected_config_id
-            or result_scope not in (None, "workspace")
+            or result_scope != "workspace_site_scope"
             or result_value_mode != expected_value_mode
         ):
             if not journeys:
                 raise HTTPException(status_code=400, detail="No journeys loaded.")
             kwargs = _attribution_kwargs_for_model(model)
             result = run_attribution_fn(journeys_for_model, model=model, **kwargs)
-            _with_result_scope(result, meta=meta, basis="workspace")
+            _with_result_scope(result, meta=meta, basis="workspace_site_scope")
             _results_store()[model] = result
 
-        expense_by_channel: Dict[str, float] = {}
-        for exp in expenses_obj.values():
-            if getattr(exp, "status", "active") == "deleted":
-                continue
-            converted = exp.converted_amount if getattr(exp, "converted_amount", None) is not None else exp.amount
-            expense_by_channel[exp.channel] = expense_by_channel.get(exp.channel, 0) + converted
+        expense_by_channel = _scoped_expense_by_channel()
 
         performance = compute_channel_performance_fn(result, expense_by_channel)
         for row in performance:
@@ -1528,7 +1542,7 @@ def create_router(
         conversion_key: Optional[str] = None,
         db=Depends(get_db_dependency),
     ):
-        journeys = get_journeys_fn(db)
+        journeys = _scoped_journeys(get_journeys_fn(db))
         if not journeys:
             raise HTTPException(status_code=400, detail="No journeys loaded.")
         if not has_any_campaign_fn(journeys):
@@ -1556,12 +1570,7 @@ def create_router(
             kwargs["last_pct"] = settings.attribution.position_last_pct
         result = run_attribution_campaign_fn(journeys_for_model, model=model, **kwargs)
 
-        expense_by_channel: Dict[str, float] = {}
-        for exp in expenses_obj.values():
-            if getattr(exp, "status", "active") == "deleted":
-                continue
-            converted = exp.converted_amount if getattr(exp, "converted_amount", None) is not None else exp.amount
-            expense_by_channel[exp.channel] = expense_by_channel.get(exp.channel, 0) + converted
+        expense_by_channel = _scoped_expense_by_channel()
 
         total_spend = sum(expense_by_channel.values())
         total_attributed_value = float(result.get("total_value", 0) or 0.0)
@@ -1570,6 +1579,8 @@ def create_router(
         campaigns_list = []
         for ch in result.get("channels", []):
             step = ch["channel"]
+            if not campaign_label_matches_target_site_scope(step, allow_unknown=True):
+                continue
             channel_name = step.split(":", 1)[0] if ":" in step else step
             campaign_name = step.split(":", 1)[1] if ":" in step else None
             spend = expense_by_channel.get(channel_name, 0)
@@ -1631,7 +1642,7 @@ def create_router(
 
     @router.get("/api/attribution/campaign-performance/trends")
     def get_campaign_performance_trends(db=Depends(get_db_dependency)):
-        journeys = get_journeys_fn(db)
+        journeys = _scoped_journeys(get_journeys_fn(db))
         if not journeys:
             raise HTTPException(status_code=400, detail="No journeys loaded.")
         return compute_campaign_trends_fn(journeys)

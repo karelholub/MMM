@@ -35,6 +35,7 @@ from .services_conversions import (
 from .services_journey_path_outputs import list_paths_from_outputs
 from .services_visit_facts import iter_touchpoint_visit_rows
 from .services_metrics import delta_pct, journey_outcome_summary
+from .utils.meiro_config import campaign_label_matches_target_site_scope
 
 
 # ---------------------------------------------------------------------------
@@ -1339,6 +1340,8 @@ def _campaign_rollups_from_daily_path_aggregates(
 
     for row in rows:
         campaign = str(row.campaign_id or "").strip() or "unknown"
+        if not campaign_label_matches_target_site_scope(campaign, allow_unknown=True):
+            continue
         if dt_from.date() <= row.date <= dt_to.date():
             current_revenue[campaign] = current_revenue.get(campaign, 0.0) + float(row.gross_revenue_total or 0.0)
             current_conversions[campaign] = current_conversions.get(campaign, 0) + int(row.count_conversions or 0)
@@ -2051,6 +2054,8 @@ def get_overview_drivers(
                 if isinstance(camp, dict):
                     camp = camp.get("name", "unknown")
                 camp = camp or "unknown"
+                if not campaign_label_matches_target_site_scope(camp, allow_unknown=True):
+                    continue
                 camp_rev[camp] = camp_rev.get(camp, 0) + val
                 camp_conv[camp] = camp_conv.get(camp, 0) + 1
                 metrics = camp_outcomes.setdefault(camp, _empty_outcomes())
@@ -2083,6 +2088,8 @@ def get_overview_drivers(
                 camp = last.get("campaign") or last.get("campaign_name") or "unknown"
                 if isinstance(camp, dict):
                     camp = camp.get("name", "unknown")
+                if not campaign_label_matches_target_site_scope(camp, allow_unknown=True):
+                    continue
                 prev_camp_rev[camp] = prev_camp_rev.get(camp, 0) + val
 
     if fact_current_channel_rollups is not None:
@@ -2176,7 +2183,11 @@ def get_overview_drivers(
             key: float(value or 0.0)
             for key, value in ((silver_prev_campaign_rollups or {}).get("revenue") or {}).items()
         }
-    campaigns_sorted = sorted(camp_rev.keys(), key=lambda c: -camp_rev[c])[:top_campaigns_n]
+    campaigns_sorted = [
+        campaign
+        for campaign in sorted(camp_rev.keys(), key=lambda c: -camp_rev[c])
+        if campaign_label_matches_target_site_scope(campaign, allow_unknown=True)
+    ][:top_campaigns_n]
     by_campaign = [
         {
             "campaign": c,
@@ -2475,6 +2486,8 @@ def _campaign_driver_rollups_from_silver_facts(
         conversion_id = str(row.conversion_id or "")
         campaign = last_touch_campaign.get(conversion_id)
         if not campaign:
+            continue
+        if not campaign_label_matches_target_site_scope(campaign, allow_unknown=True):
             continue
         revenue[campaign] = revenue.get(campaign, 0.0) + float(row.gross_revenue_total or 0.0)
         conversions_by_campaign[campaign] = conversions_by_campaign.get(campaign, 0) + 1
