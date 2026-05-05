@@ -21,6 +21,7 @@ from app.utils import datasource_config as ds_config
 from app.utils.taxonomy import load_taxonomy
 from app.utils.kpi_config import load_kpi_config, save_kpi_config, KpiConfig, KpiDefinition
 from app.utils.api_params import clamp_int, resolve_per_page, resolve_sort_dir
+from app.utils.meiro_config import expense_site_scope, get_target_site_domains
 from app.db import Base, engine, get_db, SessionLocal
 from app.models_config_dq import (
     ModelConfig as ORMModelConfig,
@@ -1934,6 +1935,7 @@ def load_sample_journeys(req: LoadSampleRequest = Body(default=LoadSampleRequest
 @app.get("/api/expenses")
 def list_expenses(
     include_deleted: bool = Query(False),
+    include_out_of_scope: bool = Query(False),
     channel: Optional[str] = None,
     campaign: Optional[str] = None,
     cost_type: Optional[str] = None,
@@ -1951,6 +1953,9 @@ def list_expenses(
     items = []
     for expense_id, exp in EXPENSES.items():
         if not include_deleted and exp.status == "deleted":
+            continue
+        scope = expense_site_scope(exp)
+        if not include_out_of_scope and scope.get("status") == "out_of_scope":
             continue
         if channel and exp.channel != channel:
             continue
@@ -1982,7 +1987,7 @@ def list_expenses(
             ).lower()
             if search.lower() not in haystack:
                 continue
-        items.append({"id": expense_id, **exp.model_dump()})
+        items.append({"id": expense_id, **exp.model_dump(), "site_scope": scope})
     return items
 
 
@@ -2121,6 +2126,7 @@ def get_expense_audit(expense_id: str):
 @app.get("/api/expenses/summary")
 def expense_summary(
     include_deleted: bool = Query(False),
+    include_out_of_scope: bool = Query(False),
     service_period_start: Optional[str] = None,
     service_period_end: Optional[str] = None,
 ):
@@ -2132,6 +2138,8 @@ def expense_summary(
     total_manual = 0.0
     total_imported = 0.0
     total_unknown = 0.0
+    out_of_scope_total = 0.0
+    out_of_scope_count = 0
     reporting_currency = _default_reporting_currency()
 
     for exp in EXPENSES.values():
@@ -2141,8 +2149,14 @@ def expense_summary(
             continue
         if service_period_end and exp.service_period_end and exp.service_period_end > service_period_end:
             continue
-
         converted = exp.converted_amount if exp.converted_amount is not None else exp.amount
+        scope = expense_site_scope(exp)
+        if scope.get("status") == "out_of_scope":
+            out_of_scope_total += converted
+            out_of_scope_count += 1
+            if not include_out_of_scope:
+                continue
+
         by_channel[exp.channel] = by_channel.get(exp.channel, 0.0) + converted
 
         source_type = getattr(exp, "source_type", "manual")
@@ -2165,6 +2179,12 @@ def expense_summary(
         "manual_total": total_manual,
         "imported_total": total_imported,
         "unknown_total": total_unknown,
+        "site_scope": {
+            "target_sites": get_target_site_domains(),
+            "out_of_scope_total": out_of_scope_total,
+            "out_of_scope_count": out_of_scope_count,
+            "out_of_scope_excluded": not include_out_of_scope,
+        },
     }
 
 

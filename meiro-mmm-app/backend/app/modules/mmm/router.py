@@ -32,6 +32,7 @@ from app.services_walled_garden import (
     source_channel_from_synthetic_column,
     synthetic_column,
 )
+from app.utils.meiro_config import expense_matches_target_site_scope, site_scope_is_strict
 
 
 def create_router(
@@ -56,6 +57,16 @@ def create_router(
     def _ensure_mmm_enabled() -> None:
         if not getattr(get_settings_obj().feature_flags, "mmm_enabled", False):
             raise HTTPException(status_code=404, detail="mmm_enabled flag is off")
+
+    def _scoped_expenses() -> list[Any]:
+        expenses = list(get_expenses_obj().values())
+        if not site_scope_is_strict():
+            return expenses
+        return [
+            expense
+            for expense in expenses
+            if expense_matches_target_site_scope(expense, allow_unknown=True)
+        ]
 
     def _load_run_and_dataset_rows(run_id: str) -> tuple[Dict[str, Any], list[dict[str, Any]]]:
         run = get_runs_obj().get(run_id)
@@ -288,7 +299,7 @@ def create_router(
     def get_mmm_platform_options():
         _ensure_mmm_enabled()
         channels = set()
-        for exp in get_expenses_obj().values():
+        for exp in _scoped_expenses():
             status = exp.get("status", "active") if isinstance(exp, dict) else getattr(exp, "status", "active")
             if status == "deleted":
                 continue
@@ -348,7 +359,7 @@ def create_router(
             measurement_audience["profile_count"] = len(measurement_profile_ids)
             measurement_audience["journey_rows"] = len(scoped_journeys)
             journeys = scoped_journeys
-        expenses_list = list(get_expenses_obj().values())
+        expenses_list = _scoped_expenses()
         media_input_mode = body.media_input_mode if body.media_input_mode in {"spend", "synthetic_impressions"} else "spend"
         delivery_rows = (
             load_ads_delivery_rows(get_data_dir_obj(), date_start=body.date_start, date_end=body.date_end)

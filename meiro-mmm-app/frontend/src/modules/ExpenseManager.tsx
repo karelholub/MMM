@@ -30,6 +30,12 @@ interface ExpenseEntry {
   deleted_at?: string | null
   actor_type?: string
   change_note?: string | null
+  site_scope?: {
+    status?: string
+    campaign?: string | null
+    reason?: string
+    target_sites?: string[]
+  }
 }
 
 interface ExpenseSummary {
@@ -41,6 +47,12 @@ interface ExpenseSummary {
   manual_total?: number
   imported_total?: number
   unknown_total?: number
+  site_scope?: {
+    target_sites?: string[]
+    out_of_scope_total?: number
+    out_of_scope_count?: number
+    out_of_scope_excluded?: boolean
+  }
 }
 
 interface AuditEvent {
@@ -136,6 +148,7 @@ const COLORS: Record<string, string> = {
 
 function buildExpensesQueryParams(filters: {
   includeDeleted?: boolean
+  includeOutOfScope?: boolean
   channel?: string
   campaign?: string
   cost_type?: string
@@ -148,6 +161,7 @@ function buildExpensesQueryParams(filters: {
 }) {
   const p = new URLSearchParams()
   if (filters.includeDeleted) p.set('include_deleted', 'true')
+  if (filters.includeOutOfScope) p.set('include_out_of_scope', 'true')
   if (filters.channel) p.set('channel', filters.channel)
   if (filters.campaign) p.set('campaign', filters.campaign)
   if (filters.cost_type) p.set('cost_type', filters.cost_type)
@@ -166,6 +180,7 @@ export default function ExpenseManager() {
 
   // Filters for expenses list
   const [includeDeleted, setIncludeDeleted] = useState(false)
+  const [includeOutOfScope, setIncludeOutOfScope] = useState(false)
   const [filterChannel, setFilterChannel] = useState('')
   const [filterCampaign, setFilterCampaign] = useState('')
   const [filterCostType, setFilterCostType] = useState('')
@@ -194,6 +209,7 @@ export default function ExpenseManager() {
 
   const queryParams = useMemo(() => buildExpensesQueryParams({
     includeDeleted,
+    includeOutOfScope,
     channel: filterChannel || undefined,
     campaign: filterCampaign || undefined,
     cost_type: filterCostType || undefined,
@@ -203,15 +219,16 @@ export default function ExpenseManager() {
     service_period_start: servicePeriodStart || undefined,
     service_period_end: servicePeriodEnd || undefined,
     search: searchText || undefined,
-  }), [includeDeleted, filterChannel, filterCampaign, filterCostType, filterSourceType, filterCurrency, filterStatus, servicePeriodStart, servicePeriodEnd, searchText])
+  }), [includeDeleted, includeOutOfScope, filterChannel, filterCampaign, filterCostType, filterSourceType, filterCurrency, filterStatus, servicePeriodStart, servicePeriodEnd, searchText])
 
   const summaryParams = useMemo(() => {
     const p = new URLSearchParams()
     if (includeDeleted) p.set('include_deleted', 'true')
+    if (includeOutOfScope) p.set('include_out_of_scope', 'true')
     if (servicePeriodStart) p.set('service_period_start', servicePeriodStart)
     if (servicePeriodEnd) p.set('service_period_end', servicePeriodEnd)
     return p.toString()
-  }, [includeDeleted, servicePeriodStart, servicePeriodEnd])
+  }, [includeDeleted, includeOutOfScope, servicePeriodStart, servicePeriodEnd])
 
   const expensesQuery = useQuery<ExpenseEntry[]>({
     queryKey: ['expenses', queryParams],
@@ -509,6 +526,41 @@ export default function ExpenseManager() {
       {activeTab === 'expenses' && (
         <>
           {/* Alert banner when imports are stale/broken */}
+          {Number(summary?.site_scope?.out_of_scope_count || 0) > 0 && (
+            <div
+              style={{
+                marginBottom: 16,
+                padding: 12,
+                borderRadius: 8,
+                background: '#fff3cd',
+                border: '1px solid #ffecb5',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: 8,
+              }}
+            >
+              <span style={{ fontWeight: 600, color: '#856404' }}>
+                {Number(summary?.site_scope?.out_of_scope_count || 0).toLocaleString()} expense rows match out-of-scope Meiro archive campaigns and are {summary?.site_scope?.out_of_scope_excluded ? 'excluded from totals' : 'included in totals'}.
+              </span>
+              <button
+                onClick={() => setIncludeOutOfScope((value) => !value)}
+                style={{
+                  padding: '6px 12px',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  background: includeOutOfScope ? '#6c757d' : '#0d6efd',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 6,
+                  cursor: 'pointer',
+                }}
+              >
+                {includeOutOfScope ? 'Hide out-of-scope spend' : 'Review out-of-scope spend'}
+              </button>
+            </div>
+          )}
           {hasImportProblems && (
             <div
               style={{
@@ -822,6 +874,10 @@ export default function ExpenseManager() {
                 <input type="checkbox" checked={includeDeleted} onChange={(e) => setIncludeDeleted(e.target.checked)} />
                 <span style={{ fontSize: 13 }}>Show deleted</span>
               </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                <input type="checkbox" checked={includeOutOfScope} onChange={(e) => setIncludeOutOfScope(e.target.checked)} />
+                <span style={{ fontSize: 13 }}>Show out-of-scope</span>
+              </label>
             </div>
 
             <h3 style={{ margin: '0 0 16px', fontSize: '16px', fontWeight: '600', color: '#495057' }}>All Expenses</h3>
@@ -829,7 +885,7 @@ export default function ExpenseManager() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
                 <thead>
                   <tr style={{ backgroundColor: '#f8f9fa' }}>
-                    {['Channel', 'Campaign', 'Cost Type', 'Amount (orig)', 'Amount (' + reportingCurrency + ')', 'Service Period', 'Source', 'Status', 'Notes', 'Actions'].map(h => (
+                    {['Channel', 'Campaign', 'Scope', 'Cost Type', 'Amount (orig)', 'Amount (' + reportingCurrency + ')', 'Service Period', 'Source', 'Status', 'Notes', 'Actions'].map(h => (
                       <th key={h} style={{ padding: '12px 16px', textAlign: h === 'Actions' ? 'center' : 'left', fontWeight: '600', color: '#495057', borderBottom: '2px solid #e9ecef' }}>
                         {h}
                       </th>
@@ -858,6 +914,21 @@ export default function ExpenseManager() {
                         </span>
                       </td>
                       <td style={{ padding: '10px 16px', color: '#495057' }}>{exp.campaign || '—'}</td>
+                      <td style={{ padding: '10px 16px' }}>
+                        <span
+                          title={exp.site_scope?.reason || ''}
+                          style={{
+                            padding: '2px 8px',
+                            borderRadius: 4,
+                            fontSize: 12,
+                            fontWeight: 600,
+                            background: exp.site_scope?.status === 'out_of_scope' ? '#fff3cd' : '#e7f1ff',
+                            color: exp.site_scope?.status === 'out_of_scope' ? '#856404' : '#0d6efd',
+                          }}
+                        >
+                          {exp.site_scope?.status === 'out_of_scope' ? 'Out of scope' : 'Target/unknown'}
+                        </span>
+                      </td>
                       <td style={{ padding: '10px 16px' }}>{exp.cost_type ?? '-'}</td>
                       <td style={{ padding: '10px 16px' }}>{exp.amount.toLocaleString()} {exp.currency}</td>
                       <td style={{ padding: '10px 16px', fontWeight: 600, color: '#dc3545' }}>

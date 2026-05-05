@@ -44,6 +44,7 @@ from app.services_performance_trends import (
 )
 from app.services_quality import load_config_and_meta
 from app.utils.meiro_config import (
+    expense_matches_target_site_scope,
     event_site_scope,
     get_out_of_scope_campaign_labels,
     get_target_site_domains,
@@ -251,6 +252,30 @@ def _filter_out_of_scope_campaign_items(out: dict[str, Any]) -> dict[str, Any]:
     out["notes"] = notes
     out["totals"] = totals
     return out
+
+
+def _scope_expenses_to_target_sites(expenses: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not site_scope_is_strict():
+        return expenses, {"strict": False, "expenses_excluded": 0}
+    scoped: dict[str, Any] = {}
+    excluded = 0
+    excluded_amount = 0.0
+    for key, expense in (expenses or {}).items():
+        if expense_matches_target_site_scope(expense, allow_unknown=True):
+            scoped[key] = expense
+            continue
+        excluded += 1
+        try:
+            excluded_amount += float(getattr(expense, "converted_amount", None) or getattr(expense, "amount", 0.0) or 0.0)
+        except Exception:
+            pass
+    return scoped, {
+        "strict": True,
+        "expenses_total": len(expenses or {}),
+        "expenses_kept": len(scoped),
+        "expenses_excluded": excluded,
+        "excluded_amount": round(excluded_amount, 2),
+    }
 
 
 def _build_campaign_suggestions_payload(
@@ -502,7 +527,7 @@ def create_router(
             account=account,
             model_id=model_id,
             channel_group=channel_group,
-            expenses=expenses_obj,
+            expenses=_scope_expenses_to_target_sites(expenses_obj)[0],
             import_runs_get_last_successful=get_last_successful_run,
         )
         payload["attention_queue"] = get_overview_attention_queue_fn(db)
@@ -734,7 +759,7 @@ def create_router(
             date_from=date_from,
             date_to=date_to,
             timezone=timezone,
-            expenses=expenses_obj,
+            expenses=_scope_expenses_to_target_sites(expenses_obj)[0],
             top_campaigns_n=top_campaigns_n,
             conversion_key=conversion_key,
             channel_group=channel_group,
@@ -837,7 +862,7 @@ def create_router(
                 )
             out = build_channel_trend_response(
                 journeys=journeys,
-                expenses=expenses_obj,
+                expenses=_scope_expenses_to_target_sites(expenses_obj)[0],
                 date_from=query_ctx.date_from,
                 date_to=query_ctx.date_to,
                 timezone=query_ctx.timezone,
@@ -931,7 +956,7 @@ def create_router(
             )
         out = build_channel_summary_response(
             journeys=journeys,
-            expenses=expenses_obj,
+            expenses=_scope_expenses_to_target_sites(expenses_obj)[0],
             date_from=query_ctx.date_from,
             date_to=query_ctx.date_to,
             timezone=query_ctx.timezone,
@@ -962,7 +987,7 @@ def create_router(
         out["mapping_coverage"] = build_mapping_coverage_fn(
             mapped_spend=mapped["mapped_spend"],
             mapped_value=mapped["mapped_value"],
-            expenses=expenses_obj,
+            expenses=_scope_expenses_to_target_sites(expenses_obj)[0],
             journeys=journeys,
             date_from=query_ctx.date_from,
             date_to=query_ctx.date_to,
@@ -1056,7 +1081,7 @@ def create_router(
                 )
             out = build_campaign_trend_response(
                 journeys=journeys,
-                expenses=expenses_obj,
+                expenses=_scope_expenses_to_target_sites(expenses_obj)[0],
                 date_from=query_ctx.date_from,
                 date_to=query_ctx.date_to,
                 timezone=query_ctx.timezone,
@@ -1167,7 +1192,7 @@ def create_router(
             )
         out = build_campaign_summary_response(
             journeys=journeys,
-            expenses=expenses_obj,
+            expenses=_scope_expenses_to_target_sites(expenses_obj)[0],
             date_from=query_ctx.date_from,
             date_to=query_ctx.date_to,
             timezone=query_ctx.timezone,
@@ -1199,7 +1224,7 @@ def create_router(
         out["mapping_coverage"] = build_mapping_coverage_fn(
             mapped_spend=mapped["mapped_spend"],
             mapped_value=mapped["mapped_value"],
-            expenses=expenses_obj,
+            expenses=_scope_expenses_to_target_sites(expenses_obj)[0],
             journeys=journeys,
             date_from=query_ctx.date_from,
             date_to=query_ctx.date_to,

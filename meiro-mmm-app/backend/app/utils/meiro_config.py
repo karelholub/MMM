@@ -195,6 +195,36 @@ def get_out_of_scope_campaign_labels() -> set[str]:
     return set(labels)
 
 
+def expense_site_scope(value: Any) -> Dict[str, Any]:
+    campaign = _campaign_label(getattr(value, "campaign", None) if not isinstance(value, dict) else value.get("campaign"))
+    normalized_campaign = _normalized_campaign_label(campaign)
+    labels = get_out_of_scope_campaign_labels()
+    if normalized_campaign and normalized_campaign in labels:
+        return {
+            "status": "out_of_scope",
+            "host": None,
+            "campaign": campaign,
+            "target_sites": get_target_site_domains(),
+            "reason": "Expense campaign label was observed in out-of-scope Meiro archive traffic.",
+        }
+    return {
+        "status": "target_site" if normalized_campaign else "unknown",
+        "host": None,
+        "campaign": campaign or None,
+        "target_sites": get_target_site_domains(),
+        "reason": (
+            "Expense campaign label is not tied to known out-of-scope archive traffic."
+            if normalized_campaign
+            else "Expense has no campaign label to compare with site-scoped archive diagnostics."
+        ),
+    }
+
+
+def expense_matches_target_site_scope(value: Any, *, allow_unknown: bool = True) -> bool:
+    status = expense_site_scope(value).get("status")
+    return status == "target_site" or (allow_unknown and status == "unknown")
+
+
 def get_target_instance_url() -> str:
     return _normalized_url(
         os.getenv("MEIRO_TARGET_INSTANCE_URL")
