@@ -11,6 +11,8 @@ services:
       - MEIRO_TARGET_INSTANCE_URL=${MEIRO_TARGET_INSTANCE_URL:-https://meiro-internal.eu.pipes.meiro.io}
       - MEIRO_PRISM_BASE_URL=${MEIRO_PRISM_BASE_URL:-https://meiro-internal.eu.pipes.meiro.io}
       - MEIRO_STRICT_INSTANCE_SCOPE=${MEIRO_STRICT_INSTANCE_SCOPE:-1}
+      - MEIRO_TARGET_SITE_DOMAINS=${MEIRO_TARGET_SITE_DOMAINS:-meiro.io,meir.store}
+      - MEIRO_STRICT_SITE_SCOPE=${MEIRO_STRICT_SITE_SCOPE:-1}
       - DECIENGINE_API_KEY=${DECIENGINE_API_KEY:-local-write-key}
       - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-0}
     volumes:

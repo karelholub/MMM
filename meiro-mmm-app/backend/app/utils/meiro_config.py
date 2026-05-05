@@ -3,6 +3,7 @@ import json
 import os
 import secrets
 import threading
+from collections import Counter
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,7 +17,9 @@ WEBHOOK_ARCHIVE_PATH = DATA_DIR / "meiro_webhook_archive.jsonl"
 EVENT_ARCHIVE_PATH = DATA_DIR / "meiro_event_archive.jsonl"
 MEIRO_CDP_PLATFORM = "meiro_cdp"
 DEFAULT_TARGET_INSTANCE_URL = "https://meiro-internal.eu.pipes.meiro.io"
+DEFAULT_TARGET_SITE_DOMAINS = ("meiro.io", "meir.store")
 _CONFIG_LOCK = threading.RLock()
+_OUT_OF_SCOPE_CAMPAIGN_CACHE: tuple[float, set[str]] | None = None
 
 
 def _normalized_url(value: Any) -> str:
@@ -34,6 +37,162 @@ def _url_host(value: Any) -> str:
         return (urlparse(normalized).hostname or "").lower()
     except Exception:
         return ""
+
+
+def _domain_token(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    if "://" in raw:
+        try:
+            raw = urlparse(raw).hostname or raw
+        except Exception:
+            pass
+    raw = raw.split("/", 1)[0].split(":", 1)[0].strip(".")
+    if raw.startswith("www."):
+        raw = raw[4:]
+    return raw
+
+
+def get_target_site_domains() -> list[str]:
+    raw = os.getenv("MEIRO_TARGET_SITE_DOMAINS")
+    values = raw.split(",") if raw else list(DEFAULT_TARGET_SITE_DOMAINS)
+    domains: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        domain = _domain_token(value)
+        if not domain or domain in seen:
+            continue
+        seen.add(domain)
+        domains.append(domain)
+    return domains or list(DEFAULT_TARGET_SITE_DOMAINS)
+
+
+def site_scope_is_strict() -> bool:
+    return str(os.getenv("MEIRO_STRICT_SITE_SCOPE", "1")).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _event_dict(value: Any) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    nested = value.get("event_payload")
+    if not isinstance(nested, dict):
+        return value
+    merged = dict(nested)
+    for key, item in value.items():
+        if key != "event_payload" and key not in merged:
+            merged[key] = item
+    return merged
+
+
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, "", []):
+            return value
+    return None
+
+
+def event_site_host(value: Any) -> str:
+    event = _event_dict(value)
+    if not event:
+        return ""
+    context = event.get("context") if isinstance(event.get("context"), dict) else {}
+    explicit = _domain_token(_first_present(event.get("site"), event.get("hostname"), event.get("domain")))
+    if explicit:
+        return explicit
+    for key in ("page_url", "page_location", "url", "location", "href"):
+        host = _domain_token(event.get(key))
+        if host:
+            return host
+    host = _domain_token(context.get("url"))
+    return host
+
+
+def site_domain_matches(host: Any, domains: Optional[list[str]] = None) -> bool:
+    normalized_host = _domain_token(host)
+    if not normalized_host:
+        return False
+    target_domains = domains if domains is not None else get_target_site_domains()
+    return any(normalized_host == domain or normalized_host.endswith(f".{domain}") for domain in target_domains)
+
+
+def event_site_scope(value: Any) -> Dict[str, Any]:
+    host = event_site_host(value)
+    target_domains = get_target_site_domains()
+    if not host:
+        status = "unknown"
+        reason = "No page/site host is present on the event."
+    elif site_domain_matches(host, target_domains):
+        status = "target_site"
+        reason = "Event page host matches the active Meiro Measurement site scope."
+    else:
+        status = "out_of_scope"
+        reason = f"Event page host '{host}' is outside the active site scope."
+    return {
+        "status": status,
+        "host": host or None,
+        "target_sites": target_domains,
+        "reason": reason,
+    }
+
+
+def event_matches_target_site_scope(value: Any, *, allow_unknown: bool = True) -> bool:
+    status = event_site_scope(value).get("status")
+    return status == "target_site" or (allow_unknown and status == "unknown")
+
+
+def _campaign_label(value: Any) -> str:
+    if isinstance(value, dict):
+        value = _first_present(value.get("name"), value.get("id"))
+    return str(value or "").strip()
+
+
+def _event_campaign_labels(event: Any) -> list[str]:
+    payload = _event_dict(event)
+    labels = [
+        _campaign_label(payload.get("campaign")),
+        _campaign_label(payload.get("campaign_name")),
+        _campaign_label(payload.get("utm_campaign")),
+    ]
+    return [label for label in labels if label]
+
+
+def _profile_campaign_labels(profile: Any) -> list[str]:
+    labels: list[str] = []
+    if not isinstance(profile, dict):
+        return labels
+    for touchpoint in profile.get("touchpoints") or []:
+        if not isinstance(touchpoint, dict):
+            continue
+        labels.extend(_event_campaign_labels(touchpoint))
+        utm = touchpoint.get("utm") if isinstance(touchpoint.get("utm"), dict) else {}
+        labels.append(_campaign_label(utm.get("campaign")))
+    return [label for label in labels if label]
+
+
+def _normalized_campaign_label(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def get_out_of_scope_campaign_labels() -> set[str]:
+    global _OUT_OF_SCOPE_CAMPAIGN_CACHE
+    now = datetime.now(timezone.utc).timestamp()
+    if _OUT_OF_SCOPE_CAMPAIGN_CACHE and now - _OUT_OF_SCOPE_CAMPAIGN_CACHE[0] < 60:
+        return set(_OUT_OF_SCOPE_CAMPAIGN_CACHE[1])
+    labels: set[str] = set()
+    for entry in query_event_archive_entries(limit=50000):
+        for event in entry.get("events") or []:
+            if event_site_scope(event).get("status") == "out_of_scope":
+                labels.update(_normalized_campaign_label(label) for label in _event_campaign_labels(event))
+    for entry in query_webhook_archive_entries(limit=50000):
+        source_host = str(entry.get("source_instance_host") or "").strip().lower()
+        if source_host and source_host == get_target_instance_host():
+            continue
+        for profile in entry.get("profiles") or []:
+            labels.update(_normalized_campaign_label(label) for label in _profile_campaign_labels(profile))
+    labels.discard("")
+    _OUT_OF_SCOPE_CAMPAIGN_CACHE = (now, labels)
+    return set(labels)
 
 
 def get_target_instance_url() -> str:
@@ -397,6 +556,14 @@ def get_webhook_archive_status() -> Dict[str, Any]:
 
 
 def get_event_archive_status() -> Dict[str, Any]:
+    empty_site_scope = {
+        "strict": site_scope_is_strict(),
+        "target_sites": get_target_site_domains(),
+        "target_site_events": 0,
+        "out_of_scope_site_events": 0,
+        "unknown_site_events": 0,
+        "top_hosts": [],
+    }
     if not EVENT_ARCHIVE_PATH.exists():
         return {
             "available": False,
@@ -405,6 +572,7 @@ def get_event_archive_status() -> Dict[str, Any]:
             "last_received_at": None,
             "parser_versions": [],
             "source_scope": summarize_archive_source_scope(entries=0, verified_entries=0),
+            "site_scope": empty_site_scope,
         }
     entries = 0
     events_received = 0
@@ -412,6 +580,10 @@ def get_event_archive_status() -> Dict[str, Any]:
     parser_versions: set[str] = set()
     verified_entries = 0
     out_of_scope_entries = 0
+    target_site_events = 0
+    out_of_scope_site_events = 0
+    unknown_site_events = 0
+    site_host_counts: Counter[str] = Counter()
     try:
         with EVENT_ARCHIVE_PATH.open("r", encoding="utf-8") as handle:
             for line in handle:
@@ -441,6 +613,17 @@ def get_event_archive_status() -> Dict[str, Any]:
                     verified_entries += 1
                 elif source_status == "out_of_scope":
                     out_of_scope_entries += 1
+                for event in parsed.get("events") or []:
+                    scope = event_site_scope(event)
+                    status = str(scope.get("status") or "")
+                    host = str(scope.get("host") or "unknown")
+                    site_host_counts[host] += 1
+                    if status == "target_site":
+                        target_site_events += 1
+                    elif status == "out_of_scope":
+                        out_of_scope_site_events += 1
+                    else:
+                        unknown_site_events += 1
     except Exception:
         return {
             "available": False,
@@ -449,6 +632,7 @@ def get_event_archive_status() -> Dict[str, Any]:
             "last_received_at": None,
             "parser_versions": [],
             "source_scope": summarize_archive_source_scope(entries=0, verified_entries=0),
+            "site_scope": empty_site_scope,
         }
     return {
         "available": entries > 0,
@@ -461,6 +645,17 @@ def get_event_archive_status() -> Dict[str, Any]:
             verified_entries=verified_entries,
             out_of_scope_entries=out_of_scope_entries,
         ),
+        "site_scope": {
+            "strict": site_scope_is_strict(),
+            "target_sites": get_target_site_domains(),
+            "target_site_events": target_site_events,
+            "out_of_scope_site_events": out_of_scope_site_events,
+            "unknown_site_events": unknown_site_events,
+            "top_hosts": [
+                {"host": host, "count": count}
+                for host, count in site_host_counts.most_common(12)
+            ],
+        },
     }
 
 

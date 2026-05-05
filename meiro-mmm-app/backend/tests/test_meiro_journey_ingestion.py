@@ -451,6 +451,63 @@ def test_rebuild_profiles_from_pipes_raw_events_preserves_outer_event_fields():
     assert touchpoint["utm"] == {"source": "google", "medium": "cpc", "campaign": "brand"}
 
 
+def test_rebuild_profiles_from_meiro_events_excludes_explicit_out_of_scope_sites(monkeypatch):
+    monkeypatch.setenv("MEIRO_TARGET_SITE_DOMAINS", "meiro.io,meir.store")
+    monkeypatch.setenv("MEIRO_STRICT_SITE_SCOPE", "1")
+
+    profiles = rebuild_profiles_from_meiro_events(
+        [
+            {
+                "event_payload": {
+                    "event_id": "evt-target",
+                    "customer_id": "cust-target",
+                    "timestamp": "2026-05-04T12:00:00Z",
+                    "event_name": "page_view",
+                    "url": "https://www.meiro.io/?utm_source=google&utm_medium=cpc&utm_campaign=brand",
+                }
+            },
+            {
+                "event_payload": {
+                    "event_id": "evt-copygeneral",
+                    "customer_id": "cust-copy",
+                    "timestamp": "2026-05-04T12:01:00Z",
+                    "event_name": "page_view",
+                    "url": "https://copygeneral.cz/?utm_source=facebook&utm_medium=paid_social&utm_campaign=myTimi",
+                }
+            },
+        ]
+    )
+
+    assert [profile["customer_id"] for profile in profiles] == ["cust-target"]
+    touchpoint = profiles[0]["touchpoints"][0]
+    assert touchpoint["campaign"] == "brand"
+    assert touchpoint["meta"]["site_scope"]["status"] == "target_site"
+
+
+def test_rebuild_profiles_from_meiro_events_keeps_site_less_decision_events(monkeypatch):
+    monkeypatch.setenv("MEIRO_TARGET_SITE_DOMAINS", "meiro.io,meir.store")
+    monkeypatch.setenv("MEIRO_STRICT_SITE_SCOPE", "1")
+
+    profiles = rebuild_profiles_from_meiro_events(
+        [
+            {
+                "event_type": "decision_action",
+                "event_time": "2026-05-04T13:00:00Z",
+                "event_payload": {
+                    "event_id": "evt-decision",
+                    "customer_id": "cust-decision",
+                    "campaign_id": "global_suppression",
+                },
+            }
+        ]
+    )
+
+    assert len(profiles) == 1
+    assert profiles[0]["customer_id"] == "cust-decision"
+    assert profiles[0]["touchpoints"][0]["event_type"] == "decision_action"
+    assert profiles[0]["touchpoints"][0]["meta"]["site_scope"]["status"] == "unknown"
+
+
 def test_rebuild_profiles_from_decision_engine_collect_events():
     profiles = rebuild_profiles_from_meiro_events(
         [

@@ -3,8 +3,8 @@ from __future__ import annotations
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
-from urllib.parse import urlparse
 
+from app.utils.meiro_config import event_site_host, get_target_site_domains, site_domain_matches
 
 TARGET_SITES = ("meiro.io", "meir.store")
 
@@ -159,21 +159,13 @@ def _activation_meta(event: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _site_for_event(event: Dict[str, Any]) -> str:
-    explicit = _text(_first_present(event.get("site"), event.get("hostname"), event.get("domain"))).lower()
-    candidates = [explicit]
-    for key in ("page_url", "url", "location", "href", "referrer"):
-        raw = _text(event.get(key))
-        if not raw:
-            continue
-        parsed = urlparse(raw if "://" in raw else f"https://{raw}")
-        if parsed.netloc:
-            candidates.append(parsed.netloc.lower())
-    for candidate in candidates:
-        normalized = candidate.replace("www.", "")
-        for site in TARGET_SITES:
-            if normalized == site or normalized.endswith(f".{site}"):
-                return site
-    return explicit.replace("www.", "") or "unknown"
+    host = event_site_host(event)
+    if not host:
+        return "unknown"
+    for site in get_target_site_domains():
+        if site_domain_matches(host, [site]):
+            return site
+    return host.replace("www.", "")
 
 
 def _has_identity(event: Dict[str, Any]) -> bool:
@@ -240,10 +232,10 @@ def _pct(count: int, total: int) -> float:
 def build_event_contract_readiness(
     archive_entries: Iterable[Dict[str, Any]],
     *,
-    target_sites: Iterable[str] = TARGET_SITES,
+    target_sites: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
     events = _flatten_events(archive_entries)
-    target_site_set = {str(site).strip().lower() for site in target_sites if str(site).strip()}
+    target_site_set = {str(site).strip().lower() for site in (target_sites or get_target_site_domains()) if str(site).strip()}
     site_counts = Counter(_site_for_event(event) for event in events)
     target_events = [event for event in events if _site_for_event(event) in target_site_set]
     total = len(target_events)
@@ -257,7 +249,7 @@ def build_event_contract_readiness(
     blockers: List[str] = []
     missing_sites = sorted(site for site in target_site_set if site_counts.get(site, 0) <= 0)
     if not total:
-        blockers.append("No raw events from meiro.io or meir.store were found in the recent archive window.")
+        blockers.append(f"No raw events from {', '.join(sorted(target_site_set))} were found in the recent archive window.")
     if missing_sites:
         warnings.append(f"Missing target site traffic: {', '.join(missing_sites)}.")
     if total and _pct(identity_count, total) < 0.9:

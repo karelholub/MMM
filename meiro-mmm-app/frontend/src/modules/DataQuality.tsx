@@ -184,6 +184,14 @@ interface MeiroEventArchiveStatus {
   last_received_at?: string | null
   parser_versions: string[]
   source_scope?: ArchiveSourceScope
+  site_scope?: {
+    strict?: boolean
+    target_sites?: string[]
+    target_site_events?: number
+    out_of_scope_site_events?: number
+    unknown_site_events?: number
+    top_hosts?: Array<{ host: string; count: number }>
+  }
 }
 
 interface ArchiveSourceScope {
@@ -1236,6 +1244,26 @@ export default function DataQuality() {
             <strong style={{ color: t.color.text }}>Legacy source note:</strong>{' '}
             {Number(meiroEventArchiveStatusQuery.data?.source_scope?.legacy_unverified_entries || 0).toLocaleString()} archived raw-event batches predate instance tagging.
             New batches are tagged against the target Pipes instance.
+          </div>
+        ) : null}
+        {Number(meiroEventArchiveStatusQuery.data?.site_scope?.out_of_scope_site_events || 0) > 0 ? (
+          <div
+            style={{
+              marginBottom: t.space.md,
+              border: `1px solid ${t.color.warning}`,
+              borderRadius: t.radius.md,
+              background: t.color.warningMuted,
+              padding: t.space.md,
+              fontSize: t.font.sizeSm,
+              color: t.color.textSecondary,
+            }}
+          >
+            <strong style={{ color: t.color.text }}>Site scope guard:</strong>{' '}
+            {Number(meiroEventArchiveStatusQuery.data?.site_scope?.out_of_scope_site_events || 0).toLocaleString()} archived raw events are outside{' '}
+            {(meiroEventArchiveStatusQuery.data?.site_scope?.target_sites || ['meiro.io', 'meir.store']).join(', ')} and are excluded from strict replay/reporting.
+            {meiroEventArchiveStatusQuery.data?.site_scope?.top_hosts?.length ? (
+              <> Top hosts: {meiroEventArchiveStatusQuery.data.site_scope.top_hosts.slice(0, 4).map((item) => `${item.host} (${Number(item.count || 0).toLocaleString()})`).join(' · ')}.</>
+            ) : null}
           </div>
         ) : null}
         <div

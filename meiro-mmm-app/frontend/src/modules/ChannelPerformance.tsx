@@ -123,6 +123,7 @@ interface ChannelTrendResponse {
   series_prev?: ChannelTrendRow[]
   meta?: {
     conversion_key?: string | null
+    site_scope?: SiteScopeMeta
     conversion_key_resolution?: {
       configured_conversion_key?: string | null
       applied_conversion_key?: string | null
@@ -169,6 +170,15 @@ interface ChannelSummaryItem {
     current?: Record<string, number>
     previous?: Record<string, number> | null
   }
+}
+
+interface SiteScopeMeta {
+  strict?: boolean
+  target_sites?: string[]
+  journeys_total?: number
+  journeys_kept?: number
+  journeys_excluded?: number
+  out_of_scope_hosts?: Array<{ host: string; count: number }>
 }
 
 interface ChannelSummaryResponse {
@@ -227,6 +237,7 @@ interface ChannelSummaryResponse {
   consistency_warnings?: string[]
   meta?: {
     conversion_key?: string | null
+    site_scope?: SiteScopeMeta
     conversion_key_resolution?: {
       configured_conversion_key?: string | null
       applied_conversion_key?: string | null
@@ -1198,6 +1209,10 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
           items={[
             { label: 'Source basis', value: latestEventReplayDiagnostics?.events_loaded ? 'Pipes raw events -> live attribution' : 'Config-aware performance summary' },
             { label: 'Target instance', value: meiroConfigQuery.data?.target_instance_host || 'meiro-internal.eu.pipes.meiro.io' },
+            {
+              label: 'Site scope',
+              value: `${(summaryQuery.data?.meta?.site_scope?.target_sites || ['meiro.io', 'meir.store']).join(', ')}${Number(summaryQuery.data?.meta?.site_scope?.journeys_excluded || 0) > 0 ? ` · ${Number(summaryQuery.data?.meta?.site_scope?.journeys_excluded || 0).toLocaleString()} excluded` : ''}`,
+            },
             { label: 'Period', value: periodLabel },
             { label: 'Conversion', value: `${conversionLabel} (read-only)` },
             {

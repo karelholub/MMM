@@ -43,6 +43,12 @@ from app.services_performance_trends import (
     build_channel_trend_response,
 )
 from app.services_quality import load_config_and_meta
+from app.utils.meiro_config import (
+    event_site_scope,
+    get_out_of_scope_campaign_labels,
+    get_target_site_domains,
+    site_scope_is_strict,
+)
 
 
 _CONSISTENCY_CACHE: dict[tuple, tuple[float, tuple[dict[str, Any] | None, list[str]]]] = {}
@@ -163,6 +169,88 @@ def _filter_journeys_for_campaign_suggestions(
             continue
         selected.append(journey)
     return selected
+
+
+def _scope_journeys_to_target_sites(journeys: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if not site_scope_is_strict():
+        return journeys, {
+            "strict": False,
+            "target_sites": get_target_site_domains(),
+            "journeys_excluded": 0,
+            "out_of_scope_hosts": [],
+        }
+    kept: list[dict[str, Any]] = []
+    out_hosts: dict[str, int] = {}
+    excluded = 0
+    for journey in journeys or []:
+        explicit_out_of_scope = False
+        for touchpoint in journey.get("touchpoints") or []:
+            if not isinstance(touchpoint, dict):
+                continue
+            scope = event_site_scope(touchpoint)
+            if scope.get("status") != "out_of_scope":
+                continue
+            explicit_out_of_scope = True
+            host = str(scope.get("host") or "unknown")
+            out_hosts[host] = out_hosts.get(host, 0) + 1
+        if explicit_out_of_scope:
+            excluded += 1
+            continue
+        kept.append(journey)
+    return kept, {
+        "strict": True,
+        "target_sites": get_target_site_domains(),
+        "journeys_total": len(journeys or []),
+        "journeys_kept": len(kept),
+        "journeys_excluded": excluded,
+        "out_of_scope_hosts": [
+            {"host": host, "count": count}
+            for host, count in sorted(out_hosts.items(), key=lambda item: item[1], reverse=True)[:10]
+        ],
+    }
+
+
+def _normalized_campaign_label(value: Any) -> str:
+    raw = str(value or "").strip()
+    if ":" in raw:
+        raw = raw.split(":", 1)[1]
+    return " ".join(raw.lower().split())
+
+
+def _campaign_item_is_out_of_scope(item: dict[str, Any], labels: set[str]) -> bool:
+    candidates = {
+        _normalized_campaign_label(item.get("campaign_id")),
+        _normalized_campaign_label(item.get("campaign_name")),
+        _normalized_campaign_label(item.get("campaign")),
+    }
+    return any(candidate and candidate in labels for candidate in candidates)
+
+
+def _filter_out_of_scope_campaign_items(out: dict[str, Any]) -> dict[str, Any]:
+    labels = get_out_of_scope_campaign_labels()
+    if not labels:
+        return out
+    items = out.get("items")
+    if not isinstance(items, list):
+        return out
+    filtered = [item for item in items if not (isinstance(item, dict) and _campaign_item_is_out_of_scope(item, labels))]
+    excluded = len(items) - len(filtered)
+    if excluded <= 0:
+        return out
+    out["items"] = filtered
+    totals = out.get("totals") if isinstance(out.get("totals"), dict) else {}
+    for bucket in ("current", "previous"):
+        if bucket not in totals:
+            continue
+        totals[bucket] = {
+            key: sum(float(((item.get(bucket) or {}) if isinstance(item, dict) else {}).get(key) or 0.0) for item in filtered)
+            for key in ("spend", "visits", "conversions", "revenue")
+        }
+    notes = out.get("notes") if isinstance(out.get("notes"), list) else []
+    notes.append(f"Excluded {excluded} campaign rows matched to out-of-scope Meiro archive traffic.")
+    out["notes"] = notes
+    out["totals"] = totals
+    return out
 
 
 def _build_campaign_suggestions_payload(
@@ -447,7 +535,7 @@ def create_router(
         db=Depends(get_db_dependency),
         _ctx=Depends(require_permission_dependency("attribution.view")),
     ):
-        journeys = ensure_journeys_loaded_fn(db)
+        journeys, _site_scope_meta = _scope_journeys_to_target_sites(ensure_journeys_loaded_fn(db))
         match_aliases = [
             activation_campaign_id,
             native_meiro_campaign_id,
@@ -485,7 +573,7 @@ def create_router(
         db=Depends(get_db_dependency),
         _ctx=Depends(require_permission_dependency("attribution.view")),
     ):
-        journeys = ensure_journeys_loaded_fn(db)
+        journeys, _site_scope_meta = _scope_journeys_to_target_sites(ensure_journeys_loaded_fn(db))
         try:
             return build_activation_object_registry(journeys=journeys, object_type=object_type, q=q, limit=limit)
         except ValueError as exc:
@@ -497,7 +585,7 @@ def create_router(
         db=Depends(get_db_dependency),
         _ctx=Depends(require_permission_dependency("attribution.view")),
     ):
-        journeys = ensure_journeys_loaded_fn(db)
+        journeys, _site_scope_meta = _scope_journeys_to_target_sites(ensure_journeys_loaded_fn(db))
         return build_activation_feedback_recommendations(journeys=journeys, limit=limit)
 
     @router.get("/api/measurement/activation-feedback/export")
@@ -506,7 +594,7 @@ def create_router(
         db=Depends(get_db_dependency),
         ctx=Depends(require_permission_dependency("attribution.view")),
     ):
-        journeys = ensure_journeys_loaded_fn(db)
+        journeys, site_scope_meta = _scope_journeys_to_target_sites(ensure_journeys_loaded_fn(db))
         return build_activation_feedback_export(
             journeys=journeys,
             limit=limit,
@@ -765,6 +853,7 @@ def create_router(
             raise HTTPException(status_code=400, detail=str(exc))
         out["meta"] = build_meta_fn(ctx=query_ctx, conversion_key=effective_conversion_key, include_kpi=True)
         out["meta"]["attribution_model"] = _normalize_performance_attribution_model(model)
+        out["meta"]["site_scope"] = site_scope_meta
         if conversion_key_resolution:
             out["meta"]["conversion_key_resolution"] = conversion_key_resolution
         return out
@@ -804,7 +893,7 @@ def create_router(
             cached = _PERFORMANCE_SUMMARY_CACHE.get(cache_key)
             if cached and now - cached[0] < 30:
                 return cached[1]
-        journeys = ensure_journeys_loaded_fn(db)
+        journeys, site_scope_meta = _scope_journeys_to_target_sites(ensure_journeys_loaded_fn(db))
         query_ctx = build_query_context_fn(
             date_from=date_from,
             date_to=date_to,
@@ -886,6 +975,7 @@ def create_router(
         out["consistency_warnings"] = consistency_warnings
         out["meta"] = build_meta_fn(ctx=query_ctx, conversion_key=effective_conversion_key)
         out["meta"]["attribution_model"] = attribution_model
+        out["meta"]["site_scope"] = site_scope_meta
         if conversion_key_resolution:
             out["meta"]["conversion_key_resolution"] = conversion_key_resolution
         with _PERFORMANCE_SUMMARY_CACHE_LOCK:
@@ -928,7 +1018,7 @@ def create_router(
         db=Depends(get_db_dependency),
         _ctx=Depends(require_permission_dependency("attribution.view")),
     ):
-        journeys = ensure_journeys_loaded_fn(db)
+        journeys, site_scope_meta = _scope_journeys_to_target_sites(ensure_journeys_loaded_fn(db))
         try:
             query_ctx = build_query_context_fn(
                 date_from=date_from,
@@ -982,6 +1072,7 @@ def create_router(
             raise HTTPException(status_code=400, detail=str(exc))
         out["meta"] = build_meta_fn(ctx=query_ctx, conversion_key=effective_conversion_key, include_kpi=True)
         out["meta"]["attribution_model"] = _normalize_performance_attribution_model(model)
+        out["meta"]["site_scope"] = site_scope_meta
         if conversion_key_resolution:
             out["meta"]["conversion_key_resolution"] = conversion_key_resolution
         return out
@@ -1039,7 +1130,7 @@ def create_router(
             cached = _PERFORMANCE_SUMMARY_CACHE.get(cache_key)
             if cached and now - cached[0] < 30:
                 return cached[1]
-        journeys = ensure_journeys_loaded_fn(db)
+        journeys, site_scope_meta = _scope_journeys_to_target_sites(ensure_journeys_loaded_fn(db))
         query_ctx = build_query_context_fn(
             date_from=date_from,
             date_to=date_to,
@@ -1086,6 +1177,7 @@ def create_router(
             attribution_model=attribution_model,
             aggregate_overlay=aggregate_overlay,
         )
+        out = _filter_out_of_scope_campaign_items(out)
         diagnostics = build_scope_diagnostics(
             db=db,
             scope_type="campaign",
@@ -1120,6 +1212,7 @@ def create_router(
         out["consistency_warnings"] = consistency_warnings
         out["meta"] = build_meta_fn(ctx=query_ctx, conversion_key=effective_conversion_key)
         out["meta"]["attribution_model"] = attribution_model
+        out["meta"]["site_scope"] = site_scope_meta
         if conversion_key_resolution:
             out["meta"]["conversion_key_resolution"] = conversion_key_resolution
         with _PERFORMANCE_SUMMARY_CACHE_LOCK:
@@ -1140,7 +1233,7 @@ def create_router(
         db=Depends(get_db_dependency),
         _ctx=Depends(require_permission_dependency("attribution.view")),
     ):
-        journeys = ensure_journeys_loaded_fn(db)
+        journeys, site_scope_meta = _scope_journeys_to_target_sites(ensure_journeys_loaded_fn(db))
         query_ctx = build_query_context_fn(
             date_from=date_from,
             date_to=date_to,
@@ -1177,6 +1270,7 @@ def create_router(
         )
         out["config"] = config_meta
         out["meta"] = build_meta_fn(ctx=query_ctx, conversion_key=effective_conversion_key)
+        out["meta"]["site_scope"] = site_scope_meta
         if conversion_key_resolution:
             out["meta"]["conversion_key_resolution"] = conversion_key_resolution
         return out

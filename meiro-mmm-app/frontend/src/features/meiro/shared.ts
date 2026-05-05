@@ -27,6 +27,14 @@ export interface MeiroWebhookArchiveStatus {
     out_of_scope_entries?: number
     status?: string
   }
+  site_scope?: {
+    strict?: boolean
+    target_sites?: string[]
+    target_site_events?: number
+    out_of_scope_site_events?: number
+    unknown_site_events?: number
+    top_hosts?: Array<{ host: string; count: number }>
+  }
 }
 
 export interface MeiroWebhookReprocessResult {

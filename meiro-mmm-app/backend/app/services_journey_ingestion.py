@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import parse_qs, urlparse
 
 from app.services_revenue_config import extract_revenue_entries, normalize_revenue_config
+from app.utils.meiro_config import event_matches_target_site_scope, event_site_scope, site_scope_is_strict
 from app.utils.taxonomy import load_taxonomy, normalize_touchpoint
 
 MEIRO_PARSER_VERSION = "2026-03-20-v2"
@@ -630,6 +631,8 @@ def rebuild_profiles_from_meiro_events(
         event = _augment_event_with_url_fields(_merge_event_payload(item))
         if not isinstance(event, dict):
             continue
+        if site_scope_is_strict() and not event_matches_target_site_scope(event, allow_unknown=True):
+            continue
         event_key = str(
             event.get("event_id")
             or event.get("id")
@@ -709,6 +712,9 @@ def rebuild_profiles_from_meiro_events(
                 "ad_id": event.get("ad_id"),
                 "campaign_id": _first_present(event.get("campaign_id"), event.get("campaign", {}).get("id") if isinstance(event.get("campaign"), dict) else None),
             }
+            touchpoint_meta = touchpoint.get("meta") if isinstance(touchpoint.get("meta"), dict) else {}
+            touchpoint_meta["site_scope"] = event_site_scope(event)
+            touchpoint["meta"] = touchpoint_meta
             _merge_activation_meta(touchpoint, event)
             journey["touchpoints"].append({k: v for k, v in touchpoint.items() if v not in (None, "", [])})
             continue
@@ -757,7 +763,10 @@ def rebuild_profiles_from_meiro_events(
                 "page_referrer": normalized_touchpoint.get("page_referrer"),
                 "event_type": _first_present(event.get("event_type"), event.get("type"), event.get("event_name")),
                 "interaction_type": interaction_type if interaction_type != "unknown" else "unknown",
-                **({"meta": {"activation": _extract_activation_measurement_meta(event)}} if _extract_activation_measurement_meta(event) else {}),
+                "meta": {
+                    **({"activation": _extract_activation_measurement_meta(event)} if _extract_activation_measurement_meta(event) else {}),
+                    "site_scope": event_site_scope(event),
+                },
             })
         )
 

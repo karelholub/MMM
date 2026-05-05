@@ -144,12 +144,22 @@ interface CampaignTrendV2Response {
   series_prev?: CampaignTrendV2Row[]
   meta?: {
     conversion_key?: string | null
+    site_scope?: SiteScopeMeta
     conversion_key_resolution?: {
       configured_conversion_key?: string | null
       applied_conversion_key?: string | null
       reason?: string
     } | null
   } | null
+}
+
+interface SiteScopeMeta {
+  strict?: boolean
+  target_sites?: string[]
+  journeys_total?: number
+  journeys_kept?: number
+  journeys_excluded?: number
+  out_of_scope_hosts?: Array<{ host: string; count: number }>
 }
 
 interface CampaignSummaryItem {
@@ -264,6 +274,7 @@ interface CampaignSummaryResponse {
   notes?: string[]
   meta?: {
     conversion_key?: string | null
+    site_scope?: SiteScopeMeta
     conversion_key_resolution?: {
       configured_conversion_key?: string | null
       applied_conversion_key?: string | null
@@ -1939,6 +1950,10 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
           items={[
             { label: 'Source basis', value: latestEventReplayDiagnostics?.events_loaded ? 'Pipes raw events -> live attribution' : 'Config-aware performance summary' },
             { label: 'Target instance', value: meiroConfigQuery.data?.target_instance_host || 'meiro-internal.eu.pipes.meiro.io' },
+            {
+              label: 'Site scope',
+              value: `${(summaryQuery.data?.meta?.site_scope?.target_sites || ['meiro.io', 'meir.store']).join(', ')}${Number(summaryQuery.data?.meta?.site_scope?.journeys_excluded || 0) > 0 ? ` · ${Number(summaryQuery.data?.meta?.site_scope?.journeys_excluded || 0).toLocaleString()} excluded` : ''}`,
+            },
             { label: 'Period', value: `${trendDateRange.dateFrom} – ${trendDateRange.dateTo}` },
             { label: 'Conversion', value: conversionKey || 'All conversions' },
             {
