@@ -11,6 +11,7 @@ import pandas as pd
 from fastapi import HTTPException
 
 from app.services_meiro_replay_snapshots import get_meiro_replay_snapshot
+from app.utils.meiro_config import filter_journeys_to_target_site_scope, get_target_site_domains, site_scope_is_strict
 
 
 def import_journeys_from_cdp_source(
@@ -108,6 +109,9 @@ def import_journeys_from_cdp_source(
                 pass
         append_import_run_fn(source_label, 0, "error", error=str(exc))
         raise
+    journeys_before_site_scope = len(journeys)
+    journeys = filter_journeys_to_target_site_scope(journeys, allow_unknown=True)
+    journeys_excluded_by_site_scope = journeys_before_site_scope - len(journeys)
 
     effective_config_id = getattr(req, "config_id", None) or get_default_config_id_fn()
     if effective_config_id:
@@ -194,6 +198,12 @@ def import_journeys_from_cdp_source(
     validation_summary = {
         "cleaning_report": cleaning_report,
         "top_quarantine_reasons": cleaning_report.get("top_unresolved_patterns") or [],
+        "site_scope": {
+            "strict": site_scope_is_strict(),
+            "target_sites": get_target_site_domains(),
+            "journeys_before_scope": journeys_before_site_scope,
+            "journeys_excluded": journeys_excluded_by_site_scope,
+        },
     }
     if replay_context:
         validation_summary["replay_context"] = replay_context
@@ -208,6 +218,9 @@ def import_journeys_from_cdp_source(
         "primary_dedup_key": pull_cfg.get("primary_dedup_key"),
         "fallback_dedup_keys": pull_cfg.get("fallback_dedup_keys"),
         "strict_ingest": pull_cfg.get("strict_ingest"),
+        "site_scope_strict": site_scope_is_strict(),
+        "target_site_domains": get_target_site_domains(),
+        "journeys_excluded_by_site_scope": journeys_excluded_by_site_scope,
         "timestamp_fallback_policy": pull_cfg.get("timestamp_fallback_policy"),
         "value_fallback_policy": pull_cfg.get("value_fallback_policy"),
         "currency_fallback_policy": pull_cfg.get("currency_fallback_policy"),

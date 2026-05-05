@@ -46,8 +46,10 @@ from app.services_quality import load_config_and_meta
 from app.utils.meiro_config import (
     expense_matches_target_site_scope,
     event_site_scope,
+    filter_journeys_to_target_site_scope,
     get_out_of_scope_campaign_labels,
     get_target_site_domains,
+    journey_matches_target_site_scope,
     site_scope_is_strict,
 )
 
@@ -180,9 +182,9 @@ def _scope_journeys_to_target_sites(journeys: list[dict[str, Any]]) -> tuple[lis
             "journeys_excluded": 0,
             "out_of_scope_hosts": [],
         }
-    kept: list[dict[str, Any]] = []
     out_hosts: dict[str, int] = {}
-    excluded = 0
+    excluded_by_host = 0
+    excluded_by_campaign = 0
     for journey in journeys or []:
         explicit_out_of_scope = False
         for touchpoint in journey.get("touchpoints") or []:
@@ -195,15 +197,19 @@ def _scope_journeys_to_target_sites(journeys: list[dict[str, Any]]) -> tuple[lis
             host = str(scope.get("host") or "unknown")
             out_hosts[host] = out_hosts.get(host, 0) + 1
         if explicit_out_of_scope:
-            excluded += 1
-            continue
-        kept.append(journey)
+            excluded_by_host += 1
+        elif not journey_matches_target_site_scope(journey, allow_unknown=True):
+            excluded_by_campaign += 1
+    kept = filter_journeys_to_target_site_scope(journeys or [], allow_unknown=True)
+    excluded = len(journeys or []) - len(kept)
     return kept, {
         "strict": True,
         "target_sites": get_target_site_domains(),
         "journeys_total": len(journeys or []),
         "journeys_kept": len(kept),
         "journeys_excluded": excluded,
+        "journeys_excluded_by_host": excluded_by_host,
+        "journeys_excluded_by_campaign": excluded_by_campaign,
         "out_of_scope_hosts": [
             {"host": host, "count": count}
             for host, count in sorted(out_hosts.items(), key=lambda item: item[1], reverse=True)[:10]
@@ -632,7 +638,7 @@ def create_router(
         db=Depends(get_db_dependency),
         ctx=Depends(require_permission_dependency("attribution.view")),
     ):
-        journeys = ensure_journeys_loaded_fn(db)
+        journeys, _site_scope_meta = _scope_journeys_to_target_sites(ensure_journeys_loaded_fn(db))
         return record_activation_feedback_export(
             journeys=journeys,
             limit=limit,
@@ -645,7 +651,7 @@ def create_router(
         db=Depends(get_db_dependency),
         ctx=Depends(require_permission_dependency("attribution.view")),
     ):
-        journeys = ensure_journeys_loaded_fn(db)
+        journeys, _site_scope_meta = _scope_journeys_to_target_sites(ensure_journeys_loaded_fn(db))
         run = record_activation_feedback_export(
             journeys=journeys,
             limit=limit,
@@ -718,7 +724,7 @@ def create_router(
         db=Depends(get_db_dependency),
         _ctx=Depends(require_permission_dependency("attribution.view")),
     ):
-        journeys = ensure_journeys_loaded_fn(db)
+        journeys, _site_scope_meta = _scope_journeys_to_target_sites(ensure_journeys_loaded_fn(db))
         match_aliases = [
             activation_campaign_id,
             native_meiro_campaign_id,
