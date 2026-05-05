@@ -20,6 +20,7 @@ export type AppPage =
   | 'path_archetypes'
   | 'analytics_journeys'
   | 'datasets'
+  | 'documentation'
 
 export type NavSection =
   | 'Overview'
@@ -293,6 +294,7 @@ export function AppSidebar({
       <div style={{ borderTop: `1px solid ${tokens.color.borderLight}`, padding: sidebarCollapsed ? '10px 8px' : '12px 10px' }}>
         <button
           type="button"
+          onClick={() => onSetPage('documentation')}
           style={{
             display: 'flex',
             alignItems: 'center',

@@ -119,6 +119,7 @@ from app.services_journey_definitions import (
     get_journey_definition,
 )
 from app.services_rebuild_jobs import (
+    purge_journey_definition_outputs,
     rebuild_journey_definition_outputs,
 )
 from app.services_journeys_health import (
@@ -226,6 +227,7 @@ from app.services_incrementality import (
 from app.mmm_engine import fit_model as mmm_fit_model, engine_info
 from app.connectors import meiro_cdp
 from app.utils.meiro_config import (
+    get_event_archive_status,
     get_last_test_at,
     get_webhook_archive_status,
     get_webhook_last_received_at,
@@ -697,7 +699,7 @@ def _save_runs():
     try:
         out = {}
         for rid, r in RUNS.items():
-            out[rid] = {k: v for k, v in r.items() if k in ("status", "stage", "progress_pct", "config", "kpi_mode", "created_at", "updated_at", "dataset_id", "r2", "contrib", "roi", "engine", "engine_version", "detail", "uplift", "campaigns", "channel_summary", "adstock_params", "saturation_params", "diagnostics", "attribution_model", "attribution_config_id", "stale_from_status", "stale_reason", "stale_at")}
+            out[rid] = {k: v for k, v in r.items() if k in ("status", "stage", "progress_pct", "config", "kpi_mode", "created_at", "updated_at", "dataset_id", "r2", "contrib", "roi", "engine", "engine_version", "detail", "uplift", "campaigns", "channel_summary", "adstock_params", "saturation_params", "diagnostics", "attribution_model", "attribution_config_id", "media_input_mode", "synthetic_impressions", "stale_from_status", "stale_reason", "stale_at")}
         RUNS_FILE.parent.mkdir(parents=True, exist_ok=True)
         RUNS_FILE.write_text(json.dumps(out, indent=0), encoding="utf-8")
     except Exception:
@@ -1323,11 +1325,16 @@ def _build_overview_attention_queue(db: Any) -> List[Dict[str, Any]]:
             "has_key": meiro_metadata.get("has_key", False),
             "webhook_last_received_at": get_webhook_last_received_at(),
             "webhook_received_count": get_webhook_received_count(),
+            "event_webhook_last_received_at": get_event_archive_status().get("last_received_at"),
+            "event_webhook_received_count": get_event_archive_status().get("events_received", 0),
             "webhook_has_secret": bool(get_webhook_secret()),
+            "primary_ingest_source": get_pull_config().get("primary_ingest_source", "profiles"),
         },
         mapping_state=get_mapping_state(),
         archive_status=get_webhook_archive_status(),
+        event_archive_status=get_event_archive_status(),
         pull_config=get_pull_config(),
+        raw_event_diagnostics={},
     )
 
     data_sources_payload = list_data_sources(db, workspace_id=DEFAULT_WORKSPACE_ID, category=None)
@@ -2787,6 +2794,7 @@ app.include_router(
         get_datasets_obj=lambda: DATASETS,
         get_expenses_obj=lambda: EXPENSES,
         get_settings_obj=lambda: SETTINGS,
+        get_data_dir_obj=lambda: DATA_DIR,
         get_mmm_platform_dir_obj=lambda: MMM_PLATFORM_DIR,
         ensure_journeys_loaded_fn=_ensure_journeys_loaded,
         now_iso_fn=_now_iso,

@@ -26,6 +26,8 @@ interface GlobalFilterBarProps {
   geos?: Option[]
   segments?: Option[]
   showSegment?: boolean
+  segmentFallbackLabel?: string
+  segmentAriaLabel?: string
 }
 
 const FIELD_STYLE: CSSProperties = {
@@ -64,12 +66,14 @@ export default function GlobalFilterBar({
   geos = [],
   segments = [],
   showSegment = true,
+  segmentFallbackLabel = 'All analytical segments',
+  segmentAriaLabel = 'Analytical segment filter',
 }: GlobalFilterBarProps) {
   const channelOptions = ensureAllOption(channels, 'All channels')
   const campaignOptions = ensureAllOption(campaigns, 'All campaigns')
   const deviceOptions = ensureAllOption(devices, 'All devices')
   const geoOptions = ensureAllOption(geos, 'All geos')
-  const segmentOptions = ensureAllOption(segments, 'All segments')
+  const segmentOptions = ensureAllOption(segments, segmentFallbackLabel)
 
   return (
     <div
@@ -153,7 +157,7 @@ export default function GlobalFilterBar({
           value={value.segment}
           onChange={(event) => updateSelect(event, 'segment', value, onChange)}
           style={FIELD_STYLE}
-          aria-label="Segment filter"
+          aria-label={segmentAriaLabel}
         >
           {segmentOptions.map((option) => (
             <option key={option.value} value={option.value}>

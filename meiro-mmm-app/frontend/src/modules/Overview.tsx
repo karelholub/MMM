@@ -62,6 +62,7 @@ type PageKey =
   | 'incrementality'
   | 'path_archetypes'
   | 'datasets'
+  | 'documentation'
 
 interface OverviewProps {
   lastPage: PageKey | null
@@ -1226,7 +1227,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
           >
             <div style={{ display: 'grid', gap: 6, minWidth: 260, flex: '1 1 260px' }}>
               <span style={{ fontSize: t.font.sizeXs, fontWeight: t.font.weightMedium, color: t.color.textSecondary }}>
-                Focus segment
+                Analytical segment
               </span>
               <select
                 value={selectedSegmentId}
@@ -1241,7 +1242,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
                   fontSize: t.font.sizeSm,
                 }}
               >
-                <option value="">All journeys / no saved segment</option>
+                <option value="">All journeys / no analytical segment</option>
                 {localSegments.map((segment) => (
                   <option key={segment.id} value={segment.id}>
                     {segmentOptionLabel(segment)}

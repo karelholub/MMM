@@ -16,6 +16,7 @@ from app.services_conversions import (
     persist_journeys_as_conversion_paths,
     v2_to_legacy,
 )
+from app.services_metrics import journey_revenue_value
 
 
 def _make_session():
@@ -92,6 +93,8 @@ def test_v2_to_legacy_preserves_interaction_type_and_outcome_summary():
     assert legacy["touchpoints"][1]["interaction_type"] == "click"
     assert legacy["interaction_path_type"] == "mixed_path"
     assert legacy["conversion_outcome"]["gross_conversions"] == 1.0
+    assert legacy["conversion_outcome"]["gross_value"] == 120.0
+    assert journey_revenue_value(legacy) == 120.0
 
 
 def test_filter_journeys_by_windows_supports_click_only_and_view_through_modes():

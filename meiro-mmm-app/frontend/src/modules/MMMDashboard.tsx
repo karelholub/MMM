@@ -72,11 +72,68 @@ interface RunData {
   stale_from_status?: string | null
   stale_reason?: string | null
   stale_at?: string | null
+  source_contract?: {
+    attribution_source?: string
+    spend_source?: string
+    audience_scope?: string
+    measurement_audience?: {
+      id?: string
+      name?: string
+      source?: string
+      external_segment_id?: string
+      materialization_status?: string
+    } | null
+    profile_cdp_role?: string
+    latest_event_replay?: {
+      events_loaded?: number
+      profiles_reconstructed?: number
+      journeys_persisted?: number
+    } | null
+  }
   diagnostics?: {
     rhat_max?: number
     ess_bulk_min?: number
     divergences?: number
   }
+}
+
+interface WalledGardenImpactRow {
+  source_channel: string
+  modeled_channel: string
+  synthetic_column: string
+  modeled_from: 'spend' | 'synthetic_impressions' | string
+  spend: number
+  impressions: number
+  synthetic_impressions: number
+  contribution: number
+  roi: number
+  profit_per_1000_synthetic_impressions: number | null
+  confidence: 'high' | 'medium' | 'low' | string
+  confidence_score: number
+  calibration?: {
+    status: 'calibrated' | 'planned' | 'not_calibrated' | string
+    experiments: Array<{ experiment_id: number; name: string; status: string; has_result: boolean }>
+    latest_result?: { uplift_abs?: number | null; uplift_rel?: number | null; p_value?: number | null } | null
+    recommendation: string
+  }
+  saturation: 'room_to_scale' | 'watch' | 'high' | 'inefficient' | 'unknown' | string
+  method: string
+  caveats: string[]
+}
+
+interface WalledGardenImpact {
+  available: boolean
+  media_input_mode: 'spend' | 'synthetic_impressions' | string
+  method: string
+  summary: {
+    channels: number
+    channels_with_signal: number
+    total_synthetic_impressions: number
+    modeled_directly: boolean
+    calibrated_channels?: number
+  }
+  rows: WalledGardenImpactRow[]
+  explainability: string[]
 }
 
 function formatCurrency(val: number): string {
@@ -112,6 +169,10 @@ function channelDisplayName(
   overrides: Record<string, string> | undefined
 ): string {
   if (overrides?.[channel]) return overrides[channel]
+  if (channel.endsWith('_synthetic_impressions')) {
+    const source = channel.replace(/_synthetic_impressions$/, '')
+    return `${channelDisplayName(source, taxonomyMap, overrides)} synthetic impressions`
+  }
   if (taxonomyMap?.get(channel)) return taxonomyMap.get(channel)!
   return channel.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
@@ -257,6 +318,15 @@ export default function MMMDashboard({
       }).catch(() => []),
   })
 
+  const { data: walledGardenImpact } = useQuery<WalledGardenImpact>({
+    queryKey: ['walled-garden-impact', runId],
+    queryFn: async () =>
+      apiGetJson<WalledGardenImpact>(`/api/models/${runId}/walled-garden-impact`, {
+        fallbackMessage: 'Failed to fetch walled-garden impact',
+      }),
+    enabled: !!runId && !!run,
+  })
+
   const { data: datasetResponse } = useQuery({
     queryKey: ['dataset', datasetId],
     queryFn: async () =>
@@ -268,7 +338,8 @@ export default function MMMDashboard({
   })
   const datasetReadoutOnly = run?.dataset_available === false
   const dataset = (datasetResponse?.preview_rows ?? []) as Record<string, unknown>[]
-  const datasetMetadata = datasetResponse?.metadata
+  const datasetMetadata = datasetResponse?.metadata as Record<string, any> | undefined
+  const sourceContract = (datasetMetadata?.source_contract || run?.source_contract || null) as RunData['source_contract'] | null
 
   const { data: attributionWeekly } = useQuery<{ series: { date: string; attributed_value: number }[] }>({
     queryKey: ['attribution-weekly', runMetadata?.attribution_model, runMetadata?.attribution_config_id, datasetMetadata?.period_start, datasetMetadata?.period_end],
@@ -384,6 +455,20 @@ export default function MMMDashboard({
   }, [contrib])
 
   const negativeRoiCount = useMemo(() => roi?.filter((item) => item.roi < 0).length ?? 0, [roi])
+
+  const walledGardenRows = walledGardenImpact?.rows ?? []
+  const topWalledGardenRow = useMemo(
+    () =>
+      walledGardenRows
+        .filter((row) => row.synthetic_impressions > 0)
+        .slice()
+        .sort((a, b) => b.contribution - a.contribution)[0] ?? null,
+    [walledGardenRows],
+  )
+  const lowConfidenceWalledGardenCount = useMemo(
+    () => walledGardenRows.filter((row) => row.synthetic_impressions > 0 && row.confidence === 'low').length,
+    [walledGardenRows],
+  )
 
   const reconciliationSummary = useMemo(() => {
     if (!runMetadata?.attribution_model || !attributionWeekly?.series || !dataset.length) return null
@@ -588,7 +673,20 @@ export default function MMMDashboard({
       <div style={{ marginBottom: t.space.md }}>
         <ContextSummaryStrip
           items={[
-            { label: 'Source', value: datasetReadoutOnly ? 'MMM run readout only' : 'MMM run + dataset preview' },
+            {
+              label: 'Dataset lineage',
+              value: datasetReadoutOnly
+                ? 'Readout only'
+                : datasetMetadata?.source_detail === 'platform_journeys_expenses'
+                  ? 'Platform journeys + expenses'
+                  : datasetMetadata?.source
+                    ? String(datasetMetadata.source).replace(/_/g, ' ')
+                    : 'Dataset preview',
+            },
+            {
+              label: 'Source contract',
+              value: sourceContract?.attribution_source || 'Not persisted',
+            },
             { label: 'Dataset period', value: datasetPeriodLabel },
             { label: 'KPI', value: getKpiDisplayName() },
             { label: 'Total spend', value: formatCurrency(totalSpend) },
@@ -721,6 +819,13 @@ export default function MMMDashboard({
                       ? 'Insufficient overlap'
                       : 'Direct KPI source',
                 },
+                {
+                  label: 'Walled gardens',
+                  value: walledGardenImpact?.available ? `${walledGardenImpact.summary.channels_with_signal} with signal` : 'No signal',
+                  helper: topWalledGardenRow
+                    ? `${channelDisplay(topWalledGardenRow.source_channel)} has strongest modeled impact`
+                    : 'Import platform delivery metrics',
+                },
               ].map((item) => (
                 <div
                   key={item.label}
@@ -796,6 +901,173 @@ export default function MMMDashboard({
           headline={trustNarrative.headline}
           items={trustNarrative.items}
         />
+      </div>
+
+      <div style={{ marginBottom: t.space.xl }}>
+        <SectionCard
+          title="Walled-garden impact"
+          subtitle="Synthetic impressions connect closed-platform delivery pressure to modeled profit or conversion impact."
+          footer="Synthetic impressions are estimated exposure pressure, not user-level reach. Calibrate low-confidence rows with holdouts, lift studies, campaign pauses, or budget shocks."
+          overflow="auto"
+        >
+          {walledGardenImpact?.available ? (
+            <div style={{ display: 'grid', gap: t.space.lg }}>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
+                  gap: t.space.md,
+                }}
+              >
+                <MetricCard
+                  label="Synthetic impressions"
+                  value={Math.round(walledGardenImpact.summary.total_synthetic_impressions).toLocaleString()}
+                  description="Normalized exposure pressure imported from platform delivery metrics."
+                  tone="neutral"
+                />
+                <MetricCard
+                  label="Model basis"
+                  value={walledGardenImpact.summary.modeled_directly ? 'Exposure' : 'Spend'}
+                  description={
+                    walledGardenImpact.summary.modeled_directly
+                      ? 'MMM was fitted on synthetic impression columns.'
+                      : 'MMM was fitted on spend; exposure explains delivery pressure.'
+                  }
+                  tone={walledGardenImpact.summary.modeled_directly ? 'success' : 'neutral'}
+                />
+                <MetricCard
+                  label="Top platform"
+                  value={topWalledGardenRow ? channelDisplay(topWalledGardenRow.source_channel) : '—'}
+                  description={
+                    topWalledGardenRow
+                      ? `${formatCurrency(topWalledGardenRow.contribution)} modeled contribution`
+                      : 'No platform has enough delivery signal yet.'
+                  }
+                  tone="neutral"
+                />
+                <MetricCard
+                  label="Needs calibration"
+                  value={`${walledGardenImpact.summary.calibrated_channels ?? 0}/${walledGardenImpact.summary.channels_with_signal}`}
+                  description={
+                    lowConfidenceWalledGardenCount > 0
+                      ? 'Low-confidence rows should be validated before scaling.'
+                      : 'Existing experiment calibration is reflected where available.'
+                  }
+                  tone={(walledGardenImpact.summary.calibrated_channels ?? 0) > 0 ? 'success' : 'warning'}
+                />
+              </div>
+
+              <DashboardTable density="compact">
+                <thead>
+                  <tr>
+                    <th>Platform</th>
+                    <th style={{ textAlign: 'right' }}>Spend</th>
+                    <th style={{ textAlign: 'right' }}>Synthetic impressions</th>
+                    <th style={{ textAlign: 'right' }}>Modeled contribution</th>
+                    <th style={{ textAlign: 'right' }}>ROI</th>
+                    <th style={{ textAlign: 'right' }}>Per 1k synthetic</th>
+                    <th style={{ textAlign: 'right' }}>Confidence</th>
+                    <th style={{ textAlign: 'right' }}>Calibration</th>
+                    <th style={{ textAlign: 'right' }}>Readout</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {walledGardenRows.map((row) => {
+                    const confidenceColor =
+                      row.confidence === 'high'
+                        ? t.color.success
+                        : row.confidence === 'low'
+                          ? t.color.warning
+                          : t.color.textSecondary
+                    const readout =
+                      row.saturation === 'room_to_scale'
+                        ? 'Room to scale'
+                        : row.saturation === 'watch'
+                          ? 'Watch saturation'
+                          : row.saturation === 'high'
+                            ? 'Likely saturated'
+                            : row.saturation === 'inefficient'
+                              ? 'Inefficient'
+                              : 'Needs signal'
+                    return (
+                      <tr key={`${row.source_channel}-${row.synthetic_column}`}>
+                        <td style={{ fontWeight: t.font.weightMedium, color: t.color.text }}>
+                          {channelDisplay(row.source_channel)}
+                          {row.modeled_from === 'synthetic_impressions' && (
+                            <span style={{ marginLeft: 6, fontSize: t.font.sizeXs, color: t.color.accent }}>modeled</span>
+                          )}
+                          {row.caveats?.[0] && (
+                            <div style={{ marginTop: 2, fontSize: t.font.sizeXs, color: t.color.textMuted, maxWidth: 260 }}>
+                              {row.caveats[0]}
+                            </div>
+                          )}
+                        </td>
+                        <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{row.spend ? formatCurrency(row.spend) : '—'}</td>
+                        <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                          {row.synthetic_impressions ? Math.round(row.synthetic_impressions).toLocaleString() : '—'}
+                        </td>
+                        <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                          {row.contribution ? formatCurrency(row.contribution) : '—'}
+                        </td>
+                        <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: row.roi >= 0 ? t.color.success : t.color.danger }}>
+                          {row.spend || row.modeled_from === 'synthetic_impressions' ? `${row.roi.toFixed(2)}×` : '—'}
+                        </td>
+                        <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                          {row.profit_per_1000_synthetic_impressions != null
+                            ? formatCurrency(row.profit_per_1000_synthetic_impressions)
+                            : '—'}
+                        </td>
+                        <td style={{ textAlign: 'right', color: confidenceColor }}>{row.confidence}</td>
+                        <td
+                          style={{
+                            textAlign: 'right',
+                            color: row.calibration?.status === 'calibrated' ? t.color.success : row.calibration?.status === 'planned' ? t.color.warning : t.color.textSecondary,
+                          }}
+                          title={row.calibration?.recommendation}
+                        >
+                          {row.calibration?.status === 'calibrated'
+                            ? 'Experiment result'
+                            : row.calibration?.status === 'planned'
+                              ? 'Experiment pending'
+                              : 'Needed'}
+                        </td>
+                        <td style={{ textAlign: 'right', color: row.saturation === 'room_to_scale' ? t.color.success : row.saturation === 'inefficient' ? t.color.danger : t.color.textSecondary }}>
+                          {readout}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </DashboardTable>
+
+              <div
+                style={{
+                  display: 'grid',
+                  gap: t.space.xs,
+                  padding: t.space.md,
+                  borderRadius: t.radius.md,
+                  border: `1px solid ${t.color.borderLight}`,
+                  background: t.color.bg,
+                  fontSize: t.font.sizeSm,
+                  color: t.color.textSecondary,
+                }}
+              >
+                {(walledGardenImpact.explainability ?? []).map((line) => (
+                  <div key={line}>{line}</div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gap: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              <div>
+                No imported impression, reach, or video delivery metrics were available for the modeled platforms in this run.
+              </div>
+              <div>
+                Connect Meta, YouTube/Google, TikTok, or LinkedIn delivery data, then rebuild the platform dataset with synthetic impressions enabled.
+              </div>
+            </div>
+          )}
+        </SectionCard>
       </div>
 
       <div style={{ marginBottom: t.space.xl }}>
@@ -894,8 +1166,14 @@ export default function MMMDashboard({
                 <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>KPI source</div>
                 <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
                   <strong style={{ color: t.color.text }}>
-                    {runMetadata?.attribution_model ? `Attribution (${runMetadata.attribution_model.replace(/_/g, ' ')})` : 'Direct'}
+                    {sourceContract?.attribution_source || (runMetadata?.attribution_model ? `Attribution (${runMetadata.attribution_model.replace(/_/g, ' ')})` : 'Direct')}
                   </strong>
+                </div>
+              </div>
+              <div style={{ display: 'grid', gap: 2 }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Audience scope</div>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  <strong style={{ color: t.color.text }}>{sourceContract?.audience_scope || 'Workspace aggregate'}</strong>
                 </div>
               </div>
               <div style={{ display: 'grid', gap: 2 }}>

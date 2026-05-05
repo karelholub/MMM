@@ -478,7 +478,7 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
         ? `Mixed basis · live attribution uses ${configId.slice(0, 8)}…, path outputs stay workspace-level`
         : 'Mixed basis · live attribution + workspace path outputs',
     },
-    { label: 'Focus segment', value: selectedSegment?.name || 'Workspace baseline' },
+    { label: 'Analytical segment', value: selectedSegment?.name || 'Workspace baseline' },
     { label: 'Journey source', value: formatSourceLabel(sourceStateQuery.data?.active_source) },
     {
       label: 'Freshness',
@@ -608,7 +608,7 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
             summaryTitle="Attribution trust brief"
             summaryLines={[
               `Period: ${dateFrom} – ${dateTo}`,
-              `Focus segment: ${selectedSegment?.name || 'Workspace baseline'}`,
+              `Analytical segment: ${selectedSegment?.name || 'Workspace baseline'}`,
               `Journey source: ${formatSourceLabel(sourceStateQuery.data?.active_source)}`,
               `Freshness: ${journeysSummary?.data_freshness_hours != null ? `${Math.round(Number(journeysSummary.data_freshness_hours))}h lag` : 'unavailable'}`,
               `KPI coverage: ${formatPercent(readiness?.summary?.primary_kpi_coverage)}`,
@@ -634,7 +634,7 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
       filters={
         <div style={{ display: 'flex', gap: t.space.sm, flexWrap: 'wrap', alignItems: 'center' }}>
           <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
-            Focus segment
+            Analytical segment
             <select
               value={selectedSegmentId}
               onChange={(e) => setSelectedSegmentId(e.target.value)}
@@ -659,9 +659,14 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
       <SurfaceBasisNotice marginTop={t.space.sm} marginBottom={t.space.lg}>
         This page is a <strong>mixed-basis</strong> workspace. Live attribution diagnostics use the selected config
         {configId ? ` ${configId.slice(0, 8)}…` : ''}, while stored path outputs remain workspace-level. Use this view to understand divergence, not to assume every card is filtered by the selected config in the same way.
+        {latestReplay?.diagnostics?.events_loaded ? (
+          <>
+            {' '}Latest replay basis is <strong>Pipes raw events</strong> with {Number(latestReplay.diagnostics.events_loaded || 0).toLocaleString()} events.
+          </>
+        ) : null}
         {selectedSegment ? (
           <>
-            {' '}Focus segment <strong>{selectedSegment.name}</strong> stays analytical here and does not narrow the workspace-wide reconciliation card below.
+            {' '}Analytical segment <strong>{selectedSegment.name}</strong> stays analytical here and does not narrow the workspace-wide reconciliation card below.
           </>
         ) : null}
       </SurfaceBasisNotice>

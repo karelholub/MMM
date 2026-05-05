@@ -4,6 +4,17 @@ import { apiGetJson, apiSendJson, withQuery } from '../lib/apiClient'
 export interface MeiroConfig {
   connected: boolean
   api_base_url: string | null
+  target_instance_url?: string | null
+  target_instance_host?: string | null
+  strict_instance_scope?: boolean
+  cdp_instance_scope?: {
+    status: 'not_configured' | 'in_scope' | 'out_of_scope' | string
+    configured_url?: string | null
+    configured_host?: string | null
+    target_url?: string | null
+    target_host?: string | null
+    reason?: string | null
+  }
   last_test_at: string | null
   has_key: boolean
   webhook_url: string
@@ -123,6 +134,7 @@ export interface MeiroPullConfig {
 export interface MeiroWebhookSuggestions {
   generated_at: string
   events_analyzed: number
+  analysis_source?: 'event_archive' | 'webhook_history' | string
   total_conversions_observed: number
   total_touchpoints_observed: number
   event_stream_diagnostics?: {
@@ -156,6 +168,25 @@ export interface MeiroWebhookSuggestions {
     recommended_action?: string
     payload?: Record<string, unknown>
   }>
+  taxonomy_suggestions?: {
+    channel_rules?: Array<Record<string, unknown>>
+    source_aliases?: Record<string, string>
+    medium_aliases?: Record<string, string>
+    top_sources?: Array<{ source: string; count: number }>
+    top_mediums?: Array<{ medium: string; count: number }>
+    top_campaigns?: Array<{ campaign: string; count: number }>
+    observed_pairs?: Array<{ source: string; medium: string; count: number }>
+    unresolved_pairs?: Array<{ source: string; medium: string; count: number }>
+  }
+  mapping_suggestions?: {
+    touchpoint_attr_candidates?: Array<{ path: string; count: number }>
+    value_field_candidates?: Array<{ path: string; count: number }>
+    currency_field_candidates?: Array<{ path: string; count: number }>
+    channel_field_candidates?: Array<{ path: string; count: number }>
+    source_field_candidates?: Array<{ path: string; count: number }>
+    medium_field_candidates?: Array<{ path: string; count: number }>
+    campaign_field_candidates?: Array<{ path: string; count: number }>
+  }
   apply_payloads?: {
     sanitation?: Record<string, unknown>
     [key: string]: unknown
@@ -212,6 +243,45 @@ export interface MeiroQuarantineReprocessResult {
   existing_count: number
   persisted_count: number
   import_summary?: Record<string, unknown>
+}
+
+export type MeiroNativeCampaignChannel = 'email' | 'push' | 'whatsapp'
+
+export interface MeiroApiStatus {
+  configured: boolean
+  domain: string | null
+  username: string | null
+  has_password: boolean
+  timeout_ms: number
+  token_cached: boolean
+  last_login_at?: string | null
+}
+
+export interface MeiroNativeCampaign {
+  id: string
+  channel: MeiroNativeCampaignChannel
+  name: string
+  deleted: boolean
+  modifiedAt?: string | null
+  lastActivationAt?: string | null
+  schedules?: unknown[]
+  segmentIds?: string[]
+  frequencyCap?: unknown
+  raw?: Record<string, unknown>
+}
+
+export interface MeiroWbsProfile {
+  status: string
+  customerEntityId?: string | null
+  returnedAttributes: Record<string, unknown>
+  data: Record<string, unknown>
+  raw: Record<string, unknown>
+}
+
+export interface MeiroWbsSegments {
+  status: string
+  segmentIds: string[]
+  raw: Record<string, unknown>
 }
 
 export async function connectMeiroCDP(params: { api_base_url: string; api_key: string }) {
@@ -326,4 +396,61 @@ export async function getMeiroQuarantineRun(runId: string): Promise<MeiroQuarant
   return apiGetJson<MeiroQuarantineRun>(`/api/connectors/meiro/quarantine/${runId}`, {
     fallbackMessage: 'Failed to fetch Meiro quarantine run',
   })
+}
+
+export async function getMeiroApiStatus(): Promise<MeiroApiStatus> {
+  return apiGetJson<MeiroApiStatus>('/v1/meiro/api/status', {
+    fallbackMessage: 'Failed to fetch Meiro API status',
+  })
+}
+
+export async function checkMeiroApiLogin(): Promise<MeiroApiStatus & { ok: boolean }> {
+  return apiSendJson<MeiroApiStatus & { ok: boolean }>('/v1/meiro/api/check-login', 'POST', undefined, {
+    fallbackMessage: 'Meiro API login check failed',
+  })
+}
+
+export async function getMeiroNativeCampaigns(params: {
+  channel?: MeiroNativeCampaignChannel
+  limit?: number
+  offset?: number
+  q?: string
+  includeDeleted?: boolean
+} = {}): Promise<{ items: MeiroNativeCampaign[]; total: number; limit: number; offset: number }> {
+  return apiGetJson<{ items: MeiroNativeCampaign[]; total: number; limit: number; offset: number }>(
+    withQuery('/v1/meiro/native-campaigns', params),
+    { fallbackMessage: 'Failed to fetch Meiro campaigns' },
+  )
+}
+
+export async function getMeiroNativeCampaign(
+  channel: MeiroNativeCampaignChannel,
+  id: string,
+): Promise<MeiroNativeCampaign> {
+  return apiGetJson<MeiroNativeCampaign>(
+    `/v1/meiro/native-campaigns/${encodeURIComponent(channel)}/${encodeURIComponent(id)}`,
+    { fallbackMessage: 'Failed to fetch Meiro campaign' },
+  )
+}
+
+export async function lookupMeiroWbsProfile(params: {
+  attribute: string
+  value: string
+  categoryId?: string
+}): Promise<MeiroWbsProfile> {
+  return apiGetJson<MeiroWbsProfile>(
+    withQuery('/v1/meiro/audience/profile', params),
+    { fallbackMessage: 'Failed to fetch Meiro WBS profile' },
+  )
+}
+
+export async function lookupMeiroWbsSegments(params: {
+  attribute: string
+  value: string
+  tag?: string
+}): Promise<MeiroWbsSegments> {
+  return apiGetJson<MeiroWbsSegments>(
+    withQuery('/v1/meiro/audience/segments', params),
+    { fallbackMessage: 'Failed to fetch Meiro WBS segments' },
+  )
 }

@@ -340,6 +340,11 @@ export default function PathArchetypes() {
 
   const data = archetypesQuery.data
   const clustersRaw = data?.clusters ?? []
+  const latestEventReplay = journeys?.readiness?.details?.latest_event_replay ?? journeys?.readiness?.summary?.latest_event_replay ?? null
+  const latestEventReplayDiagnostics = latestEventReplay?.diagnostics
+  const sourceLineage = latestEventReplayDiagnostics?.events_loaded
+    ? 'Pipes raw events -> replay/import -> live attribution journeys'
+    : 'Live attribution journeys'
 
   const periodLabel =
     globalDateFrom && globalDateTo
@@ -541,7 +546,7 @@ export default function PathArchetypes() {
               </select>
             </label>
             <label style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
-              Focus segment
+              Analytical segment
               <select
                 value={selectedSegmentId}
                 onChange={(e) => setSelectedSegmentId(e.target.value)}
@@ -555,7 +560,7 @@ export default function PathArchetypes() {
                   maxWidth: 260,
                 }}
               >
-                <option value="">All journeys / no saved segment</option>
+                <option value="">All journeys / no analytical segment</option>
                 {compatibleSegments.map((segment) => (
                   <option key={segment.id} value={segment.id}>
                     {segmentOptionLabel(segment)}
@@ -773,7 +778,7 @@ export default function PathArchetypes() {
 
       {journeys?.readiness && (journeys.readiness.status === 'blocked' || journeys.readiness.warnings.length > 0) ? (
         <DecisionStatusCard
-          title="Archetype Reliability Warning"
+          title="Archetype Input Reliability"
           status={journeys.readiness.status}
           blockers={journeys.readiness.blockers}
           warnings={journeys.readiness.warnings.slice(0, 3)}
@@ -785,13 +790,14 @@ export default function PathArchetypes() {
           minItemWidth={220}
           items={[
             { label: 'Source', value: 'Live attribution journeys' },
+            { label: 'Source lineage', value: sourceLineage },
             { label: 'Selected period', value: periodLabel },
             {
               label: 'Config basis',
               value: selectedConfigId ? `Live attribution · selected config ${selectedConfigId.slice(0, 8)}… applied` : 'Live attribution',
             },
             { label: 'Conversion KPI', value: conversionLabel },
-            { label: 'Focus segment', value: selectedSegment ? selectedSegment.name : 'All journeys' },
+            { label: 'Analytical segment', value: selectedSegment ? selectedSegment.name : 'All journeys' },
             { label: 'Direct handling', value: directMode },
             {
               label: 'Converted journeys used',
@@ -801,6 +807,11 @@ export default function PathArchetypes() {
         />
         <SurfaceBasisNotice marginTop={tkn.space.sm}>
           Path Archetypes is a <strong>live config-aware</strong> clustering view. It is directly comparable to Attribution Comparison and Attribution Roles, but not to materialized journey-definition pages unless those pages explicitly say they share the same basis.
+          {latestEventReplayDiagnostics?.events_loaded ? (
+            <>
+              {' '}Current live attribution is fed by the latest Pipes raw-event replay: <strong>{latestEventReplayDiagnostics.events_loaded.toLocaleString()}</strong> events loaded and <strong>{(latestEventReplayDiagnostics.journeys_persisted ?? 0).toLocaleString()}</strong> journeys persisted.
+            </>
+          ) : null}
         </SurfaceBasisNotice>
       </div>
       {segmentComparison ? (
@@ -970,7 +981,7 @@ export default function PathArchetypes() {
             </div>
             {selectedSegment ? (
               <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>
-                Focus segment <strong style={{ color: tkn.color.text }}>{selectedSegment.name}</strong> filters the underlying live journeys before clustering using its saved analytical dimensions.
+                Analytical segment <strong style={{ color: tkn.color.text }}>{selectedSegment.name}</strong> filters the underlying live journeys before clustering using its saved analytical dimensions.
               </div>
             ) : null}
             <div style={{ fontSize: tkn.font.sizeSm, color: tkn.color.textSecondary }}>

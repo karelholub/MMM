@@ -64,8 +64,12 @@ class BuildFromPlatformRequest(BaseModel):
     spend_channels: List[str]
     covariates: Optional[List[str]] = None
     currency: str = "USD"
+    media_input_mode: str = "spend"
+    include_synthetic_impressions: bool = True
     attribution_model: Optional[str] = None
     attribution_config_id: Optional[str] = None
+    source_contract: Optional[Dict[str, Any]] = None
+    measurement_audience: Optional[Dict[str, Any]] = None
 
 
 class ValidateMappingRequest(BaseModel):

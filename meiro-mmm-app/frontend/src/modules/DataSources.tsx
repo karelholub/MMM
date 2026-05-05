@@ -49,6 +49,7 @@ import { useWorkspaceContext, type JourneysSummary } from '../components/Workspa
 import { navigateForRecommendedAction } from '../lib/recommendedActions'
 import MeiroIntegrationPanel from '../features/meiro/MeiroIntegrationPanel'
 import ActivationMeasurementShortcuts from '../features/meiro/ActivationMeasurementShortcuts'
+import MeiroTargetInstanceBadge from '../features/meiro/MeiroTargetInstanceBadge'
 import {
   DEFAULT_MEIRO_PULL_CONFIG,
   normalizeMeiroPullConfig,
@@ -78,12 +79,17 @@ interface DataSourcesReadinessResponse {
   summary: {
     journeys_loaded: number
     connected_sources: number
+    configured_external_sources?: number
     warehouse_sources: number
     ad_platform_sources: number
     overall_import_freshness: string
     healthy_import_sources: number
     syncing_sources: number
     meiro_status: string
+    meiro_active_source?: boolean
+    meiro_primary_source?: string | null
+    meiro_profile_payloads?: number
+    meiro_event_payloads?: number
   }
   blockers: string[]
   warnings: string[]
@@ -179,6 +185,16 @@ function relativeTime(iso?: string | null) {
   const h = Math.floor(m / 60)
   if (h < 24) return `${h}h ago`
   return `${Math.floor(h / 24)}d ago`
+}
+
+function meiroSourceLabel(config?: { connected?: boolean; primary_ingest_source?: string; webhook_received_count?: number; event_webhook_received_count?: number } | null) {
+  if (!config) return 'Configure Meiro Measurement Pipeline'
+  const rawEvents = Number(config.event_webhook_received_count || 0)
+  const profilePayloads = Number(config.webhook_received_count || 0)
+  if (config.primary_ingest_source === 'events' && rawEvents > 0) return `Pipes raw events · ${rawEvents.toLocaleString()} received`
+  if (profilePayloads > 0) return `Pipes profile webhook · ${profilePayloads.toLocaleString()} received`
+  if (config.connected) return 'CDP pull connected'
+  return 'Configure Meiro Measurement Pipeline'
 }
 
 function disabledReason(canManageSettings: boolean, item: { can_start?: boolean; missing_config_reason?: string | null }) {
@@ -845,9 +861,9 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
       name: 'Meiro',
       type: 'meiro',
       category: 'cdp',
-      status: meiroConfigQuery.data?.connected ? 'connected' : 'not_connected',
-      last_tested_at: meiroConfigQuery.data?.last_test_at || null,
-      note: meiroConfigQuery.data?.api_base_url || 'Configure CDP pull and Pipes webhook',
+      status: meiroConfigQuery.data?.connected || Number(meiroConfigQuery.data?.webhook_received_count || 0) > 0 || Number(meiroConfigQuery.data?.event_webhook_received_count || 0) > 0 ? 'connected' : 'not_connected',
+      last_tested_at: meiroConfigQuery.data?.event_webhook_last_received_at || meiroConfigQuery.data?.webhook_last_received_at || meiroConfigQuery.data?.last_test_at || null,
+      note: meiroSourceLabel(meiroConfigQuery.data),
     },
   ]
 
@@ -1077,6 +1093,7 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
         description="Data Ops control-plane for journeys ingestion and connected systems."
       >
         <div style={{ display: 'grid', gap: t.space.xl }}>
+          <MeiroTargetInstanceBadge config={meiroConfigQuery.data} compact />
           {oauthToast && (
             <SectionCard title="Connection update">
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'center' }}>
@@ -1155,7 +1172,7 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
           >
             <div style={{ marginBottom: t.space.md }}>
               <AnalyticsToolbar
-                summary={`Current ingestion method: ${ingestionMethod === 'sample' ? 'Sample data' : ingestionMethod === 'upload' ? 'Upload JSON' : 'Import from Meiro'}.`}
+                summary={`Current ingestion method: ${ingestionMethod === 'sample' ? 'Sample data' : ingestionMethod === 'upload' ? 'Upload JSON' : meiroSourceLabel(meiroConfigQuery.data)}.`}
                 actions={
                   <>
                     {([

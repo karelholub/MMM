@@ -33,7 +33,7 @@ def test_overview_trend_insights_returns_decomposition_momentum_and_mix_shift(mo
 
     calls = {"count": 0}
 
-    def _fake_aggregate_channel_metrics(db, *, dt_from, dt_to, conversion_key=None):
+    def _fake_aggregate_channel_metrics(db, *, dt_from, dt_to, conversion_key=None, **kwargs):
         calls["count"] += 1
         return current if calls["count"] == 1 else previous
 

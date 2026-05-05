@@ -114,6 +114,36 @@ def test_activation_measurement_matches_native_meiro_campaign_alias():
     assert summary["summary"]["conversions"] == 1
 
 
+def test_activation_measurement_can_scope_to_meiro_segment():
+    journeys = _journeys()
+    journeys[0]["segments"] = [{"id": "vip", "name": "VIP buyers"}]
+    journeys[1]["segments"] = [{"id": "winback", "name": "Winback"}]
+
+    summary = build_activation_measurement_summary(
+        journeys=journeys,
+        object_type="campaign",
+        object_id="spring_hero",
+        segment_id="meiro:vip",
+        segment_aliases=["VIP buyers"],
+    )
+
+    assert summary["period"]["segment_id"] == "vip"
+    assert summary["summary"]["matched_touchpoints"] == 1
+    assert summary["summary"]["matched_profiles"] == 1
+    assert summary["summary"]["conversions"] == 1
+
+    evidence = build_activation_measurement_evidence(
+        journeys=journeys,
+        object_type="campaign",
+        object_id="spring_hero",
+        segment_id="vip",
+    )
+
+    assert evidence["period"]["segment_id"] == "vip"
+    assert evidence["total_matches"] == 1
+    assert evidence["items"][0]["profile_id"] == "cust-1"
+
+
 def test_activation_measurement_matches_creative_asset_alias():
     summary = build_activation_measurement_summary(
         journeys=_journeys(),

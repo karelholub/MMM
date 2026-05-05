@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
 import math
 import statistics
+import urllib.parse
+import urllib.request
 import uuid
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import func
@@ -46,6 +50,9 @@ SEGMENT_FIELD_SPECS: Dict[str, Dict[str, Any]] = {
     "net_conversions_total": {"label": "Net conversions", "kind": "numeric", "operators": {"gte", "lte"}},
     "gross_conversions_total": {"label": "Gross conversions", "kind": "numeric", "operators": {"gte", "lte"}},
 }
+DATA_DIR = Path(__file__).resolve().parent / "data"
+DECIENGINE_EVENTS_CONFIG_PATH = DATA_DIR / "deciengine_events_config.json"
+DECIENGINE_PIPES_REGISTRY_CACHE_PATH = DATA_DIR / "deciengine_pipes_field_registry_cache.json"
 
 
 def _new_id() -> str:
@@ -830,7 +837,15 @@ def _normalize_meiro_segment(raw: Dict[str, Any], *, workspace_id: str) -> Dict[
         or ""
     )
     name = raw.get("name") or raw.get("title") or raw.get("label") or str(segment_id or "Unnamed segment")
-    count = raw.get("profiles_count") or raw.get("count") or raw.get("size") or raw.get("estimated_count")
+    count = (
+        raw.get("profiles_count")
+        or raw.get("profile_count")
+        or raw.get("profileCount")
+        or raw.get("count")
+        or raw.get("size")
+        or raw.get("estimated_count")
+    )
+    size_value = int(count) if isinstance(count, (int, float)) else None
     return {
         "id": f"meiro:{segment_id}" if segment_id else f"meiro:{name}",
         "external_segment_id": str(segment_id or name),
@@ -850,7 +865,20 @@ def _normalize_meiro_segment(raw: Dict[str, Any], *, workspace_id: str) -> Dict[
         "definition_version": "external",
         "segment_family": "operational_external",
         "compatibility": {"filter_keys": [], "auto_filter_compatible": False, "advanced": True},
-        "size": int(count) if isinstance(count, (int, float)) else None,
+        "size": size_value,
+        "audience_capability": {
+            "level": "estimated_reach" if size_value is not None and size_value > 0 else "definition_only",
+            "label": "Estimated reach" if size_value is not None and size_value > 0 else "Definition only",
+            "membership_backed": False,
+            "activation_ready": True,
+            "measurement_ready": False,
+            "profile_count": size_value,
+            "reason": (
+                "External audience provides an estimated profile count, but profile membership is not present in measurement journeys."
+                if size_value is not None and size_value > 0
+                else "Audience definition is available, but profile membership has not been observed in the MMM workspace."
+            ),
+        },
         "raw": raw,
     }
 
@@ -978,6 +1006,15 @@ def _list_webhook_derived_meiro_segments(
             "derived_from": "webhook_payload",
             "ingestion_sources": sources,
         }
+        segment["audience_capability"] = {
+            "level": "membership_backed",
+            "label": "Membership backed",
+            "membership_backed": True,
+            "activation_ready": True,
+            "measurement_ready": True,
+            "profile_count": len(payload["profile_ids"]),
+            "reason": "Profile membership was observed in Meiro Pipes webhook/profile state, so this audience can scope activation measurement when journeys carry membership.",
+        }
         segment["criteria_label"] = "Operational audience from Meiro Pipes webhook payloads"
         segment["description"] = (
             f"Derived from Meiro Pipes webhook payloads ({', '.join(sources)})"
@@ -985,6 +1022,154 @@ def _list_webhook_derived_meiro_segments(
             else "Derived from Meiro Pipes webhook payloads"
         )
         items.append(segment)
+    return items
+
+
+def list_membership_profile_ids_for_external_segment(db: Session, external_segment_id: str) -> List[str]:
+    target_id = str(external_segment_id or "").strip()
+    if not target_id:
+        return []
+    profile_ids: set[str] = set()
+
+    def _record(profile_id: Any, profile_json: Any) -> None:
+        normalized_profile_id = str(profile_id or "").strip()
+        if not normalized_profile_id or not isinstance(profile_json, dict):
+            return
+        for membership in _extract_segment_memberships(profile_json):
+            if str(membership.get("id") or "").strip() == target_id:
+                profile_ids.add(normalized_profile_id)
+
+    try:
+        for profile_id, profile_json in db.query(MeiroProfileFact.profile_id, MeiroProfileFact.profile_json).all():
+            _record(profile_id, profile_json)
+    except (SQLAlchemyError, UnicodeDecodeError, ValueError):
+        pass
+    try:
+        for profile_id, profile_json in db.query(MeiroEventProfileState.profile_id, MeiroEventProfileState.profile_json).all():
+            _record(profile_id, profile_json)
+    except (SQLAlchemyError, UnicodeDecodeError, ValueError):
+        pass
+    return sorted(profile_ids)
+
+
+def _normalize_deciengine_events_config(payload: Any) -> Dict[str, Any]:
+    raw = payload if isinstance(payload, dict) else {}
+    source_url = str(raw.get("source_url") or "http://host.docker.internal:3001/v1/inapp/events").strip()
+    user_email = str(raw.get("user_email") or "").strip()
+    user_role = str(raw.get("user_role") or "").strip()
+    user_id = str(raw.get("user_id") or "").strip()
+    return {
+        "source_url": source_url,
+        "user_email": user_email or None,
+        "user_role": user_role or None,
+        "user_id": user_id or None,
+    }
+
+
+def _load_deciengine_events_config_for_segments() -> Dict[str, Any]:
+    if not DECIENGINE_EVENTS_CONFIG_PATH.exists():
+        return _normalize_deciengine_events_config({})
+    try:
+        return _normalize_deciengine_events_config(json.loads(DECIENGINE_EVENTS_CONFIG_PATH.read_text()))
+    except Exception:
+        return _normalize_deciengine_events_config({})
+
+
+def _deciengine_base_url(source_url: str) -> Optional[str]:
+    parsed = urllib.parse.urlparse(str(source_url or "").strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, "", "", "", "")).rstrip("/")
+
+
+def _fetch_deciengine_pipes_field_registry() -> Optional[Dict[str, Any]]:
+    config = _load_deciengine_events_config_for_segments()
+    base_url = _deciengine_base_url(str(config.get("source_url") or ""))
+    if not base_url:
+        return None
+    headers = {"Accept": "application/json"}
+    if config.get("user_email"):
+        headers["X-User-Email"] = str(config["user_email"])
+    if config.get("user_role"):
+        headers["X-User-Role"] = str(config["user_role"])
+    if config.get("user_id"):
+        headers["X-User-Id"] = str(config["user_id"])
+    request = urllib.request.Request(f"{base_url}/v1/settings/pipes-prism/field-registry", headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=8) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _load_cached_deciengine_pipes_field_registry() -> Optional[Dict[str, Any]]:
+    if not DECIENGINE_PIPES_REGISTRY_CACHE_PATH.exists():
+        return None
+    try:
+        payload = json.loads(DECIENGINE_PIPES_REGISTRY_CACHE_PATH.read_text())
+    except Exception:
+        return None
+    registry = payload.get("registry") if isinstance(payload, dict) else None
+    return registry if isinstance(registry, dict) else None
+
+
+def _save_deciengine_pipes_field_registry_cache(registry: Dict[str, Any]) -> None:
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        DECIENGINE_PIPES_REGISTRY_CACHE_PATH.write_text(
+            json.dumps(
+                {
+                    "cached_at": datetime.utcnow().isoformat() + "Z",
+                    "source": "deciengine_pipes_field_registry",
+                    "registry": registry,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+    except Exception:
+        pass
+
+
+def _list_deciengine_pipes_registry_segments(
+    *,
+    workspace_id: str,
+    refresh: bool = False,
+) -> List[Dict[str, Any]]:
+    registry = _fetch_deciengine_pipes_field_registry() if refresh else None
+    if registry:
+        _save_deciengine_pipes_field_registry_cache(registry)
+    else:
+        registry = _load_cached_deciengine_pipes_field_registry()
+    audiences = registry.get("audiences") if isinstance(registry, dict) else None
+    if not isinstance(audiences, list):
+        return []
+
+    items: List[Dict[str, Any]] = []
+    for raw in audiences:
+        if not isinstance(raw, dict):
+            continue
+        normalized = _normalize_meiro_segment(raw, workspace_id=workspace_id)
+        normalized["source"] = "meiro_pipes_registry"
+        normalized["source_label"] = "Meiro Pipes registry"
+        normalized["description"] = raw.get("description") or "Imported from deciEngine Pipes field registry"
+        normalized["criteria_label"] = "Operational audience from deciEngine Pipes registry"
+        normalized["definition"] = {
+            **dict(normalized.get("definition") or {}),
+            "derived_from": "deciengine_pipes_field_registry",
+            "registry_source": "pipes_cli",
+        }
+        normalized["audience_capability"] = {
+            "level": "definition_only",
+            "label": "Definition only",
+            "membership_backed": False,
+            "activation_ready": True,
+            "measurement_ready": False,
+            "profile_count": normalized.get("size"),
+            "reason": "Imported from the deciEngine Pipes registry. It is safe as an operational audience reference, but measurement scoping needs observed membership.",
+        }
+        items.append(normalized)
     return items
 
 
@@ -1025,6 +1210,16 @@ def _merge_meiro_registry_items(*collections: List[Dict[str, Any]]) -> List[Dict
             if incoming_definition.get("external_segment_id") and not existing_definition.get("external_segment_id"):
                 existing_definition["external_segment_id"] = incoming_definition.get("external_segment_id")
             existing["definition"] = existing_definition
+            existing_capability = dict(existing.get("audience_capability") or {})
+            incoming_capability = dict(item.get("audience_capability") or {})
+            if incoming_capability.get("membership_backed") or incoming_capability.get("measurement_ready"):
+                existing["audience_capability"] = incoming_capability
+            elif not existing_capability:
+                existing["audience_capability"] = incoming_capability
+            elif existing_capability.get("level") == "definition_only" and incoming_capability.get("level") == "estimated_reach":
+                existing["audience_capability"] = incoming_capability
+            if existing.get("audience_capability") and existing.get("size") is not None:
+                existing["audience_capability"]["profile_count"] = existing.get("size")
             existing["criteria_label"] = "Operational audience from Meiro Pipes"
             merged[key] = existing
     return sorted(
@@ -1043,8 +1238,8 @@ def list_meiro_segment_registry(
     source: str = "all",
 ) -> Dict[str, Any]:
     normalized_source = str(source or "all").strip().lower()
-    if normalized_source not in {"all", "cdp", "pipes_webhook"}:
-        raise ValueError("source must be one of: all, cdp, pipes_webhook")
+    if normalized_source not in {"all", "cdp", "pipes_webhook", "pipes_registry"}:
+        raise ValueError("source must be one of: all, cdp, pipes_webhook, pipes_registry")
     meiro_cdp_segments: List[Dict[str, Any]] = []
     if normalized_source in {"all", "cdp"} and meiro_cdp.is_connected():
         try:
@@ -1060,7 +1255,15 @@ def list_meiro_segment_registry(
         if normalized_source in {"all", "pipes_webhook"}
         else []
     )
-    meiro_segments = _merge_meiro_registry_items(meiro_cdp_segments, webhook_meiro_segments)
+    pipes_registry_segments = (
+        _list_deciengine_pipes_registry_segments(
+            workspace_id=workspace_id,
+            refresh=normalized_source == "pipes_registry",
+        )
+        if normalized_source in {"all", "pipes_registry"}
+        else []
+    )
+    meiro_segments = _merge_meiro_registry_items(meiro_cdp_segments, webhook_meiro_segments, pipes_registry_segments)
     return {
         "items": meiro_segments,
         "summary": {
@@ -1068,6 +1271,7 @@ def list_meiro_segment_registry(
             "meiro_pipes": len(meiro_segments),
             "cdp_segments": len(meiro_cdp_segments),
             "pipes_webhook_segments": len(webhook_meiro_segments),
+            "pipes_registry_segments": len(pipes_registry_segments),
             "activation_ready": sum(1 for item in meiro_segments if item.get("supports_activation")),
         },
     }

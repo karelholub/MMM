@@ -24,6 +24,14 @@ from app.services_budget_recommendations import (
 )
 from app.services_budget_realization import list_budget_realization, record_budget_realization_snapshot
 from app.services_mmm_quality import evaluate_mmm_run_quality
+from app.services_segments import list_membership_profile_ids_for_external_segment
+from app.services_walled_garden import (
+    is_walled_garden,
+    load_ads_delivery_rows,
+    normalize_channel,
+    source_channel_from_synthetic_column,
+    synthetic_column,
+)
 
 
 def create_router(
@@ -33,6 +41,7 @@ def create_router(
     get_datasets_obj: Callable[[], Dict[str, Dict[str, Any]]],
     get_expenses_obj: Callable[[], Dict[str, Any]],
     get_settings_obj: Callable[[], Any],
+    get_data_dir_obj: Callable[[], Path],
     get_mmm_platform_dir_obj: Callable[[], Path],
     ensure_journeys_loaded_fn: Callable[..., Any],
     now_iso_fn: Callable[[], str],
@@ -232,6 +241,23 @@ def create_router(
             basis[ch] = {"roi": roi, "spend": spend, "contribution": contribution}
         return basis
 
+    def _dataset_metadata(dataset_id: Any) -> Dict[str, Any]:
+        if not dataset_id:
+            return {}
+        dataset_info = get_datasets_obj().get(str(dataset_id)) or {}
+        metadata = dataset_info.get("metadata") or {}
+        return metadata if isinstance(metadata, dict) else {}
+
+    def _journey_profile_id(journey: Dict[str, Any]) -> str:
+        customer = journey.get("customer") if isinstance(journey.get("customer"), dict) else {}
+        return str(
+            customer.get("id")
+            or journey.get("customer_id")
+            or journey.get("profile_id")
+            or journey.get("user_id")
+            or ""
+        ).strip()
+
     def _mark_stale_mmm_runs() -> None:
         runs = get_runs_obj()
         now = _parse_run_ts(now_iso_fn()) or datetime.now(timezone.utc)
@@ -269,13 +295,66 @@ def create_router(
             ch = exp.get("channel") if isinstance(exp, dict) else getattr(exp, "channel", None)
             if ch:
                 channels.add(ch)
-        return {"spend_channels": sorted(channels), "covariates": []}
+        delivery_rows = load_ads_delivery_rows(
+            get_data_dir_obj(),
+            date_start="1970-01-01",
+            date_end="2999-12-31",
+        )
+        delivery_channels = sorted({normalize_channel(row.get("channel")) for row in delivery_rows if row.get("channel")})
+        channels.update(delivery_channels)
+        return {
+            "spend_channels": sorted(channels),
+            "covariates": [],
+            "walled_garden_channels": delivery_channels,
+            "media_input_modes": [
+                {
+                    "id": "spend",
+                    "label": "Spend response",
+                    "description": "Model profit or conversions from spend while adding synthetic impressions as diagnostics.",
+                },
+                {
+                    "id": "synthetic_impressions",
+                    "label": "Synthetic impression response",
+                    "description": "Model the media response from normalized walled-garden exposure pressure.",
+                },
+            ],
+        }
 
     @router.post("/api/mmm/datasets/build-from-platform")
     def build_mmm_dataset_from_platform_endpoint(body: BuildFromPlatformRequest, db=Depends(get_db_dependency)):
         _ensure_mmm_enabled()
         journeys = ensure_journeys_loaded_fn(db)
+        measurement_audience = dict(body.measurement_audience or {})
+        measurement_profile_ids: set[str] = set()
+        if measurement_audience:
+            external_segment_id = str(
+                measurement_audience.get("external_segment_id")
+                or measurement_audience.get("id")
+                or ""
+            ).strip()
+            measurement_profile_ids = set(list_membership_profile_ids_for_external_segment(db, external_segment_id))
+            if not measurement_profile_ids:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Selected measurement audience has no observed profile membership. Use a membership-backed audience or refresh Meiro/Pipes profile state.",
+                )
+            scoped_journeys = [journey for journey in journeys if _journey_profile_id(journey) in measurement_profile_ids]
+            if not scoped_journeys:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Selected measurement audience has membership, but no matching journeys in the selected MMM workspace. Import/replay journeys with profile membership before audience-scoped MMM.",
+                )
+            measurement_audience["materialization_status"] = "journey_rows_filtered"
+            measurement_audience["profile_count"] = len(measurement_profile_ids)
+            measurement_audience["journey_rows"] = len(scoped_journeys)
+            journeys = scoped_journeys
         expenses_list = list(get_expenses_obj().values())
+        media_input_mode = body.media_input_mode if body.media_input_mode in {"spend", "synthetic_impressions"} else "spend"
+        delivery_rows = (
+            load_ads_delivery_rows(get_data_dir_obj(), date_start=body.date_start, date_end=body.date_end)
+            if body.include_synthetic_impressions
+            else []
+        )
         try:
             df, coverage = build_mmm_dataset_from_platform_fn(
                 journeys=journeys,
@@ -286,10 +365,23 @@ def create_router(
                 spend_channels=body.spend_channels,
                 covariates=body.covariates or [],
                 currency=body.currency,
+                delivery_rows=delivery_rows,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         kpi_col = "sales" if body.kpi_target == "sales" else "conversions"
+        modeled_media_channels = (
+            [synthetic_column(ch) for ch in body.spend_channels if is_walled_garden(ch)]
+            if media_input_mode == "synthetic_impressions"
+            else body.spend_channels
+        )
+        if media_input_mode == "synthetic_impressions":
+            total_synthetic = sum(float(df.get(ch, pd.Series(dtype=float)).sum() or 0.0) for ch in modeled_media_channels)
+            if total_synthetic <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No synthetic impressions were found for the selected channels and date range. Import platform delivery metrics or use spend response mode.",
+                )
         dataset_id = f"platform-mmm-{uuid.uuid4().hex[:12]}"
         dest = get_mmm_platform_dir_obj() / f"{dataset_id}.csv"
         df.to_csv(dest, index=False)
@@ -298,11 +390,28 @@ def create_router(
             "period_end": body.date_end,
             "kpi_target": body.kpi_target,
             "kpi_column": kpi_col,
-            "spend_channels": body.spend_channels,
+            "spend_channels": modeled_media_channels,
+            "source_spend_channels": body.spend_channels,
             "covariates": body.covariates or [],
             "currency": body.currency,
             "source": "platform",
+            "source_detail": "platform_journeys_expenses",
+            "media_input_mode": media_input_mode,
+            "synthetic_impressions": {
+                "enabled": body.include_synthetic_impressions,
+                "columns": coverage.get("synthetic_impression_columns", []),
+                "totals": coverage.get("synthetic_impression_totals", {}),
+                "delivery": coverage.get("delivery", {}),
+            },
         }
+        if body.source_contract:
+            metadata["source_contract"] = body.source_contract
+        if measurement_audience:
+            metadata["measurement_audience"] = measurement_audience
+            source_contract = dict(metadata.get("source_contract") or {})
+            source_contract["measurement_audience"] = measurement_audience
+            source_contract["audience_scope"] = f"Measurement audience: {measurement_audience.get('name') or measurement_audience.get('id')}"
+            metadata["source_contract"] = source_contract
         if body.kpi_target == "attribution":
             if body.attribution_model:
                 metadata["attribution_model"] = body.attribution_model
@@ -379,6 +488,14 @@ def create_router(
             runs[run_id]["attribution_model"] = dataset_meta["attribution_model"]
         if dataset_meta.get("attribution_config_id"):
             runs[run_id]["attribution_config_id"] = dataset_meta["attribution_config_id"]
+        if dataset_meta.get("media_input_mode"):
+            runs[run_id]["media_input_mode"] = dataset_meta["media_input_mode"]
+        if dataset_meta.get("synthetic_impressions"):
+            runs[run_id]["synthetic_impressions"] = dataset_meta["synthetic_impressions"]
+        if dataset_meta.get("source_contract"):
+            runs[run_id]["source_contract"] = dataset_meta["source_contract"]
+        if dataset_meta.get("measurement_audience"):
+            runs[run_id]["measurement_audience"] = dataset_meta["measurement_audience"]
         save_runs_fn()
         tasks.add_task(fit_model_fn, run_id, cfg)
         return {"run_id": run_id, "status": "queued"}
@@ -558,6 +675,159 @@ def create_router(
         if not res:
             raise HTTPException(status_code=404, detail="Model not found")
         return res.get("channel_summary", [])
+
+    @router.get("/api/models/{run_id}/walled-garden-impact")
+    def get_walled_garden_impact(run_id: str, db=Depends(get_db_dependency)):
+        _ensure_mmm_enabled()
+        from app.models_config_dq import Experiment, ExperimentResult
+
+        run = get_runs_obj().get(run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Model not found")
+        dataset_id = run.get("dataset_id") or (run.get("config") or {}).get("dataset_id")
+        metadata = _dataset_metadata(dataset_id)
+        synthetic_meta = run.get("synthetic_impressions") or metadata.get("synthetic_impressions") or {}
+        delivery = (synthetic_meta.get("delivery") or {}).get("channels") or {}
+        totals = synthetic_meta.get("totals") or {}
+        columns = synthetic_meta.get("columns") or []
+        media_input_mode = run.get("media_input_mode") or metadata.get("media_input_mode") or "spend"
+        source_channels = metadata.get("source_spend_channels") or (run.get("config") or {}).get("spend_channels") or []
+        basis = _channel_response_basis(run)
+        experiment_rows = (
+            db.query(Experiment, ExperimentResult)
+            .outerjoin(ExperimentResult, ExperimentResult.experiment_id == Experiment.id)
+            .filter(Experiment.channel.in_([normalize_channel(ch) for ch in source_channels] + list(source_channels)))
+            .all()
+        )
+        calibration_by_channel: Dict[str, list[Dict[str, Any]]] = {}
+        for exp, result in experiment_rows:
+            channel_key = normalize_channel(getattr(exp, "channel", None))
+            calibration_by_channel.setdefault(channel_key, []).append(
+                {
+                    "experiment_id": exp.id,
+                    "name": exp.name,
+                    "status": exp.status,
+                    "start_at": exp.start_at.isoformat() if exp.start_at else None,
+                    "end_at": exp.end_at.isoformat() if exp.end_at else None,
+                    "uplift_abs": getattr(result, "uplift_abs", None) if result else None,
+                    "uplift_rel": getattr(result, "uplift_rel", None) if result else None,
+                    "p_value": getattr(result, "p_value", None) if result else None,
+                    "has_result": result is not None,
+                }
+            )
+
+        rows = []
+        for source in source_channels:
+            source_channel = normalize_channel(source)
+            synthetic_col = synthetic_column(source_channel)
+            if not is_walled_garden(source_channel) and synthetic_col not in totals and source_channel not in delivery:
+                continue
+            modeled_channel = synthetic_col if media_input_mode == "synthetic_impressions" else source
+            channel_basis = basis.get(modeled_channel) or basis.get(source_channel) or {}
+            detail = delivery.get(source_channel) or {}
+            synthetic_total = float(totals.get(synthetic_col) or detail.get("synthetic_impressions") or 0.0)
+            spend = float(channel_basis.get("spend") or detail.get("spend") or 0.0)
+            contribution = float(channel_basis.get("contribution") or 0.0)
+            roi = float(channel_basis.get("roi") or 0.0)
+            profit_per_1000_synthetic = contribution / synthetic_total * 1000.0 if synthetic_total > 0 else None
+            calibrations = sorted(
+                calibration_by_channel.get(source_channel, []),
+                key=lambda item: str(item.get("end_at") or item.get("start_at") or ""),
+                reverse=True,
+            )
+            completed_calibrations = [item for item in calibrations if item.get("has_result")]
+            calibration_status = "calibrated" if completed_calibrations else "planned" if calibrations else "not_calibrated"
+            saturation = "unknown"
+            if spend > 0 and synthetic_total > 0:
+                synthetic_per_spend = synthetic_total / spend
+                if roi <= 0:
+                    saturation = "inefficient"
+                elif synthetic_per_spend > 500 and roi < 1:
+                    saturation = "high"
+                elif roi < 1.5:
+                    saturation = "watch"
+                else:
+                    saturation = "room_to_scale"
+            rows.append(
+                {
+                    "source_channel": source_channel,
+                    "modeled_channel": modeled_channel,
+                    "synthetic_column": synthetic_col,
+                    "modeled_from": media_input_mode,
+                    "spend": spend,
+                    "impressions": float(detail.get("impressions") or 0.0),
+                    "synthetic_impressions": synthetic_total,
+                    "contribution": contribution,
+                    "roi": roi,
+                    "profit_per_1000_synthetic_impressions": profit_per_1000_synthetic,
+                    "confidence": detail.get("confidence") or ("low" if synthetic_total <= 0 else "medium"),
+                    "confidence_score": detail.get("confidence_score") or 0.0,
+                    "calibration": {
+                        "status": calibration_status,
+                        "experiments": calibrations[:3],
+                        "latest_result": completed_calibrations[0] if completed_calibrations else None,
+                        "recommendation": (
+                            "Use the latest experiment result to calibrate budget decisions."
+                            if completed_calibrations
+                            else "An experiment exists but has no result yet."
+                            if calibrations
+                            else "Create a geo or audience holdout to calibrate this platform before major budget moves."
+                        ),
+                    },
+                    "saturation": saturation,
+                    "method": detail.get("method") or "synthetic_impressions_v1",
+                    "caveats": detail.get("caveats") or ([] if synthetic_total > 0 else ["No imported delivery metrics were available for this channel."]),
+                }
+            )
+        if not rows and columns:
+            for col in columns:
+                source_channel = source_channel_from_synthetic_column(str(col))
+                rows.append(
+                    {
+                        "source_channel": source_channel,
+                        "modeled_channel": col if media_input_mode == "synthetic_impressions" else source_channel,
+                        "synthetic_column": col,
+                        "modeled_from": media_input_mode,
+                        "spend": 0.0,
+                        "impressions": 0.0,
+                        "synthetic_impressions": float(totals.get(col) or 0.0),
+                        "contribution": 0.0,
+                        "roi": 0.0,
+                        "profit_per_1000_synthetic_impressions": None,
+                        "confidence": "low",
+                        "confidence_score": 0.0,
+                        "calibration": {
+                            "status": "not_calibrated",
+                            "experiments": [],
+                            "latest_result": None,
+                            "recommendation": "Create a geo or audience holdout to calibrate this platform before major budget moves.",
+                        },
+                        "saturation": "unknown",
+                        "method": "synthetic_impressions_v1",
+                        "caveats": ["Synthetic impression metadata exists, but this run has no matching source channel mapping."],
+                    }
+                )
+        rows.sort(key=lambda row: float(row.get("contribution") or 0.0), reverse=True)
+        available = any(float(row.get("synthetic_impressions") or 0.0) > 0 for row in rows)
+        return {
+            "run_id": run_id,
+            "available": available,
+            "media_input_mode": media_input_mode,
+            "method": "synthetic_impressions_v1",
+            "summary": {
+                "channels": len(rows),
+                "channels_with_signal": sum(1 for row in rows if float(row.get("synthetic_impressions") or 0.0) > 0),
+                "total_synthetic_impressions": sum(float(row.get("synthetic_impressions") or 0.0) for row in rows),
+                "modeled_directly": media_input_mode == "synthetic_impressions",
+                "calibrated_channels": sum(1 for row in rows if (row.get("calibration") or {}).get("status") == "calibrated"),
+            },
+            "rows": rows,
+            "explainability": [
+                "Synthetic impressions normalize imported platform delivery into exposure pressure using impressions, reach/frequency when available, video engagement, and clicks.",
+                "MMM contribution and ROI still come from the fitted model; synthetic impressions explain walled-garden delivery pressure behind those modeled outcomes.",
+                "Use low-confidence rows directionally and calibrate them with geo holdouts, lift studies, or campaign pause/budget-shock evidence.",
+            ],
+        }
 
     @router.get("/api/models/{run_id}/summary/campaign")
     def get_campaign_summary(run_id: str):

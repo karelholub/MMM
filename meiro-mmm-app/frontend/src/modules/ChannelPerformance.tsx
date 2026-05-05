@@ -30,6 +30,8 @@ import AnalysisNarrativePanel from '../components/dashboard/AnalysisNarrativePan
 import SegmentComparisonContextNote from '../components/segments/SegmentComparisonContextNote'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import LagInsightsPanel, { type LagInsightsResponse } from '../components/performance/LagInsightsPanel'
+import MeiroTargetInstanceBadge from '../features/meiro/MeiroTargetInstanceBadge'
+import { getMeiroConfig, type MeiroConfig } from '../connectors/meiroConnector'
 import {
   isLocalAnalyticalSegment,
   localSegmentCompatibleWithDimensions,
@@ -485,6 +487,10 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
       apiGetJson<SegmentRegistryResponse>('/api/segments/registry', {
         fallbackMessage: 'Failed to load segment registry',
       }),
+  })
+  const meiroConfigQuery = useQuery<MeiroConfig>({
+    queryKey: ['meiro-config'],
+    queryFn: getMeiroConfig,
   })
 
   const loading = summaryQuery.isLoading
@@ -1190,7 +1196,8 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
       <div style={{ marginBottom: t.space.md }}>
         <ContextSummaryStrip
           items={[
-            { label: 'Source', value: 'Config-aware performance summary' },
+            { label: 'Source basis', value: latestEventReplayDiagnostics?.events_loaded ? 'Pipes raw events -> live attribution' : 'Config-aware performance summary' },
+            { label: 'Target instance', value: meiroConfigQuery.data?.target_instance_host || 'meiro-internal.eu.pipes.meiro.io' },
             { label: 'Period', value: periodLabel },
             { label: 'Conversion', value: `${conversionLabel} (read-only)` },
             {
@@ -1202,6 +1209,9 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
             { label: 'Measurement window', value: measurementWindowLabel },
           ]}
         />
+      </div>
+      <div style={{ marginBottom: t.space.md }}>
+        <MeiroTargetInstanceBadge config={meiroConfigQuery.data} compact />
       </div>
       {mixedBasisActivityWarning ? (
         <SurfaceBasisNotice marginBottom={t.space.md}>
@@ -1329,7 +1339,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
 
       {summaryQuery.data?.readiness && (summaryQuery.data.readiness.status === 'blocked' || summaryQuery.data.readiness.warnings.length > 0) ? (
         <DecisionStatusCard
-          title="Performance Reliability Warning"
+          title="Live Attribution Reliability"
           status={summaryQuery.data.readiness.status}
           blockers={summaryQuery.data.readiness.blockers}
           warnings={summaryQuery.data.readiness.warnings.slice(0, 3)}
@@ -1985,7 +1995,7 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
                       background: t.color.surface,
                     }}
                   >
-                    <option value="">All channels / no saved segment</option>
+                    <option value="">All channels / no analytical segment</option>
                     {compatibleSegments.map((segment) => (
                       <option key={segment.id} value={segment.id}>
                         {segmentOptionLabel(segment)}

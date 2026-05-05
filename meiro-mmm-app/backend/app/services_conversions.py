@@ -670,6 +670,10 @@ def v2_to_legacy(j: Dict[str, Any]) -> Dict[str, Any]:
     cust = j.get("customer") or {}
     convs = j.get("conversions") or []
     primary = convs[0] if convs else {}
+    try:
+        primary_value = float(primary.get("value", 0.0) or 0.0) if primary else 0.0
+    except Exception:
+        primary_value = 0.0
     tps = []
     for tp in j.get("touchpoints") or []:
         lt = {"channel": tp.get("channel", "unknown")}
@@ -705,13 +709,27 @@ def v2_to_legacy(j: Dict[str, Any]) -> Dict[str, Any]:
         for field in ("impression_id", "click_id", "placement_id", "creative_id", "ad_id", "campaign_id"):
             if tp.get(field) not in (None, "", []):
                 lt[field] = tp.get(field)
+        if isinstance(tp.get("meta"), dict):
+            lt["meta"] = tp["meta"]
         tps.append(lt)
     outcome = journey_outcome_summary(j)
+    if primary and abs(float(outcome.get("gross_value", 0.0) or 0.0)) <= 1e-9 and abs(primary_value) > 1e-9:
+        converted = 1.0
+        outcome = {
+            "gross_value": primary_value,
+            "net_value": max(float(outcome.get("net_value", 0.0) or 0.0), primary_value),
+            "refunded_value": float(outcome.get("refunded_value", 0.0) or 0.0),
+            "cancelled_value": float(outcome.get("cancelled_value", 0.0) or 0.0),
+            "gross_conversions": max(float(outcome.get("gross_conversions", 0.0) or 0.0), converted),
+            "net_conversions": max(float(outcome.get("net_conversions", 0.0) or 0.0), converted),
+            "invalid_leads": float(outcome.get("invalid_leads", 0.0) or 0.0),
+            "valid_leads": max(float(outcome.get("valid_leads", 0.0) or 0.0), converted),
+        }
     return {
         "customer_id": cust.get("id", "unknown"),
         "touchpoints": tps,
         "converted": len(convs) > 0,
-        "conversion_value": float(primary.get("value", 0)) if primary else 0.0,
+        "conversion_value": primary_value,
         "kpi_type": primary.get("name") if primary else j.get("kpi_type"),
         "meta": j.get("meta") if isinstance(j.get("meta"), dict) else {},
         "quality_score": journey_quality_score(j),

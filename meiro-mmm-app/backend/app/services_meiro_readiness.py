@@ -78,15 +78,18 @@ def build_meiro_readiness(
     if meiro_connected:
         reasons.append("Meiro CDP connection is configured.")
     else:
-        warnings.append("Meiro CDP pull is not connected.")
-        actions.append(
-            _action(
-                "connect_cdp_pull",
-                "Connect Meiro CDP pull",
-                benefit="Enable manual and scheduled audience API imports",
-                target_tab="cdp",
+        if primary_ingest_source == "events" and (event_webhook_received_count > 0 or event_archive_entries > 0):
+            reasons.append("Meiro CDP pull is not connected; raw Pipes events are the active attribution source.")
+        else:
+            warnings.append("Meiro CDP pull is not connected.")
+            actions.append(
+                _action(
+                    "connect_cdp_pull",
+                    "Connect Meiro CDP pull",
+                    benefit="Enable manual and scheduled audience API imports",
+                    target_tab="cdp",
+                )
             )
-        )
 
     if profile_webhook_received_count > 0:
         reasons.append(f"Meiro Pipes profiles webhook has delivered {profile_webhook_received_count} payloads.")

@@ -7,6 +7,8 @@ import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn } from '../
 import { navigateForRecommendedAction } from '../lib/recommendedActions'
 import { apiGetJson, apiSendJson, withQuery } from '../lib/apiClient'
 import ActivationMeasurementShortcuts from '../features/meiro/ActivationMeasurementShortcuts'
+import MeiroTargetInstanceBadge from '../features/meiro/MeiroTargetInstanceBadge'
+import { getMeiroConfig, type MeiroConfig } from '../connectors/meiroConnector'
 
 // --- Types ---
 
@@ -172,6 +174,7 @@ interface MeiroWebhookArchiveStatus {
   profiles_received?: number
   last_received_at?: string | null
   parser_versions: string[]
+  source_scope?: ArchiveSourceScope
 }
 
 interface MeiroEventArchiveStatus {
@@ -180,6 +183,16 @@ interface MeiroEventArchiveStatus {
   events_received?: number
   last_received_at?: string | null
   parser_versions: string[]
+  source_scope?: ArchiveSourceScope
+}
+
+interface ArchiveSourceScope {
+  target_url?: string
+  target_host?: string
+  verified_entries?: number
+  legacy_unverified_entries?: number
+  out_of_scope_entries?: number
+  status?: string
 }
 
 interface MeiroWebhookReprocessResult {
@@ -367,6 +380,11 @@ export default function DataQuality() {
         withQuery('/api/connectors/meiro/webhook/events', { limit: 100, include_payload: 1 }),
         { fallbackMessage: 'Failed to load Meiro webhook debug log' },
       ),
+  })
+
+  const meiroConfigQuery = useQuery<MeiroConfig>({
+    queryKey: ['meiro-config'],
+    queryFn: getMeiroConfig,
   })
 
   const meiroWebhookSuggestionsQuery = useQuery<MeiroWebhookSuggestions>({
@@ -647,6 +665,34 @@ export default function DataQuality() {
         },
       ]
     : []
+  const rawEventQualityStatus = rawEventDiagnostics?.available
+    ? rawEventDiagnostics.usable_event_name_share >= 0.9 &&
+      rawEventDiagnostics.identity_share >= 0.8 &&
+      rawEventDiagnostics.source_medium_share >= 0.7
+      ? 'Ready'
+      : rawEventDiagnostics.usable_event_name_share >= 0.7 &&
+        rawEventDiagnostics.identity_share >= 0.5 &&
+        rawEventDiagnostics.source_medium_share >= 0.4
+        ? 'Needs mapping'
+        : 'Needs attention'
+    : 'No raw events'
+  const rawEventQualityColor =
+    rawEventQualityStatus === 'Ready'
+      ? t.color.success
+      : rawEventQualityStatus === 'Needs mapping'
+        ? t.color.warning
+        : t.color.danger
+  const rawEventQualityBackground =
+    rawEventQualityStatus === 'Ready'
+      ? t.color.successMuted
+      : rawEventQualityStatus === 'Needs mapping'
+        ? t.color.warningMuted
+        : t.color.dangerMuted
+  const rawEventReplayHint = rawEventDiagnostics?.available
+    ? rawEventDiagnostics.avg_reconstructed_profiles_per_event > 0
+      ? 'Raw batches are replayed into MMM profiles; reconstruction is expected when identity, timestamps, and event names are present.'
+      : 'Raw batches are available, but replay has not reconstructed measurable profile journeys yet.'
+    : 'No usable raw-event diagnostics are available from the Meiro webhook archive.'
   const taxonomySuggestions = meiroWebhookSuggestionsQuery.data?.taxonomy_suggestions
   const topSourceRows = (taxonomySuggestions?.top_sources || []).slice(0, 8)
   const topMediumRows = (taxonomySuggestions?.top_mediums || []).slice(0, 8)
@@ -1132,6 +1178,97 @@ export default function DataQuality() {
         )}
       </div>
 
+      {/* Raw event readiness summary */}
+      <div
+        style={{
+          background: t.color.surface,
+          border: `1px solid ${t.color.borderLight}`,
+          borderRadius: t.radius.lg,
+          padding: t.space.lg,
+          marginBottom: t.space.xl,
+          boxShadow: t.shadowSm,
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
+            gap: t.space.md,
+            flexWrap: 'wrap',
+            marginBottom: t.space.md,
+          }}
+        >
+          <div>
+            <h2 style={{ margin: 0, fontSize: t.font.sizeLg, color: t.color.text }}>Pipes raw-event input</h2>
+            <p style={{ margin: `${t.space.xs}px 0 0`, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Top-level readiness for events replayed from Meiro Pipes into MMM attribution and taxonomy logic.
+            </p>
+          </div>
+          <div style={{ display: 'grid', gap: t.space.xs, justifyItems: 'end' }}>
+            <span
+              style={{
+                padding: '4px 10px',
+                borderRadius: 999,
+                fontSize: t.font.sizeXs,
+                fontWeight: t.font.weightMedium,
+                background: rawEventQualityBackground,
+                color: rawEventQualityColor,
+              }}
+            >
+              {rawEventQualityStatus}
+            </span>
+            <MeiroTargetInstanceBadge config={meiroConfigQuery.data} compact showWarning={false} />
+          </div>
+        </div>
+        {Number(meiroEventArchiveStatusQuery.data?.source_scope?.legacy_unverified_entries || 0) > 0 ? (
+          <div
+            style={{
+              marginBottom: t.space.md,
+              border: `1px solid ${t.color.warning}`,
+              borderRadius: t.radius.md,
+              background: t.color.warningMuted,
+              padding: t.space.md,
+              fontSize: t.font.sizeSm,
+              color: t.color.textSecondary,
+            }}
+          >
+            <strong style={{ color: t.color.text }}>Legacy source note:</strong>{' '}
+            {Number(meiroEventArchiveStatusQuery.data?.source_scope?.legacy_unverified_entries || 0).toLocaleString()} archived raw-event batches predate instance tagging.
+            New batches are tagged against the target Pipes instance.
+          </div>
+        ) : null}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+            gap: t.space.md,
+            marginBottom: t.space.md,
+          }}
+        >
+          {[
+            { label: 'Events examined', value: rawEventDiagnostics?.available ? rawEventDiagnostics.events_examined.toLocaleString() : '—' },
+            { label: 'Usable names', value: rawEventDiagnostics?.available ? `${(rawEventDiagnostics.usable_event_name_share * 100).toFixed(1)}%` : '—' },
+            { label: 'Identity coverage', value: rawEventDiagnostics?.available ? `${(rawEventDiagnostics.identity_share * 100).toFixed(1)}%` : '—' },
+            { label: 'Source / medium', value: rawEventDiagnostics?.available ? `${(rawEventDiagnostics.source_medium_share * 100).toFixed(1)}%` : '—' },
+            { label: 'Conversion linkage', value: rawEventDiagnostics?.available ? `${(rawEventDiagnostics.conversion_linkage_share * 100).toFixed(1)}%` : '—' },
+          ].map((item) => (
+            <div key={item.label} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.md }}>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase', fontWeight: t.font.weightMedium }}>
+                {item.label}
+              </div>
+              <div style={{ marginTop: 4, fontSize: t.font.sizeLg, color: t.color.text, fontWeight: t.font.weightBold }}>
+                {item.value}
+              </div>
+            </div>
+          ))}
+        </div>
+        <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+          {rawEventReplayHint}
+          {rawEventDiagnostics?.warnings?.length ? ` ${rawEventDiagnostics.warnings.slice(0, 2).join(' ')}` : ''}
+        </p>
+      </div>
+
       {/* KPI tiles */}
       <div
         ref={tilesRef}
@@ -1251,7 +1388,7 @@ export default function DataQuality() {
               Meiro Pipes diagnostics
             </h2>
             <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-              Advanced payload debugging for Meiro Pipes. Day-to-day source setup now lives in Data Sources {'>'} Meiro.
+              Advanced payload debugging for Meiro Pipes. Day-to-day source setup now lives in the Meiro Measurement Pipeline.
             </p>
           </div>
           <button
@@ -1331,7 +1468,7 @@ export default function DataQuality() {
               Advanced setup suggestions from Meiro payloads
             </h2>
             <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-              Suggested KPI/conversion and taxonomy defaults from recent Meiro Pipes payloads. Use Data Sources {'>'} Meiro for the primary integration workflow.
+              Suggested KPI/conversion and taxonomy defaults from recent Meiro Pipes payloads. Use the Meiro Measurement Pipeline for the primary integration workflow.
             </p>
           </div>
           <button

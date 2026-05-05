@@ -49,6 +49,13 @@ def build_data_sources_readiness(
     healthy_import_sources = sum(1 for row in import_sources if row.get("status") == "Healthy")
     syncing_sources = sum(1 for row in import_sources if row.get("syncing"))
     meiro_status = str(meiro_readiness.get("status") or "unknown")
+    meiro_summary = meiro_readiness.get("summary") or {}
+    meiro_primary_source = str(meiro_summary.get("primary_ingest_source") or "").strip().lower()
+    meiro_profile_payloads = int(meiro_summary.get("webhook_received_count") or 0)
+    meiro_event_payloads = int(meiro_summary.get("event_webhook_received_count") or 0)
+    meiro_has_payloads = meiro_profile_payloads > 0 or meiro_event_payloads > 0
+    meiro_is_active_source = bool(meiro_summary.get("cdp_connected")) or meiro_has_payloads
+    connected_source_count = len(connected_sources) + (1 if meiro_is_active_source else 0)
 
     if journeys_loaded <= 0:
         blockers.append("No journeys are currently loaded into the workspace.")
@@ -73,7 +80,10 @@ def build_data_sources_readiness(
             )
         )
     elif meiro_status == "warning":
-        warnings.append("Meiro integration still needs review before it can be fully trusted.")
+        if meiro_is_active_source:
+            warnings.append("Meiro/Pipes is active, but the Measurement Pipeline still has warnings to review.")
+        else:
+            warnings.append("Meiro integration still needs review before it can be fully trusted.")
         actions.append(
             _action(
                 "review_meiro_warnings",
@@ -84,6 +94,11 @@ def build_data_sources_readiness(
         )
     else:
         reasons.append("Meiro integration is in a usable state.")
+
+    if meiro_event_payloads > 0:
+        reasons.append(f"Pipes raw events are an active ingestion source with {meiro_event_payloads} received events.")
+    elif meiro_profile_payloads > 0:
+        reasons.append(f"Pipes profile webhook is an active ingestion source with {meiro_profile_payloads} received payloads.")
 
     if overall_import_freshness in {"Broken", "Stale"}:
         warnings.append(f"Ad-platform import freshness is currently {overall_import_freshness.lower()}.")
@@ -99,8 +114,8 @@ def build_data_sources_readiness(
     else:
         reasons.append(f"Overall import freshness is {overall_import_freshness.lower()}.")
 
-    if not connected_sources:
-        warnings.append("No warehouse or ad-platform sources are connected.")
+    if connected_source_count <= 0:
+        warnings.append("No warehouse, ad-platform, or Meiro/Pipes sources are connected.")
         actions.append(
             _action(
                 "connect_sources",
@@ -109,7 +124,7 @@ def build_data_sources_readiness(
             )
         )
     else:
-        reasons.append(f"{len(connected_sources)} connected data sources are available.")
+        reasons.append(f"{connected_source_count} connected data source{'s' if connected_source_count != 1 else ''} are available.")
 
     status = "ready"
     score = 86.0
@@ -134,13 +149,18 @@ def build_data_sources_readiness(
         "confidence": _confidence(score),
         "summary": {
             "journeys_loaded": journeys_loaded,
-            "connected_sources": len(connected_sources),
+            "connected_sources": connected_source_count,
+            "configured_external_sources": len(connected_sources),
             "warehouse_sources": len(warehouse_sources),
             "ad_platform_sources": len(ad_platform_sources),
             "overall_import_freshness": overall_import_freshness,
             "healthy_import_sources": healthy_import_sources,
             "syncing_sources": syncing_sources,
             "meiro_status": meiro_status,
+            "meiro_active_source": meiro_is_active_source,
+            "meiro_primary_source": meiro_primary_source or None,
+            "meiro_profile_payloads": meiro_profile_payloads,
+            "meiro_event_payloads": meiro_event_payloads,
         },
         "blockers": blockers,
         "warnings": warnings,

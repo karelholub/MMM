@@ -19,6 +19,14 @@ export interface MeiroWebhookArchiveStatus {
   events_received?: number
   last_received_at?: string | null
   parser_versions?: string[]
+  source_scope?: {
+    target_url?: string
+    target_host?: string
+    verified_entries?: number
+    legacy_unverified_entries?: number
+    out_of_scope_entries?: number
+    status?: string
+  }
 }
 
 export interface MeiroWebhookReprocessResult {

@@ -17,6 +17,7 @@ type AppPageKey =
   | 'path_archetypes'
   | 'analytics_journeys'
   | 'datasets'
+  | 'documentation'
 
 type PermissionCheckContext = {
   rbacEnabled: boolean

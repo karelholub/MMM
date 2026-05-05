@@ -8,8 +8,28 @@ from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import DatabaseError, OperationalError
 
 from app.models_config_dq import MeiroEventProfileState
+
+
+class MeiroEventProfileStateUnavailableError(RuntimeError):
+    pass
+
+
+def _is_retryable_or_corrupt_sqlite_error(exc: Exception) -> bool:
+    message = str(getattr(exc, "orig", exc) or exc).lower()
+    markers = (
+        "disk i/o error",
+        "database is locked",
+        "database table is locked",
+        "unable to open database file",
+        "readonly database",
+        "cannot commit transaction",
+        "database disk image is malformed",
+        "malformed",
+    )
+    return any(marker in message for marker in markers)
 
 
 def _stable_item_key(item: Dict[str, Any], *, keys: Iterable[str]) -> str:
@@ -89,16 +109,28 @@ def upsert_meiro_event_profile_state(
         if isinstance(profile, dict) and str(profile.get("customer_id") or "").strip()
     }
     if reset:
-        db.query(MeiroEventProfileState).delete(synchronize_session=False)
-        db.commit()
+        try:
+            db.query(MeiroEventProfileState).delete(synchronize_session=False)
+            db.commit()
+        except (OperationalError, DatabaseError) as exc:
+            db.rollback()
+            if _is_retryable_or_corrupt_sqlite_error(exc):
+                raise MeiroEventProfileStateUnavailableError(str(exc)) from exc
+            raise
     if not normalized_profiles:
         return 0
 
-    existing_rows = (
-        db.query(MeiroEventProfileState)
-        .filter(MeiroEventProfileState.profile_id.in_(list(normalized_profiles.keys())))
-        .all()
-    )
+    try:
+        existing_rows = (
+            db.query(MeiroEventProfileState)
+            .filter(MeiroEventProfileState.profile_id.in_(list(normalized_profiles.keys())))
+            .all()
+        )
+    except (OperationalError, DatabaseError) as exc:
+        db.rollback()
+        if _is_retryable_or_corrupt_sqlite_error(exc):
+            raise MeiroEventProfileStateUnavailableError(str(exc)) from exc
+        raise
     existing_by_profile_id = {row.profile_id: row for row in existing_rows}
     updated = 0
     now = datetime.utcnow()
@@ -125,7 +157,13 @@ def upsert_meiro_event_profile_state(
             existing_row.source_snapshot_id = source_snapshot_id
             existing_row.updated_at = now
         updated += 1
-    db.commit()
+    try:
+        db.commit()
+    except (OperationalError, DatabaseError) as exc:
+        db.rollback()
+        if _is_retryable_or_corrupt_sqlite_error(exc):
+            raise MeiroEventProfileStateUnavailableError(str(exc)) from exc
+        raise
     return updated
 
 

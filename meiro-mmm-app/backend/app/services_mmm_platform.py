@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 from .services_metrics import journey_revenue_value
+from .services_walled_garden import aggregate_synthetic_by_week_channel, is_walled_garden, normalize_channel, synthetic_column
 
 # Week start: Monday. Pandas "W-MON" means weeks ending on Monday, so use
 # explicit weekday arithmetic for bucket assignment.
@@ -166,6 +167,7 @@ def build_mmm_dataset_from_platform(
     spend_channels: List[str],
     covariates: Optional[List[str]] = None,
     currency: str = "USD",
+    delivery_rows: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
     Build a wide-format MMM dataset from platform journeys and expenses.
@@ -196,6 +198,8 @@ def build_mmm_dataset_from_platform(
     kpi_series = _aggregate_kpi_by_week(journeys, kpi_target, date_start_ts, date_end_ts)
     kpi_col = "sales" if kpi_target == "sales" else "conversions"
 
+    normalized_spend_channels = [normalize_channel(ch) for ch in spend_channels]
+
     # Spend by week and channel -> dict (date_str -> { channel -> amount })
     spend_df = _aggregate_expenses_by_week_channel(expenses, spend_channels, date_start_ts, date_end_ts)
     spend_by_date: Dict[str, Dict[str, float]] = {}
@@ -219,6 +223,29 @@ def build_mmm_dataset_from_platform(
     result = pd.DataFrame({"date": [w.strftime("%Y-%m-%d") for w in week_range]})
     for ch in spend_channels:
         result[ch] = result["date"].map(lambda d: spend_by_date.get(d, {}).get(ch, 0.0))
+
+    synthetic_details: Dict[str, Any] = {"channels": {}, "method": "synthetic_impressions_v1"}
+    synthetic_df = pd.DataFrame()
+    if delivery_rows:
+        synthetic_df, synthetic_details = aggregate_synthetic_by_week_channel(
+            delivery_rows,
+            channels=normalized_spend_channels,
+            week_start_fn=_week_start,
+            date_start=date_start_ts,
+            date_end=date_end_ts,
+        )
+    synthetic_by_date: Dict[str, Dict[str, float]] = {}
+    if not synthetic_df.empty:
+        for _, row in synthetic_df.iterrows():
+            dt = row["date"]
+            d = dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else pd.to_datetime(dt).strftime("%Y-%m-%d")
+            col = str(row.get("synthetic_column") or synthetic_column(row.get("channel")))
+            synthetic_by_date.setdefault(d, {})
+            synthetic_by_date[d][col] = synthetic_by_date[d].get(col, 0.0) + float(row.get("synthetic_impressions") or 0.0)
+    synthetic_columns = [synthetic_column(ch) for ch in normalized_spend_channels if is_walled_garden(ch)]
+    for col in synthetic_columns:
+        result[col] = result["date"].map(lambda d, c=col: synthetic_by_date.get(d, {}).get(c, 0.0))
+
     result[kpi_col] = result["date"].map(
         lambda d: float(kpi_series.get(_week_start(pd.Timestamp(d)), 0.0))
     )
@@ -227,8 +254,12 @@ def build_mmm_dataset_from_platform(
             result[cov] = 0.0
 
     spend_totals = {ch: float(result[ch].sum()) for ch in spend_channels}
+    synthetic_totals = {col: float(result[col].sum()) for col in synthetic_columns}
     channels_with_spend = [ch for ch, value in spend_totals.items() if value > 0]
     all_zero_spend_channels = [ch for ch, value in spend_totals.items() if value <= 0]
+    channels_with_synthetic_impressions = [
+        source for source, col in zip(normalized_spend_channels, synthetic_columns) if synthetic_totals.get(col, 0.0) > 0
+    ]
     total_spend = float(sum(spend_totals.values()))
     if spend_channels and total_spend <= 0:
         raise ValueError(
@@ -247,6 +278,10 @@ def build_mmm_dataset_from_platform(
         "missing_spend_weeks": missing_spend_weeks,
         "missing_kpi_weeks": missing_kpi_weeks,
         "spend_totals": spend_totals,
+        "synthetic_impression_totals": synthetic_totals,
+        "synthetic_impression_columns": synthetic_columns,
+        "channels_with_synthetic_impressions": channels_with_synthetic_impressions,
+        "delivery": synthetic_details,
         "channels_with_spend": channels_with_spend,
         "all_zero_spend_channels": all_zero_spend_channels,
         "total_spend": total_spend,

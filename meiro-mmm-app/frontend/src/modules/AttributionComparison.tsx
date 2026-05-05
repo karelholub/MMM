@@ -812,7 +812,7 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
             `Selected model: ${MODEL_LABELS[selectedModel] || selectedModel}`,
             `Baseline model: ${MODEL_LABELS[baselineModel] || baselineModel}`,
             `Direct handling: ${directMode === 'include' ? 'Include Direct' : 'Exclude Direct'}`,
-            `Focus segment: ${selectedSegment ? selectedSegment.name : 'All visible channels'}`,
+            `Analytical segment: ${selectedSegment ? selectedSegment.name : 'All visible channels'}`,
             `Freshness: ${freshnessLabel}`,
             `Coverage: ${coverageLabel}`,
             `Sensitivity draft: ${currentSensitivitySummary}`,
@@ -823,7 +823,7 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
 
       {readiness && (readiness.status === 'blocked' || readiness.warnings.length > 0) ? (
         <DecisionStatusCard
-          title="Attribution Reliability Warning"
+          title="Attribution Input Reliability"
           status={readiness.status}
           blockers={readiness.blockers}
           warnings={readiness.warnings.slice(0, 3)}
@@ -846,7 +846,7 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
             { label: 'Conversion', value: conversionKey ? `Conversion: ${conversionKey}` : 'Conversion: N/A' },
             { label: 'Freshness', value: freshnessLabel },
             { label: 'Coverage', value: coverageLabel },
-            { label: 'Focus segment', value: selectedSegment ? selectedSegment.name : 'All visible channels' },
+            { label: 'Analytical segment', value: selectedSegment ? selectedSegment.name : 'All visible channels' },
             { label: 'Sensitivity draft', value: currentSensitivitySummary },
             { label: 'Sensitivity risk', value: summarizeSensitivityRisk(sensitivityQuery.data?.current) },
           ]}
@@ -1193,7 +1193,7 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
               color: t.color.textSecondary,
             }}
           >
-            Focus segment
+            Analytical segment
           </span>
           <select
             value={selectedSegmentId}
@@ -1207,7 +1207,7 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
               color: t.color.text,
             }}
           >
-            <option value="">All visible channels / no saved segment</option>
+            <option value="">All visible channels / no analytical segment</option>
             {localSegments.map((segment) => (
               <option key={segment.id} value={segment.id}>
                 {segmentOptionLabel(segment)}
@@ -1479,7 +1479,7 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
                 </div>
                 {selectedSegment ? (
                   <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-                    Focus segment <strong style={{ color: t.color.text }}>{selectedSegment.name}</strong> limits the visible channel comparison and lag exposure only. Attribution totals remain workspace-wide.
+                    Analytical segment <strong style={{ color: t.color.text }}>{selectedSegment.name}</strong> limits the visible channel comparison and lag exposure only. Attribution totals remain workspace-wide.
                   </div>
                 ) : null}
               </div>

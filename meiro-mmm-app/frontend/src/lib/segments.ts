@@ -33,6 +33,16 @@ export interface SegmentCompatibility {
   advanced?: boolean
 }
 
+export interface SegmentAudienceCapability {
+  level?: 'definition_only' | 'estimated_reach' | 'membership_backed' | string
+  label?: string | null
+  membership_backed?: boolean
+  activation_ready?: boolean
+  measurement_ready?: boolean
+  profile_count?: number | null
+  reason?: string | null
+}
+
 export interface SegmentPreview {
   journey_rows?: number
   share_of_rows?: number
@@ -64,6 +74,7 @@ export interface SegmentRegistryItem {
   external_segment_id?: string | null
   compatibility?: SegmentCompatibility | null
   preview?: SegmentPreview | null
+  audience_capability?: SegmentAudienceCapability | null
 }
 
 export interface SegmentRegistryResponse {
@@ -358,7 +369,8 @@ export function segmentOptionLabel(item: SegmentRegistryItem): string {
   const preview = formatSegmentPreview(item)
   const previewSuffix = preview ? ` · ${preview}` : ''
   const size = item.size != null ? ` · ${item.size.toLocaleString()} profiles` : ''
-  return `${item.name}${suffix}${previewSuffix}${size}`
+  const capability = !isLocalAnalyticalSegment(item) && item.audience_capability?.label ? ` · ${item.audience_capability.label}` : ''
+  return `${item.name}${suffix}${previewSuffix}${size}${capability}`
 }
 
 export function buildSegmentReference(item: SegmentRegistryItem | null | undefined): Record<string, unknown> {

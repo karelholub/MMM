@@ -1456,6 +1456,60 @@ def test_events_webhook_degrades_when_event_facts_are_unavailable(monkeypatch, t
         db.close()
 
 
+def test_events_webhook_degrades_when_event_profile_state_is_unavailable(monkeypatch, tmp_path):
+    monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(meiro_config, "CONFIG_PATH", tmp_path / "meiro_config.json")
+    monkeypatch.setattr(meiro_config, "WEBHOOK_ARCHIVE_PATH", tmp_path / "meiro_webhook_archive.jsonl")
+    monkeypatch.setattr(meiro_config, "EVENT_ARCHIVE_PATH", tmp_path / "meiro_event_archive.jsonl")
+
+    _clear_meiro_raw_batches()
+    _clear_meiro_replay_runs()
+    _clear_meiro_event_profile_state()
+    _clear_meiro_event_facts()
+
+    def fail_event_profile_state(*args, **kwargs):
+        raise meiro_router.MeiroEventProfileStateUnavailableError("database disk image is malformed")
+
+    monkeypatch.setattr(meiro_router, "upsert_meiro_event_profile_state", fail_event_profile_state)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/connectors/meiro/events",
+        json={
+            "events": [
+                {
+                    "event_id": "evt-profile-state-touch",
+                    "event_payload": {
+                        "event_id": "evt-profile-state-touch",
+                        "customer_id": "cust-profile-state-1",
+                        "timestamp": "2026-03-29T10:00:00Z",
+                        "event_name": "page_view",
+                        "source": "google",
+                        "medium": "cpc",
+                    },
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["event_profile_state"]["ok"] is False
+    assert payload["event_profile_state"]["stored"] is False
+    assert "profile-state storage is unavailable" in payload["event_profile_state"]["warning"].lower()
+
+    batch = _latest_meiro_raw_batch("events")
+    assert batch is not None
+    assert batch.records_count == 1
+
+    db = SessionLocal()
+    try:
+        assert db.query(MeiroEventFact).count() == 1
+        assert db.query(MeiroEventProfileState).count() == 0
+    finally:
+        db.close()
+
+
 def test_auto_replay_status_endpoint_prefers_db_run_history(monkeypatch, tmp_path):
     monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(meiro_config, "CONFIG_PATH", tmp_path / "meiro_config.json")

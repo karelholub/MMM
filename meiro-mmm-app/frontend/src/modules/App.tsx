@@ -13,6 +13,7 @@ import { WorkspaceContext, JourneysSummary } from '../components/WorkspaceContex
 import type { SettingsPageHandle, SectionKey } from './Settings'
 import { usePermissions } from '../hooks/usePermissions'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
+import { defaultRecentDateRange } from '../lib/dateRange'
 import ProtectedPage from '../components/ProtectedPage'
 import LoginPage from '../components/LoginPage'
 import AppErrorBoundary from '../components/AppErrorBoundary'
@@ -38,6 +39,8 @@ const ExpenseManager = lazy(() => import('./ExpenseManager'))
 const DataSources = lazy(() => import('./DataSources'))
 const MeiroIntegrationPage = lazy(() => import('./MeiroIntegration'))
 const CampaignPerformance = lazy(() => import('./CampaignPerformance'))
+
+const DEFAULT_GLOBAL_LOOKBACK_DAYS = 30
 const SettingsPage = lazy(() => import('./Settings'))
 const DataQuality = lazy(() => import('./DataQuality'))
 const IncrementalityPage = lazy(() => import('./Incrementality'))
@@ -83,7 +86,31 @@ const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
 
 function isAppPage(value: string | null | undefined): value is AppPage {
   if (!value) return false
-  return NAV_ITEMS.some((item) => item.key === value)
+  return value === 'documentation' || NAV_ITEMS.some((item) => item.key === value)
+}
+
+function DocumentationPage() {
+  return (
+    <div style={{ display: 'grid', gap: 20 }}>
+      <section style={{ border: `1px solid ${tokens.color.borderLight}`, borderRadius: tokens.radius.md, background: tokens.color.surface, padding: 24 }}>
+        <h1 style={{ margin: 0, fontSize: tokens.font.size2xl, color: tokens.color.text }}>Documentation</h1>
+        <p style={{ margin: '8px 0 0', color: tokens.color.textSecondary, fontSize: tokens.font.sizeSm }}>
+          Measurement source contract and operating notes for the current Meiro/Pipes workspace.
+        </p>
+      </section>
+      <section style={{ border: `1px solid ${tokens.color.borderLight}`, borderRadius: tokens.radius.md, background: tokens.color.surface, padding: 24, display: 'grid', gap: 12 }}>
+        <h2 style={{ margin: 0, fontSize: tokens.font.sizeLg, color: tokens.color.text }}>Source Contract</h2>
+        <div style={{ color: tokens.color.textSecondary, fontSize: tokens.font.sizeSm, lineHeight: 1.6 }}>
+          Use one primary Meiro attribution source at a time. Pipes raw events should power journey reconstruction and attribution when selected as primary. CDP pull and profile webhooks can still enrich audiences or metadata, but they should not silently replace the raw-event journey source.
+        </div>
+        <div style={{ display: 'grid', gap: 8, color: tokens.color.textSecondary, fontSize: tokens.font.sizeSm }}>
+          <div><strong style={{ color: tokens.color.text }}>Analytical segment:</strong> local saved slice used to filter attribution, path, and performance analysis.</div>
+          <div><strong style={{ color: tokens.color.text }}>Operational audience:</strong> Meiro/Pipes audience reference used for activation, hypotheses, and experiment planning.</div>
+          <div><strong style={{ color: tokens.color.text }}>Measurement audience:</strong> operational audience with membership present on journeys/profiles, safe to use for measurement scoping.</div>
+        </div>
+      </section>
+    </div>
+  )
 }
 
 function parseInitialPage(pathname: string, search: string = ''): AppPage {
@@ -170,21 +197,15 @@ export default function App() {
   })
   const [navSearch, setNavSearch] = useState('')
   const [globalDateRange, setGlobalDateRange] = useState<{ dateFrom: string; dateTo: string }>(() => {
-    if (typeof window === 'undefined') return { dateFrom: '', dateTo: '' }
+    const defaultRange = defaultRecentDateRange(DEFAULT_GLOBAL_LOOKBACK_DAYS)
+    if (typeof window === 'undefined') return defaultRange
     const params = new URLSearchParams(window.location.search)
     const dateFrom = params.get('date_from')
     const dateTo = params.get('date_to')
     if (isIsoDateOnly(dateFrom) && isIsoDateOnly(dateTo) && dateFrom <= dateTo) {
       return { dateFrom, dateTo }
     }
-    return { dateFrom: '', dateTo: '' }
-  })
-  const [hasCustomGlobalDateRange, setHasCustomGlobalDateRange] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false
-    const params = new URLSearchParams(window.location.search)
-    const dateFrom = params.get('date_from')
-    const dateTo = params.get('date_to')
-    return !!(isIsoDateOnly(dateFrom) && isIsoDateOnly(dateTo) && dateFrom <= dateTo)
+    return defaultRange
   })
   const permissions = usePermissions()
 
@@ -379,9 +400,8 @@ export default function App() {
       const dateTo = params.get('date_to')
       if (isIsoDateOnly(dateFrom) && isIsoDateOnly(dateTo) && dateFrom <= dateTo) {
         setGlobalDateRange({ dateFrom, dateTo })
-        setHasCustomGlobalDateRange(true)
       } else {
-        setHasCustomGlobalDateRange(false)
+        setGlobalDateRange(defaultRecentDateRange(DEFAULT_GLOBAL_LOOKBACK_DAYS))
       }
     }
     window.addEventListener('popstate', onPopState)
@@ -419,14 +439,6 @@ export default function App() {
   const primaryKpiId: string | undefined = journeysQuery.data?.primary_kpi_id ?? undefined
   const primaryKpiCount: number | undefined = journeysQuery.data?.primary_kpi_count
   const channels = useMemo(() => journeysQuery.data?.channels ?? [], [journeysQuery.data?.channels])
-  useEffect(() => {
-    const min = journeysQuery.data?.date_min?.slice(0, 10)
-    const max = journeysQuery.data?.date_max?.slice(0, 10)
-    if (!isIsoDateOnly(min) || !isIsoDateOnly(max) || min > max) return
-    if (hasCustomGlobalDateRange) return
-    setGlobalDateRange({ dateFrom: min, dateTo: max })
-  }, [hasCustomGlobalDateRange, journeysQuery.data?.date_max, journeysQuery.data?.date_min])
-
   useEffect(() => {
     if (typeof window === 'undefined') return
     if (!isIsoDateOnly(globalDateRange.dateFrom) || !isIsoDateOnly(globalDateRange.dateTo)) return
@@ -618,7 +630,6 @@ export default function App() {
         setGlobalDateRange: ({ dateFrom, dateTo }) => {
           if (!isIsoDateOnly(dateFrom) || !isIsoDateOnly(dateTo) || dateFrom > dateTo) return
           setGlobalDateRange({ dateFrom, dateTo })
-          setHasCustomGlobalDateRange(true)
         },
         isRunningAttribution: runAllMutation.isPending,
         isLoadingSampleJourneys: loadSampleMutation.isPending,
@@ -758,6 +769,7 @@ export default function App() {
                   onStartOver={handleMmmStartOver}
                 />
               )}
+              {page === 'documentation' && <DocumentationPage />}
                   </>
                 </ProtectedPage>
               </AppErrorBoundary>

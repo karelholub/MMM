@@ -36,6 +36,13 @@ interface MeiroImportReplayProps {
   selectedQuarantineRun?: MeiroQuarantineRun | null
   selectedQuarantineRunLoading: boolean
   selectedQuarantineRunError?: string | null
+  pipelineAudienceScope?: {
+    id?: string
+    external_segment_id?: string | null
+    name?: string
+    source?: string
+    source_label?: string
+  } | null
   relativeTime: (iso?: string | null) => string
   onDryRun: () => void
   onImportFromMeiro: () => void
@@ -194,6 +201,7 @@ type MeiroSegmentImportResponse = {
     meiro_pipes?: number
     cdp_segments?: number
     pipes_webhook_segments?: number
+    pipes_registry_segments?: number
     activation_ready?: number
   }
   items?: Array<{
@@ -220,6 +228,8 @@ function initialMeasurementDraftFromUrl() {
     native_meiro_asset_id: '',
     offer_catalog_id: '',
     native_meiro_catalog_id: '',
+    segment_id: '',
+    segment_alias: '',
   }
   if (typeof window === 'undefined') return fallback
   const params = new URLSearchParams(window.location.search)
@@ -233,6 +243,8 @@ function initialMeasurementDraftFromUrl() {
     native_meiro_asset_id: params.get('native_meiro_asset_id') || '',
     offer_catalog_id: params.get('offer_catalog_id') || '',
     native_meiro_catalog_id: params.get('native_meiro_catalog_id') || '',
+    segment_id: params.get('segment_id') || '',
+    segment_alias: params.get('segment_alias') || '',
   }
 }
 
@@ -270,6 +282,7 @@ export default function MeiroImportReplay({
   selectedQuarantineRun,
   selectedQuarantineRunLoading,
   selectedQuarantineRunError,
+  pipelineAudienceScope,
   relativeTime,
   onDryRun,
   onImportFromMeiro,
@@ -299,7 +312,7 @@ export default function MeiroImportReplay({
   const [activationFeedbackHandoffPending, setActivationFeedbackHandoffPending] = useState(false)
   const [activationFeedbackHandoff, setActivationFeedbackHandoff] = useState<ActivationFeedbackDeciEngineHandoff | null>(null)
   const [activationFeedbackHandoffError, setActivationFeedbackHandoffError] = useState<string | null>(null)
-  const [meiroSegmentImportSource, setMeiroSegmentImportSource] = useState<'pipes_webhook' | 'cdp'>('pipes_webhook')
+  const [meiroSegmentImportSource, setMeiroSegmentImportSource] = useState<'pipes_registry' | 'pipes_webhook' | 'cdp'>('pipes_registry')
   const [meiroSegmentImportPending, setMeiroSegmentImportPending] = useState(false)
   const [meiroSegmentImportError, setMeiroSegmentImportError] = useState<string | null>(null)
   const [meiroSegmentImportResult, setMeiroSegmentImportResult] = useState<MeiroSegmentImportResponse | null>(null)
@@ -320,6 +333,17 @@ export default function MeiroImportReplay({
   const replaySourceLabel =
     replaySource === 'events' ? 'Raw events archive' : replaySource === 'profiles' ? 'Profiles archive' : 'Auto (freshest archive)'
   const replayDiagnostics = reprocessWebhookArchiveResult?.event_reconstruction_diagnostics
+  const archiveInputSuggestions = meiroWebhookSuggestions?.taxonomy_suggestions
+  const archiveMappingSuggestions = meiroWebhookSuggestions?.mapping_suggestions
+  const topArchiveSources = archiveInputSuggestions?.top_sources || []
+  const topArchiveMediums = archiveInputSuggestions?.top_mediums || []
+  const topArchiveCampaigns = archiveInputSuggestions?.top_campaigns || []
+  const topArchivePairs = archiveInputSuggestions?.observed_pairs || []
+  const topArchiveFieldPaths = [
+    ...(archiveMappingSuggestions?.source_field_candidates || []).slice(0, 2).map((item) => `source: ${item.path}`),
+    ...(archiveMappingSuggestions?.medium_field_candidates || []).slice(0, 2).map((item) => `medium: ${item.path}`),
+    ...(archiveMappingSuggestions?.campaign_field_candidates || []).slice(0, 2).map((item) => `campaign: ${item.path}`),
+  ]
   const indexedRecords = useMemo(
     () => (selectedQuarantineRun?.records || []).map((record, index) => ({ record, index })),
     [selectedQuarantineRun?.records],
@@ -358,6 +382,10 @@ export default function MeiroImportReplay({
   const updateDeciEngineImportDraft = (patch: Partial<DeciEngineEventsImportPayload>) => {
     onDeciEngineImportDraftChange({ ...deciEngineImportDraft, ...patch })
   }
+  const rawPipelineSegmentAlias = String(pipelineAudienceScope?.name || '').trim()
+  const pipelineAudienceIsAll = rawPipelineSegmentAlias.toLowerCase() === 'all'
+  const pipelineSegmentAlias = pipelineAudienceIsAll ? '' : rawPipelineSegmentAlias
+  const pipelineSegmentId = pipelineAudienceIsAll ? '' : String(pipelineAudienceScope?.external_segment_id || pipelineAudienceScope?.id || '').trim()
   const measurementDraftForObject = (
     item: ActivationMeasurementObject,
     prev = measurementDraft,
@@ -371,6 +399,8 @@ export default function MeiroImportReplay({
       creative_asset_id: item.object_type === 'asset' ? item.object_id : prev.creative_asset_id,
       native_meiro_asset_id: item.object_type === 'asset' ? alias : prev.native_meiro_asset_id,
       offer_catalog_id: item.object_type === 'bundle' ? item.object_id : prev.offer_catalog_id,
+      segment_id: pipelineSegmentId || prev.segment_id,
+      segment_alias: pipelineSegmentAlias || prev.segment_alias,
     }
   }
   const loadActivationObjects = async () => {
@@ -563,6 +593,18 @@ export default function MeiroImportReplay({
     setAutoMeasurementStarted(true)
     void runActivationMeasurement(measurementDraft)
   }, [autoMeasurementStarted, measurementDraft])
+
+  useEffect(() => {
+    if (!pipelineSegmentId && !pipelineSegmentAlias) return
+    setMeasurementDraft((prev) => {
+      if (prev.segment_id === pipelineSegmentId && prev.segment_alias === pipelineSegmentAlias) return prev
+      return {
+        ...prev,
+        segment_id: pipelineSegmentId,
+        segment_alias: pipelineSegmentAlias,
+      }
+    })
+  }, [pipelineSegmentId, pipelineSegmentAlias])
 
   useEffect(() => {
     setSelectedRecordIndices((prev) => {
@@ -780,15 +822,16 @@ export default function MeiroImportReplay({
           <div style={{ display: 'grid', gap: 4 }}>
             <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Sync Meiro audiences into MMM segments</div>
             <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
-              Bring one audience source into the MMM segment registry so selectors can use it for experiment setup and operational audience alignment.
+              Bring one audience source into the MMM segment registry so selectors can use it for experiment setup and operational audience alignment. Use the Pipes registry for definitions, or archive memberships for observed profile membership.
             </div>
           </div>
           <div style={{ display: 'flex', gap: t.space.sm, alignItems: 'center', flexWrap: 'wrap' }}>
             <select
               value={meiroSegmentImportSource}
-              onChange={(event) => setMeiroSegmentImportSource(event.target.value as 'pipes_webhook' | 'cdp')}
+              onChange={(event) => setMeiroSegmentImportSource(event.target.value as 'pipes_registry' | 'pipes_webhook' | 'cdp')}
               style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, background: t.color.surface }}
             >
+              <option value="pipes_registry">Pipes audience registry</option>
               <option value="pipes_webhook">Pipes archive memberships</option>
               <option value="cdp">CDP connector segments</option>
             </select>
@@ -1060,6 +1103,17 @@ export default function MeiroImportReplay({
           ) : null}
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: t.space.sm }}>
+          {pipelineAudienceScope ? (
+            <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, background: t.color.surface, padding: t.space.sm, display: 'grid', gap: 4 }}>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Audience scope</div>
+              <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text, overflowWrap: 'anywhere' }}>
+                {pipelineAudienceScope.name || pipelineAudienceScope.external_segment_id || pipelineAudienceScope.id}
+              </div>
+              <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                {pipelineAudienceScope.source_label || 'Meiro audience'} · applied when journeys carry profile segment membership
+              </div>
+            </div>
+          ) : null}
           <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
             Object type
             <select value={measurementDraft.object_type} onChange={(e) => setMeasurementDraft((prev) => ({ ...prev, object_type: e.target.value }))} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, background: t.color.surface }}>
@@ -1081,6 +1135,14 @@ export default function MeiroImportReplay({
           <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
             Offer catalog ID
             <input value={measurementDraft.offer_catalog_id} onChange={(e) => setMeasurementDraft((prev) => ({ ...prev, offer_catalog_id: e.target.value }))} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
+            Segment ID
+            <input value={measurementDraft.segment_id} onChange={(e) => setMeasurementDraft((prev) => ({ ...prev, segment_id: e.target.value }))} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm, color: t.color.text }}>
+            Segment alias
+            <input value={measurementDraft.segment_alias} onChange={(e) => setMeasurementDraft((prev) => ({ ...prev, segment_alias: e.target.value }))} style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}` }} />
           </label>
         </div>
         {measurementError ? (
@@ -1187,7 +1249,12 @@ export default function MeiroImportReplay({
             </div>
             {meiroWebhookSuggestions?.event_stream_diagnostics?.available ? (
               <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, display: 'grid', gap: 6 }}>
-                <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Raw event archive quality</div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, flexWrap: 'wrap' }}>
+                  <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Raw event archive quality</div>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                    Analysis source: <strong>{meiroWebhookSuggestions.analysis_source === 'event_archive' ? 'event archive' : 'webhook history'}</strong>
+                  </div>
+                </div>
                 <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
                   Usable names <strong>{(meiroWebhookSuggestions.event_stream_diagnostics.usable_event_name_share * 100).toFixed(1)}%</strong>
                   {' '}· source/medium <strong>{(meiroWebhookSuggestions.event_stream_diagnostics.source_medium_share * 100).toFixed(1)}%</strong>
@@ -1197,6 +1264,46 @@ export default function MeiroImportReplay({
                 {(meiroWebhookSuggestions.event_stream_diagnostics.warnings || []).length ? (
                   <div style={{ fontSize: t.font.sizeXs, color: t.color.warning }}>
                     {(meiroWebhookSuggestions.event_stream_diagnostics.warnings || []).join(' · ')}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {(topArchiveSources.length || topArchiveMediums.length || topArchiveCampaigns.length || topArchivePairs.length) ? (
+              <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, flexWrap: 'wrap' }}>
+                  <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Archive-derived channel inputs</div>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                    {Number(meiroWebhookSuggestions?.events_analyzed || 0).toLocaleString()} raw events analyzed
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: t.space.sm }}>
+                  <div>
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Top sources</div>
+                    <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+                      {topArchiveSources.slice(0, 4).map((item) => `${item.source} (${Number(item.count || 0).toLocaleString()})`).join(' · ') || '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Top mediums</div>
+                    <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+                      {topArchiveMediums.slice(0, 4).map((item) => `${item.medium} (${Number(item.count || 0).toLocaleString()})`).join(' · ') || '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Top campaigns</div>
+                    <div style={{ fontSize: t.font.sizeSm, color: t.color.text }}>
+                      {topArchiveCampaigns.slice(0, 4).map((item) => `${item.campaign} (${Number(item.count || 0).toLocaleString()})`).join(' · ') || '—'}
+                    </div>
+                  </div>
+                </div>
+                {topArchivePairs.length ? (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    Observed pairs: {topArchivePairs.slice(0, 5).map((item) => `${item.source}/${item.medium} (${Number(item.count || 0).toLocaleString()})`).join(' · ')}
+                  </div>
+                ) : null}
+                {topArchiveFieldPaths.length ? (
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                    Suggested field paths: {topArchiveFieldPaths.join(' · ')}
                   </div>
                 ) : null}
               </div>

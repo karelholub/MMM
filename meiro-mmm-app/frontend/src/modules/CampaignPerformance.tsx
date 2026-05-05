@@ -21,6 +21,8 @@ import SegmentComparisonContextNote from '../components/segments/SegmentComparis
 import { getAdsDeepLink, type AdsProviderKey } from '../connectors/adsManagerConnector'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import LagInsightsPanel, { type LagInsightsResponse } from '../components/performance/LagInsightsPanel'
+import MeiroTargetInstanceBadge from '../features/meiro/MeiroTargetInstanceBadge'
+import { getMeiroConfig, type MeiroConfig } from '../connectors/meiroConnector'
 import {
   isLocalAnalyticalSegment,
   localSegmentCompatibleWithDimensions,
@@ -314,6 +316,20 @@ function providerFromChannel(channel: string): AdsProviderKey | null {
   return null
 }
 
+function isLikelyTestCampaign(campaign: CampaignData): boolean {
+  const value = `${campaign.campaign || ''} ${campaign.campaign_name || ''}`.toLowerCase()
+  if (!value.trim()) return false
+  return (
+    value.includes('contract_campaign') ||
+    value.includes('contract campaign') ||
+    value.includes('test_campaign') ||
+    value.includes('test campaign') ||
+    value.includes('contract_') ||
+    /^test[-_: ]/.test(value) ||
+    /(^|[-_: ])test($|[-_: ])/.test(value)
+  )
+}
+
 function exportCampaignsCSV(
   campaigns: CampaignData[],
   opts: {
@@ -399,6 +415,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
   const [showLagInsights, setShowLagInsights] = usePersistentToggle('campaign-performance:show-lag-insights', false)
   const [conversionKey, setConversionKey] = useState<string | ''>('')
   const [directMode, setDirectMode] = useState<'include' | 'exclude'>('include')
+  const [excludeLikelyTestCampaigns, setExcludeLikelyTestCampaigns] = useState(true)
   const [comparePrevious, setComparePrevious] = useState(initialTrendParams.compare)
   const [trendKpi, setTrendKpi] = useState(initialTrendParams.kpi)
   const [trendGrain, setTrendGrain] = useState<'auto' | 'daily' | 'weekly'>(initialTrendParams.grain)
@@ -530,6 +547,10 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
         fallbackMessage: 'Failed to load segment registry',
       }),
   })
+  const meiroConfigQuery = useQuery<MeiroConfig>({
+    queryKey: ['meiro-config'],
+    queryFn: getMeiroConfig,
+  })
 
   const campaigns = useMemo(() => {
     const items = summaryQuery.data?.items ?? []
@@ -613,6 +634,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
     const q = search.trim().toLowerCase()
     const byChannel = channelFilter.trim()
     return campaigns.filter((c) => {
+      if (excludeLikelyTestCampaigns && isLikelyTestCampaign(c)) return false
       if (selectedSegmentDefinition.channel_group && c.channel !== selectedSegmentDefinition.channel_group) return false
       if (selectedSegmentDefinition.campaign_id && c.campaign !== selectedSegmentDefinition.campaign_id) return false
       if (directMode === 'exclude' && c.channel === 'direct') {
@@ -626,7 +648,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       const matchChannel = !byChannel || c.channel === byChannel
       return matchSearch && matchChannel
     })
-  }, [campaigns, search, channelFilter, directMode, selectedSegmentDefinition.channel_group, selectedSegmentDefinition.campaign_id])
+  }, [campaigns, search, channelFilter, directMode, excludeLikelyTestCampaigns, selectedSegmentDefinition.channel_group, selectedSegmentDefinition.campaign_id])
   const workspaceCampaigns = useMemo(
     () =>
       campaigns.filter((campaign) => {
@@ -646,6 +668,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
   )
 
   const channelsList = useMemo(() => Array.from(new Set(campaigns.map((c) => c.channel))).sort(), [campaigns])
+  const likelyTestCampaignCount = useMemo(() => campaigns.filter(isLikelyTestCampaign).length, [campaigns])
   const latestEventReplayDiagnostics = summaryQuery.data?.readiness?.details?.latest_event_replay?.diagnostics
   const diagnosticRoleConversions = useMemo(
     () =>
@@ -1645,12 +1668,42 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
 
       {summaryQuery.data?.readiness && (summaryQuery.data.readiness.status === 'blocked' || summaryQuery.data.readiness.warnings.length > 0) ? (
         <DecisionStatusCard
-          title="Performance Reliability Warning"
+          title="Campaign Attribution Reliability"
           status={summaryQuery.data.readiness.status}
           blockers={summaryQuery.data.readiness.blockers}
           warnings={summaryQuery.data.readiness.warnings.slice(0, 3)}
         />
       ) : null}
+
+      <SectionCard
+        title="Campaign Taxonomy Readiness"
+        subtitle="Campaign-level measurement uses raw campaign values from the current journey source, then applies taxonomy and view filters before analysis."
+      >
+        <div style={{ display: 'grid', gap: t.space.sm, gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
+          <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bgSubtle }}>
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Visible campaigns</div>
+            <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: t.color.text }}>{filteredCampaigns.length.toLocaleString()}</div>
+          </div>
+          <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bgSubtle }}>
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Likely test/contract campaigns</div>
+            <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: likelyTestCampaignCount ? t.color.warning : t.color.success }}>{likelyTestCampaignCount.toLocaleString()}</div>
+          </div>
+          <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.bgSubtle }}>
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>Value mapping coverage</div>
+            <div style={{ fontSize: t.font.sizeLg, fontWeight: t.font.weightSemibold, color: coverage && coverage.value_mapped_pct < 95 ? t.color.warning : t.color.success }}>
+              {coverage?.value_mapped_pct != null ? `${coverage.value_mapped_pct.toFixed(1)}%` : '—'}
+            </div>
+          </div>
+        </div>
+        <label style={{ display: 'inline-flex', gap: 8, alignItems: 'center', marginTop: t.space.md, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+          <input
+            type="checkbox"
+            checked={excludeLikelyTestCampaigns}
+            onChange={(event) => setExcludeLikelyTestCampaigns(event.target.checked)}
+          />
+          Exclude likely test/contract campaigns from campaign analysis views
+        </label>
+      </SectionCard>
 
       {summaryQuery.isError && (
         <div
@@ -1717,6 +1770,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
             <option value="all">All campaigns (aggregated)</option>
             {trendCampaignOptions
               .filter((c) => c.toLowerCase().includes(trendCampaignSearch.trim().toLowerCase()))
+              .filter((c) => !excludeLikelyTestCampaigns || !/contract_campaign|contract campaign|test_campaign|test campaign|contract_|(^|[-_: ])test($|[-_: ])/.test(c.toLowerCase()))
               .map((c) => (
                 <option key={c} value={c}>
                   {c}
@@ -1883,7 +1937,8 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       <div style={{ marginBottom: t.space.lg }}>
         <ContextSummaryStrip
           items={[
-            { label: 'Source', value: 'Config-aware performance summary' },
+            { label: 'Source basis', value: latestEventReplayDiagnostics?.events_loaded ? 'Pipes raw events -> live attribution' : 'Config-aware performance summary' },
+            { label: 'Target instance', value: meiroConfigQuery.data?.target_instance_host || 'meiro-internal.eu.pipes.meiro.io' },
             { label: 'Period', value: `${trendDateRange.dateFrom} – ${trendDateRange.dateTo}` },
             { label: 'Conversion', value: conversionKey || 'All conversions' },
             {
@@ -1895,6 +1950,9 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
             { label: 'Measurement window', value: measurementWindowLabel },
           ]}
         />
+      </div>
+      <div style={{ marginBottom: t.space.md }}>
+        <MeiroTargetInstanceBadge config={meiroConfigQuery.data} compact />
       </div>
       {mixedBasisActivityWarning ? (
         <SurfaceBasisNotice marginBottom={t.space.md}>
@@ -2197,7 +2255,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
                   background: t.color.surface,
                 }}
               >
-                <option value="">All campaigns / no saved segment</option>
+                <option value="">All campaigns / no analytical segment</option>
                 {compatibleSegments.map((segment) => (
                   <option key={segment.id} value={segment.id}>
                     {segmentOptionLabel(segment)}

@@ -442,6 +442,8 @@ def create_router(
         native_meiro_asset_id: Optional[str] = Query(None, description="Optional native Meiro asset alias"),
         offer_catalog_id: Optional[str] = Query(None, description="Optional offer catalog alias"),
         native_meiro_catalog_id: Optional[str] = Query(None, description="Optional native Meiro catalog alias"),
+        segment_id: Optional[str] = Query(None, description="Optional Meiro/MMM segment or audience id scope"),
+        segment_alias: Optional[List[str]] = Query(None, description="Optional segment aliases to match"),
         db=Depends(get_db_dependency),
         _ctx=Depends(require_permission_dependency("attribution.view")),
     ):
@@ -463,6 +465,8 @@ def create_router(
                 date_from=date_from,
                 date_to=date_to,
                 conversion_key=conversion_key,
+                segment_id=segment_id,
+                segment_aliases=segment_alias,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -595,6 +599,8 @@ def create_router(
         native_meiro_asset_id: Optional[str] = Query(None, description="Optional native Meiro asset alias"),
         offer_catalog_id: Optional[str] = Query(None, description="Optional offer catalog alias"),
         native_meiro_catalog_id: Optional[str] = Query(None, description="Optional native Meiro catalog alias"),
+        segment_id: Optional[str] = Query(None, description="Optional Meiro/MMM segment or audience id scope"),
+        segment_alias: Optional[List[str]] = Query(None, description="Optional segment aliases to match"),
         limit: int = Query(20, ge=1, le=100, description="Maximum evidence rows to return"),
         db=Depends(get_db_dependency),
         _ctx=Depends(require_permission_dependency("attribution.view")),
@@ -617,6 +623,8 @@ def create_router(
                 date_from=date_from,
                 date_to=date_to,
                 conversion_key=conversion_key,
+                segment_id=segment_id,
+                segment_aliases=segment_alias,
                 limit=limit,
             )
         except ValueError as exc:

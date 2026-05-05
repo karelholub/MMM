@@ -34,6 +34,20 @@ function appUrl(pageParam?: string): string {
   return `/?${params.toString()}`
 }
 
+function localIsoDate(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function defaultRecentRange(days: number): { dateFrom: string; dateTo: string } {
+  const end = new Date()
+  const start = new Date(end)
+  start.setDate(end.getDate() - Math.max(1, days))
+  return { dateFrom: localIsoDate(start), dateTo: localIsoDate(end) }
+}
+
 async function installSmokeAuth(page: Page) {
   await page.addInitScript(() => {
     window.localStorage.setItem('mmm-user-role', 'admin')
@@ -135,6 +149,80 @@ async function installSmokeAuth(page: Page) {
   })
 }
 
+async function installMeasurementAudienceFixture(page: Page) {
+  await page.route('**/api/segments/registry', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items: [
+          {
+            id: 'meiro:vip_buyers',
+            external_segment_id: 'vip_buyers',
+            name: 'VIP Buyers',
+            description: 'Membership-backed smoke audience',
+            status: 'active',
+            source: 'meiro_pipes',
+            source_label: 'Meiro Pipes',
+            kind: 'operational',
+            supports_analysis: false,
+            supports_activation: true,
+            supports_hypotheses: true,
+            supports_experiments: true,
+            definition: { external_segment_id: 'vip_buyers', derived_from: 'webhook_payload' },
+            criteria_label: 'Operational audience from Meiro Pipes webhook payloads',
+            definition_version: 'external',
+            segment_family: 'operational_external',
+            size: 2,
+            audience_capability: {
+              level: 'membership_backed',
+              label: 'Membership backed',
+              membership_backed: true,
+              activation_ready: true,
+              measurement_ready: true,
+              profile_count: 2,
+              reason: 'Profile membership was observed in Meiro Pipes webhook/profile state.',
+            },
+          },
+          {
+            id: 'meiro:definition_only',
+            external_segment_id: 'definition_only',
+            name: 'Definition Only Audience',
+            status: 'active',
+            source: 'meiro_pipes_registry',
+            source_label: 'Meiro Pipes registry',
+            kind: 'operational',
+            supports_analysis: false,
+            supports_activation: true,
+            supports_hypotheses: true,
+            supports_experiments: true,
+            definition: { external_segment_id: 'definition_only', derived_from: 'deciengine_pipes_field_registry' },
+            criteria_label: 'Operational audience from deciEngine Pipes registry',
+            definition_version: 'external',
+            segment_family: 'operational_external',
+            size: 42,
+            audience_capability: {
+              level: 'definition_only',
+              label: 'Definition only',
+              membership_backed: false,
+              activation_ready: true,
+              measurement_ready: false,
+              profile_count: 42,
+              reason: 'Measurement scoping needs observed membership.',
+            },
+          },
+        ],
+        summary: {
+          local_analytical: 0,
+          meiro_pipes: 2,
+          analysis_ready: 0,
+          activation_ready: 2,
+        },
+      }),
+    })
+  })
+}
+
 function installRuntimeGuards(page: Page) {
   const issues: string[] = []
 
@@ -205,6 +293,40 @@ test.describe('Meiro app smoke', () => {
     await expect(page).toHaveURL(/page=roles/)
     await expect(page).toHaveURL(/date_from=2026-04-01/)
     await expect(page).toHaveURL(/date_to=2026-04-14/)
+
+    expect(issues, issues.join('\n')).toEqual([])
+  })
+
+  test('overview defaults to a current rolling lookback when no dates are supplied', async ({ page }) => {
+    const issues = installRuntimeGuards(page)
+    const expected = defaultRecentRange(30)
+
+    await page.goto('/', { waitUntil: 'domcontentloaded' })
+    await expectHealthyPage(page, /Overview|What changed|Workspace Assistant/i)
+    await expect(page).toHaveURL(new RegExp(`date_from=${expected.dateFrom}`))
+    await expect(page).toHaveURL(new RegExp(`date_to=${expected.dateTo}`))
+
+    expect(issues, issues.join('\n')).toEqual([])
+  })
+
+  test('MMM setup only allows membership-backed measurement audiences', async ({ page }) => {
+    const issues = installRuntimeGuards(page)
+    await installMeasurementAudienceFixture(page)
+
+    await page.goto(appUrl('mmm'), { waitUntil: 'domcontentloaded' })
+    await expectHealthyPage(page, 'Marketing Mix Modeling')
+
+    await page.getByRole('button', { name: /Create new model/i }).last().click()
+    await expectHealthyPage(page, 'Prepare MMM dataset')
+
+    const audienceSelect = page.getByLabel('Measurement audience')
+    await expect(audienceSelect).toContainText('VIP Buyers')
+    await expect(audienceSelect).not.toContainText('Definition Only Audience')
+    await expect(page.getByText(/Blocked from MMM scoping until membership is observed: Definition Only Audience/i)).toBeVisible()
+
+    await audienceSelect.selectOption('meiro:vip_buyers')
+    await expect(page.getByText('VIP Buyers', { exact: true }).first()).toBeVisible()
+    await expect(page.getByText(/Membership-backed audience selected for measurement context/i)).toBeVisible()
 
     expect(issues, issues.join('\n')).toEqual([])
   })

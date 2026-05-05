@@ -3,6 +3,10 @@ import { useQuery, useMutation } from '@tanstack/react-query'
 import { tokens } from '../theme/tokens'
 import DatasetUploader from './DatasetUploader'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
+import { useWorkspaceContext } from '../components/WorkspaceContext'
+import { segmentOptionLabel, type SegmentRegistryItem, type SegmentRegistryResponse } from '../lib/segments'
+import MeiroTargetInstanceBadge from '../features/meiro/MeiroTargetInstanceBadge'
+import { getMeiroConfig, type MeiroConfig } from '../connectors/meiroConnector'
 
 const t = tokens
 
@@ -11,6 +15,8 @@ type DataSourceType = 'platform' | 'csv'
 interface PlatformOptions {
   spend_channels: string[]
   covariates: string[]
+  walled_garden_channels?: string[]
+  media_input_modes?: Array<{ id: 'spend' | 'synthetic_impressions'; label: string; description: string }>
 }
 
 interface BuildResponse {
@@ -25,6 +31,18 @@ interface BuildResponse {
     channels_with_spend?: string[]
     all_zero_spend_channels?: string[]
     total_spend?: number
+    synthetic_impression_totals?: Record<string, number>
+    synthetic_impression_columns?: string[]
+    channels_with_synthetic_impressions?: string[]
+    delivery?: {
+      channels?: Record<string, {
+        confidence?: 'high' | 'medium' | 'low'
+        confidence_score?: number
+        caveats?: string[]
+        synthetic_impressions?: number
+        impressions?: number
+      }>
+    }
   }
   metadata: {
     period_start: string
@@ -32,10 +50,27 @@ interface BuildResponse {
     kpi_target: string
     kpi_column: string
     spend_channels: string[]
+    source_spend_channels?: string[]
     covariates: string[]
     currency: string
+    source?: string
+    source_detail?: string
+    source_contract?: Record<string, unknown>
+    media_input_mode?: 'spend' | 'synthetic_impressions'
+    synthetic_impressions?: {
+      enabled: boolean
+      columns: string[]
+      totals: Record<string, number>
+    }
     attribution_model?: string
     attribution_config_id?: string
+    measurement_audience?: {
+      id?: string
+      name?: string
+      profile_count?: number
+      journey_rows?: number
+      materialization_status?: string
+    }
   }
 }
 
@@ -66,6 +101,7 @@ interface MMMDataSourceStepProps {
 }
 
 export default function MMMDataSourceStep({ onMappingComplete, initialPlatformDraft }: MMMDataSourceStepProps) {
+  const { journeysSummary } = useWorkspaceContext()
   const [sourceType, setSourceType] = useState<DataSourceType>('platform')
   const [kpiTarget, setKpiTarget] = useState<'sales' | 'attribution'>('sales')
   const [dateStart, setDateStart] = useState(() => {
@@ -75,9 +111,12 @@ export default function MMMDataSourceStep({ onMappingComplete, initialPlatformDr
   })
   const [dateEnd, setDateEnd] = useState(() => new Date().toISOString().slice(0, 10))
   const [selectedChannels, setSelectedChannels] = useState<string[]>([])
+  const [mediaInputMode, setMediaInputMode] = useState<'spend' | 'synthetic_impressions'>('spend')
   const [platformResult, setPlatformResult] = useState<BuildResponse | null>(null)
   const [attributionModel, setAttributionModel] = useState<string>('linear')
   const [attributionConfigId, setAttributionConfigId] = useState<string | null>(null)
+  const [measurementAudienceId, setMeasurementAudienceId] = useState('')
+  const [showAdvancedControls, setShowAdvancedControls] = useState(false)
   const seededDraftChannelsRef = useRef<string | null>(null)
 
   const { data: platformOptions } = useQuery<PlatformOptions>({
@@ -101,11 +140,81 @@ export default function MMMDataSourceStep({ onMappingComplete, initialPlatformDr
         .then((list) => (Array.isArray(list) ? list : []))
         .catch(() => []),
   })
+  const { data: segmentRegistry } = useQuery<SegmentRegistryResponse>({
+    queryKey: ['segment-registry', 'mmm-measurement-audience'],
+    queryFn: async () =>
+      apiGetJson<SegmentRegistryResponse>('/api/segments/registry', {
+        fallbackMessage: 'Failed to load measurement audiences',
+      }),
+  })
+  const { data: meiroConfig } = useQuery<MeiroConfig>({
+    queryKey: ['meiro-config'],
+    queryFn: getMeiroConfig,
+  })
 
   const attributionModelOptions = attributionModelsData?.models ?? ['linear', 'last_touch', 'first_touch', 'time_decay', 'position_based', 'markov']
   const spendChannelOptions = platformOptions?.spend_channels ?? []
   const covariateOptions = platformOptions?.covariates ?? []
+  const walledGardenChannels = new Set(platformOptions?.walled_garden_channels ?? [])
   const initialSpendChannelsKey = initialPlatformDraft?.spendChannels?.join(',') ?? ''
+  const operationalAudiences = (segmentRegistry?.items ?? []).filter((item) => item.source !== 'local_analytical')
+  const measurementReadyAudiences = operationalAudiences.filter((item) => item.audience_capability?.membership_backed || item.audience_capability?.measurement_ready)
+  const definitionOnlyAudiences = operationalAudiences.filter((item) => !item.audience_capability?.membership_backed && !item.audience_capability?.measurement_ready)
+  const selectedMeasurementAudience: SegmentRegistryItem | null =
+    measurementReadyAudiences.find((item) => item.id === measurementAudienceId) ?? null
+  const latestEventReplay =
+    journeysSummary?.readiness?.details?.latest_event_replay ??
+    journeysSummary?.readiness?.summary?.latest_event_replay ??
+    null
+  const latestEventReplayDiagnostics = latestEventReplay?.diagnostics
+  const attributionSourceLabel = latestEventReplayDiagnostics?.events_loaded
+    ? 'Pipes raw events -> replay/import -> live journeys'
+    : 'Current live journeys'
+  const sourceContractRows = [
+    {
+      label: 'Attribution / KPI source',
+      value: kpiTarget === 'attribution' ? attributionSourceLabel : `${attributionSourceLabel} for journey-derived sales`,
+      helper: latestEventReplayDiagnostics?.events_loaded
+        ? `${latestEventReplayDiagnostics.events_loaded.toLocaleString()} raw events loaded; ${(latestEventReplayDiagnostics.journeys_persisted ?? 0).toLocaleString()} journeys persisted.`
+        : 'No latest raw-event replay diagnostics are attached to the current journey summary.',
+    },
+    {
+      label: 'Spend source',
+      value: 'Platform expenses',
+      helper: 'MMM spend comes from Expenses/imported spend for the selected channels and period.',
+    },
+    {
+      label: 'Audience scope',
+      value: selectedMeasurementAudience ? selectedMeasurementAudience.name : 'Workspace aggregate',
+      helper: selectedMeasurementAudience
+        ? `Membership-backed audience selected for measurement context; ${selectedMeasurementAudience.audience_capability?.profile_count?.toLocaleString() ?? 'observed'} profiles are available from profile-state membership.`
+        : 'CDP/profile audiences are enrichment or planning context unless a membership-backed measurement audience is selected for the MMM dataset contract.',
+    },
+  ]
+  const measurementAudiencePayload = selectedMeasurementAudience
+    ? {
+        id: selectedMeasurementAudience.id,
+        name: selectedMeasurementAudience.name,
+        source: selectedMeasurementAudience.source,
+        external_segment_id: selectedMeasurementAudience.external_segment_id || selectedMeasurementAudience.id,
+        capability: selectedMeasurementAudience.audience_capability || null,
+        materialization_status: 'membership_backed_reference',
+      }
+    : null
+  const sourceContractPayload = {
+    attribution_source: attributionSourceLabel,
+    spend_source: 'Platform expenses',
+    audience_scope: selectedMeasurementAudience ? `Measurement audience: ${selectedMeasurementAudience.name}` : 'Workspace aggregate',
+    measurement_audience: measurementAudiencePayload,
+    profile_cdp_role: 'Enrichment only unless a membership-backed measurement audience is materialized into the dataset',
+    latest_event_replay: latestEventReplayDiagnostics
+      ? {
+          events_loaded: latestEventReplayDiagnostics.events_loaded ?? 0,
+          profiles_reconstructed: latestEventReplayDiagnostics.profiles_reconstructed ?? 0,
+          journeys_persisted: latestEventReplayDiagnostics.journeys_persisted ?? 0,
+        }
+      : null,
+  }
 
   useEffect(() => {
     if (initialPlatformDraft?.kpiTarget) setKpiTarget(initialPlatformDraft.kpiTarget)
@@ -137,6 +246,10 @@ export default function MMMDataSourceStep({ onMappingComplete, initialPlatformDr
         spend_channels: selectedChannels,
         covariates: covariateOptions.length ? [] : undefined,
         currency: 'USD',
+        media_input_mode: mediaInputMode,
+        include_synthetic_impressions: true,
+        source_contract: sourceContractPayload,
+        ...(measurementAudiencePayload && { measurement_audience: measurementAudiencePayload }),
         ...(kpiTarget === 'attribution' && {
           attribution_model: attributionModel,
           ...(attributionConfigId && { attribution_config_id: attributionConfigId }),
@@ -196,6 +309,11 @@ export default function MMMDataSourceStep({ onMappingComplete, initialPlatformDr
     const totalSpend = Number(coverage.total_spend ?? 0)
     const allZeroSpendChannels = coverage.all_zero_spend_channels ?? []
     const hasUsableSpend = totalSpend > 0
+    const syntheticTotals = coverage.synthetic_impression_totals ?? {}
+    const totalSynthetic = Object.values(syntheticTotals).reduce((sum, value) => sum + Number(value || 0), 0)
+    const hasSyntheticSignal = totalSynthetic > 0
+    const canUseDataset = metadata.media_input_mode === 'synthetic_impressions' ? hasSyntheticSignal : hasUsableSpend
+    const deliveryChannels = coverage.delivery?.channels ?? {}
     return (
       <div style={{ maxWidth: 920, margin: '0 auto' }}>
         <div style={{ marginBottom: t.space.lg }}>
@@ -206,8 +324,69 @@ export default function MMMDataSourceStep({ onMappingComplete, initialPlatformDr
             <code style={{ background: t.color.bg, padding: '2px 6px', borderRadius: t.radius.sm }}>{platformResult.dataset_id}</code>
             {' · '}
             {metadata.period_start} → {metadata.period_end} · {metadata.kpi_column}
+            {' · '}
+            {metadata.source_detail === 'platform_journeys_expenses' ? 'Platform journeys + expenses' : metadata.source || 'Platform dataset'}
           </p>
         </div>
+
+        <div
+          style={{
+            marginBottom: t.space.xl,
+            padding: t.space.lg,
+            borderRadius: t.radius.lg,
+            border: `1px solid ${t.color.borderLight}`,
+            background: t.color.surface,
+            boxShadow: t.shadowSm,
+          }}
+        >
+          <div style={{ marginBottom: t.space.md }}>
+            <h4 style={{ margin: 0, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+              Measurement source contract
+            </h4>
+            <p style={{ margin: `${t.space.xs}px 0 0`, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Build one MMM dataset from one attribution source. Profile/CDP data can enrich labels and audiences, but it does not replace the raw-event journey source in this run.
+            </p>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: t.space.md }}>
+            {sourceContractRows.map((row) => (
+              <div key={row.label} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.md, background: t.color.bg }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase', fontWeight: t.font.weightMedium }}>
+                  {row.label}
+                </div>
+                <div style={{ marginTop: 4, fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                  {row.value}
+                </div>
+                <div style={{ marginTop: 4, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                  {row.helper}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {metadata.measurement_audience ? (
+          <div
+            style={{
+              marginBottom: t.space.xl,
+              padding: t.space.lg,
+              borderRadius: t.radius.lg,
+              border: `1px solid ${t.color.success}`,
+              background: t.color.successMuted,
+              color: t.color.textSecondary,
+              fontSize: t.font.sizeSm,
+            }}
+          >
+            <strong style={{ color: t.color.text }}>Measurement audience materialized:</strong>{' '}
+            {metadata.measurement_audience.name || metadata.measurement_audience.id || 'Selected audience'}
+            {' · '}
+            {(metadata.measurement_audience.profile_count ?? 0).toLocaleString()} profiles
+            {' · '}
+            {(metadata.measurement_audience.journey_rows ?? 0).toLocaleString()} matching journeys.
+            <div style={{ marginTop: t.space.xs }}>
+              Status: {String(metadata.measurement_audience.materialization_status || 'journey_rows_filtered').replace(/_/g, ' ')}.
+            </div>
+          </div>
+        ) : null}
 
         {/* Coverage */}
         <div
@@ -293,6 +472,45 @@ export default function MMMDataSourceStep({ onMappingComplete, initialPlatformDr
           )}
         </div>
 
+        <div
+          style={{
+            marginBottom: t.space.xl,
+            padding: t.space.lg,
+            borderRadius: t.radius.lg,
+            border: `1px solid ${hasSyntheticSignal ? t.color.success : t.color.borderLight}`,
+            background: t.color.surface,
+            color: t.color.textSecondary,
+            fontSize: t.font.sizeSm,
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.md, flexWrap: 'wrap' }}>
+            <div>
+              <strong style={{ color: t.color.text }}>Walled-garden exposure:</strong>{' '}
+              {hasSyntheticSignal
+                ? `${Math.round(totalSynthetic).toLocaleString()} synthetic impressions built from imported delivery metrics.`
+                : 'No synthetic impressions were found for this period.'}
+            </div>
+            <div style={{ color: t.color.textMuted }}>
+              Modeled from {metadata.media_input_mode === 'synthetic_impressions' ? 'synthetic impressions' : 'spend'}
+            </div>
+          </div>
+          {Object.entries(deliveryChannels).length > 0 && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: t.space.sm, marginTop: t.space.md }}>
+              {Object.entries(deliveryChannels).map(([channel, detail]) => (
+                <div key={channel} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, background: t.color.bg }}>
+                  <div style={{ fontWeight: t.font.weightSemibold, color: t.color.text }}>{channelLabel(channel)}</div>
+                  <div style={{ fontSize: t.font.sizeXs }}>
+                    {Math.round(Number(detail.synthetic_impressions || 0)).toLocaleString()} synthetic impressions
+                  </div>
+                  <div style={{ fontSize: t.font.sizeXs, color: detail.confidence === 'high' ? t.color.success : detail.confidence === 'low' ? t.color.warning : t.color.textSecondary }}>
+                    {detail.confidence ?? 'low'} confidence
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         {/* Preview table */}
         <div
           style={{
@@ -352,16 +570,16 @@ export default function MMMDataSourceStep({ onMappingComplete, initialPlatformDr
           <button
             type="button"
             onClick={handleUsePlatformDataset}
-            disabled={!hasUsableSpend}
+            disabled={!canUseDataset}
             style={{
               padding: `${t.space.md}px ${t.space.xl}px`,
               fontSize: t.font.sizeBase,
               fontWeight: t.font.weightSemibold,
               color: '#fff',
-              background: hasUsableSpend ? t.color.accent : t.color.border,
+              background: canUseDataset ? t.color.accent : t.color.border,
               border: 'none',
               borderRadius: t.radius.sm,
-              cursor: hasUsableSpend ? 'pointer' : 'not-allowed',
+              cursor: canUseDataset ? 'pointer' : 'not-allowed',
             }}
           >
             Use this dataset →
@@ -444,6 +662,42 @@ export default function MMMDataSourceStep({ onMappingComplete, initialPlatformDr
         )}
 
         <div style={{ marginBottom: t.space.lg }}>
+          <MeiroTargetInstanceBadge config={meiroConfig} compact />
+        </div>
+
+        <div
+          style={{
+            marginBottom: t.space.lg,
+            padding: t.space.lg,
+            borderRadius: t.radius.lg,
+            border: `1px solid ${latestEventReplayDiagnostics?.events_loaded ? t.color.success : t.color.warning}`,
+            background: latestEventReplayDiagnostics?.events_loaded ? t.color.successMuted : t.color.warningMuted,
+          }}
+        >
+          <h4 style={{ margin: 0, fontSize: t.font.sizeMd, fontWeight: t.font.weightSemibold, color: t.color.text }}>
+            Measurement source contract
+          </h4>
+          <p style={{ margin: `${t.space.xs}px 0 ${t.space.md}px`, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+            MMM run creation uses a single attribution basis. Raw-event replay feeds attribution journeys; profile/CDP payloads stay as enrichment unless you materialize a measurement audience before modeling.
+          </p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: t.space.md }}>
+            {sourceContractRows.map((row) => (
+              <div key={row.label} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.md, background: t.color.surface }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase', fontWeight: t.font.weightMedium }}>
+                  {row.label}
+                </div>
+                <div style={{ marginTop: 4, fontSize: t.font.sizeSm, color: t.color.text, fontWeight: t.font.weightSemibold }}>
+                  {row.value}
+                </div>
+                <div style={{ marginTop: 4, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                  {row.helper}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ marginBottom: t.space.lg }}>
           <label style={{ display: 'block', fontSize: t.font.sizeSm, fontWeight: t.font.weightMedium, color: t.color.textSecondary, marginBottom: t.space.xs }}>
             KPI target
           </label>
@@ -507,6 +761,56 @@ export default function MMMDataSourceStep({ onMappingComplete, initialPlatformDr
           )}
         </div>
 
+        <div style={{ marginBottom: t.space.lg }}>
+          <label
+            htmlFor="mmm-measurement-audience"
+            style={{ display: 'block', fontSize: t.font.sizeSm, fontWeight: t.font.weightMedium, color: t.color.textSecondary, marginBottom: t.space.xs }}
+          >
+            Measurement audience
+          </label>
+          <select
+            id="mmm-measurement-audience"
+            value={measurementAudienceId}
+            onChange={(e) => setMeasurementAudienceId(e.target.value)}
+            style={{
+              width: '100%',
+              maxWidth: 520,
+              padding: t.space.sm,
+              fontSize: t.font.sizeSm,
+              border: `1px solid ${t.color.border}`,
+              borderRadius: t.radius.sm,
+              background: t.color.surface,
+              color: t.color.text,
+            }}
+          >
+            <option value="">Workspace aggregate</option>
+            {measurementReadyAudiences.map((audience) => (
+              <option key={audience.id} value={audience.id}>
+                {segmentOptionLabel(audience)}
+              </option>
+            ))}
+          </select>
+          <p style={{ margin: `${t.space.xs}px 0 0`, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+            Only membership-backed Meiro/Pipes audiences can be attached to an MMM measurement contract. Definition-only audiences remain available for activation and planning, but cannot silently scope MMM.
+          </p>
+          {definitionOnlyAudiences.length > 0 ? (
+            <div
+              style={{
+                marginTop: t.space.sm,
+                padding: t.space.sm,
+                borderRadius: t.radius.sm,
+                border: `1px solid ${t.color.borderLight}`,
+                background: t.color.bg,
+                fontSize: t.font.sizeXs,
+                color: t.color.textSecondary,
+              }}
+            >
+              Blocked from MMM scoping until membership is observed: {definitionOnlyAudiences.slice(0, 3).map((audience) => audience.name).join(', ')}
+              {definitionOnlyAudiences.length > 3 ? `, +${definitionOnlyAudiences.length - 3} more` : ''}.
+            </div>
+          ) : null}
+        </div>
+
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: t.space.lg, marginBottom: t.space.lg }}>
           <div>
             <label style={{ display: 'block', fontSize: t.font.sizeSm, fontWeight: t.font.weightMedium, color: t.color.textSecondary, marginBottom: t.space.xs }}>
@@ -551,6 +855,7 @@ export default function MMMDataSourceStep({ onMappingComplete, initialPlatformDr
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: t.space.sm }}>
             {spendChannelOptions.map((ch) => {
               const selected = selectedChannels.includes(ch)
+              const hasWalledGardenSignal = walledGardenChannels.has(ch)
               return (
                 <button
                   key={ch}
@@ -568,6 +873,7 @@ export default function MMMDataSourceStep({ onMappingComplete, initialPlatformDr
                   }}
                 >
                   {channelLabel(ch)}
+                  {hasWalledGardenSignal ? ' · exposure' : ''}
                 </button>
               )
             })}
@@ -579,16 +885,92 @@ export default function MMMDataSourceStep({ onMappingComplete, initialPlatformDr
           )}
         </div>
 
-        {covariateOptions.length > 0 && (
-          <div style={{ marginBottom: t.space.lg }}>
-            <label style={{ display: 'block', fontSize: t.font.sizeSm, fontWeight: t.font.weightMedium, color: t.color.textSecondary, marginBottom: t.space.sm }}>
-              Optional covariates
-            </label>
-            <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.textMuted }}>
-              {covariateOptions.join(', ')} (not yet used in builder)
-            </p>
-          </div>
-        )}
+        <div
+          style={{
+            marginBottom: t.space.lg,
+            border: `1px solid ${t.color.borderLight}`,
+            borderRadius: t.radius.md,
+            background: t.color.bg,
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => setShowAdvancedControls((value) => !value)}
+            aria-expanded={showAdvancedControls}
+            style={{
+              width: '100%',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: t.space.md,
+              padding: t.space.md,
+              border: 'none',
+              background: 'transparent',
+              color: t.color.text,
+              cursor: 'pointer',
+              textAlign: 'left',
+            }}
+          >
+            <span>
+              <span style={{ display: 'block', fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>
+                Advanced dataset controls
+              </span>
+              <span style={{ display: 'block', marginTop: 2, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                Media basis: {mediaInputMode === 'synthetic_impressions' ? 'synthetic impressions' : 'spend'}{covariateOptions.length ? ` · ${covariateOptions.length} covariates available` : ''}
+              </span>
+            </span>
+            <span style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              {showAdvancedControls ? 'Hide' : 'Show'}
+            </span>
+          </button>
+          {showAdvancedControls && (
+            <div style={{ padding: `${t.space.sm}px ${t.space.md}px ${t.space.md}`, borderTop: `1px solid ${t.color.borderLight}` }}>
+              <div style={{ marginBottom: t.space.lg }}>
+                <label style={{ display: 'block', fontSize: t.font.sizeSm, fontWeight: t.font.weightMedium, color: t.color.textSecondary, marginBottom: t.space.sm }}>
+                  Media response basis
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: t.space.sm }}>
+                  {(platformOptions?.media_input_modes ?? [
+                    { id: 'spend', label: 'Spend response', description: 'Model from spend and use synthetic impressions as diagnostics.' },
+                    { id: 'synthetic_impressions', label: 'Synthetic impression response', description: 'Model from normalized exposure pressure.' },
+                  ]).map((mode) => {
+                    const selected = mediaInputMode === mode.id
+                    return (
+                      <button
+                        key={mode.id}
+                        type="button"
+                        onClick={() => setMediaInputMode(mode.id)}
+                        style={{
+                          textAlign: 'left',
+                          padding: t.space.md,
+                          borderRadius: t.radius.md,
+                          border: `1px solid ${selected ? t.color.accent : t.color.borderLight}`,
+                          background: selected ? t.color.accentMuted : t.color.surface,
+                          color: t.color.text,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold }}>{mode.label}</div>
+                        <div style={{ marginTop: 4, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>{mode.description}</div>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {covariateOptions.length > 0 && (
+                <div>
+                  <label style={{ display: 'block', fontSize: t.font.sizeSm, fontWeight: t.font.weightMedium, color: t.color.textSecondary, marginBottom: t.space.sm }}>
+                    Optional covariates
+                  </label>
+                  <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.textMuted }}>
+                    {covariateOptions.join(', ')} (not yet used in builder)
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
 
         <button
           type="button"

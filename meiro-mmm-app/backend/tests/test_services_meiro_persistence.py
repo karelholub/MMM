@@ -5,6 +5,10 @@ from sqlalchemy.exc import DatabaseError
 
 from app.db import SessionLocal
 from app.models_config_dq import MeiroRawBatch, MeiroReplayRun, MeiroReplaySnapshot
+from app.services_meiro_event_profile_state import (
+    MeiroEventProfileStateUnavailableError,
+    upsert_meiro_event_profile_state,
+)
 from app.services_meiro_raw_batches import MeiroRawBatchUnavailableError, record_meiro_raw_batch
 from app.services_meiro_replay_runs import record_meiro_replay_run
 from app.services_meiro_replay_snapshots import create_meiro_replay_snapshot
@@ -85,6 +89,38 @@ def test_record_meiro_raw_batch_raises_unavailable_on_corrupt_sqlite() -> None:
             replace=False,
             records_count=1,
             metadata_json={"ip": "127.0.0.1"},
+        )
+
+
+def test_upsert_meiro_event_profile_state_raises_unavailable_on_corrupt_sqlite() -> None:
+    class FakeQuery:
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def all(self):
+            return []
+
+    class FakeSession:
+        def query(self, _model):
+            return FakeQuery()
+
+        def add(self, _item) -> None:
+            return None
+
+        def rollback(self) -> None:
+            return None
+
+        def commit(self) -> None:
+            raise DatabaseError(
+                "INSERT INTO meiro_event_profile_state ...",
+                {},
+                sqlite3.DatabaseError("database disk image is malformed"),
+            )
+
+    with pytest.raises(MeiroEventProfileStateUnavailableError):
+        upsert_meiro_event_profile_state(
+            FakeSession(),
+            profiles=[{"customer_id": "cust-1", "touchpoints": [], "conversions": []}],
         )
 
 

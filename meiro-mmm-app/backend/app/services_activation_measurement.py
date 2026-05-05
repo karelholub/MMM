@@ -188,6 +188,50 @@ def _profile_id(journey: Dict[str, Any]) -> str:
     return _as_text(customer.get("id") or journey.get("customer_id") or journey.get("profile_id"))
 
 
+def _normalize_segment_target(value: Any) -> str:
+    text = _as_text(value)
+    return text[6:] if text.startswith("meiro:") else text
+
+
+def _journey_segment_values(journey: Dict[str, Any]) -> set[str]:
+    values: set[str] = set()
+
+    def _capture(raw: Any) -> None:
+        if raw in (None, "", []):
+            return
+        if isinstance(raw, list):
+            for item in raw:
+                _capture(item)
+            return
+        if isinstance(raw, dict):
+            for key in ("id", "segment_id", "external_segment_id", "key", "slug", "uuid", "name", "label"):
+                value = _normalize_segment_target(raw.get(key))
+                if value:
+                    values.add(value)
+            return
+        value = _normalize_segment_target(raw)
+        if value:
+            values.add(value)
+
+    _capture(journey.get("segments"))
+    customer = journey.get("customer") if isinstance(journey.get("customer"), dict) else {}
+    _capture(customer.get("segments"))
+    for key in ("profile", "user"):
+        nested = journey.get(key)
+        if isinstance(nested, dict):
+            _capture(nested.get("segments"))
+    return values
+
+
+def _matches_segment_scope(journey: Dict[str, Any], segment_id: Optional[str], segment_aliases: Optional[Sequence[str]]) -> bool:
+    targets = {_normalize_segment_target(segment_id)}
+    targets.update(_normalize_segment_target(value) for value in (segment_aliases or []))
+    targets = {target for target in targets if target}
+    if not targets:
+        return True
+    return bool(targets.intersection(_journey_segment_values(journey)))
+
+
 def _first_conversion(journey: Dict[str, Any]) -> Dict[str, Any]:
     conversions = journey.get("conversions") if isinstance(journey.get("conversions"), list) else []
     return conversions[0] if conversions and isinstance(conversions[0], dict) else {}
@@ -200,11 +244,15 @@ def _matches_filters(
     object_type: str,
     object_id: str,
     match_aliases: Optional[Sequence[str]],
+    segment_id: Optional[str],
+    segment_aliases: Optional[Sequence[str]],
     start: Optional[datetime],
     end: Optional[datetime],
     conversion_key: Optional[str],
 ) -> bool:
     if conversion_key and _as_text(journey.get("kpi_type") or journey.get("conversion_key")) != _as_text(conversion_key):
+        return False
+    if not _matches_segment_scope(journey, segment_id, segment_aliases):
         return False
     if not _in_bounds(touchpoint.get("ts") or touchpoint.get("timestamp"), start, end):
         return False
@@ -220,6 +268,8 @@ def build_activation_measurement_summary(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     conversion_key: Optional[str] = None,
+    segment_id: Optional[str] = None,
+    segment_aliases: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     resolved_type = _as_text(object_type).lower()
     resolved_id = _as_text(object_id)
@@ -230,6 +280,8 @@ def build_activation_measurement_summary(
 
     start, end = _date_bounds(date_from, date_to)
     resolved_aliases = sorted(_match_targets("", match_aliases))
+    resolved_segment_id = _normalize_segment_target(segment_id)
+    resolved_segment_aliases = sorted(_normalize_segment_target(value) for value in (segment_aliases or []) if _normalize_segment_target(value))
     matched_touchpoints: List[Dict[str, Any]] = []
     matched_journey_ids: set[str] = set()
     matched_profiles: set[str] = set()
@@ -247,6 +299,8 @@ def build_activation_measurement_summary(
             object_type=resolved_type,
             object_id=resolved_id,
             match_aliases=resolved_aliases,
+            segment_id=resolved_segment_id,
+            segment_aliases=resolved_segment_aliases,
             start=start,
             end=end,
             conversion_key=conversion_key,
@@ -289,6 +343,8 @@ def build_activation_measurement_summary(
             "date_from": date_from,
             "date_to": date_to,
             "conversion_key": conversion_key,
+            "segment_id": resolved_segment_id or None,
+            "segment_aliases": resolved_segment_aliases,
         },
         "summary": {
             "matched_touchpoints": touchpoint_count,
@@ -351,6 +407,8 @@ def build_activation_measurement_evidence(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     conversion_key: Optional[str] = None,
+    segment_id: Optional[str] = None,
+    segment_aliases: Optional[Sequence[str]] = None,
     limit: int = 20,
 ) -> Dict[str, Any]:
     resolved_type = _as_text(object_type).lower()
@@ -362,6 +420,8 @@ def build_activation_measurement_evidence(
 
     start, end = _date_bounds(date_from, date_to)
     resolved_aliases = sorted(_match_targets("", match_aliases))
+    resolved_segment_id = _normalize_segment_target(segment_id)
+    resolved_segment_aliases = sorted(_normalize_segment_target(value) for value in (segment_aliases or []) if _normalize_segment_target(value))
     resolved_limit = max(1, min(int(limit or 20), 100))
     items: List[Dict[str, Any]] = []
     total_matches = 0
@@ -373,6 +433,8 @@ def build_activation_measurement_evidence(
             object_type=resolved_type,
             object_id=resolved_id,
             match_aliases=resolved_aliases,
+            segment_id=resolved_segment_id,
+            segment_aliases=resolved_segment_aliases,
             start=start,
             end=end,
             conversion_key=conversion_key,
@@ -432,6 +494,8 @@ def build_activation_measurement_evidence(
             "date_from": date_from,
             "date_to": date_to,
             "conversion_key": conversion_key,
+            "segment_id": resolved_segment_id or None,
+            "segment_aliases": resolved_segment_aliases,
         },
         "total_matches": total_matches,
         "limit": resolved_limit,

@@ -4903,6 +4903,12 @@ export default function Journeys({
                         <div>
                           Audience size: {selectedHypothesisOperationalSegment.size != null ? selectedHypothesisOperationalSegment.size.toLocaleString() : 'Unknown'}
                         </div>
+                        {selectedHypothesisOperationalSegment.audience_capability ? (
+                          <div>
+                            Capability: <strong style={{ color: t.color.text }}>{selectedHypothesisOperationalSegment.audience_capability.label || selectedHypothesisOperationalSegment.audience_capability.level}</strong>
+                            {selectedHypothesisOperationalSegment.audience_capability.reason ? ` · ${selectedHypothesisOperationalSegment.audience_capability.reason}` : ''}
+                          </div>
+                        ) : null}
                         <div>
                           Use this when the hypothesis targets an operational audience, not when you want to compare analytical journey behavior.
                         </div>

@@ -73,6 +73,13 @@ interface MeiroIntegrationPanelProps {
   selectedQuarantineRun?: MeiroQuarantineRun | null
   selectedQuarantineRunLoading?: boolean
   selectedQuarantineRunError?: string | null
+  pipelineAudienceScope?: {
+    id?: string
+    external_segment_id?: string | null
+    name?: string
+    source?: string
+    source_label?: string
+  } | null
   relativeTime: (iso?: string | null) => string
   setOauthToast: Dispatch<SetStateAction<string | null>>
   onTestMeiro: () => void
@@ -241,6 +248,7 @@ export default function MeiroIntegrationPanel(props: MeiroIntegrationPanelProps)
           selectedQuarantineRun={props.selectedQuarantineRun}
           selectedQuarantineRunLoading={props.selectedQuarantineRunLoading || false}
           selectedQuarantineRunError={props.selectedQuarantineRunError}
+          pipelineAudienceScope={props.pipelineAudienceScope}
           relativeTime={props.relativeTime}
           onDryRun={props.onDryRun}
           onImportFromMeiro={props.onImportFromMeiro}

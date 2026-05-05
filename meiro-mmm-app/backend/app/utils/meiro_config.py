@@ -1,11 +1,13 @@
 """Meiro integration config: metadata, mapping, webhook stats."""
 import json
+import os
 import secrets
 import threading
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
+from urllib.parse import urlparse
 
 # Store in app/data/ alongside other meiro files
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -13,7 +15,105 @@ CONFIG_PATH = DATA_DIR / "meiro_config.json"
 WEBHOOK_ARCHIVE_PATH = DATA_DIR / "meiro_webhook_archive.jsonl"
 EVENT_ARCHIVE_PATH = DATA_DIR / "meiro_event_archive.jsonl"
 MEIRO_CDP_PLATFORM = "meiro_cdp"
+DEFAULT_TARGET_INSTANCE_URL = "https://meiro-internal.eu.pipes.meiro.io"
 _CONFIG_LOCK = threading.RLock()
+
+
+def _normalized_url(value: Any) -> str:
+    raw = str(value or "").strip().rstrip("/")
+    if raw and "://" not in raw:
+        raw = f"https://{raw}"
+    return raw
+
+
+def _url_host(value: Any) -> str:
+    normalized = _normalized_url(value)
+    if not normalized:
+        return ""
+    try:
+        return (urlparse(normalized).hostname or "").lower()
+    except Exception:
+        return ""
+
+
+def get_target_instance_url() -> str:
+    return _normalized_url(
+        os.getenv("MEIRO_TARGET_INSTANCE_URL")
+        or os.getenv("MEIRO_PRISM_BASE_URL")
+        or os.getenv("MEIRO_PIPES_BASE_URL")
+        or DEFAULT_TARGET_INSTANCE_URL
+    )
+
+
+def get_target_instance_host() -> str:
+    return _url_host(get_target_instance_url())
+
+
+def instance_scope(url: Any) -> Dict[str, Any]:
+    configured_url = _normalized_url(url)
+    configured_host = _url_host(configured_url)
+    target_url = get_target_instance_url()
+    target_host = get_target_instance_host()
+    if not configured_url:
+        status = "not_configured"
+        reason = "No Meiro connector instance is configured."
+    elif configured_host == target_host:
+        status = "in_scope"
+        reason = "Configured instance matches the active Meiro Measurement target."
+    else:
+        status = "out_of_scope"
+        reason = f"Configured instance host '{configured_host or configured_url}' does not match target host '{target_host}'."
+    return {
+        "status": status,
+        "configured_url": configured_url or None,
+        "configured_host": configured_host or None,
+        "target_url": target_url,
+        "target_host": target_host,
+        "reason": reason,
+    }
+
+
+def instance_scope_is_strict() -> bool:
+    return str(os.getenv("MEIRO_STRICT_INSTANCE_SCOPE", "1")).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def require_target_instance(url: Any) -> None:
+    scope = instance_scope(url)
+    if instance_scope_is_strict() and scope.get("status") == "out_of_scope":
+        raise ValueError(
+            "This workspace is scoped to "
+            f"{scope.get('target_url')}. The configured Meiro instance is "
+            f"{scope.get('configured_url') or 'not set'}."
+        )
+
+
+def archive_source_metadata() -> Dict[str, Any]:
+    return {
+        "source_instance_url": get_target_instance_url(),
+        "source_instance_host": get_target_instance_host(),
+        "source_scope_status": "target_instance",
+    }
+
+
+def summarize_archive_source_scope(*, entries: int, verified_entries: int, out_of_scope_entries: int = 0) -> Dict[str, Any]:
+    legacy_unverified_entries = max(0, int(entries or 0) - int(verified_entries or 0) - int(out_of_scope_entries or 0))
+    status = (
+        "empty"
+        if int(entries or 0) <= 0
+        else "out_of_scope"
+        if out_of_scope_entries > 0
+        else "legacy_unverified"
+        if legacy_unverified_entries > 0
+        else "target_verified"
+    )
+    return {
+        "target_url": get_target_instance_url(),
+        "target_host": get_target_instance_host(),
+        "verified_entries": int(verified_entries or 0),
+        "legacy_unverified_entries": legacy_unverified_entries,
+        "out_of_scope_entries": int(out_of_scope_entries or 0),
+        "status": status,
+    }
 
 
 def _backup_path() -> Path:
@@ -230,11 +330,20 @@ def query_event_archive_entries(
 
 def get_webhook_archive_status() -> Dict[str, Any]:
     if not WEBHOOK_ARCHIVE_PATH.exists():
-        return {"available": False, "entries": 0, "profiles_received": 0, "last_received_at": None, "parser_versions": []}
+        return {
+            "available": False,
+            "entries": 0,
+            "profiles_received": 0,
+            "last_received_at": None,
+            "parser_versions": [],
+            "source_scope": summarize_archive_source_scope(entries=0, verified_entries=0),
+        }
     entries = 0
     profiles_received = 0
     last_received_at: Optional[str] = None
     parser_versions: set[str] = set()
+    verified_entries = 0
+    out_of_scope_entries = 0
     try:
         with WEBHOOK_ARCHIVE_PATH.open("r", encoding="utf-8") as handle:
             for line in handle:
@@ -258,24 +367,51 @@ def get_webhook_archive_status() -> Dict[str, Any]:
                 parser_version = parsed.get("parser_version")
                 if isinstance(parser_version, str) and parser_version:
                     parser_versions.add(parser_version)
+                source_host = str(parsed.get("source_instance_host") or "").strip().lower()
+                source_status = str(parsed.get("source_scope_status") or "").strip().lower()
+                if source_host and source_host == get_target_instance_host():
+                    verified_entries += 1
+                elif source_status == "out_of_scope":
+                    out_of_scope_entries += 1
     except Exception:
-        return {"available": False, "entries": 0, "profiles_received": 0, "last_received_at": None, "parser_versions": []}
+        return {
+            "available": False,
+            "entries": 0,
+            "profiles_received": 0,
+            "last_received_at": None,
+            "parser_versions": [],
+            "source_scope": summarize_archive_source_scope(entries=0, verified_entries=0),
+        }
     return {
         "available": entries > 0,
         "entries": entries,
         "profiles_received": profiles_received,
         "last_received_at": last_received_at,
         "parser_versions": sorted(parser_versions),
+        "source_scope": summarize_archive_source_scope(
+            entries=entries,
+            verified_entries=verified_entries,
+            out_of_scope_entries=out_of_scope_entries,
+        ),
     }
 
 
 def get_event_archive_status() -> Dict[str, Any]:
     if not EVENT_ARCHIVE_PATH.exists():
-        return {"available": False, "entries": 0, "events_received": 0, "last_received_at": None, "parser_versions": []}
+        return {
+            "available": False,
+            "entries": 0,
+            "events_received": 0,
+            "last_received_at": None,
+            "parser_versions": [],
+            "source_scope": summarize_archive_source_scope(entries=0, verified_entries=0),
+        }
     entries = 0
     events_received = 0
     last_received_at: Optional[str] = None
     parser_versions: set[str] = set()
+    verified_entries = 0
+    out_of_scope_entries = 0
     try:
         with EVENT_ARCHIVE_PATH.open("r", encoding="utf-8") as handle:
             for line in handle:
@@ -299,14 +435,32 @@ def get_event_archive_status() -> Dict[str, Any]:
                 parser_version = parsed.get("parser_version")
                 if isinstance(parser_version, str) and parser_version:
                     parser_versions.add(parser_version)
+                source_host = str(parsed.get("source_instance_host") or "").strip().lower()
+                source_status = str(parsed.get("source_scope_status") or "").strip().lower()
+                if source_host and source_host == get_target_instance_host():
+                    verified_entries += 1
+                elif source_status == "out_of_scope":
+                    out_of_scope_entries += 1
     except Exception:
-        return {"available": False, "entries": 0, "events_received": 0, "last_received_at": None, "parser_versions": []}
+        return {
+            "available": False,
+            "entries": 0,
+            "events_received": 0,
+            "last_received_at": None,
+            "parser_versions": [],
+            "source_scope": summarize_archive_source_scope(entries=0, verified_entries=0),
+        }
     return {
         "available": entries > 0,
         "entries": entries,
         "events_received": events_received,
         "last_received_at": last_received_at,
         "parser_versions": sorted(parser_versions),
+        "source_scope": summarize_archive_source_scope(
+            entries=entries,
+            verified_entries=verified_entries,
+            out_of_scope_entries=out_of_scope_entries,
+        ),
     }
 
 

@@ -24,7 +24,13 @@ import pandas as pd
 import requests
 
 from app.utils.token_store import save_token, get_token, delete_token
-from app.utils.meiro_config import set_last_test_at, get_last_test_at
+from app.utils.meiro_config import (
+    get_last_test_at,
+    get_target_instance_url,
+    instance_scope,
+    require_target_instance,
+    set_last_test_at,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +43,7 @@ PLATFORM_KEY = "meiro_cdp"
 
 def save_config(api_base_url: str, api_key: str) -> None:
     """Store Meiro CDP credentials in the encrypted token store."""
+    require_target_instance(api_base_url)
     save_token(PLATFORM_KEY, {
         "access_token": api_key,
         "api_base_url": api_base_url,
@@ -77,6 +84,8 @@ def get_connection_metadata() -> Optional[Dict[str, Any]]:
         "api_base_url": base,
         "has_key": bool(cfg.get("api_key")),
         "last_test_at": get_last_test_at(),
+        "target_instance_url": get_target_instance_url(),
+        "instance_scope": instance_scope(base),
     }
 
 
@@ -119,6 +128,10 @@ def test_connection(api_base_url: str, api_key: str) -> Dict[str, Any]:
     Returns {"ok": True, "version": "..."} on success.
     """
     try:
+        require_target_instance(api_base_url)
+    except ValueError as exc:
+        return {"ok": False, "code": "out_of_scope_instance", "message": str(exc), "instance_scope": instance_scope(api_base_url)}
+    try:
         _get(f"{api_base_url.rstrip('/')}/api/v1/attributes", api_key, params={"limit": 1})
         return {"ok": True, "message": "Connection successful"}
     except requests.RequestException as exc:
@@ -133,6 +146,7 @@ def list_attributes(api_base_url: Optional[str] = None, api_key: Optional[str] =
             raise ValueError("Meiro CDP not configured")
         api_base_url = cfg["api_base_url"]
         api_key = cfg["api_key"]
+    require_target_instance(api_base_url)
 
     data = _get(f"{api_base_url.rstrip('/')}/api/v1/attributes", api_key)
     return data.get("data", data) if isinstance(data, dict) else data
@@ -146,6 +160,7 @@ def list_events(api_base_url: Optional[str] = None, api_key: Optional[str] = Non
             raise ValueError("Meiro CDP not configured")
         api_base_url = cfg["api_base_url"]
         api_key = cfg["api_key"]
+    require_target_instance(api_base_url)
 
     data = _get(f"{api_base_url.rstrip('/')}/api/v1/events", api_key)
     return data.get("data", data) if isinstance(data, dict) else data
@@ -159,6 +174,7 @@ def list_segments(api_base_url: Optional[str] = None, api_key: Optional[str] = N
             raise ValueError("Meiro CDP not configured")
         api_base_url = cfg["api_base_url"]
         api_key = cfg["api_key"]
+    require_target_instance(api_base_url)
 
     data = _get(f"{api_base_url.rstrip('/')}/api/v1/segments", api_key)
     return data.get("data", data) if isinstance(data, dict) else data
@@ -189,6 +205,7 @@ def create_export(
             raise ValueError("Meiro CDP not configured")
         api_base_url = cfg["api_base_url"]
         api_key = cfg["api_key"]
+    require_target_instance(api_base_url)
 
     body: Dict[str, Any] = {
         "date_from": since,
@@ -223,6 +240,7 @@ def poll_export(
             raise ValueError("Meiro CDP not configured")
         api_base_url = cfg["api_base_url"]
         api_key = cfg["api_key"]
+    require_target_instance(api_base_url)
 
     deadline = time.time() + max_wait
     while time.time() < deadline:

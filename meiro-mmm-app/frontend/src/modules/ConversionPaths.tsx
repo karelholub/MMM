@@ -670,6 +670,11 @@ export default function ConversionPaths() {
 
   const data = pathsQuery.data
   const t = tokens
+  const latestEventReplay = journeys?.readiness?.details?.latest_event_replay ?? journeys?.readiness?.summary?.latest_event_replay ?? null
+  const latestEventReplayDiagnostics = latestEventReplay?.diagnostics
+  const sourceLineage = latestEventReplayDiagnostics?.events_loaded
+    ? `Pipes raw events -> replay/import -> ${data?.source || 'journey outputs'}`
+    : `Stored journey outputs -> ${data?.source || 'journey outputs'}`
 
   const channelFreq = data?.channel_frequency ?? {}
   const totalTouchpoints = Object.values(channelFreq).reduce((s, n) => s + n, 0)
@@ -1344,6 +1349,7 @@ export default function ConversionPaths() {
               items={[
                 { label: 'Journey definition', value: <strong style={{ fontWeight: t.font.weightSemibold }}>{selectedDefinitionName}</strong> },
                 { label: 'Data source', value: data?.source || '—' },
+                { label: 'Source lineage', value: sourceLineage },
                 { label: 'Selected period', value: periodLabel },
                 {
                   label: 'Config basis',
@@ -1369,6 +1375,14 @@ export default function ConversionPaths() {
                 <strong>{data?.total_journeys.toLocaleString() ?? '—'}</strong> materialized journey outputs through{' '}
                 <strong>{data?.date_to ?? '—'}</strong>.
               </div>
+            ) : null}
+            {latestEventReplayDiagnostics?.events_loaded ? (
+              <SurfaceBasisNotice>
+                This view is reading materialized path outputs created from the latest Pipes raw-event replay: {' '}
+                <strong>{latestEventReplayDiagnostics.events_loaded.toLocaleString()}</strong> events loaded, {' '}
+                <strong>{(latestEventReplayDiagnostics.profiles_reconstructed ?? 0).toLocaleString()}</strong> profiles reconstructed, {' '}
+                <strong>{(latestEventReplayDiagnostics.journeys_persisted ?? 0).toLocaleString()}</strong> journeys persisted.
+              </SurfaceBasisNotice>
             ) : null}
             {!canCompareToWorkspaceLiveJourneys && data ? (
               <SurfaceBasisNotice>

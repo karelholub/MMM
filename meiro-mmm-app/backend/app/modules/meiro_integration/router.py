@@ -12,6 +12,7 @@ from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Requ
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import OperationalError
 
+from app import services_meiro_api
 from app.connectors import meiro_cdp
 from app.modules.meiro_integration.schemas import (
     MeiroCDPConnectRequest,
@@ -24,9 +25,12 @@ from app.utils.meiro_config import (
     append_event_archive_entry,
     append_auto_replay_history,
     append_webhook_archive_entry,
+    archive_source_metadata,
     append_webhook_event,
     get_event_archive_status,
     get_last_test_at,
+    get_target_instance_host,
+    get_target_instance_url,
     get_mapping,
     get_mapping_state,
     get_auto_replay_state,
@@ -44,6 +48,7 @@ from app.utils.meiro_config import (
     save_mapping,
     save_pull_config,
     set_webhook_received,
+    instance_scope,
     update_auto_replay_state,
     update_mapping_approval,
 )
@@ -69,6 +74,7 @@ from app.services_meiro_event_facts import (
 from app.services_meiro_profile_facts import list_meiro_profile_facts, upsert_meiro_profile_facts
 from app.services_meiro_replay_runs import list_meiro_replay_runs, record_meiro_replay_run
 from app.services_meiro_replay_snapshots import create_meiro_replay_snapshot
+from app.services_meiro_api import MeiroApiError
 from app.utils.taxonomy import load_taxonomy
 
 logger = logging.getLogger(__name__)
@@ -161,13 +167,24 @@ def _extract_payload_hints(payload_profiles: list[Any]) -> tuple[list[str], list
     return sorted(conversion_names)[:20], sorted(channels)[:20]
 
 
+def _event_payload_with_outer_fields(item: Any) -> Dict[str, Any]:
+    if not isinstance(item, dict):
+        return {}
+    nested = item.get("event_payload")
+    if not isinstance(nested, dict):
+        return item
+    merged = dict(nested)
+    for key, value in item.items():
+        if key != "event_payload" and key not in merged:
+            merged[key] = value
+    return merged
+
+
 def _extract_event_payload_hints(payload_events: list[Any]) -> tuple[list[str], list[str]]:
     event_names: set[str] = set()
     channels: set[str] = set()
     for item in payload_events[:200]:
-        event = item
-        if isinstance(item, dict) and isinstance(item.get("event_payload"), dict):
-            event = item.get("event_payload")
+        event = _event_payload_with_outer_fields(item)
         if not isinstance(event, dict):
             continue
         event_name = event.get("event_name") or event.get("event_type") or event.get("name") or event.get("type")
@@ -349,7 +366,10 @@ def _looks_like_touchpoint_name(value: Any) -> bool:
     token = _normalized_event_token(value)
     if not token:
         return False
-    return any(fragment in token for fragment in ("page_view", "session", "click", "impression", "visit", "landing", "view"))
+    decision_engine_touchpoints = {"inapp_message", "decision_action", "eligibility_check", "personalize"}
+    return token in decision_engine_touchpoints or any(
+        fragment in token for fragment in ("page_view", "session", "click", "impression", "visit", "landing", "view")
+    )
 
 
 def _looks_like_conversion_name(value: Any) -> bool:
@@ -376,7 +396,7 @@ def _build_raw_event_stream_diagnostics(*, event_archive_entries: list[Dict[str,
             continue
         batches += 1
         for item in entry.get("events") or []:
-            event = item.get("event_payload") if isinstance(item, dict) and isinstance(item.get("event_payload"), dict) else item
+            event = _event_payload_with_outer_fields(item)
             if not isinstance(event, dict):
                 continue
             total_events += 1
@@ -627,6 +647,9 @@ def create_router(
     register_auto_replay_runner_fn: Optional[Callable[[Callable[..., Dict[str, Any]]], None]] = None,
 ) -> APIRouter:
     router = APIRouter(tags=["meiro_integration"])
+
+    def _handle_meiro_api_error(exc: MeiroApiError) -> None:
+        raise HTTPException(status_code=exc.status_code, detail=exc.to_response())
 
     def _build_saved_mapping_config() -> Dict[str, Any]:
         saved = get_mapping()
@@ -1258,6 +1281,102 @@ def create_router(
                 "retryable": True,
             }
 
+    @router.get("/v1/meiro/api/status")
+    def meiro_api_status():
+        return services_meiro_api.get_safe_status()
+
+    @router.post("/v1/meiro/api/check-login")
+    def meiro_api_check_login():
+        try:
+            return services_meiro_api.check_login()
+        except MeiroApiError as exc:
+            _handle_meiro_api_error(exc)
+
+    @router.get("/v1/meiro/audience/profile")
+    def meiro_api_audience_profile(
+        attribute: str = Query(..., min_length=1),
+        value: str = Query(..., min_length=1),
+        categoryId: Optional[str] = Query(None),
+    ):
+        try:
+            return services_meiro_api.lookup_wbs_profile(attribute=attribute, value=value, category_id=categoryId)
+        except MeiroApiError as exc:
+            _handle_meiro_api_error(exc)
+
+    @router.get("/v1/meiro/audience/segments")
+    def meiro_api_audience_segments(
+        attribute: str = Query(..., min_length=1),
+        value: str = Query(..., min_length=1),
+        tag: Optional[str] = Query(None),
+    ):
+        _ = tag
+        try:
+            return services_meiro_api.lookup_wbs_segments(attribute=attribute, value=value)
+        except MeiroApiError as exc:
+            _handle_meiro_api_error(exc)
+
+    @router.get("/v1/meiro/native-campaigns")
+    def meiro_api_native_campaigns(
+        channel: Optional[str] = Query(None),
+        limit: int = Query(100, ge=1, le=500),
+        offset: int = Query(0, ge=0),
+        q: Optional[str] = Query(None),
+        includeDeleted: bool = Query(False),
+    ):
+        try:
+            return services_meiro_api.list_native_campaigns(
+                channel=channel,
+                limit=limit,
+                offset=offset,
+                q=q,
+                include_deleted=includeDeleted,
+            )
+        except MeiroApiError as exc:
+            _handle_meiro_api_error(exc)
+
+    @router.get("/v1/meiro/native-campaigns/{channel}/{campaign_id}")
+    def meiro_api_native_campaign_detail(channel: str, campaign_id: str):
+        try:
+            return services_meiro_api.get_native_campaign(channel=channel, campaign_id=campaign_id)
+        except MeiroApiError as exc:
+            _handle_meiro_api_error(exc)
+
+    @router.get("/v1/meiro/reports/search")
+    def meiro_reporting_search(
+        q: str = Query(..., min_length=1),
+        model: Optional[str] = Query(None),
+        limit: int = Query(20, ge=1, le=100),
+    ):
+        try:
+            return services_meiro_api.search_reporting_assets(q=q, model=model, limit=limit)
+        except MeiroApiError as exc:
+            _handle_meiro_api_error(exc)
+
+    @router.get("/v1/meiro/reports/dashboard/{dashboard_id}")
+    def meiro_reporting_dashboard(dashboard_id: int):
+        try:
+            return services_meiro_api.get_reporting_dashboard(dashboard_id)
+        except MeiroApiError as exc:
+            _handle_meiro_api_error(exc)
+
+    @router.get("/v1/meiro/reports/card/{card_id}")
+    def meiro_reporting_card(card_id: int):
+        try:
+            return services_meiro_api.get_reporting_card(card_id)
+        except MeiroApiError as exc:
+            _handle_meiro_api_error(exc)
+
+    @router.post("/v1/meiro/reports/card/{card_id}/query-json")
+    def meiro_reporting_card_query_json(
+        card_id: int,
+        parameters: Optional[List[Dict[str, Any]]] = Body(default=None),
+        limit: int = Query(100, ge=1, le=1000),
+    ):
+        try:
+            return services_meiro_api.query_reporting_card_json(card_id, parameters=parameters, limit=limit)
+        except MeiroApiError as exc:
+            _handle_meiro_api_error(exc)
+
     @router.post("/api/connectors/meiro/test")
     def meiro_test(req: MeiroCDPTestRequest = MeiroCDPTestRequest()):
         api_base_url = req.api_base_url
@@ -1271,7 +1390,10 @@ def create_router(
         result = meiro_cdp.test_connection(api_base_url, api_key)
         if result.get("ok"):
             if req.save_on_success:
-                meiro_cdp.save_config(api_base_url, api_key)
+                try:
+                    meiro_cdp.save_config(api_base_url, api_key)
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
             meiro_cdp.update_last_test_at()
             return {"ok": True, "message": "Connection successful"}
         raise HTTPException(status_code=400, detail=result.get("message", "Connection failed"))
@@ -1280,14 +1402,20 @@ def create_router(
     def meiro_connect(req: MeiroCDPConnectRequest):
         result = meiro_cdp.test_connection(req.api_base_url, req.api_key)
         if result.get("ok"):
-            meiro_cdp.save_config(req.api_base_url, req.api_key)
+            try:
+                meiro_cdp.save_config(req.api_base_url, req.api_key)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             meiro_cdp.update_last_test_at()
             return {"message": "Connected to Meiro CDP", "connected": True}
         raise HTTPException(status_code=400, detail=result.get("message", "Connection failed"))
 
     @router.post("/api/connectors/meiro/save")
     def meiro_save(req: MeiroCDPConnectRequest):
-        meiro_cdp.save_config(req.api_base_url, req.api_key)
+        try:
+            meiro_cdp.save_config(req.api_base_url, req.api_key)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"message": "Credentials saved"}
 
     @router.delete("/api/connectors/meiro")
@@ -1310,6 +1438,10 @@ def create_router(
         return {
             "connected": meiro_cdp.is_connected(),
             "api_base_url": meta["api_base_url"] if meta else None,
+            "target_instance_url": get_target_instance_url(),
+            "target_instance_host": get_target_instance_host(),
+            "strict_instance_scope": True,
+            "cdp_instance_scope": (meta.get("instance_scope") if meta else instance_scope(None)),
             "last_test_at": meta["last_test_at"] if meta else get_last_test_at(),
             "has_key": meta["has_key"] if meta else False,
             "webhook_url": webhook_url,
@@ -1354,13 +1486,19 @@ def create_router(
     def meiro_events():
         if not meiro_cdp.is_connected():
             raise HTTPException(status_code=401, detail="Meiro CDP not connected")
-        return meiro_cdp.list_events()
+        try:
+            return meiro_cdp.list_events()
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.get("/api/connectors/meiro/segments")
     def meiro_segments():
         if not meiro_cdp.is_connected():
             raise HTTPException(status_code=401, detail="Meiro CDP not connected")
-        return meiro_cdp.list_segments()
+        try:
+            return meiro_cdp.list_segments()
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.post("/api/connectors/meiro/fetch")
     def meiro_fetch(req: MeiroCDPExportRequest):
@@ -1378,6 +1516,8 @@ def create_router(
             df.to_csv(out_path, index=False)
             get_datasets_obj()["meiro-cdp-export"] = {"path": out_path, "type": "sales"}
             return {"rows": len(df), "path": str(out_path), "dataset_id": "meiro-cdp-export"}
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc))
 
@@ -1532,6 +1672,7 @@ def create_router(
                     "replace": bool(replace),
                     "payload_shape": "array" if isinstance(body, list) else "object",
                     "received_count": int(len(profiles)),
+                    **archive_source_metadata(),
                     "profiles": profiles,
                 }
             )
@@ -1548,6 +1689,7 @@ def create_router(
                         "replace": bool(replace),
                         "payload_shape": "array" if isinstance(body, list) else "object",
                         "received_count": int(len(profiles)),
+                        **archive_source_metadata(),
                         "profiles": profiles,
                     },
                     received_at=now_iso,
@@ -1725,6 +1867,7 @@ def create_router(
                     "replace": bool(replace),
                     "payload_shape": "array" if isinstance(body, list) else "object",
                     "received_count": int(len(events)),
+                    **archive_source_metadata(),
                     "events": events,
                 }
             )
@@ -1741,6 +1884,7 @@ def create_router(
                         "replace": bool(replace),
                         "payload_shape": "array" if isinstance(body, list) else "object",
                         "received_count": int(len(events)),
+                        **archive_source_metadata(),
                         "events": events,
                     },
                     received_at=now_iso,
@@ -1778,13 +1922,34 @@ def create_router(
                     "reason": str(exc),
                 }
             rebuilt_profiles = rebuild_profiles_from_meiro_events_fn(events, dedup_config=get_pull_config())
-            upsert_meiro_event_profile_state(
-                db,
-                profiles=rebuilt_profiles,
-                latest_event_batch_db_id=(int(raw_batch.id) if getattr(raw_batch, "id", None) is not None else None),
-                reset=bool(replace),
-            )
+            event_profile_state_status = {"ok": True, "stored": True, "warning": None}
+            try:
+                upsert_meiro_event_profile_state(
+                    db,
+                    profiles=rebuilt_profiles,
+                    latest_event_batch_db_id=(int(raw_batch.id) if getattr(raw_batch, "id", None) is not None else None),
+                    reset=bool(replace),
+                )
+            except MeiroEventProfileStateUnavailableError as exc:
+                logger.warning("Canonical Meiro event-derived profile state is unavailable; continuing with archive + event facts", exc_info=True)
+                event_profile_state_status = {
+                    "ok": False,
+                    "stored": False,
+                    "warning": "Canonical event-derived profile-state storage is unavailable. Raw archive and event facts were still updated.",
+                    "reason": str(exc),
+                }
             payload_analysis = _analyze_payload(rebuilt_profiles)
+            warning_class = None
+            warning_detail = None
+            if not raw_batch_status["ok"]:
+                warning_class = "raw_batch_unavailable"
+                warning_detail = raw_batch_status["warning"]
+            elif not event_facts_status["ok"]:
+                warning_class = "event_facts_unavailable"
+                warning_detail = event_facts_status["warning"]
+            elif not event_profile_state_status["ok"]:
+                warning_class = "event_profile_state_unavailable"
+                warning_detail = event_profile_state_status["warning"]
             append_webhook_event(
                 {
                     "received_at": now_iso,
@@ -1807,10 +1972,8 @@ def create_router(
                     "error_class": None,
                     "ingest_kind": "events",
                     "reconstructed_profiles": len(rebuilt_profiles),
-                    "warning_class": None if raw_batch_status["ok"] and event_facts_status["ok"] else (
-                        "raw_batch_unavailable" if not raw_batch_status["ok"] else "event_facts_unavailable"
-                    ),
-                    "warning_detail": raw_batch_status["warning"] or event_facts_status["warning"],
+                    "warning_class": warning_class,
+                    "warning_detail": warning_detail,
                 },
                 max_items=100,
             )
@@ -1832,6 +1995,7 @@ def create_router(
                     "message": "Events saved. Use Replay archived webhook payloads or import from the event archive to build journeys.",
                     "raw_batch": raw_batch_status,
                     "event_facts": event_facts_status,
+                    "event_profile_state": event_profile_state_status,
                     "auto_replay": auto_replay_result,
                 },
             )
@@ -1946,6 +2110,7 @@ def create_router(
                 "replace": False,
                 "payload_shape": "contract_sample",
                 "received_count": len(events),
+                **archive_source_metadata(),
                 "events": events,
             }
         )
@@ -2142,11 +2307,12 @@ def create_router(
     @router.get("/api/connectors/meiro/webhook/suggestions")
     def meiro_webhook_suggestions(limit: int = Query(100, ge=1, le=500), db=Depends(get_db_dependency)):
         events = get_webhook_events(limit=limit)
+        current_pull_config = get_pull_config()
+        event_archive_entries = _get_event_archive_entries(db, limit=max(25, min(limit, 100)))
         raw_event_diagnostics = _build_raw_event_stream_diagnostics(
-            event_archive_entries=_get_event_archive_entries(db, limit=max(25, min(limit, 100))),
+            event_archive_entries=event_archive_entries,
             webhook_events=events,
         )
-        current_pull_config = get_pull_config()
         conversion_event_counts: Dict[str, int] = {}
         channel_counts: Dict[str, int] = {}
         source_counts: Dict[str, int] = {}
@@ -2163,6 +2329,7 @@ def create_router(
         dedup_key_counts: Dict[str, int] = {"conversion_id": 0, "order_id": 0, "event_id": 0}
         total_conversions = 0
         total_touchpoints = 0
+        raw_events_analyzed = 0
 
         def _merge_counts(target: Dict[str, int], incoming: Dict[str, Any]) -> None:
             for key, value in (incoming or {}).items():
@@ -2173,8 +2340,25 @@ def create_router(
                 if key:
                     target[key] = target.get(key, 0) + count
 
-        for event in events:
-            analysis = event.get("payload_analysis") if isinstance(event, dict) else None
+        raw_event_profiles: List[Dict[str, Any]] = []
+        for entry in event_archive_entries:
+            if not isinstance(entry, dict):
+                continue
+            entry_events = entry.get("events") or []
+            if isinstance(entry_events, list):
+                raw_events_analyzed += len(entry_events)
+                raw_event_profiles.extend(
+                    rebuild_profiles_from_meiro_events_fn(entry_events, dedup_config=current_pull_config)
+                )
+        raw_event_analysis = _analyze_payload(raw_event_profiles) if raw_event_profiles else None
+        stored_payload_analyses = [
+            event.get("payload_analysis")
+            for event in events
+            if isinstance(event, dict) and isinstance(event.get("payload_analysis"), dict)
+        ]
+        analysis_sources = [raw_event_analysis] if isinstance(raw_event_analysis, dict) and int(raw_event_analysis.get("touchpoint_count") or 0) > 0 else stored_payload_analyses
+
+        for analysis in analysis_sources:
             if not isinstance(analysis, dict):
                 continue
             total_conversions += int(analysis.get("conversion_count") or 0)
@@ -2569,7 +2753,8 @@ def create_router(
 
         return {
             "generated_at": datetime.utcnow().isoformat() + "Z",
-            "events_analyzed": len(events),
+            "events_analyzed": raw_events_analyzed or len(events),
+            "analysis_source": "event_archive" if raw_events_analyzed else "webhook_history",
             "total_conversions_observed": total_conversions,
             "total_touchpoints_observed": total_touchpoints,
             "event_stream_diagnostics": raw_event_diagnostics,
@@ -2666,6 +2851,9 @@ def create_router(
         saved = get_mapping()
         try:
             records = meiro_cdp.fetch_raw_events(since=since, until=until)
+        except ValueError as exc:
+            append_import_run_fn("meiro_pull", 0, "error", error=str(exc))
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
             append_import_run_fn("meiro_pull", 0, "error", error=str(exc))
             raise HTTPException(status_code=500, detail=str(exc))

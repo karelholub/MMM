@@ -16,6 +16,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
+from urllib.parse import parse_qs, urlparse
 
 from app.services_revenue_config import extract_revenue_entries, normalize_revenue_config
 from app.utils.taxonomy import load_taxonomy, normalize_touchpoint
@@ -45,6 +46,10 @@ INTERACTION_TYPE_ALIASES: Dict[str, str] = {
     "visit": "visit",
     "session": "visit",
     "page_view": "visit",
+    "personalize": "visit",
+    "eligibility_check": "visit",
+    "inapp_message": "impression",
+    "decision_action": "click",
     "direct": "direct",
 }
 
@@ -124,6 +129,57 @@ def _extract_path(record: Any, path: str, fallback: Any = None) -> Any:
         if current is None:
             return fallback
     return current
+
+
+def _merge_event_payload(item: Any) -> Dict[str, Any]:
+    if not isinstance(item, dict):
+        return {}
+    nested = item.get("event_payload")
+    if not isinstance(nested, dict):
+        return item
+    merged = dict(nested)
+    for key, value in item.items():
+        if key != "event_payload" and key not in merged:
+            merged[key] = value
+    return merged
+
+
+def _query_value_from_url(url: Any, key: str) -> Optional[str]:
+    if not isinstance(url, str) or not url.strip():
+        return None
+    try:
+        values = parse_qs(urlparse(url).query).get(key) or []
+    except Exception:
+        return None
+    for value in values:
+        if value not in (None, "", []):
+            return str(value)
+    return None
+
+
+def _augment_event_with_url_fields(event: Dict[str, Any]) -> Dict[str, Any]:
+    context = event.get("context") if isinstance(event.get("context"), dict) else {}
+    page_location = _first_present(event.get("page_location"), event.get("url"), context.get("url"))
+    page_referrer = _first_present(event.get("page_referrer"), event.get("referrer"), context.get("referrer"))
+    if page_location not in (None, "", []) and event.get("page_location") in (None, "", []):
+        event["page_location"] = page_location
+    if page_referrer not in (None, "", []) and event.get("page_referrer") in (None, "", []):
+        event["page_referrer"] = page_referrer
+    for source_key, target_key in (
+        ("utm_source", "utm_source"),
+        ("utm_medium", "utm_medium"),
+        ("utm_campaign", "utm_campaign"),
+        ("utm_content", "utm_content"),
+        ("utm_term", "utm_term"),
+        ("gclid", "click_id"),
+        ("msclkid", "click_id"),
+        ("fbclid", "click_id"),
+    ):
+        if event.get(target_key) in (None, "", []):
+            value = _query_value_from_url(page_location, source_key)
+            if value not in (None, "", []):
+                event[target_key] = value
+    return event
 
 
 def _iso_datetime(dt: datetime) -> str:
@@ -232,7 +288,7 @@ def extract_customer_ids_from_meiro_events(raw_events: List[Any]) -> List[str]:
     profile_ids: List[str] = []
     seen: Set[str] = set()
     for idx, item in enumerate(raw_events):
-        event = item.get("event_payload") if isinstance(item, dict) and isinstance(item.get("event_payload"), dict) else item
+        event = _augment_event_with_url_fields(_merge_event_payload(item))
         if not isinstance(event, dict):
             continue
         profile_id = _extract_customer_id_from_event(event, idx).strip()
@@ -247,6 +303,7 @@ def _extract_event_timestamp(event: Dict[str, Any]) -> Optional[str]:
     return _candidate_timestamp(
         event.get("ts"),
         event.get("timestamp"),
+        event.get("event_time"),
         event.get("occurred_at"),
         event.get("created_at"),
         event.get("event_date"),
@@ -509,11 +566,11 @@ def _looks_like_conversion_event(
         return True
     if isinstance(converted, str) and converted.strip().lower() in {"true", "1", "yes"}:
         return True
-    if interaction_type in {"impression", "click", "visit", "direct"}:
-        return False
     for key in ("conversion_id", "order_id", "lead_id", "original_conversion_id"):
         if event.get(key) not in (None, "", []):
             return True
+    if interaction_type in {"impression", "click", "visit", "direct"}:
+        return False
     value = event.get("value")
     if value not in (None, "", []):
         try:
@@ -539,6 +596,25 @@ def _looks_like_conversion_event(
     return False
 
 
+def _normalized_event_touchpoint(event: Dict[str, Any], taxonomy: Any) -> Dict[str, Any]:
+    return normalize_touchpoint(
+        {
+            "channel": event.get("channel"),
+            "source": _first_present(event.get("source"), event.get("utm_source")),
+            "medium": _first_present(event.get("medium"), event.get("utm_medium")),
+            "campaign": _first_present(event.get("campaign"), event.get("campaign_name"), event.get("utm_campaign")),
+            "utm_source": event.get("utm_source"),
+            "utm_medium": event.get("utm_medium"),
+            "utm_campaign": event.get("utm_campaign"),
+            "utm_content": event.get("utm_content"),
+            "page_location": _first_present(event.get("page_location"), event.get("url")),
+            "page_referrer": _first_present(event.get("page_referrer"), event.get("referrer")),
+            "creative": _first_present(event.get("creative"), event.get("utm_content")),
+        },
+        taxonomy,
+    )
+
+
 def rebuild_profiles_from_meiro_events(
     raw_events: List[Any],
     *,
@@ -546,13 +622,12 @@ def rebuild_profiles_from_meiro_events(
     only_profile_ids: Optional[Set[str] | List[str]] = None,
 ) -> List[Dict[str, Any]]:
     ingest_cfg = _normalize_meiro_dedup_config(dedup_config)
+    taxonomy = load_taxonomy()
     grouped: Dict[str, Dict[str, Any]] = {}
     seen_event_keys: Set[str] = set()
     profile_filter = {str(item).strip() for item in (only_profile_ids or []) if str(item).strip()} or None
     for idx, item in enumerate(raw_events):
-        event = item
-        if isinstance(item, dict) and isinstance(item.get("event_payload"), dict):
-            event = item.get("event_payload")
+        event = _augment_event_with_url_fields(_merge_event_payload(item))
         if not isinstance(event, dict):
             continue
         event_key = str(
@@ -600,22 +675,31 @@ def rebuild_profiles_from_meiro_events(
             adjustment_type=adjustment_type,
             ingest_cfg=ingest_cfg,
         )
+        normalized_touchpoint = _normalized_event_touchpoint(event, taxonomy)
         if looks_like_touchpoint and not looks_like_conversion:
+            utm: Dict[str, Any] = {}
+            if normalized_touchpoint.get("source") not in (None, "", []):
+                utm["source"] = normalized_touchpoint.get("source")
+            if normalized_touchpoint.get("medium") not in (None, "", []):
+                utm["medium"] = normalized_touchpoint.get("medium")
+            if normalized_touchpoint.get("campaign") not in (None, "", []):
+                utm["campaign"] = normalized_touchpoint.get("campaign")
+            if event.get("utm_content") not in (None, "", []):
+                utm["content"] = event.get("utm_content")
             touchpoint: Dict[str, Any] = {
                 "id": str(event.get("touchpoint_id") or event.get("id") or event.get("event_id") or f"tp_evt_{event_key[:12]}"),
                 "timestamp": timestamp,
-                "channel": _first_present(event.get("channel"), event.get("source"), event.get("utm_source"), "unknown"),
-                "source": _first_present(event.get("source"), event.get("utm_source")),
-                "medium": _first_present(event.get("medium"), event.get("utm_medium")),
-                "campaign": _first_present(
-                    event.get("campaign"),
-                    event.get("campaign_name"),
-                    event.get("utm_campaign"),
-                ),
+                "channel": _first_present(normalized_touchpoint.get("channel"), "unknown"),
+                "source": normalized_touchpoint.get("source"),
+                "medium": normalized_touchpoint.get("medium"),
+                "campaign": normalized_touchpoint.get("campaign"),
+                **({"utm": utm} if utm else {}),
                 "utm_source": event.get("utm_source"),
                 "utm_medium": event.get("utm_medium"),
                 "utm_campaign": event.get("utm_campaign"),
                 "utm_content": event.get("utm_content"),
+                "page_location": normalized_touchpoint.get("page_location"),
+                "page_referrer": normalized_touchpoint.get("page_referrer"),
                 "interaction_type": interaction_type,
                 "event_type": _first_present(event.get("event_type"), event.get("type"), event.get("event_name")),
                 "impression_id": event.get("impression_id"),
@@ -655,10 +739,22 @@ def rebuild_profiles_from_meiro_events(
             _compact_dict({
                 "id": str(event.get("id") or event.get("event_id") or f"tp_evt_{event_key[:12]}"),
                 "timestamp": timestamp,
-                "channel": _first_present(event.get("channel"), event.get("source"), "unknown"),
-                "source": _first_present(event.get("source"), event.get("utm_source")),
-                "medium": _first_present(event.get("medium"), event.get("utm_medium")),
-                "campaign": _first_present(event.get("campaign"), event.get("campaign_name"), event.get("utm_campaign")),
+                "channel": _first_present(normalized_touchpoint.get("channel"), "unknown"),
+                "source": normalized_touchpoint.get("source"),
+                "medium": normalized_touchpoint.get("medium"),
+                "campaign": normalized_touchpoint.get("campaign"),
+                "utm": {
+                    key: value
+                    for key, value in {
+                        "source": normalized_touchpoint.get("source"),
+                        "medium": normalized_touchpoint.get("medium"),
+                        "campaign": normalized_touchpoint.get("campaign"),
+                        "content": event.get("utm_content"),
+                    }.items()
+                    if value not in (None, "", [])
+                },
+                "page_location": normalized_touchpoint.get("page_location"),
+                "page_referrer": normalized_touchpoint.get("page_referrer"),
                 "event_type": _first_present(event.get("event_type"), event.get("type"), event.get("event_name")),
                 "interaction_type": interaction_type if interaction_type != "unknown" else "unknown",
                 **({"meta": {"activation": _extract_activation_measurement_meta(event)}} if _extract_activation_measurement_meta(event) else {}),

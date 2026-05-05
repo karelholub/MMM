@@ -471,14 +471,23 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
     totalObservedRevenue,
     visibleEntities.length,
   ])
+  const latestEventReplay =
+    journeysSummary?.readiness?.details?.latest_event_replay ??
+    journeysSummary?.readiness?.summary?.latest_event_replay ??
+    null
+  const latestEventReplayDiagnostics = latestEventReplay?.diagnostics
+  const sourceLineage = latestEventReplayDiagnostics?.events_loaded
+    ? 'Pipes raw events -> replay/import -> live attribution roles'
+    : 'Live attribution journeys -> role entities'
   const summaryItems = [
     { label: 'Period', value: `${dateFrom} – ${dateTo}` },
     { label: 'Scope', value: scope === 'channels' ? 'Channels' : 'Campaigns' },
     { label: 'Role metric', value: metric === 'conversions' ? 'Conversions' : 'Revenue' },
+    { label: 'Source lineage', value: sourceLineage },
     { label: 'KPI', value: String(conversionKey || 'Primary KPI') },
     { label: 'Model context', value: model.replace(/_/g, ' ') },
     { label: 'Config context', value: configId ? `${configId.slice(0, 8)}…` : 'Default active' },
-    { label: 'Focus segment', value: selectedSegment?.name || 'Workspace baseline' },
+    { label: 'Analytical segment', value: selectedSegment?.name || 'Workspace baseline' },
     { label: 'Journeys loaded', value: journeysSummary?.count?.toLocaleString() ?? '—' },
   ]
   const compareConversionsDelta = segmentCompareQuery.data?.deltas.conversions
@@ -604,7 +613,7 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
                 </select>
               </label>
               <label style={{ display: 'grid', gap: 6, fontSize: t.font.sizeSm }}>
-                Focus segment
+                Analytical segment
                 <select
                   value={selectedSegmentId}
                   onChange={(e) => setSelectedSegmentId(e.target.value)}
@@ -662,7 +671,7 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
                     `Scope: ${scope === 'channels' ? 'Channels' : 'Campaigns'}`,
                     `Metric: ${metric === 'conversions' ? 'Conversions' : 'Revenue'}`,
                     `Ranked by: ${ROLE_LABELS[focusRole]}`,
-                    `Focus segment: ${selectedSegment?.name || 'Workspace baseline'}`,
+                    `Analytical segment: ${selectedSegment?.name || 'Workspace baseline'}`,
                     `Top ${ROLE_LABELS[focusRole].toLowerCase()}: ${topFocusedEntity ? `${topFocusedEntity.label} (${metric === 'conversions' ? formatNumber(readRoleValue(topFocusedEntity, focusRole, metric)) : formatCurrency(readRoleValue(topFocusedEntity, focusRole, metric))})` : 'No ranked entity in the current slice'}`,
                   ]}
                 />
@@ -683,6 +692,11 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
         <ContextSummaryStrip items={summaryItems} minItemWidth={180} />
         <SurfaceBasisNotice marginTop={-t.space.md} marginBottom={t.space.lg}>
           Attribution Roles is a <strong>live config-aware</strong> view built from live attribution journeys and derived role entities. It is directly comparable to Attribution Comparison and Path Archetypes, but only directionally comparable to workspace-fact or materialized-output pages.
+          {latestEventReplayDiagnostics?.events_loaded ? (
+            <>
+              {' '}Current role entities are fed by the latest Pipes raw-event replay: <strong>{latestEventReplayDiagnostics.events_loaded.toLocaleString()}</strong> events loaded and <strong>{(latestEventReplayDiagnostics.journeys_persisted ?? 0).toLocaleString()}</strong> journeys persisted.
+            </>
+          ) : null}
         </SurfaceBasisNotice>
 
         <SegmentOverlapNotice selectedSegment={selectedSegment} />

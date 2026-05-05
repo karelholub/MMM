@@ -419,6 +419,96 @@ def test_rebuild_profiles_from_meiro_events_groups_touchpoints_and_adjustments()
     assert journey["conversions"][0]["adjustments"][0]["type"] == "refund"
 
 
+def test_rebuild_profiles_from_pipes_raw_events_preserves_outer_event_fields():
+    profiles = rebuild_profiles_from_meiro_events(
+        [
+            {
+                "event_type": "page_view",
+                "event_time": "2026-05-04T12:27:46.133Z",
+                "event_payload": {
+                    "url": "https://meiro.io/product/meiro-audiences/?utm_source=google&utm_medium=cpc&utm_campaign=brand",
+                    "context": {
+                        "url": "https://meiro.io/product/meiro-audiences/?utm_source=google&utm_medium=cpc&utm_campaign=brand",
+                        "referrer": "https://meiro.io/meiro-audience/",
+                    },
+                    "user_id": "883e1427-62ab-4aa7-b74d-7e74cbcea353",
+                    "session_id": "sess-1",
+                },
+            }
+        ]
+    )
+
+    assert len(profiles) == 1
+    touchpoint = profiles[0]["touchpoints"][0]
+    assert profiles[0]["customer_id"] == "883e1427-62ab-4aa7-b74d-7e74cbcea353"
+    assert touchpoint["timestamp"] == "2026-05-04T12:27:46.133000Z"
+    assert touchpoint["event_type"] == "page_view"
+    assert touchpoint["interaction_type"] == "visit"
+    assert touchpoint["channel"] == "paid_search"
+    assert touchpoint["source"] == "google"
+    assert touchpoint["medium"] == "cpc"
+    assert touchpoint["campaign"] == "brand"
+    assert touchpoint["utm"] == {"source": "google", "medium": "cpc", "campaign": "brand"}
+
+
+def test_rebuild_profiles_from_decision_engine_collect_events():
+    profiles = rebuild_profiles_from_meiro_events(
+        [
+            {
+                "event_type": "personalize",
+                "event_time": "2026-05-04T13:00:00Z",
+                "event_payload": {"event_id": "de-1", "customer_id": "cust-de", "campaign_id": "spring"},
+            },
+            {
+                "event_type": "eligibility_check",
+                "event_time": "2026-05-04T13:00:01Z",
+                "event_payload": {"event_id": "de-2", "customer_id": "cust-de", "campaign_id": "spring"},
+            },
+            {
+                "event_type": "inapp_message",
+                "event_time": "2026-05-04T13:00:02Z",
+                "event_payload": {"event_id": "de-3", "customer_id": "cust-de", "campaign_id": "spring"},
+            },
+            {
+                "event_type": "decision_action",
+                "event_time": "2026-05-04T13:00:03Z",
+                "event_payload": {"event_id": "de-4", "customer_id": "cust-de", "campaign_id": "spring"},
+            },
+            {
+                "event_type": "decision_action",
+                "event_time": "2026-05-04T13:00:04Z",
+                "event_payload": {
+                    "event_id": "de-5",
+                    "customer_id": "cust-de",
+                    "campaign_id": "spring",
+                    "conversion_id": "conv-de-1",
+                    "value": 42,
+                    "currency": "EUR",
+                },
+            },
+        ]
+    )
+
+    assert len(profiles) == 1
+    profile = profiles[0]
+    assert [touchpoint["interaction_type"] for touchpoint in profile["touchpoints"]] == [
+        "visit",
+        "visit",
+        "impression",
+        "click",
+    ]
+    assert [touchpoint["event_type"] for touchpoint in profile["touchpoints"]] == [
+        "personalize",
+        "eligibility_check",
+        "inapp_message",
+        "decision_action",
+    ]
+    assert len(profile["conversions"]) == 1
+    assert profile["conversions"][0]["event_name"] == "decision_action"
+    assert profile["converted"] is True
+    assert profile["conversion_value"] == 42.0
+
+
 def test_rebuild_profiles_from_meiro_events_preserves_activation_measurement_metadata():
     profiles = rebuild_profiles_from_meiro_events(
         [

@@ -1620,6 +1620,12 @@ export default function IncrementalityPage() {
                   Selected segment: <strong style={{ color: tkn.color.text }}>{selectedSegment.name}</strong>
                   {selectedSegment.criteria_label ? ` · ${selectedSegment.criteria_label}` : ''}
                   {selectedSegment.source_label ? ` · Source: ${selectedSegment.source_label}` : ''}
+                  {selectedSegment.audience_capability ? (
+                    <div style={{ marginTop: 4 }}>
+                      Capability: <strong style={{ color: tkn.color.text }}>{selectedSegment.audience_capability.label || selectedSegment.audience_capability.level}</strong>
+                      {selectedSegment.audience_capability.reason ? ` · ${selectedSegment.audience_capability.reason}` : ''}
+                    </div>
+                  ) : null}
                 </div>
               )}
               {selectedSetupChannel && (

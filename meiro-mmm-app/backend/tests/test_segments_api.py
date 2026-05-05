@@ -7,6 +7,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base, get_db
 from app.main import app
+from app import services_segments
 from app.connectors import meiro_cdp
 from app.models_config_dq import (
     ConversionScopeDiagnosticFact,
@@ -18,7 +19,14 @@ from app.models_config_dq import (
 
 
 @pytest.fixture
-def client():
+def client(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(services_segments, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(services_segments, "DECIENGINE_EVENTS_CONFIG_PATH", tmp_path / "deciengine_events_config.json")
+    monkeypatch.setattr(
+        services_segments,
+        "DECIENGINE_PIPES_REGISTRY_CACHE_PATH",
+        tmp_path / "deciengine_pipes_field_registry_cache.json",
+    )
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -465,6 +473,20 @@ def test_meiro_segment_import_uses_one_source_at_a_time(client: TestClient, monk
         "list_segments",
         lambda: [{"id": "cdp-vip", "name": "CDP VIP buyers", "profiles_count": 11}],
     )
+    monkeypatch.setattr(
+        services_segments,
+        "_fetch_deciengine_pipes_field_registry",
+        lambda: {
+            "audiences": [
+                {
+                    "id": "global_suppression",
+                    "name": "Global suppression",
+                    "description": "Profiles excluded from activation",
+                    "profileCount": 19,
+                }
+            ]
+        },
+    )
 
     db_gen = app.dependency_overrides[get_db]()
     db = next(db_gen)
@@ -498,6 +520,14 @@ def test_meiro_segment_import_uses_one_source_at_a_time(client: TestClient, monk
     cdp_payload = cdp_resp.json()
     assert cdp_payload["summary"]["source"] == "cdp"
     assert [item["external_segment_id"] for item in cdp_payload["items"]] == ["cdp-vip"]
+
+    registry_resp = client.post("/api/segments/import/meiro", headers=headers, json={"source": "pipes_registry"})
+    assert registry_resp.status_code == 200
+    registry_payload = registry_resp.json()
+    assert registry_payload["summary"]["source"] == "pipes_registry"
+    assert registry_payload["summary"]["pipes_registry_segments"] == 1
+    assert [item["external_segment_id"] for item in registry_payload["items"]] == ["global_suppression"]
+    assert registry_payload["items"][0]["source"] == "meiro_pipes_registry"
 
     bad_resp = client.post("/api/segments/import/meiro", headers=headers, json={"source": "both_pls"})
     assert bad_resp.status_code == 400
