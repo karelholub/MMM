@@ -160,6 +160,7 @@ export default function MMMDataSourceStep({ onMappingComplete, initialPlatformDr
   const operationalAudiences = (segmentRegistry?.items ?? []).filter((item) => item.source !== 'local_analytical')
   const measurementReadyAudiences = operationalAudiences.filter((item) => item.audience_capability?.membership_backed || item.audience_capability?.measurement_ready)
   const definitionOnlyAudiences = operationalAudiences.filter((item) => !item.audience_capability?.membership_backed && !item.audience_capability?.measurement_ready)
+  const audienceCapabilitySummary = segmentRegistry?.summary
   const selectedMeasurementAudience: SegmentRegistryItem | null =
     measurementReadyAudiences.find((item) => item.id === measurementAudienceId) ?? null
   const latestEventReplay =
@@ -792,6 +793,9 @@ export default function MMMDataSourceStep({ onMappingComplete, initialPlatformDr
           </select>
           <p style={{ margin: `${t.space.xs}px 0 0`, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
             Only membership-backed Meiro/Pipes audiences can be attached to an MMM measurement contract. Definition-only audiences remain available for activation and planning, but cannot silently scope MMM.
+            {audienceCapabilitySummary
+              ? ` Available: ${Number(audienceCapabilitySummary.measurement_ready || 0).toLocaleString()} measurement-ready, ${Number(audienceCapabilitySummary.definition_only || 0).toLocaleString()} definition-only, ${Number(audienceCapabilitySummary.estimated_reach || 0).toLocaleString()} estimated-reach.`
+              : ''}
           </p>
           {definitionOnlyAudiences.length > 0 ? (
             <div

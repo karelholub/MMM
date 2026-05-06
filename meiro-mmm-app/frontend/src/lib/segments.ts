@@ -84,6 +84,10 @@ export interface SegmentRegistryResponse {
     meiro_pipes: number
     analysis_ready: number
     activation_ready: number
+    definition_only?: number
+    estimated_reach?: number
+    membership_backed?: number
+    measurement_ready?: number
   }
 }
 

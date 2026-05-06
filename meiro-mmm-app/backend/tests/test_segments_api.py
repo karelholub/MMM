@@ -457,6 +457,9 @@ def test_segment_registry_includes_webhook_derived_meiro_segments(client: TestCl
     assert response.status_code == 200
     payload = response.json()
     assert payload["summary"]["meiro_pipes"] == 2
+    assert payload["summary"]["membership_backed"] == 2
+    assert payload["summary"]["measurement_ready"] == 2
+    assert payload["summary"]["definition_only"] == 0
     vip = next(item for item in payload["items"] if item["id"] == "meiro:vip")
     assert vip["name"] == "VIP buyers"
     assert vip["size"] == 2
@@ -526,6 +529,9 @@ def test_meiro_segment_import_uses_one_source_at_a_time(client: TestClient, monk
     registry_payload = registry_resp.json()
     assert registry_payload["summary"]["source"] == "pipes_registry"
     assert registry_payload["summary"]["pipes_registry_segments"] == 1
+    assert registry_payload["summary"]["definition_only"] == 1
+    assert registry_payload["summary"]["activation_ready"] == 1
+    assert registry_payload["summary"]["measurement_ready"] == 0
     assert [item["external_segment_id"] for item in registry_payload["items"]] == ["global_suppression"]
     assert registry_payload["items"][0]["source"] == "meiro_pipes_registry"
 

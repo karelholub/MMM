@@ -1231,6 +1231,34 @@ def _merge_meiro_registry_items(*collections: List[Dict[str, Any]]) -> List[Dict
     )
 
 
+def _audience_capability_summary(items: List[Dict[str, Any]]) -> Dict[str, int]:
+    definition_only = 0
+    estimated_reach = 0
+    membership_backed = 0
+    activation_ready = 0
+    measurement_ready = 0
+    for item in items:
+        capability = item.get("audience_capability") if isinstance(item.get("audience_capability"), dict) else {}
+        level = str(capability.get("level") or "").strip().lower()
+        if level == "definition_only":
+            definition_only += 1
+        if level == "estimated_reach":
+            estimated_reach += 1
+        if capability.get("membership_backed"):
+            membership_backed += 1
+        if capability.get("activation_ready") or item.get("supports_activation"):
+            activation_ready += 1
+        if capability.get("measurement_ready"):
+            measurement_ready += 1
+    return {
+        "definition_only": definition_only,
+        "estimated_reach": estimated_reach,
+        "membership_backed": membership_backed,
+        "activation_ready": activation_ready,
+        "measurement_ready": measurement_ready,
+    }
+
+
 def list_meiro_segment_registry(
     db: Session,
     *,
@@ -1264,6 +1292,7 @@ def list_meiro_segment_registry(
         else []
     )
     meiro_segments = _merge_meiro_registry_items(meiro_cdp_segments, webhook_meiro_segments, pipes_registry_segments)
+    capability_summary = _audience_capability_summary(meiro_segments)
     return {
         "items": meiro_segments,
         "summary": {
@@ -1272,7 +1301,7 @@ def list_meiro_segment_registry(
             "cdp_segments": len(meiro_cdp_segments),
             "pipes_webhook_segments": len(webhook_meiro_segments),
             "pipes_registry_segments": len(pipes_registry_segments),
-            "activation_ready": sum(1 for item in meiro_segments if item.get("supports_activation")),
+            **capability_summary,
         },
     }
 
@@ -1302,13 +1331,14 @@ def list_segment_registry(
     local_segments = list_local_segments(db, workspace_id=workspace_id, include_archived=include_archived)
     meiro_payload = list_meiro_segment_registry(db, workspace_id=workspace_id, source="all")
     meiro_segments = meiro_payload.get("items") or []
+    capability_summary = _audience_capability_summary(meiro_segments)
     return {
         "items": [*local_segments, *meiro_segments],
         "summary": {
             "local_analytical": len(local_segments),
             "meiro_pipes": len(meiro_segments),
             "analysis_ready": sum(1 for item in local_segments if item.get("supports_analysis")),
-            "activation_ready": sum(1 for item in meiro_segments if item.get("supports_activation")),
+            **capability_summary,
         },
     }
 
