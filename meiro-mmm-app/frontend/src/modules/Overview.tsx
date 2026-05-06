@@ -164,6 +164,12 @@ interface CampaignDriver {
 interface OverviewDriversResponse {
   by_channel: ChannelDriver[]
   by_campaign: CampaignDriver[]
+  scope_filter?: {
+    strict?: boolean
+    mode?: string
+    out_of_scope_campaign_labels?: number
+    campaign_rows_excluded?: number
+  }
   date_from: string
   date_to: string
 }
@@ -637,6 +643,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
   const highlights = summary?.highlights ?? []
   const byChannel = drivers?.by_channel ?? []
   const byCampaign = drivers?.by_campaign ?? []
+  const driverScopeFilter = drivers?.scope_filter
   const funnelSummary = funnelsQuery.data?.summary
   const funnelRows = funnelsQuery.data?.tabs?.[funnelTab] ?? []
   const baselineSummary = baselineSummaryQuery.data
@@ -1946,6 +1953,11 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
               </button>
             }
           >
+            {Number(driverScopeFilter?.campaign_rows_excluded || 0) > 0 || Number(driverScopeFilter?.out_of_scope_campaign_labels || 0) > 0 ? (
+              <SurfaceBasisNotice marginBottom={t.space.md}>
+                Top campaigns are filtered to the Meiro production scope. {Number(driverScopeFilter?.campaign_rows_excluded || 0).toLocaleString()} campaign row{Number(driverScopeFilter?.campaign_rows_excluded || 0) === 1 ? '' : 's'} and {Number(driverScopeFilter?.out_of_scope_campaign_labels || 0).toLocaleString()} archived label{Number(driverScopeFilter?.out_of_scope_campaign_labels || 0) === 1 ? '' : 's'} are excluded from this overview.
+              </SurfaceBasisNotice>
+            ) : null}
             <AnalyticsTable
               columns={campaignColumns}
               rows={byCampaign.slice(0, 5)}

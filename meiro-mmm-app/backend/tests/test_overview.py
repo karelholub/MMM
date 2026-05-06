@@ -376,6 +376,60 @@ def test_overview_drivers_last_touch_count_uses_position_not_value_equality():
         db.close()
 
 
+def test_overview_drivers_reports_meiro_campaign_scope_filter(monkeypatch):
+    db = _unit_db_session()
+    try:
+        monkeypatch.setattr(overview, "site_scope_is_strict", lambda: True)
+        monkeypatch.setattr(overview, "get_out_of_scope_campaign_labels", lambda: {"legacy bad"})
+        monkeypatch.setattr(
+            overview,
+            "campaign_label_matches_target_site_scope",
+            lambda value, allow_unknown=True: str(value or "").strip().lower() != "legacy bad",
+        )
+        db.add_all(
+            [
+                ConversionPath(
+                    conversion_id="conv-target",
+                    profile_id="p-target",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2024, 2, 15, 12, 0),
+                    path_json={"conversion_value": 100.0, "touchpoints": [{"channel": "email", "campaign": "Spring"}]},
+                    path_hash="hash-target",
+                    length=1,
+                    first_touch_ts=datetime(2024, 2, 15, 11, 0),
+                    last_touch_ts=datetime(2024, 2, 15, 11, 30),
+                ),
+                ConversionPath(
+                    conversion_id="conv-legacy",
+                    profile_id="p-legacy",
+                    conversion_key="purchase",
+                    conversion_ts=datetime(2024, 2, 15, 13, 0),
+                    path_json={"conversion_value": 500.0, "touchpoints": [{"channel": "paid", "campaign": "Legacy Bad"}]},
+                    path_hash="hash-legacy",
+                    length=1,
+                    first_touch_ts=datetime(2024, 2, 15, 12, 0),
+                    last_touch_ts=datetime(2024, 2, 15, 12, 30),
+                ),
+            ]
+        )
+        db.commit()
+
+        out = get_overview_drivers(
+            db,
+            date_from="2024-02-01",
+            date_to="2024-02-29",
+            expenses={},
+            top_campaigns_n=10,
+        )
+
+        assert [row["campaign"] for row in out["by_campaign"]] == ["Spring"]
+        assert out["scope_filter"]["strict"] is True
+        assert out["scope_filter"]["out_of_scope_campaign_labels"] == 1
+        assert out["scope_filter"]["campaign_rows_excluded"] == 1
+    finally:
+        db.close()
+
+
 def test_overview_drivers_channel_group_filters_channels_and_campaigns():
     db = _unit_db_session()
     try:

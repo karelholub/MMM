@@ -35,7 +35,7 @@ from .services_conversions import (
 from .services_journey_path_outputs import list_paths_from_outputs
 from .services_visit_facts import iter_touchpoint_visit_rows
 from .services_metrics import delta_pct, journey_outcome_summary
-from .utils.meiro_config import campaign_label_matches_target_site_scope
+from .utils.meiro_config import campaign_label_matches_target_site_scope, get_out_of_scope_campaign_labels, site_scope_is_strict
 
 
 # ---------------------------------------------------------------------------
@@ -2023,6 +2023,7 @@ def get_overview_drivers(
     camp_rev: Dict[str, float] = {}
     camp_conv: Dict[str, int] = {}
     camp_outcomes: Dict[str, Dict[str, float]] = {}
+    campaign_rows_excluded = 0
     need_current_channel_paths = fact_current_channel_rollups is None and silver_current_channel_rollups is None
     need_previous_channel_paths = fact_prev_channel_rollups is None and silver_prev_channel_rollups is None
     need_current_campaign_paths = aggregate_campaign_rollups is None and silver_current_campaign_rollups is None
@@ -2055,6 +2056,7 @@ def get_overview_drivers(
                     camp = camp.get("name", "unknown")
                 camp = camp or "unknown"
                 if not campaign_label_matches_target_site_scope(camp, allow_unknown=True):
+                    campaign_rows_excluded += 1
                     continue
                 camp_rev[camp] = camp_rev.get(camp, 0) + val
                 camp_conv[camp] = camp_conv.get(camp, 0) + 1
@@ -2183,6 +2185,11 @@ def get_overview_drivers(
             key: float(value or 0.0)
             for key, value in ((silver_prev_campaign_rollups or {}).get("revenue") or {}).items()
         }
+    campaign_rows_excluded += sum(
+        1
+        for campaign in camp_rev.keys()
+        if not campaign_label_matches_target_site_scope(campaign, allow_unknown=True)
+    )
     campaigns_sorted = [
         campaign
         for campaign in sorted(camp_rev.keys(), key=lambda c: -camp_rev[c])
@@ -2213,6 +2220,12 @@ def get_overview_drivers(
         "by_campaign": by_campaign,
         "biggest_movers": biggest_movers,
         "channel_group": channel_group,
+        "scope_filter": {
+            "strict": site_scope_is_strict(),
+            "mode": "strict_target_site" if site_scope_is_strict() else "disabled",
+            "out_of_scope_campaign_labels": len(get_out_of_scope_campaign_labels()) if site_scope_is_strict() else 0,
+            "campaign_rows_excluded": campaign_rows_excluded,
+        },
         "date_from": date_from,
         "date_to": date_to,
     }
