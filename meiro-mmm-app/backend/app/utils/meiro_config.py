@@ -4,7 +4,6 @@ import os
 import secrets
 import threading
 from collections import Counter
-from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -22,6 +21,7 @@ DEFAULT_TARGET_SITE_DOMAINS = ("meiro.io", "meir.store")
 _CONFIG_LOCK = threading.RLock()
 _OUT_OF_SCOPE_CAMPAIGN_CACHE: tuple[float, set[str]] | None = None
 _ARCHIVE_STATUS_CACHE: dict[str, tuple[int, int, Dict[str, Any]]] = {}
+_JSONL_TAIL_BLOCK_SIZE = 64 * 1024
 
 
 def _archive_signature(path: Path) -> tuple[int, int]:
@@ -76,6 +76,12 @@ def _cached_archive_status(path: Path, key: str) -> Optional[Dict[str, Any]]:
         if isinstance(status, dict):
             _ARCHIVE_STATUS_CACHE[cache_key] = (mtime_ns, size, dict(status))
             return dict(status)
+    status = persisted.get("status") if isinstance(persisted, dict) else None
+    if isinstance(status, dict) and status.get("available"):
+        stale_status = dict(status)
+        stale_status["cache_stale"] = True
+        _ARCHIVE_STATUS_CACHE[cache_key] = (mtime_ns, size, dict(stale_status))
+        return stale_status
     return None
 
 
@@ -97,6 +103,30 @@ def _latest_archive_status(path: Path, key: str) -> Dict[str, Any]:
     persisted = _read_persisted_archive_status_cache().get(cache_key)
     status = persisted.get("status") if isinstance(persisted, dict) else None
     return dict(status) if isinstance(status, dict) else {}
+
+
+def _read_jsonl_tail(path: Path, keep: int) -> list[str]:
+    if keep <= 0 or not path.exists():
+        return []
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            position = handle.tell()
+            buffer = b""
+            lines: list[bytes] = []
+            while position > 0 and len(lines) <= keep:
+                read_size = min(_JSONL_TAIL_BLOCK_SIZE, position)
+                position -= read_size
+                handle.seek(position)
+                buffer = handle.read(read_size) + buffer
+                lines = buffer.splitlines()
+            return [
+                line.decode("utf-8", errors="ignore").strip()
+                for line in lines[-keep:]
+                if line.strip()
+            ]
+    except Exception:
+        return []
 
 
 def _entry_source_scope_delta(entry: Dict[str, Any]) -> tuple[int, int]:
@@ -703,14 +733,8 @@ def query_event_archive_entries(
     if limit is not None and since is None and until is None:
         keep = max(1, min(50000, int(limit)))
         try:
-            tail = deque(maxlen=keep)
-            with EVENT_ARCHIVE_PATH.open("r", encoding="utf-8") as handle:
-                for line in handle:
-                    line = line.strip()
-                    if line:
-                        tail.append(line)
             rows: list[Dict[str, Any]] = []
-            for line in reversed(tail):
+            for line in reversed(_read_jsonl_tail(EVENT_ARCHIVE_PATH, keep)):
                 try:
                     parsed = json.loads(line)
                 except Exception:

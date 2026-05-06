@@ -867,7 +867,7 @@ def create_router(
         db=Depends(get_db_dependency),
         _ctx=Depends(require_permission_dependency("attribution.view")),
     ):
-        journeys = ensure_journeys_loaded_fn(db)
+        journeys, site_scope_meta = _scope_journeys_to_target_sites(ensure_journeys_loaded_fn(db))
         try:
             query_ctx = build_query_context_fn(
                 date_from=date_from,

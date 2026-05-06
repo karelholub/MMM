@@ -697,18 +697,16 @@ def create_router(
         return base.model_dump() if hasattr(base, "model_dump") else dict(base)
 
     def _get_profile_archive_status(db: Any) -> Dict[str, Any]:
-        status = get_meiro_raw_batch_status(db, source_kind="profiles")
-        return status if status.get("available") else get_webhook_archive_status()
+        file_status = get_webhook_archive_status()
+        if file_status.get("available"):
+            return file_status
+        return get_meiro_raw_batch_status(db, source_kind="profiles")
 
     def _get_event_archive_status(db: Any) -> Dict[str, Any]:
         file_status = get_event_archive_status()
-        db_status = get_meiro_raw_batch_status(db, source_kind="events")
         if file_status.get("available"):
-            merged = dict(file_status)
-            latest_batch_db_id = db_status.get("latest_batch_db_id")
-            if latest_batch_db_id is not None:
-                merged["latest_batch_db_id"] = latest_batch_db_id
-            return merged
+            return file_status
+        db_status = get_meiro_raw_batch_status(db, source_kind="events")
         return db_status if db_status.get("available") else file_status
 
     def _get_profile_archive_entries(
@@ -739,6 +737,10 @@ def create_router(
         since: Optional[str] = None,
         until: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
+        if after_db_id is None and since is None and until is None and limit is not None:
+            file_items = query_event_archive_entries(limit=limit)
+            if file_items:
+                return file_items
         items = list_meiro_raw_batches(
             db,
             source_kind="events",
@@ -1493,7 +1495,7 @@ def create_router(
         event_archive_status = _get_event_archive_status(db)
         pull_config = get_pull_config()
         raw_event_diagnostics = _build_raw_event_stream_diagnostics(
-            event_archive_entries=_get_event_archive_entries(db, limit=100),
+            event_archive_entries=_get_event_archive_entries(db, limit=50),
             webhook_events=get_webhook_events(limit=250),
         )
         return build_meiro_readiness(
@@ -1513,7 +1515,7 @@ def create_router(
         pull_config = get_pull_config()
         profile_archive_status = _get_profile_archive_status(db)
         event_archive_status = _get_event_archive_status(db)
-        event_entries = _get_event_archive_entries(db, limit=250)
+        event_entries = _get_event_archive_entries(db, limit=75)
         webhook_events = get_webhook_events(limit=250)
         raw_event_diagnostics = _build_raw_event_stream_diagnostics(
             event_archive_entries=event_entries,
@@ -2448,7 +2450,7 @@ def create_router(
     def meiro_webhook_suggestions(limit: int = Query(100, ge=1, le=500), db=Depends(get_db_dependency)):
         events = get_webhook_events(limit=limit)
         current_pull_config = get_pull_config()
-        event_archive_entries = _get_event_archive_entries(db, limit=max(25, min(limit, 100)))
+        event_archive_entries = _get_event_archive_entries(db, limit=max(10, min(limit, 40)))
         raw_event_diagnostics = _build_raw_event_stream_diagnostics(
             event_archive_entries=event_archive_entries,
             webhook_events=events,

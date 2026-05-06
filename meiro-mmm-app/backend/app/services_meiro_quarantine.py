@@ -12,15 +12,30 @@ from typing import Any, Dict, List, Optional
 QUARANTINE_RUNS_FILE = Path(__file__).resolve().parent / "data" / "meiro_quarantine_runs.json"
 MAX_RUNS = 100
 MAX_RECORDS_PER_RUN = 200
+_RUNS_CACHE: Dict[str, Any] = {"signature": None, "runs": []}
+
+
+def _file_signature(path: Path) -> tuple[int, int]:
+    try:
+        stat = path.stat()
+        return int(stat.st_mtime_ns), int(stat.st_size)
+    except Exception:
+        return 0, 0
 
 
 def _load_runs() -> List[Dict[str, Any]]:
     if not QUARANTINE_RUNS_FILE.exists():
         return []
+    signature = _file_signature(QUARANTINE_RUNS_FILE)
+    if _RUNS_CACHE.get("signature") == signature:
+        return list(_RUNS_CACHE.get("runs") or [])
     try:
         raw = QUARANTINE_RUNS_FILE.read_text(encoding="utf-8")
         data = json.loads(raw)
-        return data if isinstance(data, list) else []
+        runs = data if isinstance(data, list) else []
+        _RUNS_CACHE["signature"] = signature
+        _RUNS_CACHE["runs"] = list(runs)
+        return runs
     except Exception:
         return []
 
@@ -31,6 +46,8 @@ def _save_runs(runs: List[Dict[str, Any]]) -> None:
         json.dumps(runs[:MAX_RUNS], indent=2, default=str),
         encoding="utf-8",
     )
+    _RUNS_CACHE["signature"] = _file_signature(QUARANTINE_RUNS_FILE)
+    _RUNS_CACHE["runs"] = list(runs[:MAX_RUNS])
 
 
 def create_quarantine_run(
