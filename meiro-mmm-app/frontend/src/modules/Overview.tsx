@@ -10,6 +10,7 @@ import SegmentOverlapNotice from '../components/segments/SegmentOverlapNotice'
 import { buildSettingsHref } from '../lib/settingsLinks'
 import { navigateForRecommendedAction } from '../lib/recommendedActions'
 import { apiGetJson, apiSendJson, withQuery } from '../lib/apiClient'
+import { getMeiroConfig, type MeiroConfig } from '../connectors/meiroConnector'
 import { buildIncrementalityPlannerHref } from '../lib/experimentLinks'
 import {
   listJourneyAlertDefinitions,
@@ -400,6 +401,12 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
       }),
     refetchInterval: false,
   })
+  const meiroConfigQuery = useQuery<MeiroConfig>({
+    queryKey: ['meiro-config', 'overview-source'],
+    queryFn: getMeiroConfig,
+    refetchInterval: false,
+    refetchOnWindowFocus: false,
+  })
 
   const localSegments = useMemo(
     () => (segmentRegistryQuery.data?.items ?? []).filter(isLocalAnalyticalSegment),
@@ -658,6 +665,16 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
   const trendInsights = trendsQuery.data
   const journeysReadiness = summary?.readiness
   const latestEventReplayDiagnostics = journeysReadiness?.details?.latest_event_replay?.diagnostics
+  const segmentSummary = segmentRegistryQuery.data?.summary
+  const meiroConfig = meiroConfigQuery.data
+  const overviewSourceLabel = latestEventReplayDiagnostics?.events_loaded
+    ? `Pipes raw events -> live attribution (${Number(latestEventReplayDiagnostics.events_loaded || 0).toLocaleString()} events)`
+    : meiroConfig?.primary_ingest_source === 'events' && Number(meiroConfig.event_webhook_received_count || 0) > 0
+      ? `Pipes raw events -> live attribution (${Number(meiroConfig.event_webhook_received_count || 0).toLocaleString()} received)`
+    : 'Workspace summary + journey health'
+  const audienceCapabilityLabel = segmentSummary
+    ? `${Number(segmentSummary.meiro_pipes || 0).toLocaleString()} operational · ${Number(segmentSummary.measurement_ready || 0).toLocaleString()} measurement-ready`
+    : 'Audience registry loading'
   const overviewAttentionQueue = summary?.attention_queue ?? journeysReadiness?.recommended_actions ?? []
   const overviewPeriodLabel =
     summary?.current_period?.date_from && summary?.current_period?.date_to
@@ -1534,12 +1551,13 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
 
         <ContextSummaryStrip
           items={[
-            { label: 'Source', value: 'Workspace summary + journey health' },
+            { label: 'Source', value: overviewSourceLabel },
             { label: 'Period', value: overviewPeriodLabel },
             {
               label: 'Config basis',
               value: selectedConfigId ? `Workspace facts · selected config ${selectedConfigId.slice(0, 8)}… not applied` : 'Workspace facts',
             },
+            { label: 'Pipes audiences', value: audienceCapabilityLabel },
             { label: 'Focus', value: focusSegmentLabel },
             { label: 'Freshness', value: freshnessLabel },
             { label: 'KPI coverage', value: readinessCoverageLabel },
