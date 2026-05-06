@@ -4,28 +4,42 @@ import { tokens as t } from '../../theme/tokens'
 
 interface MeiroMeasurementScopeNoticeProps {
   compact?: boolean
+  scope?: {
+    strict?: boolean
+    target_sites?: string[]
+    source_scope?: { status?: string; target_host?: string }
+    event_archive_site_scope?: {
+      target_site_events?: number
+      out_of_scope_site_events?: number
+      unknown_site_events?: number
+    }
+  } | null
+  targetHost?: string | null
+  source?: string | null
 }
 
 function formatStatus(value?: string | null) {
   return String(value || 'unknown').replace(/_/g, ' ')
 }
 
-export default function MeiroMeasurementScopeNotice({ compact = false }: MeiroMeasurementScopeNoticeProps) {
+export default function MeiroMeasurementScopeNotice({ compact = false, scope, targetHost: providedTargetHost, source }: MeiroMeasurementScopeNoticeProps) {
   const summaryQuery = useQuery<MeiroMeasurementPipelineSummary>({
     queryKey: ['meiro-measurement-pipeline-summary'],
     queryFn: getMeiroMeasurementPipelineSummary,
     staleTime: 30_000,
+    enabled: !scope,
   })
   const summary = summaryQuery.data
   if (!summary && summaryQuery.isLoading && compact) return null
 
-  const sourceScope = summary?.source.source_scope
-  const siteScope = summary?.source.site_scope
+  const sourceScope = scope?.source_scope || summary?.source.source_scope
+  const siteScope = scope?.event_archive_site_scope || summary?.source.site_scope
   const status = formatStatus(sourceScope?.status)
   const outOfScopeEvents = Number(siteScope?.out_of_scope_site_events || 0)
   const targetEvents = Number(siteScope?.target_site_events || 0)
-  const targetHost = summary?.target.instance_host || 'meiro-internal.eu.pipes.meiro.io'
-  const targetSites = summary?.target.site_domains?.length ? summary.target.site_domains : ['meiro.io', 'meir.store']
+  const targetHost = providedTargetHost || sourceScope?.target_host || summary?.target.instance_host || 'meiro-internal.eu.pipes.meiro.io'
+  const targetSites = scope?.target_sites?.length ? scope.target_sites : summary?.target.site_domains?.length ? summary.target.site_domains : ['meiro.io', 'meir.store']
+  const sourceLabel = source || summary?.source.primary_ingest_source || 'events'
   const warning = summary?.status === 'blocked' || summary?.status === 'warning' || outOfScopeEvents > 0 || status !== 'target verified'
 
   return (
@@ -48,7 +62,7 @@ export default function MeiroMeasurementScopeNotice({ compact = false }: MeiroMe
         </div>
         <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           {[
-            { label: 'Source', value: summary?.source.primary_ingest_source || 'events' },
+            { label: 'Source', value: sourceLabel },
             { label: 'Archive scope', value: status },
             { label: 'Target events', value: targetEvents.toLocaleString() },
             { label: 'Out-of-scope', value: outOfScopeEvents.toLocaleString() },

@@ -1550,7 +1550,12 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       </div>
 
       <div style={{ marginBottom: t.space.md }}>
-        <MeiroMeasurementScopeNotice compact />
+        <MeiroMeasurementScopeNotice
+          compact
+          scope={meiroScope}
+          targetHost={meiroConfigQuery.data?.target_instance_host}
+          source={latestEventReplayDiagnostics?.events_loaded ? 'events' : 'summary'}
+        />
       </div>
       {meiroScopeWarnings.length ? (
         <SurfaceBasisNotice marginBottom={t.space.md}>
