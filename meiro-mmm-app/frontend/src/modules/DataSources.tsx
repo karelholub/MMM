@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import DashboardPage from '../components/dashboard/DashboardPage'
 import SectionCard from '../components/dashboard/SectionCard'
@@ -187,14 +187,24 @@ function relativeTime(iso?: string | null) {
   return `${Math.floor(h / 24)}d ago`
 }
 
-function meiroSourceLabel(config?: { connected?: boolean; primary_ingest_source?: string; webhook_received_count?: number; event_webhook_received_count?: number } | null) {
-  if (!config) return 'Configure Meiro Measurement Pipeline'
-  const rawEvents = Number(config.event_webhook_received_count || 0)
-  const profilePayloads = Number(config.webhook_received_count || 0)
-  if (config.primary_ingest_source === 'events' && rawEvents > 0) return `Pipes raw events · ${rawEvents.toLocaleString()} received`
+function meiroSourceLabelFromReadiness(summary?: DataSourcesReadinessResponse['summary'] | null, config?: { connected?: boolean; primary_ingest_source?: string; webhook_received_count?: number; event_webhook_received_count?: number } | null) {
+  const rawEvents = Number(summary?.meiro_event_payloads ?? config?.event_webhook_received_count ?? 0)
+  const profilePayloads = Number(summary?.meiro_profile_payloads ?? config?.webhook_received_count ?? 0)
+  const primary = String(summary?.meiro_primary_source ?? config?.primary_ingest_source ?? '').toLowerCase()
+  if (primary === 'events' && rawEvents > 0) return `Pipes raw events · ${rawEvents.toLocaleString()} received`
+  if (rawEvents > 0) return `Pipes raw events · ${rawEvents.toLocaleString()} received`
   if (profilePayloads > 0) return `Pipes profile webhook · ${profilePayloads.toLocaleString()} received`
-  if (config.connected) return 'CDP pull connected'
+  if (summary?.meiro_active_source || config?.connected) return 'Meiro CDP pull connected'
   return 'Configure Meiro Measurement Pipeline'
+}
+
+function meiroSourceIsActive(summary?: DataSourcesReadinessResponse['summary'] | null, config?: { connected?: boolean; webhook_received_count?: number; event_webhook_received_count?: number } | null) {
+  return Boolean(
+    summary?.meiro_active_source
+      || config?.connected
+      || Number(summary?.meiro_event_payloads ?? config?.event_webhook_received_count ?? 0) > 0
+      || Number(summary?.meiro_profile_payloads ?? config?.webhook_received_count ?? 0) > 0,
+  )
 }
 
 function disabledReason(canManageSettings: boolean, item: { can_start?: boolean; missing_config_reason?: string | null }) {
@@ -285,6 +295,7 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
   const canManageSettings = permissions.hasPermission('settings.manage')
 
   const [ingestionMethod, setIngestionMethod] = useState<IngestionMethod>('sample')
+  const [ingestionMethodUserSelected, setIngestionMethodUserSelected] = useState(false)
   const [systemsTab, setSystemsTab] = useState<SystemsTab>('warehouses')
   const [showJsonHelp, setShowJsonHelp] = useState(false)
   const [showPreviewValidation, setShowPreviewValidation] = useState(false)
@@ -417,6 +428,18 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
     queryFn: getDeciEngineEventsConfig,
     enabled: meiroDrawerOpen,
   })
+
+  const selectIngestionMethod = useCallback((method: IngestionMethod) => {
+    setIngestionMethodUserSelected(true)
+    setIngestionMethod(method)
+  }, [])
+
+  useEffect(() => {
+    if (ingestionMethodUserSelected) return
+    if (meiroSourceIsActive(dataSourcesReadinessQuery.data?.summary, meiroConfigQuery.data)) {
+      setIngestionMethod('meiro')
+    }
+  }, [dataSourcesReadinessQuery.data?.summary, ingestionMethodUserSelected, meiroConfigQuery.data])
 
   useEffect(() => {
     const email = (permissions.auth?.user?.email || '').trim()
@@ -741,13 +764,14 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
     const summary = dataSourcesReadinessQuery.data?.summary
     const importFreshness = summary?.overall_import_freshness || 'unknown'
     const meiroStatus = (summary?.meiro_status || 'unknown').toLowerCase()
+    const meiroActive = meiroSourceIsActive(summary, meiroConfigQuery.data)
     return [
       {
         key: 'journeys',
         label: 'Journeys',
         value: (summary?.journeys_loaded ?? j.count ?? 0).toLocaleString(),
         tone: (summary?.journeys_loaded ?? j.count ?? 0) > 0 ? t.color.success : t.color.warning,
-        onClick: () => setIngestionMethod('sample'),
+        onClick: () => selectIngestionMethod(meiroActive ? 'meiro' : 'sample'),
       },
       {
         key: 'sources',
@@ -773,7 +797,7 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
         },
       },
     ]
-  }, [dataSourcesReadinessQuery.data?.summary, journeysSummary, onOpenMeiro])
+  }, [dataSourcesReadinessQuery.data?.summary, journeysSummary, meiroConfigQuery.data, onOpenMeiro, selectIngestionMethod])
 
   const handleReadinessAction = (action: DataSourcesReadinessResponse['recommended_actions'][number]) => {
     if (action.target_page === 'meiro' && onOpenMeiro) {
@@ -858,14 +882,22 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
   const cdpItems = [
     {
       id: 'meiro',
-      name: 'Meiro',
+      name: meiroSourceIsActive(dataSourcesReadinessQuery.data?.summary, meiroConfigQuery.data) ? 'Meiro Measurement Pipeline' : 'Meiro',
       type: 'meiro',
       category: 'cdp',
       status: meiroConfigQuery.data?.connected || Number(meiroConfigQuery.data?.webhook_received_count || 0) > 0 || Number(meiroConfigQuery.data?.event_webhook_received_count || 0) > 0 ? 'connected' : 'not_connected',
       last_tested_at: meiroConfigQuery.data?.event_webhook_last_received_at || meiroConfigQuery.data?.webhook_last_received_at || meiroConfigQuery.data?.last_test_at || null,
-      note: meiroSourceLabel(meiroConfigQuery.data),
+      note: meiroSourceLabelFromReadiness(dataSourcesReadinessQuery.data?.summary, meiroConfigQuery.data),
     },
   ]
+
+  const meiroReadinessSummary = dataSourcesReadinessQuery.data?.summary
+  const activeMeiroSource = meiroSourceIsActive(meiroReadinessSummary, meiroConfigQuery.data)
+  const meiroMeasurementSourceLabel = meiroSourceLabelFromReadiness(meiroReadinessSummary, meiroConfigQuery.data)
+  const meiroPrimarySourceLabel = String(meiroReadinessSummary?.meiro_primary_source || meiroConfigQuery.data?.primary_ingest_source || 'not configured')
+    .replace('events', 'raw events')
+    .replace('profiles', 'profile webhook')
+  const meiroLastReceivedAt = meiroConfigQuery.data?.event_webhook_last_received_at || meiroConfigQuery.data?.webhook_last_received_at || meiroConfigQuery.data?.last_test_at || null
 
   const activeSystemsItems = systemsTab === 'warehouses' ? warehouseItems : systemsTab === 'ad_platforms' ? adPlatformItems : cdpItems
 
@@ -1158,6 +1190,40 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
           </SectionCard>
 
           <SectionCard
+            title="Active measurement source"
+            subtitle={activeMeiroSource ? 'Data Sources is using the Meiro Measurement Pipeline as the production ingestion source.' : 'No production Meiro/Pipes source is active yet.'}
+            actions={
+              activeMeiroSource && onOpenMeiro ? (
+                <button
+                  type="button"
+                  onClick={onOpenMeiro}
+                  style={{ border: `1px solid ${t.color.accent}`, background: t.color.accent, color: '#fff', borderRadius: t.radius.sm, padding: '8px 10px', cursor: 'pointer' }}
+                >
+                  Open Meiro pipeline
+                </button>
+              ) : undefined
+            }
+          >
+            <div style={{ display: 'grid', gap: t.space.sm, gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))' }}>
+              {[
+                { label: 'Source', value: meiroMeasurementSourceLabel, tone: activeMeiroSource ? t.color.success : t.color.warning },
+                { label: 'Primary mode', value: meiroPrimarySourceLabel, tone: t.color.text },
+                { label: 'Raw events', value: Number(meiroReadinessSummary?.meiro_event_payloads ?? meiroConfigQuery.data?.event_webhook_received_count ?? 0).toLocaleString(), tone: t.color.text },
+                { label: 'Profile payloads', value: Number(meiroReadinessSummary?.meiro_profile_payloads ?? meiroConfigQuery.data?.webhook_received_count ?? 0).toLocaleString(), tone: t.color.text },
+                { label: 'Latest signal', value: relativeTime(meiroLastReceivedAt), tone: t.color.text },
+              ].map((item) => (
+                <div key={item.label} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.md, padding: t.space.md, background: t.color.surface }}>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                  <div style={{ fontSize: t.font.sizeBase, fontWeight: t.font.weightSemibold, color: item.tone }}>{item.value}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ marginTop: t.space.sm, fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+              Sample data and JSON upload remain manual replacement imports. For production measurement, use the Meiro Measurement Pipeline and review replay/mapping state there.
+            </div>
+          </SectionCard>
+
+          <SectionCard
             title="Journeys ingestion"
             subtitle="Use one ingestion method at a time; each import replaces existing journey data."
             actions={
@@ -1172,18 +1238,18 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
           >
             <div style={{ marginBottom: t.space.md }}>
               <AnalyticsToolbar
-                summary={`Current ingestion method: ${ingestionMethod === 'sample' ? 'Sample data' : ingestionMethod === 'upload' ? 'Upload JSON' : meiroSourceLabel(meiroConfigQuery.data)}.`}
+                summary={`Current ingestion method: ${ingestionMethod === 'sample' ? 'Sample data' : ingestionMethod === 'upload' ? 'Upload JSON' : meiroMeasurementSourceLabel}.`}
                 actions={
                   <>
                     {([
                       { id: 'sample', label: 'Sample data' },
                       { id: 'upload', label: 'Upload JSON' },
-                      { id: 'meiro', label: 'Import from Meiro' },
+                      { id: 'meiro', label: activeMeiroSource ? 'Meiro pipeline' : 'Configure Meiro' },
                     ] as Array<{ id: IngestionMethod; label: string }>).map((opt) => (
                       <button
                         key={opt.id}
                         type="button"
-                        onClick={() => setIngestionMethod(opt.id)}
+                        onClick={() => selectIngestionMethod(opt.id)}
                         style={{
                           border: `1px solid ${ingestionMethod === opt.id ? t.color.accent : t.color.borderLight}`,
                           background: ingestionMethod === opt.id ? t.color.accentMuted : t.color.surface,
@@ -1248,10 +1314,19 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
 
             {ingestionMethod === 'meiro' && (
               <div style={{ display: 'grid', gap: t.space.sm }}>
-                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>Prerequisites: configure Meiro connector in Connected systems → CDP / Sources.</div>
+                <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                  Production path: configure and monitor raw-event replay, mapping, and source scope in the Meiro Measurement Pipeline. CDP pull is secondary metadata/enrichment unless it is explicitly selected as the primary source.
+                </div>
+                {activeMeiroSource ? (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.success }}>{meiroMeasurementSourceLabel} is active.</div>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => {
+                    if (activeMeiroSource && onOpenMeiro) {
+                      onOpenMeiro()
+                      return
+                    }
                     if (!meiroConfigQuery.data?.connected) {
                       setSystemsTab('cdp')
                       return
@@ -1261,7 +1336,7 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
                   disabled={importFromMeiroMutation.isPending}
                   style={{ alignSelf: 'flex-start', border: `1px solid ${t.color.accent}`, background: t.color.accent, color: '#fff', borderRadius: t.radius.sm, padding: '8px 12px', cursor: importFromMeiroMutation.isPending ? 'wait' : 'pointer' }}
                 >
-                  {importFromMeiroMutation.isPending ? 'Importing…' : meiroConfigQuery.data?.connected ? 'Import from Meiro' : 'Configure Meiro first'}
+                  {importFromMeiroMutation.isPending ? 'Importing…' : activeMeiroSource ? 'Open Meiro pipeline' : meiroConfigQuery.data?.connected ? 'Import from Meiro CDP pull' : 'Configure Meiro first'}
                 </button>
                 {importFromMeiroMutation.isError && <div style={{ color: t.color.danger, fontSize: t.font.sizeSm }}>{(importFromMeiroMutation.error as Error).message}</div>}
               </div>
