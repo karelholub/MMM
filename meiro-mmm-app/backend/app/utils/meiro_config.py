@@ -15,13 +15,16 @@ CONFIG_PATH = DATA_DIR / "meiro_config.json"
 WEBHOOK_ARCHIVE_PATH = DATA_DIR / "meiro_webhook_archive.jsonl"
 EVENT_ARCHIVE_PATH = DATA_DIR / "meiro_event_archive.jsonl"
 ARCHIVE_STATUS_CACHE_PATH = DATA_DIR / "meiro_archive_status_cache.json"
+OUT_OF_SCOPE_CAMPAIGN_CACHE_PATH = DATA_DIR / "meiro_out_of_scope_campaign_cache.json"
 MEIRO_CDP_PLATFORM = "meiro_cdp"
 DEFAULT_TARGET_INSTANCE_URL = "https://meiro-internal.eu.pipes.meiro.io"
 DEFAULT_TARGET_SITE_DOMAINS = ("meiro.io", "meir.store")
 _CONFIG_LOCK = threading.RLock()
 _OUT_OF_SCOPE_CAMPAIGN_CACHE: tuple[float, set[str]] | None = None
+_OUT_OF_SCOPE_CAMPAIGN_LOCK = threading.RLock()
 _ARCHIVE_STATUS_CACHE: dict[str, tuple[int, int, Dict[str, Any]]] = {}
 _JSONL_TAIL_BLOCK_SIZE = 64 * 1024
+_OUT_OF_SCOPE_CAMPAIGN_SCAN_LIMIT = 5000
 
 
 def _archive_signature(path: Path) -> tuple[int, int]:
@@ -38,6 +41,10 @@ def _archive_cache_key(path: Path, key: str) -> str:
 
 def _archive_status_cache_path() -> Path:
     return Path(DATA_DIR) / ARCHIVE_STATUS_CACHE_PATH.name
+
+
+def _out_of_scope_campaign_cache_path() -> Path:
+    return Path(DATA_DIR) / OUT_OF_SCOPE_CAMPAIGN_CACHE_PATH.name
 
 
 def _read_persisted_archive_status_cache() -> dict[str, Any]:
@@ -388,25 +395,79 @@ def normalize_campaign_label(value: Any) -> str:
     return _normalized_campaign_label(raw)
 
 
+def _campaign_cache_signature() -> Dict[str, Dict[str, int]]:
+    event_mtime, event_size = _archive_signature(EVENT_ARCHIVE_PATH)
+    profile_mtime, profile_size = _archive_signature(WEBHOOK_ARCHIVE_PATH)
+    return {
+        "events": {"mtime_ns": event_mtime, "size": event_size},
+        "profiles": {"mtime_ns": profile_mtime, "size": profile_size},
+    }
+
+
+def _read_persisted_out_of_scope_campaign_labels() -> Optional[set[str]]:
+    try:
+        parsed = json.loads(_out_of_scope_campaign_cache_path().read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    labels = parsed.get("labels")
+    if not isinstance(labels, list):
+        return None
+    return {str(label) for label in labels if str(label or "").strip()}
+
+
+def _write_persisted_out_of_scope_campaign_labels(labels: set[str]) -> None:
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        path = _out_of_scope_campaign_cache_path()
+        tmp_path = path.with_name(f"{path.name}.tmp")
+        tmp_path.write_text(
+            json.dumps(
+                {
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "signature": _campaign_cache_signature(),
+                    "scan_limit": _OUT_OF_SCOPE_CAMPAIGN_SCAN_LIMIT,
+                    "labels": sorted(labels),
+                },
+                indent=2,
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        tmp_path.replace(path)
+    except Exception:
+        return
+
+
 def get_out_of_scope_campaign_labels() -> set[str]:
     global _OUT_OF_SCOPE_CAMPAIGN_CACHE
     now = datetime.now(timezone.utc).timestamp()
     if _OUT_OF_SCOPE_CAMPAIGN_CACHE and now - _OUT_OF_SCOPE_CAMPAIGN_CACHE[0] < 60:
         return set(_OUT_OF_SCOPE_CAMPAIGN_CACHE[1])
-    labels: set[str] = set()
-    for entry in query_event_archive_entries(limit=50000):
-        for event in entry.get("events") or []:
-            if event_site_scope(event).get("status") == "out_of_scope":
-                labels.update(_normalized_campaign_label(label) for label in _event_campaign_labels(event))
-    for entry in query_webhook_archive_entries(limit=50000):
-        source_host = str(entry.get("source_instance_host") or "").strip().lower()
-        if source_host and source_host == get_target_instance_host():
-            continue
-        for profile in entry.get("profiles") or []:
-            labels.update(_normalized_campaign_label(label) for label in _profile_campaign_labels(profile))
-    labels.discard("")
-    _OUT_OF_SCOPE_CAMPAIGN_CACHE = (now, labels)
-    return set(labels)
+    with _OUT_OF_SCOPE_CAMPAIGN_LOCK:
+        now = datetime.now(timezone.utc).timestamp()
+        if _OUT_OF_SCOPE_CAMPAIGN_CACHE and now - _OUT_OF_SCOPE_CAMPAIGN_CACHE[0] < 60:
+            return set(_OUT_OF_SCOPE_CAMPAIGN_CACHE[1])
+        persisted = _read_persisted_out_of_scope_campaign_labels()
+        if persisted is not None:
+            _OUT_OF_SCOPE_CAMPAIGN_CACHE = (now, persisted)
+            return set(persisted)
+        labels: set[str] = set()
+        for entry in query_event_archive_entries(limit=_OUT_OF_SCOPE_CAMPAIGN_SCAN_LIMIT):
+            for event in entry.get("events") or []:
+                if event_site_scope(event).get("status") == "out_of_scope":
+                    labels.update(_normalized_campaign_label(label) for label in _event_campaign_labels(event))
+        for entry in query_webhook_archive_entries(limit=_OUT_OF_SCOPE_CAMPAIGN_SCAN_LIMIT):
+            source_host = str(entry.get("source_instance_host") or "").strip().lower()
+            if source_host and source_host == get_target_instance_host():
+                continue
+            for profile in entry.get("profiles") or []:
+                labels.update(_normalized_campaign_label(label) for label in _profile_campaign_labels(profile))
+        labels.discard("")
+        _OUT_OF_SCOPE_CAMPAIGN_CACHE = (now, labels)
+        _write_persisted_out_of_scope_campaign_labels(labels)
+        return set(labels)
 
 
 def campaign_label_matches_target_site_scope(value: Any, *, allow_unknown: bool = True) -> bool:
@@ -693,6 +754,20 @@ def query_webhook_archive_entries(
 ) -> list[Dict[str, Any]]:
     if not WEBHOOK_ARCHIVE_PATH.exists():
         return []
+    if limit is not None and since is None and until is None:
+        keep = max(1, min(50000, int(limit)))
+        try:
+            rows: list[Dict[str, Any]] = []
+            for line in reversed(_read_jsonl_tail(WEBHOOK_ARCHIVE_PATH, keep)):
+                try:
+                    parsed = json.loads(line)
+                except Exception:
+                    continue
+                if isinstance(parsed, dict):
+                    rows.append(parsed)
+            return rows
+        except Exception:
+            return []
     rows: list[Dict[str, Any]] = []
     try:
         with WEBHOOK_ARCHIVE_PATH.open("r", encoding="utf-8") as handle:
