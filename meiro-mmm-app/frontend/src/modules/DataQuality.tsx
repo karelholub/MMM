@@ -83,6 +83,10 @@ interface MeiroWebhookSuggestions {
   events_analyzed: number
   total_conversions_observed: number
   total_touchpoints_observed: number
+  site_scope?: {
+    strict?: boolean
+    events_excluded?: number
+  }
   event_stream_diagnostics?: {
     available: boolean
     batches_examined: number
@@ -1534,6 +1538,11 @@ export default function DataQuality() {
               {' '}<strong>{meiroWebhookSuggestionsQuery.data.total_conversions_observed.toLocaleString()}</strong> conversions,
               {' '}<strong>{meiroWebhookSuggestionsQuery.data.total_touchpoints_observed.toLocaleString()}</strong> touchpoints.
               {' '}Suggested dedup key: <strong>{meiroWebhookSuggestionsQuery.data.dedup_key_suggestion}</strong>.
+              {Number(meiroWebhookSuggestionsQuery.data.site_scope?.events_excluded || 0) > 0 ? (
+                <>
+                  {' '}Strict Meiro site scope excluded <strong>{Number(meiroWebhookSuggestionsQuery.data.site_scope?.events_excluded || 0).toLocaleString()}</strong> archive event{Number(meiroWebhookSuggestionsQuery.data.site_scope?.events_excluded || 0) === 1 ? '' : 's'} before generating these suggestions.
+                </>
+              ) : null}
             </div>
 
             {meiroWebhookSuggestionsQuery.data.event_stream_diagnostics?.available ? (
