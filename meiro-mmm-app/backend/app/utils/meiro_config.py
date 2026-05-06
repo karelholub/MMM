@@ -20,6 +20,29 @@ DEFAULT_TARGET_INSTANCE_URL = "https://meiro-internal.eu.pipes.meiro.io"
 DEFAULT_TARGET_SITE_DOMAINS = ("meiro.io", "meir.store")
 _CONFIG_LOCK = threading.RLock()
 _OUT_OF_SCOPE_CAMPAIGN_CACHE: tuple[float, set[str]] | None = None
+_ARCHIVE_STATUS_CACHE: dict[str, tuple[int, int, Dict[str, Any]]] = {}
+
+
+def _archive_signature(path: Path) -> tuple[int, int]:
+    try:
+        stat = path.stat()
+        return int(stat.st_mtime_ns), int(stat.st_size)
+    except Exception:
+        return 0, 0
+
+
+def _cached_archive_status(path: Path, key: str) -> Optional[Dict[str, Any]]:
+    mtime_ns, size = _archive_signature(path)
+    cached = _ARCHIVE_STATUS_CACHE.get(key)
+    if cached and cached[0] == mtime_ns and cached[1] == size:
+        return dict(cached[2])
+    return None
+
+
+def _store_archive_status(path: Path, key: str, value: Dict[str, Any]) -> Dict[str, Any]:
+    mtime_ns, size = _archive_signature(path)
+    _ARCHIVE_STATUS_CACHE[key] = (mtime_ns, size, dict(value))
+    return value
 
 
 def _normalized_url(value: Any) -> str:
@@ -567,6 +590,9 @@ def query_event_archive_entries(
 
 
 def get_webhook_archive_status() -> Dict[str, Any]:
+    cached = _cached_archive_status(WEBHOOK_ARCHIVE_PATH, "profiles")
+    if cached is not None:
+        return cached
     if not WEBHOOK_ARCHIVE_PATH.exists():
         return {
             "available": False,
@@ -620,7 +646,7 @@ def get_webhook_archive_status() -> Dict[str, Any]:
             "parser_versions": [],
             "source_scope": summarize_archive_source_scope(entries=0, verified_entries=0),
         }
-    return {
+    return _store_archive_status(WEBHOOK_ARCHIVE_PATH, "profiles", {
         "available": entries > 0,
         "entries": entries,
         "profiles_received": profiles_received,
@@ -631,10 +657,13 @@ def get_webhook_archive_status() -> Dict[str, Any]:
             verified_entries=verified_entries,
             out_of_scope_entries=out_of_scope_entries,
         ),
-    }
+    })
 
 
 def get_event_archive_status() -> Dict[str, Any]:
+    cached = _cached_archive_status(EVENT_ARCHIVE_PATH, "events")
+    if cached is not None:
+        return cached
     empty_site_scope = {
         "strict": site_scope_is_strict(),
         "target_sites": get_target_site_domains(),
@@ -713,7 +742,7 @@ def get_event_archive_status() -> Dict[str, Any]:
             "source_scope": summarize_archive_source_scope(entries=0, verified_entries=0),
             "site_scope": empty_site_scope,
         }
-    return {
+    return _store_archive_status(EVENT_ARCHIVE_PATH, "events", {
         "available": entries > 0,
         "entries": entries,
         "events_received": events_received,
@@ -735,7 +764,7 @@ def get_event_archive_status() -> Dict[str, Any]:
                 for host, count in site_host_counts.most_common(12)
             ],
         },
-    }
+    })
 
 
 def rebuild_profiles_from_webhook_archive(

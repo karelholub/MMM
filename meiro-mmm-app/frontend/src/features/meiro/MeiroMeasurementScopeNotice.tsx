@@ -18,7 +18,8 @@ export default function MeiroMeasurementScopeNotice({ compact = false, scope, ta
   const summaryQuery = useQuery<MeiroMeasurementPipelineSummary>({
     queryKey: ['meiro-measurement-pipeline-summary'],
     queryFn: getMeiroMeasurementPipelineSummary,
-    staleTime: 30_000,
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
     enabled: !scope,
   })
   const summary = summaryQuery.data

@@ -280,7 +280,8 @@ export default function App() {
         return { loaded: false, count: 0, converted: 0, non_converted: 0 }
       }
     },
-    refetchInterval: 15 * 1000,
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
   })
 
   const modelConfigsQuery = useQuery({
