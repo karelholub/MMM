@@ -19,6 +19,12 @@ def _exclude_out_of_scope_campaigns(query: Query, column: Any) -> Query:
     return query.filter(or_(column.is_(None), column == "", func.lower(func.trim(column)).notin_(labels)))
 
 
+def _out_of_scope_campaign_label_count() -> int:
+    if not site_scope_is_strict():
+        return 0
+    return len(get_out_of_scope_campaign_labels())
+
+
 def _apply_dimension_filters(
     query: Query,
     *,
@@ -116,6 +122,11 @@ def build_journey_filter_dimensions(
             "date_from": date_from.isoformat(),
             "date_to": date_to.isoformat(),
             "segment_supported": False,
+            "scope_filter": {
+                "strict": site_scope_is_strict(),
+                "out_of_scope_campaign_labels": _out_of_scope_campaign_label_count(),
+                "campaign_selectors_filtered": _out_of_scope_campaign_label_count() > 0,
+            },
         },
         "channels": _top_dimension_values(
             db,

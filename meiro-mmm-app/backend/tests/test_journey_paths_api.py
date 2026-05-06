@@ -353,6 +353,8 @@ def test_journey_dimensions_exclude_out_of_scope_campaigns_from_selectors(client
     assert resp.status_code == 200
     body = resp.json()
     assert body["summary"]["journey_rows"] == 1
+    assert body["summary"]["scope_filter"]["campaign_selectors_filtered"] is True
+    assert body["summary"]["scope_filter"]["out_of_scope_campaign_labels"] == 1
     assert body["campaigns"] == [{"value": "meiro-brand", "count": 1}]
 
 

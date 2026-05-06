@@ -70,6 +70,11 @@ interface JourneyFilterDimensionsResponse {
     date_from: string
     date_to: string
     segment_supported: boolean
+    scope_filter?: {
+      strict?: boolean
+      out_of_scope_campaign_labels?: number
+      campaign_selectors_filtered?: boolean
+    }
   }
   channels: JourneyFilterDimensionValue[]
   campaigns: JourneyFilterDimensionValue[]
@@ -1216,6 +1221,11 @@ export default function ConversionPaths() {
                 {dimensionsQuery.data?.summary?.journey_rows != null ? (
                   <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
                     {dimensionsQuery.data.summary.journey_rows.toLocaleString()} observed rows available for the current definition and date window.
+                  </div>
+                ) : null}
+                {dimensionsQuery.data?.summary?.scope_filter?.campaign_selectors_filtered ? (
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.warning }}>
+                    Campaign filters exclude {Number(dimensionsQuery.data.summary.scope_filter.out_of_scope_campaign_labels || 0).toLocaleString()} out-of-scope Meiro archive label{Number(dimensionsQuery.data.summary.scope_filter.out_of_scope_campaign_labels || 0) === 1 ? '' : 's'}.
                   </div>
                 ) : null}
               </div>
