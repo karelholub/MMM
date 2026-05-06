@@ -653,6 +653,19 @@ export default function DataQuality() {
   if (scoreInputs.unresolved_pairs > 10) topDrivers.push(`${scoreInputs.unresolved_pairs.toFixed(1)}% unresolved source/medium touchpoints`)
   if (scoreInputs.inferred_journeys > 15) topDrivers.push(`${scoreInputs.inferred_journeys.toFixed(1)}% journeys using inferred mappings`)
   const rawEventDiagnostics = meiroWebhookSuggestionsQuery.data?.event_stream_diagnostics
+  const rawEventsActive =
+    meiroConfigQuery.data?.primary_ingest_source === 'events' ||
+    Number(meiroConfigQuery.data?.event_webhook_received_count || 0) > 0
+  const rawEventReconstructionExpected = Boolean(
+    rawEventsActive &&
+    rawEventDiagnostics?.available &&
+    Number(rawEventDiagnostics.avg_reconstructed_profiles_per_event || 0) > 0,
+  )
+  const scoreBasisNote = rawEventReconstructionExpected
+    ? 'Pipes raw events are reconstructed into profile journeys during replay. The score still penalizes persisted journey fields that remain missing after reconstruction.'
+    : rawEventsActive
+      ? 'Pipes raw events are active. Reconstruction is expected only when identity, timestamps, event names, and attribution fields are present.'
+      : 'Score penalties apply to the current persisted journey and source snapshots.'
   const rawEventFunnelData = rawEventDiagnostics?.available
     ? [
         { label: 'Events', value: rawEventDiagnostics.events_examined, annotation: 'Examined' },
@@ -798,7 +811,7 @@ export default function DataQuality() {
         return ingestKind === 'events'
           ? event.channels_detected?.length
             ? event.channels_detected.join(', ')
-            : 'Reconstructed on replay/import'
+            : 'Expected: reconstructed during replay/import'
           : event.channels_detected?.length
           ? event.channels_detected.join(', ')
           : '—'
@@ -1193,6 +1206,9 @@ export default function DataQuality() {
             Top drivers lowering score: {topDrivers.slice(0, 2).join('; ')}
           </div>
         )}
+        <div style={{ flexBasis: '100%', fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+          {scoreBasisNote}
+        </div>
       </div>
 
       {/* Raw event readiness summary */}
@@ -1334,10 +1350,10 @@ export default function DataQuality() {
           onClick={() => setDrilldownMetric('freshness_lag_minutes')}
         />
         <Tile
-          label="Journeys missing profile ID"
+          label="Persisted journeys missing profile ID"
           metricKey="missing_profile_pct"
           value={completenessMissingProfile ? completenessMissingProfile.metric_value.toFixed(1) : null}
-          description="Higher values mean poor joinability"
+          description={rawEventReconstructionExpected ? 'After raw-event replay reconstruction' : 'Higher values mean poor joinability'}
           trend={getTrend('missing_profile_pct', scope === 'overall' ? undefined : scope)}
           onClick={() => setDrilldownMetric('missing_profile_pct')}
         />
