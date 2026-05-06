@@ -89,6 +89,116 @@ def _store_archive_status(path: Path, key: str, value: Dict[str, Any]) -> Dict[s
     return value
 
 
+def _latest_archive_status(path: Path, key: str) -> Dict[str, Any]:
+    cache_key = _archive_cache_key(path, key)
+    cached = _ARCHIVE_STATUS_CACHE.get(cache_key)
+    if cached:
+        return dict(cached[2])
+    persisted = _read_persisted_archive_status_cache().get(cache_key)
+    status = persisted.get("status") if isinstance(persisted, dict) else None
+    return dict(status) if isinstance(status, dict) else {}
+
+
+def _entry_source_scope_delta(entry: Dict[str, Any]) -> tuple[int, int]:
+    source_host = str(entry.get("source_instance_host") or "").strip().lower()
+    source_status = str(entry.get("source_scope_status") or "").strip().lower()
+    verified = 1 if source_host and source_host == get_target_instance_host() else 0
+    out_of_scope = 1 if not verified and source_status == "out_of_scope" else 0
+    return verified, out_of_scope
+
+
+def _incremental_profile_archive_status(entry: Dict[str, Any]) -> None:
+    previous = _latest_archive_status(WEBHOOK_ARCHIVE_PATH, "profiles")
+    entries = int(previous.get("entries") or 0) + 1
+    try:
+        profiles_received_delta = int(entry.get("received_count") or len(entry.get("profiles") or []))
+    except Exception:
+        profiles_received_delta = 0
+    source_scope = previous.get("source_scope") if isinstance(previous.get("source_scope"), dict) else {}
+    verified_delta, out_of_scope_delta = _entry_source_scope_delta(entry)
+    verified_entries = int(source_scope.get("verified_entries") or 0) + verified_delta
+    out_of_scope_entries = int(source_scope.get("out_of_scope_entries") or 0) + out_of_scope_delta
+    parser_versions = set(previous.get("parser_versions") or [])
+    parser_version = entry.get("parser_version")
+    if isinstance(parser_version, str) and parser_version:
+        parser_versions.add(parser_version)
+    _store_archive_status(WEBHOOK_ARCHIVE_PATH, "profiles", {
+        "available": entries > 0,
+        "entries": entries,
+        "profiles_received": int(previous.get("profiles_received") or 0) + profiles_received_delta,
+        "last_received_at": entry.get("received_at") or previous.get("last_received_at"),
+        "parser_versions": sorted(parser_versions),
+        "source_scope": summarize_archive_source_scope(
+            entries=entries,
+            verified_entries=verified_entries,
+            out_of_scope_entries=out_of_scope_entries,
+        ),
+    })
+
+
+def _incremental_event_archive_status(entry: Dict[str, Any]) -> None:
+    previous = _latest_archive_status(EVENT_ARCHIVE_PATH, "events")
+    entries = int(previous.get("entries") or 0) + 1
+    events = entry.get("events") if isinstance(entry.get("events"), list) else []
+    try:
+        events_received_delta = int(entry.get("received_count") or len(events))
+    except Exception:
+        events_received_delta = 0
+    source_scope = previous.get("source_scope") if isinstance(previous.get("source_scope"), dict) else {}
+    verified_delta, out_of_scope_delta = _entry_source_scope_delta(entry)
+    verified_entries = int(source_scope.get("verified_entries") or 0) + verified_delta
+    out_of_scope_entries = int(source_scope.get("out_of_scope_entries") or 0) + out_of_scope_delta
+    parser_versions = set(previous.get("parser_versions") or [])
+    parser_version = entry.get("parser_version")
+    if isinstance(parser_version, str) and parser_version:
+        parser_versions.add(parser_version)
+
+    previous_site_scope = previous.get("site_scope") if isinstance(previous.get("site_scope"), dict) else {}
+    target_site_events = int(previous_site_scope.get("target_site_events") or 0)
+    out_of_scope_site_events = int(previous_site_scope.get("out_of_scope_site_events") or 0)
+    unknown_site_events = int(previous_site_scope.get("unknown_site_events") or 0)
+    site_host_counts: Counter[str] = Counter({
+        str(item.get("host") or "unknown"): int(item.get("count") or 0)
+        for item in previous_site_scope.get("top_hosts") or []
+        if isinstance(item, dict)
+    })
+    for event in events:
+        scope = event_site_scope(event)
+        status = str(scope.get("status") or "")
+        host = str(scope.get("host") or "unknown")
+        site_host_counts[host] += 1
+        if status == "target_site":
+            target_site_events += 1
+        elif status == "out_of_scope":
+            out_of_scope_site_events += 1
+        else:
+            unknown_site_events += 1
+
+    _store_archive_status(EVENT_ARCHIVE_PATH, "events", {
+        "available": entries > 0,
+        "entries": entries,
+        "events_received": int(previous.get("events_received") or 0) + events_received_delta,
+        "last_received_at": entry.get("received_at") or previous.get("last_received_at"),
+        "parser_versions": sorted(parser_versions),
+        "source_scope": summarize_archive_source_scope(
+            entries=entries,
+            verified_entries=verified_entries,
+            out_of_scope_entries=out_of_scope_entries,
+        ),
+        "site_scope": {
+            "strict": site_scope_is_strict(),
+            "target_sites": get_target_site_domains(),
+            "target_site_events": target_site_events,
+            "out_of_scope_site_events": out_of_scope_site_events,
+            "unknown_site_events": unknown_site_events,
+            "top_hosts": [
+                {"host": host, "count": count}
+                for host, count in site_host_counts.most_common(12)
+            ],
+        },
+    })
+
+
 def _normalized_url(value: Any) -> str:
     raw = str(value or "").strip().rstrip("/")
     if raw and "://" not in raw:
@@ -531,12 +641,14 @@ def append_webhook_archive_entry(entry: Dict[str, Any]) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     with WEBHOOK_ARCHIVE_PATH.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    _incremental_profile_archive_status(entry)
 
 
 def append_event_archive_entry(entry: Dict[str, Any]) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     with EVENT_ARCHIVE_PATH.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    _incremental_event_archive_status(entry)
 
 
 def get_webhook_archive_entries(limit: int = 100) -> list[Dict[str, Any]]:
