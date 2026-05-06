@@ -106,6 +106,14 @@ interface CampaignSummaryItem {
 
 interface CampaignSummaryResponse {
   items: CampaignSummaryItem[]
+  meta?: {
+    meiro_measurement_scope?: {
+      strict?: boolean
+      out_of_scope_campaign_labels?: number
+      campaign_rows_excluded?: number
+      warnings?: string[]
+    } | null
+  } | null
 }
 
 function normalizeCampaignOption(item: CampaignSummaryItem): string | null {
@@ -114,6 +122,33 @@ function normalizeCampaignOption(item: CampaignSummaryItem): string | null {
   if (!raw) return null
   const idx = raw.indexOf(':')
   return idx >= 0 ? raw.slice(idx + 1) || null : raw
+}
+
+function CampaignOptionScopeNote({
+  expenseOnlyCount,
+  excludedRows,
+  outOfScopeLabels,
+}: {
+  expenseOnlyCount: number
+  excludedRows: number
+  outOfScopeLabels: number
+}) {
+  if (expenseOnlyCount <= 0 && excludedRows <= 0 && outOfScopeLabels <= 0) return null
+  const details = []
+  if (excludedRows > 0) {
+    details.push(`${excludedRows.toLocaleString()} out-of-scope performance row${excludedRows === 1 ? '' : 's'} hidden`)
+  }
+  if (outOfScopeLabels > 0) {
+    details.push(`${outOfScopeLabels.toLocaleString()} archived campaign label${outOfScopeLabels === 1 ? '' : 's'} excluded`)
+  }
+  if (expenseOnlyCount > 0) {
+    details.push(`${expenseOnlyCount.toLocaleString()} option${expenseOnlyCount === 1 ? '' : 's'} from expense rows only`)
+  }
+  return (
+    <div style={{ marginTop: 6, fontSize: 12, lineHeight: 1.35, color: '#856404' }}>
+      Campaign suggestions use production-scoped Meiro performance data plus saved expense rows. {details.join('; ')}.
+    </div>
+  )
 }
 
 const card = {
@@ -449,17 +484,40 @@ export default function ExpenseManager() {
     taxonomyCoverageQuery.data?.channel_distribution,
     taxonomyQuery.data?.channel_rules,
   ])
-  const campaignOptions = useMemo(() => {
+  const performanceCampaignOptionSet = useMemo(() => {
     const options = new Set<string>()
     ;(campaignOptionsQuery.data?.items ?? []).forEach((item) => {
       const label = normalizeCampaignOption(item)
       if (label) options.add(String(label))
     })
+    return options
+  }, [campaignOptionsQuery.data?.items])
+  const expenseCampaignOptionSet = useMemo(() => {
+    const options = new Set<string>()
     expenses.forEach((expense) => {
       if (expense.campaign) options.add(expense.campaign)
     })
+    return options
+  }, [expenses])
+  const campaignOptions = useMemo(() => {
+    const options = new Set<string>()
+    performanceCampaignOptionSet.forEach((campaign) => options.add(campaign))
+    expenseCampaignOptionSet.forEach((campaign) => options.add(campaign))
     return Array.from(options).sort((a, b) => a.localeCompare(b))
-  }, [campaignOptionsQuery.data?.items, expenses])
+  }, [expenseCampaignOptionSet, performanceCampaignOptionSet])
+  const expenseOnlyCampaignCount = useMemo(() => {
+    let count = 0
+    expenseCampaignOptionSet.forEach((campaign) => {
+      if (!performanceCampaignOptionSet.has(campaign)) count += 1
+    })
+    return count
+  }, [expenseCampaignOptionSet, performanceCampaignOptionSet])
+  const campaignScope = campaignOptionsQuery.data?.meta?.meiro_measurement_scope
+  const campaignRowsExcluded = Number(campaignScope?.campaign_rows_excluded || 0)
+  const outOfScopeCampaignLabels = Number(campaignScope?.out_of_scope_campaign_labels || 0)
+  const getCampaignOptionSourceLabel = (campaign: string) => (
+    performanceCampaignOptionSet.has(campaign) ? 'Production-scoped performance campaign' : 'Expense ledger only'
+  )
   const chartData = summary ? Object.entries(summary.by_channel).map(([channel, amount]) => ({
     channel, amount, fill: COLORS[channel] || '#6c757d',
   })).sort((a, b) => b.amount - a.amount) : []
@@ -691,7 +749,7 @@ export default function ExpenseManager() {
                   ))}
                 </select>
               </div>
-              <div>
+              <div style={{ minWidth: 180 }}>
                 <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#6c757d', marginBottom: 4 }}>Campaign</label>
                 <input
                   type="text"
@@ -703,9 +761,14 @@ export default function ExpenseManager() {
                 />
                 <datalist id="expense-campaign-options">
                   {campaignOptions.map((campaign) => (
-                    <option key={campaign} value={campaign} />
+                    <option key={campaign} value={campaign} label={getCampaignOptionSourceLabel(campaign)} />
                   ))}
                 </datalist>
+                <CampaignOptionScopeNote
+                  expenseOnlyCount={expenseOnlyCampaignCount}
+                  excludedRows={campaignRowsExcluded}
+                  outOfScopeLabels={outOfScopeCampaignLabels}
+                />
               </div>
               <div>
                 <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#6c757d', marginBottom: 4 }}>Cost Type</label>
@@ -843,8 +906,17 @@ export default function ExpenseManager() {
                 style={{ padding: '8px', fontSize: 13, border: '1px solid #dee2e6', borderRadius: 6, minWidth: 180 }}
               />
               <datalist id="expense-filter-campaign-options">
-                {campaignOptions.map((campaign) => <option key={campaign} value={campaign} />)}
+                {campaignOptions.map((campaign) => (
+                  <option key={campaign} value={campaign} label={getCampaignOptionSourceLabel(campaign)} />
+                ))}
               </datalist>
+              <div style={{ flexBasis: '100%', marginTop: -6 }}>
+                <CampaignOptionScopeNote
+                  expenseOnlyCount={expenseOnlyCampaignCount}
+                  excludedRows={campaignRowsExcluded}
+                  outOfScopeLabels={outOfScopeCampaignLabels}
+                />
+              </div>
               <select value={filterCostType} onChange={(e) => setFilterCostType(e.target.value)} style={{ padding: '8px', fontSize: 13, border: '1px solid #dee2e6', borderRadius: 6 }}>
                 <option value="">All cost types</option>
                 {COST_TYPES.map(ct => <option key={ct} value={ct}>{ct}</option>)}

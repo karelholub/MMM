@@ -10,6 +10,7 @@ import SegmentOverlapNotice from '../components/segments/SegmentOverlapNotice'
 import { apiGetJson } from '../lib/apiClient'
 import { buildIncrementalityPlannerHref } from '../lib/experimentLinks'
 import { buildSettingsHref } from '../lib/settingsLinks'
+import MeiroMeasurementScopeNotice from '../features/meiro/MeiroMeasurementScopeNotice'
 import {
   buildSegmentComparisonHref,
   localSegmentCompatibleWithDimensions,
@@ -42,12 +43,25 @@ interface ChannelSummaryItem {
   diagnostics?: { roles?: RoleDiagnostics }
 }
 
+interface MeiroMeasurementScopeMeta {
+  strict?: boolean
+  target_sites?: string[]
+  source_scope?: { status?: string; target_host?: string; legacy_unverified_entries?: number; out_of_scope_entries?: number }
+  event_archive_site_scope?: { target_site_events?: number; out_of_scope_site_events?: number; unknown_site_events?: number }
+  out_of_scope_campaign_labels?: number
+  campaign_rows_excluded?: number
+  warnings?: string[]
+}
+
 interface ChannelSummaryResponse {
   current_period: { date_from: string; date_to: string; grain?: string }
   items: ChannelSummaryItem[]
   config?: {
     conversion_key?: string | null
     config_version?: number | null
+  } | null
+  meta?: {
+    meiro_measurement_scope?: MeiroMeasurementScopeMeta
   } | null
 }
 
@@ -65,6 +79,9 @@ interface CampaignSummaryResponse {
   config?: {
     conversion_key?: string | null
     config_version?: number | null
+  } | null
+  meta?: {
+    meiro_measurement_scope?: MeiroMeasurementScopeMeta
   } | null
 }
 
@@ -279,6 +296,10 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
     () => localSegmentCompatibleWithDimensions(selectedSegment, scope === 'channels' ? ['channel_group'] : ['channel_group', 'campaign_id']),
     [scope, selectedSegment],
   )
+  const meiroScope =
+    scope === 'campaigns'
+      ? campaignSummaryQuery.data?.meta?.meiro_measurement_scope
+      : channelSummaryQuery.data?.meta?.meiro_measurement_scope
   const compareSegment = useMemo<SegmentRegistryItem | null>(
     () => localSegments.find((item) => item.id === compareSegmentId) ?? null,
     [compareSegmentId, localSegments],
@@ -690,6 +711,9 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
         </SectionCard>
 
         <ContextSummaryStrip items={summaryItems} minItemWidth={180} />
+        <div style={{ marginTop: -t.space.md, marginBottom: t.space.lg }}>
+          <MeiroMeasurementScopeNotice compact scope={meiroScope} />
+        </div>
         <SurfaceBasisNotice marginTop={-t.space.md} marginBottom={t.space.lg}>
           Attribution Roles is a <strong>live config-aware</strong> view built from live attribution journeys and derived role entities. It is directly comparable to Attribution Comparison and Path Archetypes, but only directionally comparable to workspace-fact or materialized-output pages.
           {latestEventReplayDiagnostics?.events_loaded ? (

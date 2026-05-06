@@ -95,6 +95,16 @@ interface ChannelSummaryResponse {
   consistency_warnings?: string[]
   meta?: {
     conversion_key?: string | null
+    meiro_measurement_scope?: {
+      strict?: boolean
+      target_sites?: string[]
+      source_scope?: { status?: string; target_host?: string }
+      event_archive_site_scope?: {
+        target_site_events?: number
+        out_of_scope_site_events?: number
+        unknown_site_events?: number
+      }
+    } | null
     conversion_key_resolution?: {
       configured_conversion_key?: string | null
       applied_conversion_key?: string | null
@@ -113,6 +123,18 @@ interface CampaignSummaryResponse {
   } | null
   readiness?: SummaryReadiness | null
   consistency_warnings?: string[]
+  meta?: {
+    meiro_measurement_scope?: {
+      strict?: boolean
+      target_sites?: string[]
+      source_scope?: { status?: string; target_host?: string }
+      event_archive_site_scope?: {
+        target_site_events?: number
+        out_of_scope_site_events?: number
+        unknown_site_events?: number
+      }
+    } | null
+  } | null
 }
 
 interface ConversionPathsAnalysis {
@@ -374,6 +396,9 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
   const replayDiagnostics = latestReplay?.diagnostics ?? null
   const mappingCoverage = channelSummaryQuery.data?.mapping_coverage ?? campaignSummaryQuery.data?.mapping_coverage ?? null
   const spendQuality = campaignSummaryQuery.data?.spend_quality ?? null
+  const meiroScope =
+    channelSummaryQuery.data?.meta?.meiro_measurement_scope ??
+    campaignSummaryQuery.data?.meta?.meiro_measurement_scope
   const conversionKeyResolution = channelSummaryQuery.data?.meta?.conversion_key_resolution ?? null
   const consistencyWarnings = useMemo(
     () =>
@@ -658,7 +683,7 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
       <ContextSummaryStrip items={summaryItems} />
 
       <div style={{ marginTop: t.space.sm, marginBottom: t.space.lg }}>
-        <MeiroMeasurementScopeNotice compact />
+        <MeiroMeasurementScopeNotice compact scope={meiroScope} />
       </div>
 
       <SurfaceBasisNotice marginTop={t.space.sm} marginBottom={t.space.lg}>
