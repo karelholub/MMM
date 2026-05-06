@@ -75,6 +75,7 @@ from app.services_meiro_event_facts import (
     upsert_meiro_event_facts,
 )
 from app.services_meiro_profile_facts import list_meiro_profile_facts, upsert_meiro_profile_facts
+from app.services_meiro_pipes_cli import build_pipes_cli_status
 from app.services_meiro_replay_runs import list_meiro_replay_runs, record_meiro_replay_run
 from app.services_meiro_replay_snapshots import create_meiro_replay_snapshot
 from app.services_meiro_api import MeiroApiError
@@ -1486,6 +1487,10 @@ def create_router(
             "primary_ingest_source": pull_config.get("primary_ingest_source", "profiles"),
             "auto_replay_state": get_auto_replay_state(),
         }
+
+    @router.get("/api/connectors/meiro/pipes-cli/status")
+    def meiro_pipes_cli_status(live: bool = Query(False)):
+        return build_pipes_cli_status(live=live)
 
     @router.get("/api/connectors/meiro/readiness")
     def meiro_readiness(db=Depends(get_db_dependency)):

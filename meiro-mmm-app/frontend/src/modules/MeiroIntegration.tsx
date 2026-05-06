@@ -13,6 +13,7 @@ import {
   getMeiroEventArchive,
   getMeiroConfig,
   getMeiroMeasurementPipelineSummary,
+  getMeiroPipesCliStatus,
   type MeiroQuarantineReprocessResult,
   getMeiroMapping,
   getMeiroPullConfig,
@@ -28,6 +29,7 @@ import {
   saveMeiroPullConfig,
   testMeiroConnection,
   type MeiroPullConfig,
+  type MeiroPipesCliStatus,
   type MeiroQuarantineRun,
   type MeiroMeasurementPipelineSummary,
   type MeiroWebhookDiagnostics,
@@ -203,6 +205,11 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
     queryFn: getMeiroMeasurementPipelineSummary,
     staleTime: 30_000,
   })
+  const pipesCliStatusQuery = useQuery<MeiroPipesCliStatus>({
+    queryKey: ['meiro-pipes-cli-status'],
+    queryFn: () => getMeiroPipesCliStatus(false),
+    staleTime: 5 * 60 * 1000,
+  })
   const segmentRegistryQuery = useQuery<SegmentRegistryResponse>({
     queryKey: ['segment-registry', 'meiro-pipeline'],
     queryFn: async () =>
@@ -332,6 +339,13 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
       await queryClient.invalidateQueries({ queryKey: ['meiro-measurement-pipeline-summary'] })
     },
     onError: (error) => setOauthToast((error as Error).message || 'Failed to pin raw events as primary source'),
+  })
+  const refreshPipesCliStatusMutation = useMutation({
+    mutationFn: () => getMeiroPipesCliStatus(true),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['meiro-pipes-cli-status'], data)
+    },
+    onError: (error) => setOauthToast((error as Error).message || 'Failed to check Meiro Pipes CLI status'),
   })
   const runMeiroPullMutation = useMutation({
     mutationFn: () => meiroPull(),
@@ -521,6 +535,18 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
   const outOfScopeSiteEvents = Number(summarySource?.site_scope?.out_of_scope_site_events || 0)
   const targetSites = measurementSummary?.target.site_domains || summarySource?.site_scope?.target_sites || ['meiro.io', 'meir.store']
   const topTargetCampaigns = measurementSummary?.quality.top_target_campaigns || []
+  const pipesCli = refreshPipesCliStatusMutation.data || pipesCliStatusQuery.data
+  const pipesCliScope = pipesCli?.status.instance_scope
+  const pipesCliScopeStatus = pipesCliScope?.status || 'not_configured'
+  const pipesCliSummary = pipesCli?.snapshot.summary
+  const pipesCliAvailable = Boolean(pipesCli?.status.available)
+  const pipesCliTone = pipelineTone(
+    pipesCliAvailable && pipesCliScopeStatus === 'in_scope'
+      ? 'ready'
+      : pipesCliAvailable
+        ? 'warning'
+        : 'idle',
+  )
   const readinessActions = ((readiness?.recommended_actions || []) as Array<Partial<RecommendedActionItem>>)
     .filter((action): action is RecommendedActionItem => Boolean(action?.id && action?.label))
   const firstReadinessAction = readinessActions[0]
@@ -706,6 +732,57 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
                       : 'Pipes profile payloads are imported as assembled journeys, then measured and handed back to deciEngine.'}
                 </div>
                 <MeiroTargetInstanceBadge config={meiroConfigQuery.data} />
+                <div
+                  style={{
+                    border: `1px solid ${t.color.borderLight}`,
+                    background: t.color.bg,
+                    borderRadius: t.radius.md,
+                    padding: t.space.md,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    gap: t.space.md,
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                    maxWidth: 920,
+                  }}
+                >
+                  <div style={{ display: 'grid', gap: 5, minWidth: 0 }}>
+                    <div style={{ display: 'flex', gap: t.space.xs, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <span style={{ borderRadius: t.radius.full, background: pipesCliTone.bg, color: pipesCliTone.color, padding: '2px 7px', fontSize: t.font.sizeXs, fontWeight: t.font.weightSemibold }}>
+                        {pipesCliAvailable ? pipesCliScopeStatus.replace(/_/g, ' ') : 'snapshot missing'}
+                      </span>
+                      <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                        {pipesCli?.source === 'live' ? 'Live mpcli check' : pipesCli?.snapshot.available ? 'Host mpcli snapshot' : 'No mpcli snapshot'}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Meiro Pipes CLI verification</div>
+                    <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                      {pipesCliAvailable
+                        ? `CLI context ${pipesCliScope?.configured_host || pipesCli?.status.instance_url || 'unknown'} -> target ${pipesCli?.target.instance_host || 'meiro-internal.eu.pipes.meiro.io'}.`
+                        : 'Run the host mpcli snapshot script to let MMM verify Pipes sources, pipes, destinations, and queue health without using CDP/MCP.'}
+                      {pipesCliSummary ? (
+                        <> Streams {Number(pipesCliSummary.event_stream_count ?? 0).toLocaleString()} · pipes {Number(pipesCliSummary.pipe_count ?? 0).toLocaleString()} · destinations {Number(pipesCliSummary.event_destination_count ?? 0).toLocaleString()}</>
+                      ) : null}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => refreshPipesCliStatusMutation.mutate()}
+                    disabled={refreshPipesCliStatusMutation.isPending}
+                    style={{
+                      border: `1px solid ${t.color.border}`,
+                      background: t.color.surface,
+                      color: t.color.text,
+                      borderRadius: t.radius.sm,
+                      padding: '8px 10px',
+                      cursor: refreshPipesCliStatusMutation.isPending ? 'wait' : 'pointer',
+                      fontWeight: t.font.weightMedium,
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {refreshPipesCliStatusMutation.isPending ? 'Checking...' : 'Check live CLI'}
+                  </button>
+                </div>
                 {dualIngestDetected ? (
                   <div
                     style={{

@@ -164,6 +164,37 @@ export interface MeiroMeasurementPipelineSummary {
   }
 }
 
+export interface MeiroPipesCliStatus {
+  generated_at: string
+  source: 'live' | 'snapshot' | 'none' | string
+  target: {
+    instance_url: string
+    instance_host: string
+  }
+  status: {
+    available: boolean
+    live_checked: boolean
+    live_ok?: boolean | null
+    instance_url?: string | null
+    api?: Record<string, unknown> | null
+    auth?: string | null
+    instance_scope?: MeiroConfig['cdp_instance_scope']
+    error?: string | null
+    hint?: string | null
+  }
+  snapshot: {
+    available: boolean
+    generated_at?: string | null
+    path?: string | null
+    summary?: {
+      event_stream_count?: number | null
+      pipe_count?: number | null
+      event_destination_count?: number | null
+      queues_ok?: boolean | null
+    } | null
+  }
+}
+
 export interface MeiroPullConfig {
   lookback_days: number
   session_gap_minutes: number
@@ -375,6 +406,13 @@ export async function getMeiroMeasurementPipelineSummary(): Promise<MeiroMeasure
   return apiGetJson<MeiroMeasurementPipelineSummary>('/api/connectors/meiro/measurement-pipeline/summary', {
     fallbackMessage: 'Failed to fetch Meiro Measurement Pipeline summary',
   })
+}
+
+export async function getMeiroPipesCliStatus(live = false): Promise<MeiroPipesCliStatus> {
+  return apiGetJson<MeiroPipesCliStatus>(
+    withQuery('/api/connectors/meiro/pipes-cli/status', { live: live ? 1 : undefined }),
+    { fallbackMessage: 'Failed to fetch Meiro Pipes CLI status' },
+  )
 }
 
 export async function getMeiroMapping(): Promise<MeiroMappingState> {
