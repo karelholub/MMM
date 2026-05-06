@@ -36,6 +36,11 @@ def test_channel_summary_response_shape():
     assert "mapping_coverage" in body
     assert "meta" in body
     assert isinstance(body["meta"]["channels"], list)
+    scope = body["meta"]["meiro_measurement_scope"]
+    assert scope["target_sites"]
+    assert "source_scope" in scope
+    assert "event_archive_site_scope" in scope
+    assert "campaign_rows_excluded" in scope
 
 
 def test_campaign_summary_response_shape_and_note():
@@ -55,6 +60,12 @@ def test_campaign_summary_response_shape_and_note():
     assert body["notes"]
     assert "meta" in body
     assert "query_context" in body["meta"]
+    assert "scope_filter" in body
+    scope = body["meta"]["meiro_measurement_scope"]
+    assert scope["target_sites"]
+    assert "source_scope" in scope
+    assert "event_archive_site_scope" in scope
+    assert scope["campaign_rows_excluded"] == body["scope_filter"]["campaign_rows_excluded"]
 
 
 def test_campaign_summary_includes_conversion_key_meta_when_passed():
@@ -66,6 +77,37 @@ def test_campaign_summary_includes_conversion_key_meta_when_passed():
     assert res.status_code == 200
     body = res.json()
     assert body["meta"]["conversion_key"] == "purchase"
+
+
+def test_campaign_summary_scope_filter_excludes_out_of_scope_rows(monkeypatch):
+    monkeypatch.setattr(performance_router, "get_out_of_scope_campaign_labels", lambda: {"legacy campaign"})
+    out = {
+        "items": [
+            {
+                "campaign_id": "legacy campaign",
+                "campaign_name": "Legacy Campaign",
+                "current": {"spend": 10, "visits": 4, "conversions": 1, "revenue": 20},
+                "previous": {"spend": 5, "visits": 2, "conversions": 0, "revenue": 0},
+            },
+            {
+                "campaign_id": "target campaign",
+                "campaign_name": "Target Campaign",
+                "current": {"spend": 30, "visits": 8, "conversions": 2, "revenue": 80},
+                "previous": {"spend": 15, "visits": 3, "conversions": 1, "revenue": 25},
+            },
+        ],
+        "totals": {"current": {}, "previous": {}},
+        "notes": [],
+    }
+
+    filtered = performance_router._filter_out_of_scope_campaign_items(out)
+
+    assert [item["campaign_id"] for item in filtered["items"]] == ["target campaign"]
+    assert filtered["scope_filter"]["out_of_scope_campaign_labels"] == 1
+    assert filtered["scope_filter"]["campaign_rows_excluded"] == 1
+    assert filtered["totals"]["current"] == {"spend": 30.0, "visits": 8.0, "conversions": 2.0, "revenue": 80.0}
+    assert filtered["totals"]["previous"] == {"spend": 15.0, "visits": 3.0, "conversions": 1.0, "revenue": 25.0}
+    assert any("Excluded 1 campaign rows" in note for note in filtered["notes"])
 
 
 def test_performance_conversion_scope_defaults_to_all_when_config_has_primary_key():
