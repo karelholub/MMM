@@ -12,6 +12,7 @@ import {
   disconnectMeiroCDP,
   getMeiroEventArchive,
   getMeiroConfig,
+  getMeiroMeasurementPipelineSummary,
   type MeiroQuarantineReprocessResult,
   getMeiroMapping,
   getMeiroPullConfig,
@@ -28,6 +29,7 @@ import {
   testMeiroConnection,
   type MeiroPullConfig,
   type MeiroQuarantineRun,
+  type MeiroMeasurementPipelineSummary,
   type MeiroWebhookDiagnostics,
 } from '../connectors/meiroConnector'
 import { getDeciEngineEventsConfig, importDeciEngineActivationEvents, saveDeciEngineEventsConfig, type DeciEngineEventsImportPayload } from '../connectors/deciengineConnector'
@@ -174,6 +176,11 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
   const [pipelineAudienceKey, setPipelineAudienceKey] = useState('')
 
   const meiroConfigQuery = useQuery({ queryKey: ['meiro-config'], queryFn: getMeiroConfig })
+  const measurementPipelineQuery = useQuery<MeiroMeasurementPipelineSummary>({
+    queryKey: ['meiro-measurement-pipeline-summary'],
+    queryFn: getMeiroMeasurementPipelineSummary,
+    staleTime: 30_000,
+  })
   const segmentRegistryQuery = useQuery<SegmentRegistryResponse>({
     queryKey: ['segment-registry', 'meiro-pipeline'],
     queryFn: async () =>
@@ -300,6 +307,7 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
       await queryClient.invalidateQueries({ queryKey: ['meiro-pull-config'] })
       await queryClient.invalidateQueries({ queryKey: ['meiro-config'] })
       await queryClient.invalidateQueries({ queryKey: ['meiro-readiness'] })
+      await queryClient.invalidateQueries({ queryKey: ['meiro-measurement-pipeline-summary'] })
     },
     onError: (error) => setOauthToast((error as Error).message || 'Failed to pin raw events as primary source'),
   })
@@ -395,6 +403,7 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
       await queryClient.invalidateQueries({ queryKey: ['meiro-webhook-events-page'] })
       await queryClient.invalidateQueries({ queryKey: ['meiro-webhook-archive-status-page'] })
       await queryClient.invalidateQueries({ queryKey: ['meiro-event-archive-status-page'] })
+      await queryClient.invalidateQueries({ queryKey: ['meiro-measurement-pipeline-summary'] })
     },
   })
   const reprocessSelectedQuarantineMutation = useMutation({
@@ -445,8 +454,12 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
     }
   }, [meiroQuarantineRunsQuery.data, selectedQuarantineRunId])
 
-  const readiness = meiroReadinessQuery.data
-  const mappingStatus = (readiness?.summary.mapping_status || meiroMappingQuery.data?.approval?.status || '').toLowerCase()
+  const measurementSummary = measurementPipelineQuery.data
+  const readiness = measurementSummary?.readiness || meiroReadinessQuery.data
+  const readinessSummary = (readiness?.summary || {}) as MeiroReadinessResponse['summary'] & Record<string, unknown>
+  const summarySource = measurementSummary?.source
+  const summaryMapping = measurementSummary?.mapping
+  const mappingStatus = (summaryMapping?.status || readinessSummary.mapping_status || meiroMappingQuery.data?.approval?.status || '').toLowerCase()
   const mappingNeedsReview = mappingStatus !== 'approved'
 
   const handleReadinessAction = (action: RecommendedActionItem) => {
@@ -456,44 +469,60 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
     }
   }
 
-  const sourceMode = (readiness?.summary.primary_ingest_source || meiroConfigQuery.data?.primary_ingest_source || meiroPullDraft.primary_ingest_source || 'profiles') === 'events' ? 'events' : 'profiles'
+  const sourceMode = (summarySource?.primary_ingest_source || readinessSummary.primary_ingest_source || meiroConfigQuery.data?.primary_ingest_source || meiroPullDraft.primary_ingest_source || 'profiles') === 'events' ? 'events' : 'profiles'
   const profilePayloads = Math.max(
-    Number(readiness?.summary.webhook_received_count || 0),
+    Number(summarySource?.profile_payloads || 0),
+    Number(readinessSummary.webhook_received_count || 0),
     Number(meiroConfigQuery.data?.webhook_received_count || 0),
     Number(meiroWebhookArchiveStatusQuery.data?.profiles_received || 0),
   )
   const rawEvents = Math.max(
-    Number(readiness?.summary.event_webhook_received_count || 0),
+    Number(summarySource?.raw_events || 0),
+    Number(readinessSummary.event_webhook_received_count || 0),
     Number(meiroConfigQuery.data?.event_webhook_received_count || 0),
     Number(meiroEventArchiveStatusQuery.data?.events_received || 0),
   )
-  const rawDiagnostics = readiness?.summary.raw_event_diagnostics
-  const cdpOutOfScope = meiroConfigQuery.data?.cdp_instance_scope?.status === 'out_of_scope'
+  const rawDiagnostics = measurementSummary?.quality.raw_event_diagnostics || (readinessSummary.raw_event_diagnostics as MeiroMeasurementPipelineSummary['quality']['raw_event_diagnostics'] | undefined)
+  const cdpScopeStatus = summarySource?.cdp_instance_scope?.status || meiroConfigQuery.data?.cdp_instance_scope?.status
+  const cdpOutOfScope = cdpScopeStatus === 'out_of_scope'
   const sourceMediumShare = Number(rawDiagnostics?.source_medium_share || 0)
   const conversionLinkageShare = Number(rawDiagnostics?.conversion_linkage_share || 0)
   const hasLivePipes = profilePayloads > 0 || rawEvents > 0
   const mappingApproved = mappingStatus === 'approved'
-  const dualIngestDetected = Boolean(readiness?.summary.dual_ingest_detected ?? (profilePayloads > 0 && rawEvents > 0))
+  const dualIngestDetected = Boolean(summarySource?.dual_ingest_detected ?? readinessSummary.dual_ingest_detected ?? (profilePayloads > 0 && rawEvents > 0))
   const replayBacklogCount = Math.max(
-    Number(readiness?.summary.archive_entries || 0),
+    Number(measurementSummary?.replay.backlog_entries || 0),
+    Number(readinessSummary.archive_entries || 0),
     Number(sourceMode === 'events' ? meiroEventArchiveStatusQuery.data?.entries || 0 : meiroWebhookArchiveStatusQuery.data?.entries || 0),
   )
-  const firstReadinessAction = readiness?.recommended_actions?.[0]
+  const sourceScopeStatus = summarySource?.source_scope?.status || meiroEventArchiveStatusQuery.data?.source_scope?.status || 'unknown'
+  const outOfScopeSiteEvents = Number(summarySource?.site_scope?.out_of_scope_site_events || 0)
+  const targetSites = measurementSummary?.target.site_domains || summarySource?.site_scope?.target_sites || ['meiro.io', 'meir.store']
+  const topTargetCampaigns = measurementSummary?.quality.top_target_campaigns || []
+  const readinessActions = ((readiness?.recommended_actions || []) as Array<Partial<RecommendedActionItem>>)
+    .filter((action): action is RecommendedActionItem => Boolean(action?.id && action?.label))
+  const firstReadinessAction = readinessActions[0]
   const pipelineWarningCount = [
     dualIngestDetected,
     cdpOutOfScope,
     mappingNeedsReview,
+    sourceMode === 'events' && sourceScopeStatus === 'out_of_scope',
+    sourceMode === 'events' && outOfScopeSiteEvents > 0,
     sourceMode === 'events' && rawDiagnostics?.available && sourceMediumShare < 0.6,
     sourceMode === 'events' && rawDiagnostics?.available && conversionLinkageShare < 0.2,
   ].filter(Boolean).length
-  const pipelineStatus = !hasLivePipes
+  const pipelineStatus = measurementSummary?.status === 'blocked'
+    ? 'blocked'
+    : measurementSummary?.status === 'ready' && hasLivePipes && pipelineWarningCount === 0
+      ? 'ready'
+      : !hasLivePipes
     ? 'blocked'
     : pipelineWarningCount > 0 || readiness?.status === 'warning' || readiness?.status === 'blocked'
       ? 'warning'
       : 'ready'
   const pipelineStatusTone = pipelineTone(pipelineStatus)
   const nextAction = firstReadinessAction
-    ? { label: firstReadinessAction.label, tab: firstReadinessAction.target_tab as MeiroTab | undefined }
+    ? { label: String(firstReadinessAction.label), tab: firstReadinessAction.target_tab as MeiroTab | undefined }
     : mappingNeedsReview
       ? { label: 'Review mapping', tab: 'normalization' as MeiroTab }
       : !hasLivePipes
@@ -506,7 +535,7 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
       label: 'Connect',
       status: hasLivePipes ? 'ready' : 'blocked',
       value: hasLivePipes ? `${sourceMode === 'events' ? rawEvents.toLocaleString() : profilePayloads.toLocaleString()} ${sourceMode === 'events' ? 'raw events' : 'profile payloads'}` : 'No live payloads',
-      detail: hasLivePipes ? `Last event ${relativeTime(readiness?.summary.last_event_webhook_received_at || readiness?.summary.last_webhook_received_at || meiroConfigQuery.data?.event_webhook_last_received_at || meiroConfigQuery.data?.webhook_last_received_at)}` : 'Configure the Pipes webhook endpoint',
+      detail: hasLivePipes ? `Last event ${relativeTime(readinessSummary.last_event_webhook_received_at || readinessSummary.last_webhook_received_at || meiroConfigQuery.data?.event_webhook_last_received_at || meiroConfigQuery.data?.webhook_last_received_at)}` : 'Configure the Pipes webhook endpoint',
       tab: 'pipes' as MeiroTab,
     },
     {
@@ -515,14 +544,14 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
       value: mappingApproved ? 'Approved' : 'Needs approval',
       detail: sourceMode === 'events' && rawDiagnostics?.available
         ? `${(sourceMediumShare * 100).toFixed(0)}% source/medium coverage`
-        : `Version ${readiness?.summary.mapping_version || meiroMappingQuery.data?.version || 0}`,
+        : `Version ${readinessSummary.mapping_version || meiroMappingQuery.data?.version || 0}`,
       tab: 'normalization' as MeiroTab,
     },
     {
       label: 'Replay',
       status: replayBacklogCount > 0 ? 'warning' : 'ready',
       value: replayBacklogCount > 0 ? `${replayBacklogCount.toLocaleString()} archived batches` : 'No backlog',
-      detail: `Source ${readiness?.summary.replay_archive_source || meiroPullDraft.replay_archive_source || sourceMode}`,
+      detail: `Source ${measurementSummary?.source.replay_archive_source || readinessSummary.replay_archive_source || meiroPullDraft.replay_archive_source || sourceMode}`,
       tab: 'import' as MeiroTab,
     },
     {
@@ -762,6 +791,59 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
 
             <div
               style={{
+                border: `1px solid ${sourceScopeStatus === 'out_of_scope' ? t.color.danger : t.color.borderLight}`,
+                borderRadius: t.radius.md,
+                background: sourceScopeStatus === 'out_of_scope' ? t.color.dangerMuted : t.color.bg,
+                padding: t.space.md,
+                display: 'grid',
+                gap: t.space.sm,
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'start', flexWrap: 'wrap' }}>
+                <div style={{ display: 'grid', gap: 4 }}>
+                  <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Production data guardrails</div>
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    Target instance <strong style={{ color: t.color.text }}>{measurementSummary?.target.instance_host || meiroConfigQuery.data?.target_instance_host || 'meiro-internal.eu.pipes.meiro.io'}</strong>
+                    {' '}and target sites <strong style={{ color: t.color.text }}>{targetSites.join(', ')}</strong>.
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  {[
+                    { label: 'Instance scope', value: sourceScopeStatus.replace(/_/g, ' ') },
+                    { label: 'Target-site events', value: Number(summarySource?.site_scope?.target_site_events || 0).toLocaleString() },
+                    { label: 'Out-of-scope events', value: outOfScopeSiteEvents.toLocaleString() },
+                  ].map((item) => (
+                    <div key={item.label} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, background: t.color.surface, padding: '7px 9px', minWidth: 130 }}>
+                      <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
+                      <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>{item.value}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div style={{ display: 'grid', gap: 6 }}>
+                <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted, textTransform: 'uppercase', letterSpacing: 0.4 }}>Top target campaigns in raw events</div>
+                {topTargetCampaigns.length ? (
+                  <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
+                    {topTargetCampaigns.slice(0, 8).map((item) => (
+                      <span
+                        key={item.campaign}
+                        title={`${item.campaign}: ${item.events.toLocaleString()} events`}
+                        style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.full, background: t.color.surface, color: t.color.textSecondary, padding: '4px 8px', fontSize: t.font.sizeXs, maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                      >
+                        {item.campaign} ({item.events.toLocaleString()})
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
+                    No target-site campaign labels are available in recent raw events yet.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div
+              style={{
                 border: `1px solid ${t.color.borderLight}`,
                 borderRadius: t.radius.md,
                 background: t.color.bg,
@@ -916,14 +998,14 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
               ) : null}
             </div>
 
-            {readiness && (readiness.blockers.length || readiness.warnings.length || readiness.reasons.length || readiness.recommended_actions.length) ? (
+            {readiness && (readiness.blockers.length || readiness.warnings.length || readiness.reasons.length || readinessActions.length) ? (
               <DecisionStatusCard
                 title="Pipeline diagnostics"
                 status={readiness.status}
                 subtitle="Detailed health checks are secondary to the pipeline state above."
                 blockers={readiness.blockers}
                 warnings={[...readiness.warnings, ...readiness.reasons]}
-                actions={readiness.recommended_actions.slice(0, 3)}
+                actions={readinessActions.slice(0, 3)}
                 onActionClick={handleReadinessAction}
               />
             ) : null}

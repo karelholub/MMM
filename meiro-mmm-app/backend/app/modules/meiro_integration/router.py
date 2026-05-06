@@ -31,6 +31,7 @@ from app.utils.meiro_config import (
     get_last_test_at,
     get_target_instance_host,
     get_target_instance_url,
+    get_target_site_domains,
     get_mapping,
     get_mapping_state,
     get_auto_replay_state,
@@ -558,6 +559,33 @@ def _build_event_replay_reconstruction_diagnostics(
 
     diagnostics["warnings"] = warnings
     return diagnostics
+
+
+def _top_campaigns_from_event_archive(entries: list[Dict[str, Any]], *, limit: int = 8) -> list[Dict[str, Any]]:
+    counts: Dict[str, int] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        for item in entry.get("events") or []:
+            event = _event_payload_with_outer_fields(item)
+            if not isinstance(event, dict) or not event_matches_target_site_scope(event, allow_unknown=False):
+                continue
+            campaign = (
+                event.get("campaign")
+                or event.get("campaign_name")
+                or event.get("utm_campaign")
+                or event.get("activation_campaign_id")
+            )
+            if isinstance(campaign, dict):
+                campaign = campaign.get("name") or campaign.get("id")
+            label = str(campaign or "").strip()
+            if not label:
+                continue
+            counts[label] = counts.get(label, 0) + 1
+    return [
+        {"campaign": campaign, "events": count}
+        for campaign, count in sorted(counts.items(), key=lambda item: item[1], reverse=True)[: max(1, int(limit or 8))]
+    ]
 
 
 def _record_webhook_diagnostic_event(
@@ -1477,6 +1505,116 @@ def create_router(
             pull_config=pull_config,
             raw_event_diagnostics=raw_event_diagnostics,
         )
+
+    @router.get("/api/connectors/meiro/measurement-pipeline/summary")
+    def meiro_measurement_pipeline_summary(db=Depends(get_db_dependency)):
+        config = meiro_config(db=db)
+        mapping_state = get_mapping_state()
+        pull_config = get_pull_config()
+        profile_archive_status = _get_profile_archive_status(db)
+        event_archive_status = _get_event_archive_status(db)
+        event_entries = _get_event_archive_entries(db, limit=250)
+        webhook_events = get_webhook_events(limit=250)
+        raw_event_diagnostics = _build_raw_event_stream_diagnostics(
+            event_archive_entries=event_entries,
+            webhook_events=webhook_events,
+        )
+        readiness = build_meiro_readiness(
+            meiro_connected=meiro_cdp.is_connected(),
+            meiro_config=config,
+            mapping_state=mapping_state,
+            archive_status=profile_archive_status,
+            event_archive_status=event_archive_status,
+            pull_config=pull_config,
+            raw_event_diagnostics=raw_event_diagnostics,
+        )
+        replay_runs = list_meiro_replay_runs(db, limit=5)
+        latest_replay = replay_runs[0] if replay_runs else None
+        source_mode = str(
+            pull_config.get("primary_ingest_source")
+            or config.get("primary_ingest_source")
+            or readiness.get("summary", {}).get("primary_ingest_source")
+            or "profiles"
+        ).strip().lower()
+        replay_source = str(pull_config.get("replay_archive_source") or "auto").strip().lower() or "auto"
+        profile_payloads = max(
+            int(config.get("webhook_received_count") or 0),
+            int(profile_archive_status.get("profiles_received") or 0),
+        )
+        raw_events = max(
+            int(config.get("event_webhook_received_count") or 0),
+            int(event_archive_status.get("events_received") or 0),
+        )
+        active_backlog = int(
+            (event_archive_status if source_mode == "events" else profile_archive_status).get("entries") or 0
+        )
+        mapping_approval = mapping_state.get("approval") if isinstance(mapping_state, dict) else {}
+        mapping_status = str((mapping_approval or {}).get("status") or "unreviewed").strip().lower()
+        source_scope = event_archive_status.get("source_scope") or {}
+        site_scope = event_archive_status.get("site_scope") or {}
+        source_scope_status = str(source_scope.get("status") or "empty")
+        warnings = list(readiness.get("warnings") or [])
+        blockers = list(readiness.get("blockers") or [])
+        if source_mode == "events" and source_scope_status == "out_of_scope":
+            blockers.append("Raw-event archive contains batches from a non-target Meiro Pipes instance.")
+        if source_mode == "events" and source_scope_status == "legacy_unverified":
+            warnings.append("Some raw-event archive batches are legacy/unverified; new reporting should use target-verified batches.")
+        if site_scope.get("out_of_scope_site_events"):
+            warnings.append("Some raw events are outside the active meiro.io / meir.store site scope and are excluded from campaign samples.")
+
+        status = "ready"
+        if blockers:
+            status = "blocked"
+        elif warnings or readiness.get("status") in {"warning", "blocked"}:
+            status = "warning"
+
+        return {
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "status": status,
+            "target": {
+                "instance_url": get_target_instance_url(),
+                "instance_host": get_target_instance_host(),
+                "site_domains": get_target_site_domains(),
+                "strict_site_scope": site_scope_is_strict(),
+            },
+            "source": {
+                "primary_ingest_source": source_mode if source_mode in {"profiles", "events"} else "profiles",
+                "replay_archive_source": replay_source,
+                "cdp_connected": bool(config.get("connected")),
+                "cdp_instance_scope": config.get("cdp_instance_scope"),
+                "profile_payloads": profile_payloads,
+                "raw_events": raw_events,
+                "profile_archive_entries": int(profile_archive_status.get("entries") or 0),
+                "event_archive_entries": int(event_archive_status.get("entries") or 0),
+                "last_profile_received_at": config.get("webhook_last_received_at") or profile_archive_status.get("last_received_at"),
+                "last_event_received_at": config.get("event_webhook_last_received_at") or event_archive_status.get("last_received_at"),
+                "source_scope": source_scope,
+                "site_scope": site_scope,
+                "webhook_secret_configured": bool(config.get("webhook_has_secret")),
+                "dual_ingest_detected": bool(readiness.get("summary", {}).get("dual_ingest_detected")),
+            },
+            "mapping": {
+                "status": mapping_status,
+                "version": int(mapping_state.get("version") or 0) if isinstance(mapping_state, dict) else 0,
+                "conversion_selector": pull_config.get("conversion_selector") or None,
+            },
+            "replay": {
+                "backlog_entries": active_backlog,
+                "latest": latest_replay,
+                "recent": replay_runs,
+                "auto_replay_state": get_auto_replay_state(),
+            },
+            "quality": {
+                "raw_event_diagnostics": raw_event_diagnostics,
+                "top_target_campaigns": _top_campaigns_from_event_archive(event_entries),
+            },
+            "readiness": {
+                **readiness,
+                "status": status,
+                "blockers": blockers,
+                "warnings": warnings,
+            },
+        }
 
     @router.get("/api/connectors/meiro/attributes")
     def meiro_attributes():

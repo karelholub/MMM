@@ -99,6 +99,71 @@ export interface MeiroWebhookDiagnostics {
   notes?: string[]
 }
 
+export interface MeiroMeasurementPipelineSummary {
+  generated_at: string
+  status: 'ready' | 'warning' | 'blocked' | string
+  target: {
+    instance_url: string
+    instance_host: string
+    site_domains: string[]
+    strict_site_scope: boolean
+  }
+  source: {
+    primary_ingest_source: 'profiles' | 'events'
+    replay_archive_source: 'auto' | 'profiles' | 'events' | string
+    cdp_connected: boolean
+    cdp_instance_scope?: MeiroConfig['cdp_instance_scope']
+    profile_payloads: number
+    raw_events: number
+    profile_archive_entries: number
+    event_archive_entries: number
+    last_profile_received_at?: string | null
+    last_event_received_at?: string | null
+    source_scope?: {
+      status?: string
+      target_url?: string
+      target_host?: string
+      verified_entries?: number
+      legacy_unverified_entries?: number
+      out_of_scope_entries?: number
+    }
+    site_scope?: {
+      strict?: boolean
+      target_sites?: string[]
+      target_site_events?: number
+      out_of_scope_site_events?: number
+      unknown_site_events?: number
+      top_hosts?: Array<{ host: string; count: number }>
+    }
+    webhook_secret_configured: boolean
+    dual_ingest_detected: boolean
+  }
+  mapping: {
+    status: string
+    version: number
+    conversion_selector?: string | null
+  }
+  replay: {
+    backlog_entries: number
+    latest?: Record<string, unknown> | null
+    recent?: Array<Record<string, unknown>>
+    auto_replay_state?: MeiroConfig['auto_replay_state']
+  }
+  quality: {
+    raw_event_diagnostics?: MeiroWebhookSuggestions['event_stream_diagnostics']
+    top_target_campaigns?: Array<{ campaign: string; events: number }>
+  }
+  readiness: {
+    status: string
+    confidence: { score: number; band: string }
+    summary: Record<string, unknown>
+    blockers: string[]
+    warnings: string[]
+    reasons: string[]
+    recommended_actions: Array<Record<string, unknown>>
+  }
+}
+
 export interface MeiroPullConfig {
   lookback_days: number
   session_gap_minutes: number
@@ -304,6 +369,12 @@ export async function disconnectMeiroCDP() {
 
 export async function getMeiroConfig(): Promise<MeiroConfig> {
   return apiGetJson<MeiroConfig>('/api/connectors/meiro/config', { fallbackMessage: 'Failed to fetch Meiro config' })
+}
+
+export async function getMeiroMeasurementPipelineSummary(): Promise<MeiroMeasurementPipelineSummary> {
+  return apiGetJson<MeiroMeasurementPipelineSummary>('/api/connectors/meiro/measurement-pipeline/summary', {
+    fallbackMessage: 'Failed to fetch Meiro Measurement Pipeline summary',
+  })
 }
 
 export async function getMeiroMapping(): Promise<MeiroMappingState> {
