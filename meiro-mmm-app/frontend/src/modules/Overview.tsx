@@ -1263,7 +1263,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
                   fontSize: t.font.sizeSm,
                 }}
               >
-                <option value="">All journeys / no analytical segment</option>
+                <option value="">All analytical segments</option>
                 {localSegments.map((segment) => (
                   <option key={segment.id} value={segment.id}>
                     {segmentOptionLabel(segment)}

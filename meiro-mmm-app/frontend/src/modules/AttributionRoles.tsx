@@ -631,7 +631,7 @@ export default function AttributionRoles({ model, configId }: AttributionRolesPr
                   onChange={(e) => setSelectedSegmentId(e.target.value)}
                   style={{ padding: '8px 10px', borderRadius: t.radius.sm, border: `1px solid ${t.color.border}`, minWidth: 0 }}
                 >
-                  <option value="">Workspace baseline</option>
+                  <option value="">Workspace baseline / no analytical segment</option>
                   {localSegments.map((segment) => (
                     <option key={segment.id} value={segment.id}>
                       {segmentOptionLabel(segment)}

@@ -25,6 +25,7 @@ import { defaultRecentDateRange } from '../lib/dateRange'
 import { buildIncrementalityPlannerHref } from '../lib/experimentLinks'
 import { buildJourneyHypothesisHref, buildJourneyHypothesisSeedHref } from '../lib/journeyLinks'
 import { buildSettingsHref } from '../lib/settingsLinks'
+import { formatReadinessWarningsForBasis, readinessBasisSubtitle } from '../lib/readinessBasis'
 import {
   activeLocalSegmentDefinitionFromFilters,
   applyLocalSegmentToFilterState,
@@ -1616,9 +1617,10 @@ export default function ConversionPaths() {
             {journeys?.readiness && (journeys.readiness.status === 'blocked' || journeys.readiness.warnings.length > 0) ? (
               <DecisionStatusCard
                 title="Path Analysis Reliability Warning"
+                subtitle={readinessBasisSubtitle(journeys.readiness.warnings, 'materialized_outputs')}
                 status={journeys.readiness.status}
                 blockers={journeys.readiness.blockers}
-                warnings={journeys.readiness.warnings.slice(0, 3)}
+                warnings={formatReadinessWarningsForBasis(journeys.readiness.warnings, 'materialized_outputs').slice(0, 3)}
               />
             ) : null}
             <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>

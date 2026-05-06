@@ -11,6 +11,7 @@ interface RunSummary {
   created_at: string | null
   updated_at: string | null
   dataset_id: string | null
+  dataset_available?: boolean
   kpi_mode: string | null
   kpi: string | null
   n_channels: number
@@ -19,6 +20,24 @@ interface RunSummary {
   engine?: string
   stage?: string | null
   progress_pct?: number | null
+  attribution_model?: string | null
+  attribution_config_id?: string | null
+  source_contract?: {
+    attribution_source?: string
+    spend_source?: string
+    audience_scope?: string
+    measurement_audience?: {
+      id?: string
+      name?: string
+      source?: string
+      materialization_status?: string
+    } | null
+    latest_event_replay?: {
+      events_loaded?: number
+      profiles_reconstructed?: number
+      journeys_persisted?: number
+    } | null
+  } | null
 }
 
 interface PendingMapping {
@@ -86,6 +105,20 @@ export default function MMMRunConfigStep({
   }
 
   const formatDate = (iso: string | null) => (iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : '—')
+  const sourceLineageLabel = (run: RunSummary) => {
+    const contract = run.source_contract
+    const attributionSource = contract?.attribution_source || (run.attribution_model ? `Attribution ${run.attribution_model.replace(/_/g, ' ')}` : null)
+    const replay = contract?.latest_event_replay
+    if (attributionSource) {
+      const replaySuffix = replay?.events_loaded ? ` · ${Number(replay.events_loaded).toLocaleString()} Pipes events` : ''
+      return `${attributionSource}${replaySuffix}`
+    }
+    return run.dataset_available === false ? 'Saved run readout; linked dataset unavailable' : 'Dataset source not recorded'
+  }
+  const audienceScopeLabel = (run: RunSummary) => {
+    const contract = run.source_contract
+    return contract?.measurement_audience?.name || contract?.audience_scope || 'Workspace aggregate'
+  }
   const hasEnoughChannels = pendingMapping.columns.spend_channels.length > 0
   const modelShape = useAdstock && useSaturation
     ? 'Carry-over + diminishing returns'
@@ -287,6 +320,10 @@ export default function MMMRunConfigStep({
                       <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
                         {run.kpi} · {run.n_channels} ch · {run.dataset_id ?? '—'}
                         {run.r2 != null && ` · R² ${run.r2.toFixed(3)}`}
+                      </div>
+                      <div style={{ marginTop: 4, display: 'grid', gap: 2, fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                        <span>Source: {sourceLineageLabel(run)}</span>
+                        <span>Audience: {audienceScopeLabel(run)}</span>
                       </div>
                       {isActive ? (
                         <div style={{ display: 'grid', gap: 4, marginTop: t.space.sm }}>

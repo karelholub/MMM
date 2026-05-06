@@ -10,6 +10,7 @@ import { apiGetJson } from '../lib/apiClient'
 import { buildJourneyHypothesisHref } from '../lib/journeyLinks'
 import { buildIncrementalityPlannerHref } from '../lib/experimentLinks'
 import { buildSettingsHref } from '../lib/settingsLinks'
+import { formatReadinessWarningsForBasis, readinessBasisSubtitle } from '../lib/readinessBasis'
 import { useWorkspaceContext } from '../components/WorkspaceContext'
 import AdsActionsDrawer from '../components/ads/AdsActionsDrawer'
 import DecisionStatusCard from '../components/DecisionStatusCard'
@@ -1706,9 +1707,10 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       {summaryQuery.data?.readiness && (summaryQuery.data.readiness.status === 'blocked' || summaryQuery.data.readiness.warnings.length > 0) ? (
         <DecisionStatusCard
           title="Campaign Attribution Reliability"
+          subtitle={readinessBasisSubtitle(summaryQuery.data.readiness.warnings, 'live_attribution')}
           status={summaryQuery.data.readiness.status}
           blockers={summaryQuery.data.readiness.blockers}
-          warnings={summaryQuery.data.readiness.warnings.slice(0, 3)}
+          warnings={formatReadinessWarningsForBasis(summaryQuery.data.readiness.warnings, 'live_attribution').slice(0, 3)}
         />
       ) : null}
 
@@ -2298,7 +2300,7 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
                   background: t.color.surface,
                 }}
               >
-                <option value="">All campaigns / no analytical segment</option>
+                <option value="">All analytical segments</option>
                 {compatibleSegments.map((segment) => (
                   <option key={segment.id} value={segment.id}>
                     {segmentOptionLabel(segment)}

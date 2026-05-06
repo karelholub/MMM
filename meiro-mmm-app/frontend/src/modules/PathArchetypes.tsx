@@ -11,6 +11,7 @@ import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { apiGetJson } from '../lib/apiClient'
 import { buildIncrementalityPlannerHref } from '../lib/experimentLinks'
 import { buildSettingsHref } from '../lib/settingsLinks'
+import { formatReadinessWarningsForBasis, readinessBasisSubtitle } from '../lib/readinessBasis'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import {
   buildSegmentComparisonHref,
@@ -560,7 +561,7 @@ export default function PathArchetypes() {
                   maxWidth: 260,
                 }}
               >
-                <option value="">All journeys / no analytical segment</option>
+                <option value="">All analytical segments</option>
                 {compatibleSegments.map((segment) => (
                   <option key={segment.id} value={segment.id}>
                     {segmentOptionLabel(segment)}
@@ -779,9 +780,10 @@ export default function PathArchetypes() {
       {journeys?.readiness && (journeys.readiness.status === 'blocked' || journeys.readiness.warnings.length > 0) ? (
         <DecisionStatusCard
           title="Archetype Input Reliability"
+          subtitle={readinessBasisSubtitle(journeys.readiness.warnings, 'live_attribution')}
           status={journeys.readiness.status}
           blockers={journeys.readiness.blockers}
-          warnings={journeys.readiness.warnings.slice(0, 3)}
+          warnings={formatReadinessWarningsForBasis(journeys.readiness.warnings, 'live_attribution').slice(0, 3)}
         />
       ) : null}
 

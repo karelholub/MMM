@@ -722,7 +722,7 @@ def _save_runs():
     try:
         out = {}
         for rid, r in RUNS.items():
-            out[rid] = {k: v for k, v in r.items() if k in ("status", "stage", "progress_pct", "config", "kpi_mode", "created_at", "updated_at", "dataset_id", "r2", "contrib", "roi", "engine", "engine_version", "detail", "uplift", "campaigns", "channel_summary", "adstock_params", "saturation_params", "diagnostics", "attribution_model", "attribution_config_id", "media_input_mode", "synthetic_impressions", "stale_from_status", "stale_reason", "stale_at")}
+            out[rid] = {k: v for k, v in r.items() if k in ("status", "stage", "progress_pct", "config", "kpi_mode", "created_at", "updated_at", "dataset_id", "r2", "contrib", "roi", "engine", "engine_version", "detail", "uplift", "campaigns", "channel_summary", "adstock_params", "saturation_params", "diagnostics", "attribution_model", "attribution_config_id", "media_input_mode", "synthetic_impressions", "source_contract", "measurement_audience", "stale_from_status", "stale_reason", "stale_at")}
         RUNS_FILE.parent.mkdir(parents=True, exist_ok=True)
         RUNS_FILE.write_text(json.dumps(out, indent=0), encoding="utf-8")
     except Exception:

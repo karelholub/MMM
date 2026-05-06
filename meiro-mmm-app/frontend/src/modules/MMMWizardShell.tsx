@@ -715,6 +715,17 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
     const kpiSource = runData?.attribution_model
       ? `Attribution: ${String(runData.attribution_model).replace(/_/g, ' ')}`
       : 'Direct KPI'
+    const sourceContract = runData?.source_contract || null
+    const sourceContractLabel = sourceContract?.attribution_source || kpiSource
+    const sourceContractHelper = sourceContract?.latest_event_replay?.events_loaded
+      ? `${Number(sourceContract.latest_event_replay.events_loaded).toLocaleString()} Pipes events · ${(Number(sourceContract.latest_event_replay.journeys_persisted) || 0).toLocaleString()} persisted journeys`
+      : sourceContract?.spend_source
+        ? `Spend: ${sourceContract.spend_source}`
+        : 'Source contract not persisted for this run'
+    const audienceScopeLabel =
+      sourceContract?.measurement_audience?.name ||
+      sourceContract?.audience_scope ||
+      'Workspace aggregate'
     const modelMeta = [
       runData?.engine ? String(runData.engine) : null,
       runData?.config?.frequency ? `Frequency ${runData.config.frequency}` : 'Weekly',
@@ -866,6 +877,18 @@ export default function MMMWizardShell(props: MMMWizardShellProps) {
                     helper: runData?.attribution_config_id
                       ? `${kpiSource}, config ${String(runData.attribution_config_id).slice(0, 8)}…`
                       : kpiSource,
+                  },
+                  {
+                    label: 'Source contract',
+                    value: sourceContractLabel,
+                    helper: sourceContractHelper,
+                  },
+                  {
+                    label: 'Audience scope',
+                    value: audienceScopeLabel,
+                    helper: sourceContract?.measurement_audience?.materialization_status
+                      ? String(sourceContract.measurement_audience.materialization_status).replace(/_/g, ' ')
+                      : 'No membership-backed audience scope attached',
                   },
                   {
                     label: 'Dataset',

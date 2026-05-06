@@ -1207,7 +1207,7 @@ export default function AttributionComparison({ selectedModel, onSelectModel }: 
               color: t.color.text,
             }}
           >
-            <option value="">All visible channels / no analytical segment</option>
+            <option value="">All analytical segments</option>
             {localSegments.map((segment) => (
               <option key={segment.id} value={segment.id}>
                 {segmentOptionLabel(segment)}
