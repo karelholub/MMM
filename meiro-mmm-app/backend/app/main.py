@@ -522,6 +522,28 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def slow_request_logging_middleware(request: Request, call_next):
+    started = time.perf_counter()
+    response = await call_next(request)
+    elapsed = time.perf_counter() - started
+    try:
+        threshold = float(os.getenv("SLOW_REQUEST_LOG_SECONDS", "1.0") or "1.0")
+    except ValueError:
+        threshold = 1.0
+    if request.url.path.startswith("/api/") and elapsed >= threshold:
+        logger.warning(
+            "Slow API request %.3fs %s %s status=%s query=%s",
+            elapsed,
+            request.method,
+            request.url.path,
+            getattr(response, "status_code", "-"),
+            request.url.query,
+        )
+    response.headers["X-Response-Time-Ms"] = str(int(elapsed * 1000))
+    return response
+
+
 @contextmanager
 def _internal_db_session():
     provider = app.dependency_overrides.get(get_db, get_db)

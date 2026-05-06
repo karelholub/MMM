@@ -15,6 +15,7 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 CONFIG_PATH = DATA_DIR / "meiro_config.json"
 WEBHOOK_ARCHIVE_PATH = DATA_DIR / "meiro_webhook_archive.jsonl"
 EVENT_ARCHIVE_PATH = DATA_DIR / "meiro_event_archive.jsonl"
+ARCHIVE_STATUS_CACHE_PATH = DATA_DIR / "meiro_archive_status_cache.json"
 MEIRO_CDP_PLATFORM = "meiro_cdp"
 DEFAULT_TARGET_INSTANCE_URL = "https://meiro-internal.eu.pipes.meiro.io"
 DEFAULT_TARGET_SITE_DOMAINS = ("meiro.io", "meir.store")
@@ -31,17 +32,60 @@ def _archive_signature(path: Path) -> tuple[int, int]:
         return 0, 0
 
 
+def _archive_cache_key(path: Path, key: str) -> str:
+    return f"{key}:{path}"
+
+
+def _archive_status_cache_path() -> Path:
+    return Path(DATA_DIR) / ARCHIVE_STATUS_CACHE_PATH.name
+
+
+def _read_persisted_archive_status_cache() -> dict[str, Any]:
+    path = _archive_status_cache_path()
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _write_persisted_archive_status_cache(cache: dict[str, Any]) -> None:
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        path = _archive_status_cache_path()
+        tmp_path = path.with_name(f"{path.name}.tmp")
+        tmp_path.write_text(json.dumps(cache, indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp_path.replace(path)
+    except Exception:
+        return
+
+
 def _cached_archive_status(path: Path, key: str) -> Optional[Dict[str, Any]]:
     mtime_ns, size = _archive_signature(path)
-    cached = _ARCHIVE_STATUS_CACHE.get(key)
+    cache_key = _archive_cache_key(path, key)
+    cached = _ARCHIVE_STATUS_CACHE.get(cache_key)
     if cached and cached[0] == mtime_ns and cached[1] == size:
         return dict(cached[2])
+    persisted = _read_persisted_archive_status_cache().get(cache_key)
+    if (
+        isinstance(persisted, dict)
+        and int(persisted.get("mtime_ns") or 0) == mtime_ns
+        and int(persisted.get("size") or 0) == size
+    ):
+        status = persisted.get("status")
+        if isinstance(status, dict):
+            _ARCHIVE_STATUS_CACHE[cache_key] = (mtime_ns, size, dict(status))
+            return dict(status)
     return None
 
 
 def _store_archive_status(path: Path, key: str, value: Dict[str, Any]) -> Dict[str, Any]:
     mtime_ns, size = _archive_signature(path)
-    _ARCHIVE_STATUS_CACHE[key] = (mtime_ns, size, dict(value))
+    cache_key = _archive_cache_key(path, key)
+    _ARCHIVE_STATUS_CACHE[cache_key] = (mtime_ns, size, dict(value))
+    persisted = _read_persisted_archive_status_cache()
+    persisted[cache_key] = {"mtime_ns": mtime_ns, "size": size, "status": value}
+    _write_persisted_archive_status_cache(persisted)
     return value
 
 

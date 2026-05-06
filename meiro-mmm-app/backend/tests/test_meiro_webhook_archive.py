@@ -163,6 +163,40 @@ def test_event_archive_status_counts_events(monkeypatch, tmp_path):
     assert items[0]["received_at"] == "2026-03-26T10:05:00Z"
 
 
+def test_event_archive_status_uses_persisted_cache(monkeypatch, tmp_path):
+    event_archive_path = tmp_path / "meiro_event_archive.jsonl"
+    monkeypatch.setattr(meiro_config, "EVENT_ARCHIVE_PATH", event_archive_path)
+    monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
+    meiro_config._ARCHIVE_STATUS_CACHE.clear()
+
+    meiro_config.append_event_archive_entry(
+        {
+            "received_at": "2026-03-26T10:00:00Z",
+            "parser_version": "v3",
+            "replace": False,
+            "events": [{"event_id": "evt-1"}],
+            "received_count": 1,
+        }
+    )
+
+    first = meiro_config.get_event_archive_status()
+    assert first["events_received"] == 1
+
+    meiro_config._ARCHIVE_STATUS_CACHE.clear()
+    original_open = type(meiro_config.EVENT_ARCHIVE_PATH).open
+
+    def fail_if_archive_scanned(self, *args, **kwargs):
+        mode = args[0] if args else kwargs.get("mode")
+        if self == meiro_config.EVENT_ARCHIVE_PATH and (mode is None or mode.startswith("r")):
+            raise AssertionError("archive file should not be rescanned when persisted status cache matches")
+        return original_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(type(meiro_config.EVENT_ARCHIVE_PATH), "open", fail_if_archive_scanned)
+    second = meiro_config.get_event_archive_status()
+    assert second["events_received"] == 1
+    assert second["entries"] == 1
+
+
 def test_event_contract_readiness_reports_target_site_coverage(monkeypatch, tmp_path):
     monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(meiro_config, "CONFIG_PATH", tmp_path / "meiro_config.json")
