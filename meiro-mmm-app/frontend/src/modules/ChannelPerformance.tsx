@@ -31,6 +31,7 @@ import SegmentComparisonContextNote from '../components/segments/SegmentComparis
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import LagInsightsPanel, { type LagInsightsResponse } from '../components/performance/LagInsightsPanel'
 import MeiroTargetInstanceBadge from '../features/meiro/MeiroTargetInstanceBadge'
+import MeiroMeasurementScopeNotice from '../features/meiro/MeiroMeasurementScopeNotice'
 import { getMeiroConfig, type MeiroConfig } from '../connectors/meiroConnector'
 import {
   isLocalAnalyticalSegment,
@@ -1227,6 +1228,9 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
       </div>
       <div style={{ marginBottom: t.space.md }}>
         <MeiroTargetInstanceBadge config={meiroConfigQuery.data} compact />
+      </div>
+      <div style={{ marginBottom: t.space.md }}>
+        <MeiroMeasurementScopeNotice compact />
       </div>
       {mixedBasisActivityWarning ? (
         <SurfaceBasisNotice marginBottom={t.space.md}>

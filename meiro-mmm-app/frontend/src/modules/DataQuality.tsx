@@ -8,6 +8,7 @@ import { navigateForRecommendedAction } from '../lib/recommendedActions'
 import { apiGetJson, apiSendJson, withQuery } from '../lib/apiClient'
 import ActivationMeasurementShortcuts from '../features/meiro/ActivationMeasurementShortcuts'
 import MeiroTargetInstanceBadge from '../features/meiro/MeiroTargetInstanceBadge'
+import MeiroMeasurementScopeNotice from '../features/meiro/MeiroMeasurementScopeNotice'
 import { getMeiroConfig, type MeiroConfig } from '../connectors/meiroConnector'
 
 // --- Types ---
@@ -1062,6 +1063,10 @@ export default function DataQuality() {
           )}
           {runMutation.isPending ? 'Running checks…' : 'Run data quality checks'}
         </button>
+      </div>
+
+      <div style={{ marginBottom: t.space.md }}>
+        <MeiroMeasurementScopeNotice compact />
       </div>
 
       {/* Measurement context bar */}

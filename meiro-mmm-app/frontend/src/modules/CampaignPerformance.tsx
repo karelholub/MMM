@@ -22,6 +22,7 @@ import { getAdsDeepLink, type AdsProviderKey } from '../connectors/adsManagerCon
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import LagInsightsPanel, { type LagInsightsResponse } from '../components/performance/LagInsightsPanel'
 import MeiroTargetInstanceBadge from '../features/meiro/MeiroTargetInstanceBadge'
+import MeiroMeasurementScopeNotice from '../features/meiro/MeiroMeasurementScopeNotice'
 import { getMeiroConfig, type MeiroConfig } from '../connectors/meiroConnector'
 import {
   isLocalAnalyticalSegment,
@@ -1526,6 +1527,10 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
         >
           Why?
         </button>
+      </div>
+
+      <div style={{ marginBottom: t.space.md }}>
+        <MeiroMeasurementScopeNotice compact />
       </div>
 
       {(activationFeedbackItems.length > 0 || activationFeedbackQuery.isLoading || activationFeedbackQuery.isError) ? (

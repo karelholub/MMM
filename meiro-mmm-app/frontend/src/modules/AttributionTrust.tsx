@@ -9,6 +9,7 @@ import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { apiGetJson } from '../lib/apiClient'
 import { buildSettingsHref } from '../lib/settingsLinks'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
+import MeiroMeasurementScopeNotice from '../features/meiro/MeiroMeasurementScopeNotice'
 import {
   isLocalAnalyticalSegment,
   localSegmentCompatibleWithDimensions,
@@ -655,6 +656,10 @@ export default function AttributionTrust({ model, configId }: AttributionTrustPr
       }
     >
       <ContextSummaryStrip items={summaryItems} />
+
+      <div style={{ marginTop: t.space.sm, marginBottom: t.space.lg }}>
+        <MeiroMeasurementScopeNotice compact />
+      </div>
 
       <SurfaceBasisNotice marginTop={t.space.sm} marginBottom={t.space.lg}>
         This page is a <strong>mixed-basis</strong> workspace. Live attribution diagnostics use the selected config
