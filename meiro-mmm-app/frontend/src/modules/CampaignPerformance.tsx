@@ -163,6 +163,16 @@ interface SiteScopeMeta {
   out_of_scope_hosts?: Array<{ host: string; count: number }>
 }
 
+interface MeiroMeasurementScopeMeta {
+  strict?: boolean
+  target_sites?: string[]
+  source_scope?: { status?: string; target_host?: string; legacy_unverified_entries?: number; out_of_scope_entries?: number }
+  event_archive_site_scope?: { target_site_events?: number; out_of_scope_site_events?: number; unknown_site_events?: number }
+  out_of_scope_campaign_labels?: number
+  campaign_rows_excluded?: number
+  warnings?: string[]
+}
+
 interface CampaignSummaryItem {
   campaign_id: string
   campaign_name?: string | null
@@ -276,6 +286,7 @@ interface CampaignSummaryResponse {
   meta?: {
     conversion_key?: string | null
     site_scope?: SiteScopeMeta
+    meiro_measurement_scope?: MeiroMeasurementScopeMeta
     conversion_key_resolution?: {
       configured_conversion_key?: string | null
       applied_conversion_key?: string | null
@@ -878,6 +889,9 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
   const measurementWindowLabel = summaryQuery.data?.config?.time_window
     ? `Click ${summaryQuery.data.config.time_window.click_lookback_days ?? '—'}d · Impression ${summaryQuery.data.config.time_window.impression_lookback_days ?? '—'}d · Session ${summaryQuery.data.config.time_window.session_timeout_minutes ?? '—'}m`
     : 'Not configured'
+  const meiroScope = summaryQuery.data?.meta?.meiro_measurement_scope
+  const meiroScopeStatus = String(meiroScope?.source_scope?.status || 'unknown').replace(/_/g, ' ')
+  const meiroScopeFilterLabel = `${Number(meiroScope?.campaign_rows_excluded || 0).toLocaleString()} rows excluded · ${Number(meiroScope?.event_archive_site_scope?.out_of_scope_site_events || 0).toLocaleString()} out-of-scope events`
   const lagSummaryConversions = lagQuery.data?.summary?.conversions ?? 0
   const mixedBasisActivityWarning =
     Boolean(configId) &&
@@ -1959,6 +1973,8 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
               label: 'Site scope',
               value: `${(summaryQuery.data?.meta?.site_scope?.target_sites || ['meiro.io', 'meir.store']).join(', ')}${Number(summaryQuery.data?.meta?.site_scope?.journeys_excluded || 0) > 0 ? ` · ${Number(summaryQuery.data?.meta?.site_scope?.journeys_excluded || 0).toLocaleString()} excluded` : ''}`,
             },
+            { label: 'Archive scope', value: meiroScopeStatus },
+            { label: 'Scope filter', value: meiroScopeFilterLabel },
             { label: 'Period', value: `${trendDateRange.dateFrom} – ${trendDateRange.dateTo}` },
             { label: 'Conversion', value: conversionKey || 'All conversions' },
             {

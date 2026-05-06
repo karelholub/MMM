@@ -47,6 +47,7 @@ from app.utils.meiro_config import (
     expense_matches_target_site_scope,
     event_site_scope,
     filter_journeys_to_target_site_scope,
+    get_event_archive_status,
     get_out_of_scope_campaign_labels,
     get_target_site_domains,
     journey_matches_target_site_scope,
@@ -235,6 +236,11 @@ def _campaign_item_is_out_of_scope(item: dict[str, Any], labels: set[str]) -> bo
 
 def _filter_out_of_scope_campaign_items(out: dict[str, Any]) -> dict[str, Any]:
     labels = get_out_of_scope_campaign_labels()
+    out["scope_filter"] = {
+        "out_of_scope_campaign_labels": len(labels),
+        "campaign_rows_excluded": 0,
+        "mode": "strict_target_site" if site_scope_is_strict() else "disabled",
+    }
     if not labels:
         return out
     items = out.get("items")
@@ -244,6 +250,7 @@ def _filter_out_of_scope_campaign_items(out: dict[str, Any]) -> dict[str, Any]:
     excluded = len(items) - len(filtered)
     if excluded <= 0:
         return out
+    out["scope_filter"]["campaign_rows_excluded"] = excluded
     out["items"] = filtered
     totals = out.get("totals") if isinstance(out.get("totals"), dict) else {}
     for bucket in ("current", "previous"):
@@ -258,6 +265,37 @@ def _filter_out_of_scope_campaign_items(out: dict[str, Any]) -> dict[str, Any]:
     out["notes"] = notes
     out["totals"] = totals
     return out
+
+
+def _build_meiro_measurement_scope_meta(
+    *,
+    site_scope_meta: dict[str, Any],
+    campaign_scope_filter: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    event_archive_status = get_event_archive_status()
+    source_scope = event_archive_status.get("source_scope") or {}
+    archive_site_scope = event_archive_status.get("site_scope") or {}
+    out_of_scope_campaign_labels = len(get_out_of_scope_campaign_labels()) if site_scope_is_strict() else 0
+    campaign_rows_excluded = int((campaign_scope_filter or {}).get("campaign_rows_excluded") or 0)
+    warnings: list[str] = []
+    if str(source_scope.get("status") or "") == "legacy_unverified":
+        warnings.append("Some Meiro raw-event archive batches are legacy/unverified.")
+    if str(source_scope.get("status") or "") == "out_of_scope":
+        warnings.append("Some Meiro raw-event archive batches are from a non-target Pipes instance.")
+    if int(archive_site_scope.get("out_of_scope_site_events") or 0) > 0:
+        warnings.append("Some raw events are outside the active target-site scope.")
+    if campaign_rows_excluded > 0:
+        warnings.append(f"{campaign_rows_excluded} campaign rows were excluded because they only matched out-of-scope Meiro evidence.")
+    return {
+        "strict": site_scope_is_strict(),
+        "target_sites": get_target_site_domains(),
+        "source_scope": source_scope,
+        "event_archive_site_scope": archive_site_scope,
+        "summary_site_scope": site_scope_meta,
+        "out_of_scope_campaign_labels": out_of_scope_campaign_labels,
+        "campaign_rows_excluded": campaign_rows_excluded,
+        "warnings": warnings,
+    }
 
 
 def _scope_expenses_to_target_sites(expenses: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -1007,6 +1045,9 @@ def create_router(
         out["meta"] = build_meta_fn(ctx=query_ctx, conversion_key=effective_conversion_key)
         out["meta"]["attribution_model"] = attribution_model
         out["meta"]["site_scope"] = site_scope_meta
+        out["meta"]["meiro_measurement_scope"] = _build_meiro_measurement_scope_meta(
+            site_scope_meta=site_scope_meta,
+        )
         if conversion_key_resolution:
             out["meta"]["conversion_key_resolution"] = conversion_key_resolution
         with _PERFORMANCE_SUMMARY_CACHE_LOCK:
@@ -1244,6 +1285,10 @@ def create_router(
         out["meta"] = build_meta_fn(ctx=query_ctx, conversion_key=effective_conversion_key)
         out["meta"]["attribution_model"] = attribution_model
         out["meta"]["site_scope"] = site_scope_meta
+        out["meta"]["meiro_measurement_scope"] = _build_meiro_measurement_scope_meta(
+            site_scope_meta=site_scope_meta,
+            campaign_scope_filter=out.get("scope_filter") if isinstance(out.get("scope_filter"), dict) else None,
+        )
         if conversion_key_resolution:
             out["meta"]["conversion_key_resolution"] = conversion_key_resolution
         with _PERFORMANCE_SUMMARY_CACHE_LOCK:

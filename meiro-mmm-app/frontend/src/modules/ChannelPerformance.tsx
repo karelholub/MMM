@@ -182,6 +182,16 @@ interface SiteScopeMeta {
   out_of_scope_hosts?: Array<{ host: string; count: number }>
 }
 
+interface MeiroMeasurementScopeMeta {
+  strict?: boolean
+  target_sites?: string[]
+  source_scope?: { status?: string; target_host?: string; legacy_unverified_entries?: number; out_of_scope_entries?: number }
+  event_archive_site_scope?: { target_site_events?: number; out_of_scope_site_events?: number; unknown_site_events?: number }
+  out_of_scope_campaign_labels?: number
+  campaign_rows_excluded?: number
+  warnings?: string[]
+}
+
 interface ChannelSummaryResponse {
   current_period: { date_from: string; date_to: string; grain?: string }
   previous_period: { date_from: string; date_to: string }
@@ -239,6 +249,7 @@ interface ChannelSummaryResponse {
   meta?: {
     conversion_key?: string | null
     site_scope?: SiteScopeMeta
+    meiro_measurement_scope?: MeiroMeasurementScopeMeta
     conversion_key_resolution?: {
       configured_conversion_key?: string | null
       applied_conversion_key?: string | null
@@ -772,6 +783,9 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
         .filter(Boolean)
         .join(' · ')
     : 'Not configured'
+  const meiroScope = summaryQuery.data?.meta?.meiro_measurement_scope
+  const meiroScopeStatus = String(meiroScope?.source_scope?.status || 'unknown').replace(/_/g, ' ')
+  const meiroScopeFilterLabel = `${Number(meiroScope?.campaign_rows_excluded || 0).toLocaleString()} rows excluded · ${Number(meiroScope?.event_archive_site_scope?.out_of_scope_site_events || 0).toLocaleString()} out-of-scope events`
 
   const exp = explainabilityQuery.data
   const revDriver = exp?.drivers?.find((d) => d.metric === 'attributed_value')
@@ -1214,6 +1228,8 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
               label: 'Site scope',
               value: `${(summaryQuery.data?.meta?.site_scope?.target_sites || ['meiro.io', 'meir.store']).join(', ')}${Number(summaryQuery.data?.meta?.site_scope?.journeys_excluded || 0) > 0 ? ` · ${Number(summaryQuery.data?.meta?.site_scope?.journeys_excluded || 0).toLocaleString()} excluded` : ''}`,
             },
+            { label: 'Archive scope', value: meiroScopeStatus },
+            { label: 'Scope filter', value: meiroScopeFilterLabel },
             { label: 'Period', value: periodLabel },
             { label: 'Conversion', value: `${conversionLabel} (read-only)` },
             {
