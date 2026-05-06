@@ -1072,7 +1072,7 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
               meiroWebhookSuggestionsLoading={meiroWebhookSuggestionsQuery.isLoading}
               meiroWebhookSuggestionsError={(meiroWebhookSuggestionsQuery.error as Error | undefined)?.message || null}
               testMeiroResult={testMeiroMutation.data}
-              saveMeiroPullPending={saveMeiroPullMutation.isPending}
+              saveMeiroPullPending={saveMeiroPullMutation.isPending || pinRawEventsPrimaryMutation.isPending}
               runMeiroPullPending={runMeiroPullMutation.isPending}
               applyMeiroMappingSuggestionPending={applyMeiroMappingSuggestionMutation.isPending}
               updateMeiroMappingApprovalPending={updateMeiroMappingApprovalMutation.isPending}
@@ -1102,6 +1102,7 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
               relativeTime={relativeTime}
               setOauthToast={setOauthToast}
               onTestMeiro={() => testMeiroMutation.mutate()}
+              onPinRawEventsSource={() => pinRawEventsPrimaryMutation.mutate()}
               onConnectMeiro={() => connectMeiroMutation.mutate()}
               onDisconnectMeiro={() => disconnectMeiroMutation.mutate()}
               onRotateWebhookSecret={() => rotateWebhookSecretMutation.mutate()}

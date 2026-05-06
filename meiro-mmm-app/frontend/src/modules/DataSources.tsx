@@ -536,6 +536,30 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
   })
 
   const saveMeiroPullMutation = useMutation({ mutationFn: saveMeiroPullConfig, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['meiro-pull-config'] }) })
+  const pinRawEventsPrimaryMutation = useMutation({
+    mutationFn: async () => {
+      const nextConfig = normalizeMeiroPullConfig({
+        ...meiroPullDraft,
+        primary_ingest_source: 'events',
+        replay_archive_source: 'events',
+      })
+      return saveMeiroPullConfig(nextConfig)
+    },
+    onSuccess: async (saved) => {
+      const nextConfig = normalizeMeiroPullConfig(saved || {
+        ...meiroPullDraft,
+        primary_ingest_source: 'events',
+        replay_archive_source: 'events',
+      })
+      setMeiroPullDraft(nextConfig)
+      setOauthToast('Raw Pipes events are pinned as the attribution source. Profile/CDP streams stay available for enrichment.')
+      await queryClient.invalidateQueries({ queryKey: ['meiro-pull-config'] })
+      await queryClient.invalidateQueries({ queryKey: ['meiro-config'] })
+      await queryClient.invalidateQueries({ queryKey: ['data-sources-readiness'] })
+      await queryClient.invalidateQueries({ queryKey: ['meiro-measurement-pipeline-summary'] })
+    },
+    onError: (e) => setOauthToast((e as Error).message || 'Failed to pin raw events as primary source'),
+  })
   const runMeiroPullMutation = useMutation({ mutationFn: () => meiroPull(), onSuccess: () => onJourneysImported() })
   const saveMeiroMappingMutation = useMutation({ mutationFn: saveMeiroMapping, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['meiro-mapping'] }) })
   const applyMeiroMappingSuggestionMutation = useMutation({
@@ -2120,7 +2144,7 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
                     meiroWebhookSuggestionsLoading={meiroWebhookSuggestionsQuery.isLoading}
                     meiroWebhookSuggestionsError={(meiroWebhookSuggestionsQuery.error as Error | undefined)?.message || null}
                     testMeiroResult={testMeiroMutation.data}
-                    saveMeiroPullPending={saveMeiroPullMutation.isPending}
+                    saveMeiroPullPending={saveMeiroPullMutation.isPending || pinRawEventsPrimaryMutation.isPending}
                     runMeiroPullPending={runMeiroPullMutation.isPending}
                     applyMeiroMappingSuggestionPending={applyMeiroMappingSuggestionMutation.isPending}
                     updateMeiroMappingApprovalPending={updateMeiroMappingApprovalMutation.isPending}
@@ -2146,6 +2170,7 @@ export default function DataSources({ onJourneysImported, onOpenMeiro }: DataSou
                     relativeTime={relativeTime}
                     setOauthToast={setOauthToast}
                     onTestMeiro={() => testMeiroMutation.mutate()}
+                    onPinRawEventsSource={() => pinRawEventsPrimaryMutation.mutate()}
                     onConnectMeiro={() => connectMeiroMutation.mutate()}
                     onDisconnectMeiro={() => disconnectMeiroMutation.mutate()}
                     onRotateWebhookSecret={() => rotateWebhookSecretMutation.mutate()}

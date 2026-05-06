@@ -83,6 +83,7 @@ interface MeiroIntegrationPanelProps {
   relativeTime: (iso?: string | null) => string
   setOauthToast: Dispatch<SetStateAction<string | null>>
   onTestMeiro: () => void
+  onPinRawEventsSource: () => void
   onConnectMeiro: () => void
   onDisconnectMeiro: () => void
   onRotateWebhookSecret: () => void
@@ -147,11 +148,14 @@ export default function MeiroIntegrationPanel(props: MeiroIntegrationPanelProps)
         <MeiroOverview
           meiroConfig={props.meiroConfig}
           meiroMappingState={props.meiroMappingState}
+          meiroPullDraft={props.meiroPullDraft}
           meiroWebhookArchiveStatus={props.meiroWebhookArchiveStatus}
           runMeiroPullPending={props.runMeiroPullPending}
           importFromMeiroPending={props.importFromMeiroPending}
+          saveMeiroPullPending={props.saveMeiroPullPending}
           relativeTime={props.relativeTime}
           setMeiroTab={setMeiroTab}
+          onPinRawEventsSource={props.onPinRawEventsSource}
           onTestMeiro={props.onTestMeiro}
           onRunMeiroPull={props.onRunMeiroPull}
           onImportFromMeiro={props.onImportFromMeiro}
