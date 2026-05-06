@@ -786,6 +786,12 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
   const meiroScope = summaryQuery.data?.meta?.meiro_measurement_scope
   const meiroScopeStatus = String(meiroScope?.source_scope?.status || 'unknown').replace(/_/g, ' ')
   const meiroScopeFilterLabel = `${Number(meiroScope?.campaign_rows_excluded || 0).toLocaleString()} rows excluded · ${Number(meiroScope?.event_archive_site_scope?.out_of_scope_site_events || 0).toLocaleString()} out-of-scope events`
+  const meiroScopeWarnings = [
+    ...(meiroScope?.warnings || []),
+    ...(Number(meiroScope?.campaign_rows_excluded || 0) > 0
+      ? [`${Number(meiroScope?.campaign_rows_excluded || 0).toLocaleString()} campaign rows were excluded from this channel view because their evidence only matched out-of-scope Meiro archive data.`]
+      : []),
+  ]
 
   const exp = explainabilityQuery.data
   const revDriver = exp?.drivers?.find((d) => d.metric === 'attributed_value')
@@ -1248,6 +1254,11 @@ export default function ChannelPerformance({ model, modelsReady, configId }: Cha
       <div style={{ marginBottom: t.space.md }}>
         <MeiroMeasurementScopeNotice compact />
       </div>
+      {meiroScopeWarnings.length ? (
+        <SurfaceBasisNotice marginBottom={t.space.md}>
+          {meiroScopeWarnings.slice(0, 3).join(' ')}
+        </SurfaceBasisNotice>
+      ) : null}
       {mixedBasisActivityWarning ? (
         <SurfaceBasisNotice marginBottom={t.space.md}>
           The selected config <strong>{configId?.slice(0, 8)}…</strong> currently yields no config-scoped channel conversions in the KPI totals above, but supporting role, funnel, or lag diagnostics still show <strong>workspace-period activity</strong>. Read those lower panels as diagnostic context, not as proof that the selected config produced visible channel conversions in this slice.

@@ -892,6 +892,12 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
   const meiroScope = summaryQuery.data?.meta?.meiro_measurement_scope
   const meiroScopeStatus = String(meiroScope?.source_scope?.status || 'unknown').replace(/_/g, ' ')
   const meiroScopeFilterLabel = `${Number(meiroScope?.campaign_rows_excluded || 0).toLocaleString()} rows excluded · ${Number(meiroScope?.event_archive_site_scope?.out_of_scope_site_events || 0).toLocaleString()} out-of-scope events`
+  const meiroScopeWarnings = [
+    ...(meiroScope?.warnings || []),
+    ...(Number(meiroScope?.campaign_rows_excluded || 0) > 0
+      ? [`${Number(meiroScope?.campaign_rows_excluded || 0).toLocaleString()} campaign rows were excluded because their evidence only matched out-of-scope Meiro archive data.`]
+      : []),
+  ]
   const lagSummaryConversions = lagQuery.data?.summary?.conversions ?? 0
   const mixedBasisActivityWarning =
     Boolean(configId) &&
@@ -1546,6 +1552,11 @@ export default function CampaignPerformance({ model, modelsReady, configId }: Ca
       <div style={{ marginBottom: t.space.md }}>
         <MeiroMeasurementScopeNotice compact />
       </div>
+      {meiroScopeWarnings.length ? (
+        <SurfaceBasisNotice marginBottom={t.space.md}>
+          {meiroScopeWarnings.slice(0, 3).join(' ')}
+        </SurfaceBasisNotice>
+      ) : null}
 
       {(activationFeedbackItems.length > 0 || activationFeedbackQuery.isLoading || activationFeedbackQuery.isError) ? (
         <div style={{ marginBottom: t.space.md }}>
