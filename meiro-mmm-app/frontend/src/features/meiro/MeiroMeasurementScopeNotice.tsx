@@ -1,19 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
 import { getMeiroMeasurementPipelineSummary, type MeiroMeasurementPipelineSummary } from '../../connectors/meiroConnector'
 import { tokens as t } from '../../theme/tokens'
+import type { MeiroMeasurementScopeMeta } from './scopeTypes'
 
 interface MeiroMeasurementScopeNoticeProps {
   compact?: boolean
-  scope?: {
-    strict?: boolean
-    target_sites?: string[]
-    source_scope?: { status?: string; target_host?: string }
-    event_archive_site_scope?: {
-      target_site_events?: number
-      out_of_scope_site_events?: number
-      unknown_site_events?: number
-    }
-  } | null
+  scope?: MeiroMeasurementScopeMeta | null
   targetHost?: string | null
   source?: string | null
 }

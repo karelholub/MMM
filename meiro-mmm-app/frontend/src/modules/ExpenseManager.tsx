@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { apiGetJson, apiSendJson } from '../lib/apiClient'
+import type { MeiroMeasurementScopeMeta } from '../features/meiro/scopeTypes'
 
 // --- Types (aligned with backend) ---
 interface ExpenseEntry {
@@ -107,12 +108,7 @@ interface CampaignSummaryItem {
 interface CampaignSummaryResponse {
   items: CampaignSummaryItem[]
   meta?: {
-    meiro_measurement_scope?: {
-      strict?: boolean
-      out_of_scope_campaign_labels?: number
-      campaign_rows_excluded?: number
-      warnings?: string[]
-    } | null
+    meiro_measurement_scope?: MeiroMeasurementScopeMeta | null
   } | null
 }
 

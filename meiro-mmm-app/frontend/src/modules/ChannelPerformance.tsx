@@ -32,6 +32,7 @@ import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import LagInsightsPanel, { type LagInsightsResponse } from '../components/performance/LagInsightsPanel'
 import MeiroTargetInstanceBadge from '../features/meiro/MeiroTargetInstanceBadge'
 import MeiroMeasurementScopeNotice from '../features/meiro/MeiroMeasurementScopeNotice'
+import type { MeiroMeasurementScopeMeta } from '../features/meiro/scopeTypes'
 import { getMeiroConfig, type MeiroConfig } from '../connectors/meiroConnector'
 import {
   isLocalAnalyticalSegment,
@@ -180,16 +181,6 @@ interface SiteScopeMeta {
   journeys_kept?: number
   journeys_excluded?: number
   out_of_scope_hosts?: Array<{ host: string; count: number }>
-}
-
-interface MeiroMeasurementScopeMeta {
-  strict?: boolean
-  target_sites?: string[]
-  source_scope?: { status?: string; target_host?: string; legacy_unverified_entries?: number; out_of_scope_entries?: number }
-  event_archive_site_scope?: { target_site_events?: number; out_of_scope_site_events?: number; unknown_site_events?: number }
-  out_of_scope_campaign_labels?: number
-  campaign_rows_excluded?: number
-  warnings?: string[]
 }
 
 interface ChannelSummaryResponse {

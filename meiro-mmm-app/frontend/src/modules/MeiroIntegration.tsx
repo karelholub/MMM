@@ -148,6 +148,28 @@ function readInitialMeiroTab(): MeiroTab {
   return ['overview', 'cdp', 'pipes', 'normalization', 'import'].includes(value || '') ? (value as MeiroTab) : 'overview'
 }
 
+function keyForAudience(item: MeiroSegmentRegistryItem) {
+  return String(item.id || item.external_segment_id || item.name || '').trim()
+}
+
+function audienceDisplayName(item: MeiroSegmentRegistryItem) {
+  return String(item.name || item.external_segment_id || item.id || '').trim()
+}
+
+function dedupeAudienceOptions(items: MeiroSegmentRegistryItem[]) {
+  const seen = new Set<string>()
+  const deduped: MeiroSegmentRegistryItem[] = []
+  for (const item of items) {
+    const display = audienceDisplayName(item).toLowerCase()
+    const source = String(item.source || '').trim().toLowerCase()
+    const identity = display ? `${source}:${display}` : keyForAudience(item).toLowerCase()
+    if (!identity || seen.has(identity)) continue
+    seen.add(identity)
+    deduped.push(item)
+  }
+  return deduped
+}
+
 export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegrationPageProps) {
   const queryClient = useQueryClient()
   const permissions = usePermissions()
@@ -572,17 +594,22 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
     },
   ] as const
   const pipesRegistrySegments = (segmentRegistryQuery.data?.items || []).filter((item) => item.source === 'meiro_pipes_registry')
+  const pipesRegistryAudienceOptions = useMemo(() => dedupeAudienceOptions(pipesRegistrySegments), [pipesRegistrySegments])
   const meiroOperationalSegments = (segmentRegistryQuery.data?.items || []).filter((item) => String(item.source || '').startsWith('meiro'))
   const latestSegmentSync = importMeiroSegmentsMutation.data
   const pipelineAudienceOptions = useMemo(() => {
+    let items: MeiroSegmentRegistryItem[]
     if (latestSegmentSync?.summary?.source === pipelineAudienceSource && latestSegmentSync.items?.length) {
-      return latestSegmentSync.items
+      items = latestSegmentSync.items
+    } else if (pipelineAudienceSource === 'pipes_registry') {
+      items = pipesRegistryAudienceOptions
+    } else if (pipelineAudienceSource === 'pipes_webhook') {
+      items = meiroOperationalSegments.filter((item) => item.source !== 'meiro_pipes_registry')
+    } else {
+      items = []
     }
-    if (pipelineAudienceSource === 'pipes_registry') return pipesRegistrySegments
-    if (pipelineAudienceSource === 'pipes_webhook') return meiroOperationalSegments.filter((item) => item.source !== 'meiro_pipes_registry')
-    return []
-  }, [latestSegmentSync, meiroOperationalSegments, pipelineAudienceSource, pipesRegistrySegments])
-  const keyForAudience = (item: MeiroSegmentRegistryItem) => String(item.id || item.external_segment_id || item.name || '').trim()
+    return dedupeAudienceOptions(items)
+  }, [latestSegmentSync, meiroOperationalSegments, pipelineAudienceSource, pipesRegistryAudienceOptions])
   const selectedPipelineAudience = pipelineAudienceOptions.find((item) => keyForAudience(item) === pipelineAudienceKey) || pipelineAudienceOptions[0] || null
   const audienceSourceLabel =
     pipelineAudienceSource === 'pipes_registry'
@@ -590,13 +617,7 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
       : pipelineAudienceSource === 'pipes_webhook'
         ? 'Pipes archive memberships'
         : 'CDP connector segments'
-  const pipelineAudienceCount =
-    latestSegmentSync?.items?.length ??
-    (pipelineAudienceSource === 'pipes_registry'
-      ? pipesRegistrySegments.length
-      : pipelineAudienceSource === 'pipes_webhook'
-        ? meiroOperationalSegments.filter((item) => item.source !== 'meiro_pipes_registry').length
-        : 0)
+  const pipelineAudienceCount = pipelineAudienceOptions.length
 
   useEffect(() => {
     if (cdpOutOfScope && pipelineAudienceSource === 'cdp') {
@@ -882,7 +903,7 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
                         const key = keyForAudience(item)
                         return (
                           <option key={key} value={key}>
-                            {item.name || item.external_segment_id || item.id}
+                            {audienceDisplayName(item)}
                           </option>
                         )
                       })
@@ -921,11 +942,11 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
                 {[
                   { label: 'Selected source', value: audienceSourceLabel },
                   { label: 'Available now', value: segmentRegistryQuery.isLoading ? 'Loading...' : `${pipelineAudienceCount.toLocaleString()} audiences` },
-                  { label: 'Selected audience', value: selectedPipelineAudience?.name || selectedPipelineAudience?.external_segment_id || selectedPipelineAudience?.id || 'Not selected' },
-                  { label: 'Pipes registry cache', value: `${pipesRegistrySegments.length.toLocaleString()} audiences` },
+                  { label: 'Selected audience', value: selectedPipelineAudience ? audienceDisplayName(selectedPipelineAudience) : 'Not selected' },
+                  { label: 'Pipes registry cache', value: `${pipesRegistryAudienceOptions.length.toLocaleString()} audiences` },
                   {
-                    label: 'Activation-ready',
-                    value: `${Number(latestSegmentSync?.summary?.activation_ready ?? segmentRegistryQuery.data?.summary?.activation_ready ?? 0).toLocaleString()} audiences`,
+                    label: 'Activation-ready records',
+                    value: `${Number(latestSegmentSync?.summary?.activation_ready ?? segmentRegistryQuery.data?.summary?.activation_ready ?? 0).toLocaleString()} records`,
                   },
                 ].map((item) => (
                   <div key={item.label} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, background: t.color.surface, padding: t.space.sm, display: 'grid', gap: 4 }}>
@@ -963,17 +984,17 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
                             textOverflow: 'ellipsis',
                             whiteSpace: 'nowrap',
                           }}
-                          title={item.name || item.external_segment_id || item.id}
+                          title={audienceDisplayName(item)}
                         >
-                          {item.name || item.external_segment_id || item.id}
+                          {audienceDisplayName(item)}
                         </span>
                       ))}
                     </div>
                   ) : null}
                 </div>
-              ) : pipesRegistrySegments.length ? (
+              ) : pipesRegistryAudienceOptions.length ? (
                 <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
-                  {pipesRegistrySegments.slice(0, 6).map((item) => (
+                  {pipesRegistryAudienceOptions.slice(0, 6).map((item) => (
                     <span
                       key={item.id || item.external_segment_id || item.name}
                       style={{
@@ -989,9 +1010,9 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
                         textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap',
                       }}
-                      title={item.name || item.external_segment_id || item.id}
+                      title={audienceDisplayName(item)}
                     >
-                      {item.name || item.external_segment_id || item.id}
+                      {audienceDisplayName(item)}
                     </span>
                   ))}
                 </div>

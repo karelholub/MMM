@@ -10,6 +10,7 @@ import { apiGetJson } from '../lib/apiClient'
 import { buildSettingsHref } from '../lib/settingsLinks'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import MeiroMeasurementScopeNotice from '../features/meiro/MeiroMeasurementScopeNotice'
+import type { MeiroMeasurementScopeMeta } from '../features/meiro/scopeTypes'
 import {
   isLocalAnalyticalSegment,
   localSegmentCompatibleWithDimensions,
@@ -95,16 +96,7 @@ interface ChannelSummaryResponse {
   consistency_warnings?: string[]
   meta?: {
     conversion_key?: string | null
-    meiro_measurement_scope?: {
-      strict?: boolean
-      target_sites?: string[]
-      source_scope?: { status?: string; target_host?: string }
-      event_archive_site_scope?: {
-        target_site_events?: number
-        out_of_scope_site_events?: number
-        unknown_site_events?: number
-      }
-    } | null
+    meiro_measurement_scope?: MeiroMeasurementScopeMeta | null
     conversion_key_resolution?: {
       configured_conversion_key?: string | null
       applied_conversion_key?: string | null
@@ -124,16 +116,7 @@ interface CampaignSummaryResponse {
   readiness?: SummaryReadiness | null
   consistency_warnings?: string[]
   meta?: {
-    meiro_measurement_scope?: {
-      strict?: boolean
-      target_sites?: string[]
-      source_scope?: { status?: string; target_host?: string }
-      event_archive_site_scope?: {
-        target_site_events?: number
-        out_of_scope_site_events?: number
-        unknown_site_events?: number
-      }
-    } | null
+    meiro_measurement_scope?: MeiroMeasurementScopeMeta | null
   } | null
 }
 

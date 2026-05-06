@@ -5,6 +5,8 @@ import DashboardPage from '../components/dashboard/DashboardPage'
 import SectionCard from '../components/dashboard/SectionCard'
 import { AnalyticsTable, AnalyticsToolbar, type AnalyticsTableColumn } from '../components/dashboard'
 import SurfaceBasisNotice from '../components/dashboard/SurfaceBasisNotice'
+import MeiroScopeFilterNotice from '../features/meiro/MeiroScopeFilterNotice'
+import type { MeiroScopeFilterMeta } from '../features/meiro/scopeTypes'
 import GlobalFilterBar, { GlobalFiltersState } from '../components/dashboard/GlobalFilterBar'
 import SaveLocalSegmentDialog from '../components/segments/SaveLocalSegmentDialog'
 import SegmentComparisonContextNote from '../components/segments/SegmentComparisonContextNote'
@@ -504,11 +506,7 @@ interface JourneyFilterDimensionsResponse {
     date_from: string
     date_to: string
     segment_supported: boolean
-    scope_filter?: {
-      strict?: boolean
-      out_of_scope_campaign_labels?: number
-      campaign_selectors_filtered?: boolean
-    }
+    scope_filter?: MeiroScopeFilterMeta
   }
   channels: JourneyFilterDimensionValue[]
   campaigns: JourneyFilterDimensionValue[]
@@ -3690,11 +3688,12 @@ export default function Journeys({
                   ? `${dimensionsQuery.data.summary.journey_rows.toLocaleString()} rows observed from ${dimensionsQuery.data.summary.date_from} to ${dimensionsQuery.data.summary.date_to}.`
                   : 'Filter values load from current workspace activity once the selected definition resolves.'}
               </div>
-              {dimensionsQuery.data?.summary.scope_filter?.campaign_selectors_filtered ? (
-                <div style={{ color: t.color.warning }}>
-                  Campaign selectors exclude {Number(dimensionsQuery.data.summary.scope_filter.out_of_scope_campaign_labels || 0).toLocaleString()} out-of-scope Meiro archive label{Number(dimensionsQuery.data.summary.scope_filter.out_of_scope_campaign_labels || 0) === 1 ? '' : 's'}.
-                </div>
-              ) : null}
+              <MeiroScopeFilterNotice
+                scopeFilter={dimensionsQuery.data?.summary.scope_filter}
+                context="campaign_selectors"
+                marginBottom={0}
+                variant="inline"
+              />
               <div>Saved local segments apply here as analytical filter shortcuts. Meiro Pipes segments remain available in hypotheses and experiments as operational audiences.</div>
             </div>
             {selectedDefinition ? (

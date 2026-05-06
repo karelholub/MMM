@@ -33,6 +33,8 @@ import {
 } from '../components/dashboard'
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
+import MeiroScopeFilterNotice from '../features/meiro/MeiroScopeFilterNotice'
+import type { MeiroScopeFilterMeta } from '../features/meiro/scopeTypes'
 import {
   isLocalAnalyticalSegment,
   localSegmentCompatibleWithDimensions,
@@ -164,12 +166,7 @@ interface CampaignDriver {
 interface OverviewDriversResponse {
   by_channel: ChannelDriver[]
   by_campaign: CampaignDriver[]
-  scope_filter?: {
-    strict?: boolean
-    mode?: string
-    out_of_scope_campaign_labels?: number
-    campaign_rows_excluded?: number
-  }
+  scope_filter?: MeiroScopeFilterMeta
   date_from: string
   date_to: string
 }
@@ -1953,11 +1950,7 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
               </button>
             }
           >
-            {Number(driverScopeFilter?.campaign_rows_excluded || 0) > 0 || Number(driverScopeFilter?.out_of_scope_campaign_labels || 0) > 0 ? (
-              <SurfaceBasisNotice marginBottom={t.space.md}>
-                Top campaigns are filtered to the Meiro production scope. {Number(driverScopeFilter?.campaign_rows_excluded || 0).toLocaleString()} campaign row{Number(driverScopeFilter?.campaign_rows_excluded || 0) === 1 ? '' : 's'} and {Number(driverScopeFilter?.out_of_scope_campaign_labels || 0).toLocaleString()} archived label{Number(driverScopeFilter?.out_of_scope_campaign_labels || 0) === 1 ? '' : 's'} are excluded from this overview.
-              </SurfaceBasisNotice>
-            ) : null}
+            <MeiroScopeFilterNotice scopeFilter={driverScopeFilter} context="overview" />
             <AnalyticsTable
               columns={campaignColumns}
               rows={byCampaign.slice(0, 5)}

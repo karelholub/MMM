@@ -11,6 +11,7 @@ import { apiGetJson } from '../lib/apiClient'
 import { buildIncrementalityPlannerHref } from '../lib/experimentLinks'
 import { buildSettingsHref } from '../lib/settingsLinks'
 import MeiroMeasurementScopeNotice from '../features/meiro/MeiroMeasurementScopeNotice'
+import type { MeiroMeasurementScopeMeta } from '../features/meiro/scopeTypes'
 import {
   buildSegmentComparisonHref,
   localSegmentCompatibleWithDimensions,
@@ -41,16 +42,6 @@ interface ChannelSummaryItem {
   channel: string
   current: { spend: number; visits: number; conversions: number; revenue: number }
   diagnostics?: { roles?: RoleDiagnostics }
-}
-
-interface MeiroMeasurementScopeMeta {
-  strict?: boolean
-  target_sites?: string[]
-  source_scope?: { status?: string; target_host?: string; legacy_unverified_entries?: number; out_of_scope_entries?: number }
-  event_archive_site_scope?: { target_site_events?: number; out_of_scope_site_events?: number; unknown_site_events?: number }
-  out_of_scope_campaign_labels?: number
-  campaign_rows_excluded?: number
-  warnings?: string[]
 }
 
 interface ChannelSummaryResponse {
