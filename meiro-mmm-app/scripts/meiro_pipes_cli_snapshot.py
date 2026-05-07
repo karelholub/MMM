@@ -47,10 +47,10 @@ def redact(value: Any) -> Any:
     return value
 
 
-def parse_json_objects(text: str) -> List[Dict[str, Any]]:
+def parse_json_values(text: str) -> List[Any]:
     decoder = json.JSONDecoder()
     pos = 0
-    objects: List[Dict[str, Any]] = []
+    values: List[Any] = []
     while pos < len(text):
         while pos < len(text) and text[pos].isspace():
             pos += 1
@@ -60,20 +60,22 @@ def parse_json_objects(text: str) -> List[Dict[str, Any]]:
             parsed, next_pos = decoder.raw_decode(text, pos)
         except Exception:
             break
-        if isinstance(parsed, dict):
-            objects.append(redact(parsed))
+        if isinstance(parsed, (dict, list)):
+            values.append(redact(parsed))
         pos = next_pos
-    return objects
+    return values
 
 
 def run_mpcli(binary: str, base_url: str, args: List[str]) -> Dict[str, Any]:
     cmd = [binary, "--url", base_url, *args]
     completed = subprocess.run(cmd, capture_output=True, text=True, timeout=20, check=False)
-    parsed = parse_json_objects(completed.stdout or "")
+    stdout = completed.stdout or ""
+    parsed = parse_json_values(stdout)
     return {
         "ok": completed.returncode == 0,
         "returncode": completed.returncode,
         "json": parsed,
+        "stdout_tail": stdout[-800:] if stdout and not parsed else None,
         "stderr_tail": (completed.stderr or "")[-800:] or None,
     }
 
@@ -124,6 +126,19 @@ def main() -> int:
             "queues_ok": bool(results["queues"].get("ok")),
         },
     }
+    if status.get("auth") != "ok" and OUT.exists():
+        try:
+            previous = json.loads(OUT.read_text(encoding="utf-8"))
+        except Exception:
+            previous = None
+        previous_auth = ((previous or {}).get("status") or {}).get("auth") if isinstance(previous, dict) else None
+        if previous_auth == "ok":
+            print(
+                f"Refusing to overwrite authenticated snapshot with auth={status.get('auth')!r}. "
+                "Export MPCLI_TOKEN in this shell and rerun, or delete the snapshot file first.",
+                file=sys.stderr,
+            )
+            return 2
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(redact(snapshot), indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"Wrote {OUT}")

@@ -541,6 +541,9 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
   const pipesCliAuthenticated = Boolean(pipesCli?.status.authenticated)
   const pipesCliSummary = pipesCli?.snapshot.summary
   const pipesCliAvailable = Boolean(pipesCli?.status.available)
+  const pipesCliCount = (value?: number | null) => (
+    typeof value === 'number' ? value.toLocaleString() : 'unknown'
+  )
   const pipesCliTone = pipelineTone(
     pipesCliAvailable && pipesCliScopeStatus === 'in_scope' && pipesCliAuthenticated
       ? 'ready'
@@ -767,8 +770,8 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
                           ? `CLI context ${pipesCliScope?.configured_host || pipesCli?.status.instance_url || 'unknown'} -> target ${pipesCli?.target.instance_host || 'meiro-internal.eu.pipes.meiro.io'}.`
                           : `CLI reaches ${pipesCli?.target.instance_host || 'meiro-internal.eu.pipes.meiro.io'}, but this shell is not authenticated. Export MPCLI_TOKEN and regenerate the snapshot.`
                         : 'Run the host mpcli snapshot script to let MMM verify Pipes sources, pipes, destinations, and queue health without using CDP/MCP.'}
-                      {pipesCliSummary ? (
-                        <> Streams {Number(pipesCliSummary.event_stream_count ?? 0).toLocaleString()} · pipes {Number(pipesCliSummary.pipe_count ?? 0).toLocaleString()} · destinations {Number(pipesCliSummary.event_destination_count ?? 0).toLocaleString()}</>
+                      {pipesCliAuthenticated && pipesCliSummary ? (
+                        <> Streams {pipesCliCount(pipesCliSummary.event_stream_count)} · pipes {pipesCliCount(pipesCliSummary.pipe_count)} · destinations {pipesCliCount(pipesCliSummary.event_destination_count)}</>
                       ) : null}
                     </div>
                   </div>

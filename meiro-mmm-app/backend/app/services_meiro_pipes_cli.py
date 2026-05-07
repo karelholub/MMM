@@ -46,10 +46,10 @@ def _redact(value: Any) -> Any:
     return value
 
 
-def _parse_json_objects(text: str) -> List[Dict[str, Any]]:
+def _parse_json_values(text: str) -> List[Any]:
     decoder = json.JSONDecoder()
     pos = 0
-    objects: List[Dict[str, Any]] = []
+    values: List[Any] = []
     while pos < len(text):
         while pos < len(text) and text[pos].isspace():
             pos += 1
@@ -59,10 +59,10 @@ def _parse_json_objects(text: str) -> List[Dict[str, Any]]:
             parsed, next_pos = decoder.raw_decode(text, pos)
         except Exception:
             break
-        if isinstance(parsed, dict):
-            objects.append(_redact(parsed))
+        if isinstance(parsed, (dict, list)):
+            values.append(_redact(parsed))
         pos = next_pos
-    return objects
+    return values
 
 
 def _run_mpcli(args: List[str], *, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS) -> Dict[str, Any]:
@@ -91,12 +91,13 @@ def _run_mpcli(args: List[str], *, timeout_seconds: int = DEFAULT_TIMEOUT_SECOND
         return {"ok": False, "available": True, "error": type(exc).__name__, "detail": str(exc)}
     stdout = completed.stdout or ""
     stderr = completed.stderr or ""
+    parsed = _parse_json_values(stdout)
     return {
         "ok": completed.returncode == 0,
         "available": True,
         "returncode": completed.returncode,
-        "json": _parse_json_objects(stdout),
-        "stdout_tail": stdout[-800:] if stdout and not _parse_json_objects(stdout) else None,
+        "json": parsed,
+        "stdout_tail": stdout[-800:] if stdout and not parsed else None,
         "stderr_tail": stderr[-800:] if stderr else None,
     }
 
@@ -120,6 +121,8 @@ def build_pipes_cli_status(*, live: bool = False) -> Dict[str, Any]:
     api_info = None
     if status_objects:
         for item in status_objects:
+            if not isinstance(item, dict):
+                continue
             if item.get("instance"):
                 instance_url = item.get("instance")
                 api_info = item.get("api")
