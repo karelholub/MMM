@@ -164,24 +164,104 @@ def _route_health(snapshot: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             or str(pipe.get("eventDestinationName") or "").strip().lower() == destination_name
         ]
 
-    def summarize_route(route_id: str, label: str, tokens: List[str]) -> Dict[str, Any]:
+    def summarize_route(
+        route_id: str,
+        label: str,
+        tokens: List[str],
+        *,
+        required_source_tokens: Optional[List[str]] = None,
+        recent_delivery_required: bool = False,
+    ) -> Dict[str, Any]:
         destination = destination_for(tokens)
         route_pipes = pipes_for_destination(destination)
         enabled_pipes = [pipe for pipe in route_pipes if bool(pipe.get("isEnabled"))]
         source_slugs = sorted({str(pipe.get("sourceSlug") or "") for pipe in route_pipes if pipe.get("sourceSlug")})
         delivery_count = int(destination.get("deliveryCountLastHour") or 0) if destination else 0
+        issues: List[Dict[str, Any]] = []
+        if not destination:
+            issues.append(
+                {
+                    "severity": "blocked",
+                    "code": "destination_missing",
+                    "message": f"{label} destination is missing in Pipes.",
+                }
+            )
+        elif not bool(destination.get("isEnabled")):
+            issues.append(
+                {
+                    "severity": "blocked",
+                    "code": "destination_disabled",
+                    "message": f"{label} destination is disabled.",
+                }
+            )
+        if destination and not enabled_pipes:
+            issues.append(
+                {
+                    "severity": "blocked",
+                    "code": "enabled_pipe_missing",
+                    "message": f"{label} has no enabled pipes.",
+                }
+            )
+        for token in required_source_tokens or []:
+            if not any(token in slug for slug in source_slugs):
+                issues.append(
+                    {
+                        "severity": "warning",
+                        "code": "required_source_missing",
+                        "message": f"{label} does not include a source slug matching '{token}'.",
+                    }
+                )
+        if recent_delivery_required and destination and enabled_pipes and delivery_count <= 0:
+            issues.append(
+                {
+                    "severity": "warning",
+                    "code": "no_recent_delivery",
+                    "message": f"{label} has no deliveries in the last hour.",
+                }
+            )
+        status = "ready" if destination and enabled_pipes else "missing" if not destination else "disabled"
+        if any(issue.get("severity") == "blocked" for issue in issues):
+            status = "blocked"
+        elif issues:
+            status = "warning"
         return {
             "id": route_id,
             "label": label,
-            "status": "ready" if destination and enabled_pipes else "missing" if not destination else "disabled",
+            "status": status,
             "destination": destination,
             "pipe_count": len(route_pipes),
             "enabled_pipe_count": len(enabled_pipes),
             "delivery_count_last_hour": delivery_count,
             "source_slugs": source_slugs[:12],
+            "issues": issues,
         }
 
+    routes = [
+        summarize_route(
+            "mmm_raw_events",
+            "MMM raw-event ingestion",
+            ["mta-tool", "mta tool"],
+            required_source_tokens=["meiro-io", "meiro-store"],
+            recent_delivery_required=True,
+        ),
+        summarize_route(
+            "deciengine_precompute",
+            "deciEngine precompute trigger",
+            ["deciengine-precompute", "deciengine precompute"],
+            required_source_tokens=["meiro-io"],
+            recent_delivery_required=False,
+        ),
+    ]
+    issues = [issue for route in routes for issue in route.get("issues", [])]
+    status = "ready"
+    if any(issue.get("severity") == "blocked" for issue in issues):
+        status = "blocked"
+    elif issues:
+        status = "warning"
+
     return {
+        "status": status,
+        "issues": issues,
         "streams": {
             "total": len(streams),
             "enabled": len([item for item in streams if bool(item.get("isEnabled"))]),
@@ -196,14 +276,7 @@ def _route_health(snapshot: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             "total": len(pipes),
             "enabled": len([item for item in pipes if bool(item.get("isEnabled"))]),
         },
-        "routes": [
-            summarize_route("mmm_raw_events", "MMM raw-event ingestion", ["mta-tool", "mta tool"]),
-            summarize_route(
-                "deciengine_precompute",
-                "deciEngine precompute trigger",
-                ["deciengine-precompute", "deciengine precompute"],
-            ),
-        ],
+        "routes": routes,
         "queues": {
             "available": bool(queues),
             "keys": sorted(queues.keys()),

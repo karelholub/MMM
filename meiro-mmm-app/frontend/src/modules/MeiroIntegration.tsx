@@ -542,6 +542,7 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
   const pipesCliSummary = pipesCli?.snapshot.summary
   const pipesCliHealth = pipesCli?.health
   const pipesCliRoutes = pipesCliHealth?.routes || []
+  const pipesCliIssues = pipesCliHealth?.issues || []
   const pipesCliAvailable = Boolean(pipesCli?.status.available)
   const pipesCliCount = (value?: number | null) => (
     typeof value === 'number' ? value.toLocaleString() : 'unknown'
@@ -798,6 +799,21 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
                             </span>
                           )
                         })}
+                      </div>
+                    ) : null}
+                    {pipesCliAuthenticated && pipesCliIssues.length ? (
+                      <div style={{ display: 'grid', gap: 4 }}>
+                        {pipesCliIssues.slice(0, 3).map((issue, idx) => (
+                          <div
+                            key={`${issue.code || 'issue'}-${idx}`}
+                            style={{
+                              fontSize: t.font.sizeXs,
+                              color: issue.severity === 'blocked' ? t.color.danger : t.color.warning,
+                            }}
+                          >
+                            {issue.message || 'Pipes route needs attention.'}
+                          </div>
+                        ))}
                       </div>
                     ) : null}
                   </div>

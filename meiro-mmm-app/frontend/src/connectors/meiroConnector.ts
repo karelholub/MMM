@@ -196,6 +196,12 @@ export interface MeiroPipesCliStatus {
     } | null
   }
   health?: {
+    status?: 'ready' | 'warning' | 'blocked' | string
+    issues?: Array<{
+      severity?: 'warning' | 'blocked' | string
+      code?: string
+      message?: string
+    }>
     streams?: {
       total?: number
       enabled?: number
@@ -218,6 +224,11 @@ export interface MeiroPipesCliStatus {
       enabled_pipe_count: number
       delivery_count_last_hour: number
       source_slugs: string[]
+      issues?: Array<{
+        severity?: 'warning' | 'blocked' | string
+        code?: string
+        message?: string
+      }>
       destination?: Record<string, unknown> | null
     }>
     queues?: {
