@@ -335,6 +335,7 @@ export default function MeiroImportReplay({
   const replayDiagnostics = reprocessWebhookArchiveResult?.event_reconstruction_diagnostics
   const archiveInputSuggestions = meiroWebhookSuggestions?.taxonomy_suggestions
   const archiveMappingSuggestions = meiroWebhookSuggestions?.mapping_suggestions
+  const pipesFixProposals = meiroWebhookSuggestions?.pipes_fix_proposals || []
   const topArchiveSources = archiveInputSuggestions?.top_sources || []
   const topArchiveMediums = archiveInputSuggestions?.top_mediums || []
   const topArchiveCampaigns = archiveInputSuggestions?.top_campaigns || []
@@ -1266,6 +1267,64 @@ export default function MeiroImportReplay({
                     {(meiroWebhookSuggestions.event_stream_diagnostics.warnings || []).join(' · ')}
                   </div>
                 ) : null}
+              </div>
+            ) : null}
+            {pipesFixProposals.length ? (
+              <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, padding: t.space.sm, display: 'grid', gap: t.space.sm }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, flexWrap: 'wrap' }}>
+                  <div>
+                    <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Upstream Pipes fix proposals</div>
+                    <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                      Reviewed changes for the Pipes agent. Apply upstream when MMM is compensating for taxonomy or conversion drift.
+                    </div>
+                  </div>
+                  <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                    {pipesFixProposals.length} proposal{pipesFixProposals.length === 1 ? '' : 's'}
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gap: t.space.sm }}>
+                  {pipesFixProposals.slice(0, 3).map((proposal) => {
+                    const blocked = proposal.severity === 'blocked'
+                    return (
+                      <div key={proposal.id} style={{ border: `1px solid ${blocked ? t.color.danger : t.color.warning}`, borderRadius: t.radius.sm, background: blocked ? t.color.dangerMuted : t.color.warningMuted, padding: t.space.sm, display: 'grid', gap: 6 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, flexWrap: 'wrap', alignItems: 'center' }}>
+                          <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>{proposal.title}</div>
+                          <span style={{ borderRadius: t.radius.full, background: t.color.surface, color: blocked ? t.color.danger : t.color.warning, padding: '2px 7px', fontSize: t.font.sizeXs, fontWeight: t.font.weightSemibold }}>
+                            {proposal.severity || 'warning'}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                          Destination <strong>{proposal.target_destination_slug || 'MTA Tool'}</strong>
+                          {proposal.target_source_slugs?.length ? <> · sources <strong>{proposal.target_source_slugs.slice(0, 5).join(', ')}</strong></> : null}
+                        </div>
+                        {proposal.desired_contract ? (
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
+                            Contract fields: {Object.keys(proposal.desired_contract).slice(0, 8).join(', ')}
+                          </div>
+                        ) : null}
+                        <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            onClick={() => navigator.clipboard?.writeText(proposal.pipes_agent_prompt || '')}
+                            disabled={!proposal.pipes_agent_prompt}
+                            style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '6px 8px', cursor: proposal.pipes_agent_prompt ? 'pointer' : 'default', fontSize: t.font.sizeXs }}
+                          >
+                            Copy Pipes agent prompt
+                          </button>
+                          {proposal.suggested_transform ? (
+                            <button
+                              type="button"
+                              onClick={() => navigator.clipboard?.writeText(proposal.suggested_transform || '')}
+                              style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '6px 8px', cursor: 'pointer', fontSize: t.font.sizeXs }}
+                            >
+                              Copy transform guidance
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             ) : null}
             {(topArchiveSources.length || topArchiveMediums.length || topArchiveCampaigns.length || topArchivePairs.length) ? (

@@ -2911,6 +2911,226 @@ def create_router(
             if isinstance(payload, dict):
                 sanitation_apply_payload.update(payload)
 
+        pipes_cli_status = build_pipes_cli_status(live=False)
+        pipes_health = pipes_cli_status.get("health") if isinstance(pipes_cli_status, dict) else {}
+        pipes_routes = pipes_health.get("routes") if isinstance(pipes_health, dict) else []
+        mmm_route = next((route for route in pipes_routes or [] if route.get("id") == "mmm_raw_events"), {})
+        deciengine_route = next((route for route in pipes_routes or [] if route.get("id") == "deciengine_precompute"), {})
+        target_route_sources = list(mmm_route.get("source_slugs") or []) if isinstance(mmm_route, dict) else []
+
+        def _json_block(value: Any) -> str:
+            return json.dumps(value, indent=2, ensure_ascii=False, default=str)
+
+        def _proposal_prompt(
+            *,
+            title: str,
+            goal: str,
+            observed: Dict[str, Any],
+            desired_contract: Dict[str, Any],
+            target_sources: List[str],
+            suggested_transform: str,
+            validation_steps: List[str],
+        ) -> str:
+            return "\n".join(
+                [
+                    "You are the Meiro Pipes agent for the internal production instance.",
+                    f"Instance: {get_target_instance_url()}",
+                    f"Goal: {goal}",
+                    "",
+                    "Target Pipes sources/routes:",
+                    _json_block(target_sources),
+                    "",
+                    "Observed MMM/MTA problem:",
+                    _json_block(observed),
+                    "",
+                    "Desired outgoing event contract for the MMM / decision tools:",
+                    _json_block(desired_contract),
+                    "",
+                    "Suggested transform guidance:",
+                    suggested_transform.strip(),
+                    "",
+                    "Validation steps after change:",
+                    _json_block(validation_steps),
+                    "",
+                    "Safety requirements: do not delete or disable existing production routes; create a versioned transform update and keep secrets redacted.",
+                    f"Proposal title: {title}",
+                ]
+            )
+
+        pipes_fix_proposals: List[Dict[str, Any]] = []
+        source_medium_quality = float(raw_event_diagnostics.get("source_medium_share") or 0.0)
+        conversion_linkage_quality = float(raw_event_diagnostics.get("conversion_linkage_share") or 0.0)
+        if suggested_source_aliases or suggested_medium_aliases or taxonomy_rules or unresolved_pairs or source_medium_quality < 0.85:
+            observed = {
+                "source_medium_share": round(source_medium_quality, 4),
+                "top_sources": [{"source": name, "count": count} for name, count in top_sources[:8]],
+                "top_mediums": [{"medium": name, "count": count} for name, count in top_mediums[:8]],
+                "top_source_medium_pairs": [
+                    {
+                        "source": (name.split("||", 1) + [""])[0],
+                        "medium": (name.split("||", 1) + [""])[1],
+                        "count": count,
+                    }
+                    for name, count in top_source_medium_pairs[:8]
+                ],
+                "suggested_source_aliases": suggested_source_aliases,
+                "suggested_medium_aliases": suggested_medium_aliases,
+                "unresolved_pairs": unresolved_pairs[:8],
+            }
+            desired_contract = {
+                "source": "canonical traffic source, e.g. google, meta, linkedin, email, direct",
+                "medium": "canonical traffic medium, e.g. cpc, paid_social, email, organic, direct",
+                "channel": "MMM channel bucket derived from source/medium",
+                "campaign": "stable campaign identifier/name suitable for MMM grouping",
+                "source_raw": "optional original source before canonicalization",
+                "medium_raw": "optional original medium before canonicalization",
+            }
+            transform = """
+Normalize outgoing events before delivery to the MTA Tool destination:
+
+const sourceAliases = /* apply reviewed aliases from observed.suggested_source_aliases */;
+const mediumAliases = /* apply reviewed aliases from observed.suggested_medium_aliases */;
+
+event.source_raw = event.source_raw || event.source || event.utm_source || null;
+event.medium_raw = event.medium_raw || event.medium || event.utm_medium || null;
+event.source = sourceAliases[String(event.source_raw || '').toLowerCase()] || event.source_raw || 'unknown';
+event.medium = mediumAliases[String(event.medium_raw || '').toLowerCase()] || event.medium_raw || 'unknown';
+event.channel = classifyChannel(event.source, event.medium, event.campaign || event.utm_campaign);
+event.campaign = event.campaign || event.utm_campaign || event.campaign_name || null;
+"""
+            title = "Normalize taxonomy fields upstream in Pipes"
+            pipes_fix_proposals.append(
+                {
+                    "id": "pipes_taxonomy_contract",
+                    "type": "taxonomy_contract",
+                    "title": title,
+                    "severity": "warning" if source_medium_quality >= 0.5 else "blocked",
+                    "target_destination_slug": (mmm_route.get("destination") or {}).get("slug") if isinstance(mmm_route, dict) else None,
+                    "target_source_slugs": target_route_sources,
+                    "observed": observed,
+                    "desired_contract": desired_contract,
+                    "suggested_transform": transform.strip(),
+                    "pipes_agent_prompt": _proposal_prompt(
+                        title=title,
+                        goal="Fix upstream marketing taxonomy fields so MMM/MTA receives stable channel, source, medium, and campaign values.",
+                        observed=observed,
+                        desired_contract=desired_contract,
+                        target_sources=target_route_sources,
+                        suggested_transform=transform,
+                        validation_steps=[
+                            "Update only enabled Pipes feeding the MTA Tool destination unless the user approves broader changes.",
+                            "Run each changed transform test with representative meiro.io and meir.store raw events.",
+                            "Regenerate the MMM mpcli snapshot and verify the MTA Tool route remains ready.",
+                            "Replay recent raw-event archive in MMM and confirm source/medium and unresolved channel rates improve.",
+                        ],
+                    ),
+                }
+            )
+
+        if conversion_alias_suggestions or conversion_linkage_quality < 0.8 or top_conversion_names:
+            observed = {
+                "conversion_linkage_share": round(conversion_linkage_quality, 4),
+                "top_conversion_events": [{"event_name": name, "count": count} for name, count in top_conversion_names[:8]],
+                "conversion_alias_suggestions": conversion_alias_suggestions,
+                "dedup_key_candidates": dedup_key_candidates[:5],
+                "value_field_candidates": [{"path": name, "count": count} for name, count in top_value_fields],
+                "currency_field_candidates": [{"path": name, "count": count} for name, count in top_currency_fields],
+            }
+            desired_contract = {
+                "event_name": "canonical event name",
+                "is_conversion": "boolean true for conversion events",
+                "conversion_type": "purchase, lead, signup, or other reviewed KPI type",
+                "conversion_id": "stable dedupe key when available",
+                "order_id": "commerce order id when available",
+                "value": "numeric conversion value when available",
+                "currency": "ISO currency when value is present",
+                "profile_id": "stable profile/customer identifier",
+            }
+            transform = """
+Before delivery to MMM, classify conversion-like events and attach explicit conversion metadata:
+
+const aliases = /* apply reviewed conversion_event_aliases from observed.conversion_alias_suggestions */;
+const rawName = String(event.event_name || event.name || event.type || '').toLowerCase();
+event.event_name = aliases[rawName] || rawName;
+event.is_conversion = ['purchase', 'lead', 'signup'].includes(event.event_name) || Boolean(event.conversion_id || event.order_id);
+event.conversion_type = event.is_conversion ? (event.conversion_type || event.event_name) : null;
+event.conversion_id = event.conversion_id || event.order_id || event.lead_id || event.event_id || null;
+event.value = Number(event.value ?? event.revenue ?? event.price ?? 0) || null;
+event.currency = event.currency || event.currency_code || null;
+"""
+            title = "Normalize conversion contract upstream in Pipes"
+            pipes_fix_proposals.append(
+                {
+                    "id": "pipes_conversion_contract",
+                    "type": "conversion_contract",
+                    "title": title,
+                    "severity": "warning" if conversion_linkage_quality >= 0.5 else "blocked",
+                    "target_destination_slug": (mmm_route.get("destination") or {}).get("slug") if isinstance(mmm_route, dict) else None,
+                    "target_source_slugs": target_route_sources,
+                    "observed": observed,
+                    "desired_contract": desired_contract,
+                    "suggested_transform": transform.strip(),
+                    "pipes_agent_prompt": _proposal_prompt(
+                        title=title,
+                        goal="Fix upstream conversion classification, linkage, value, currency, and dedupe fields for MMM/MTA analysis.",
+                        observed=observed,
+                        desired_contract=desired_contract,
+                        target_sources=target_route_sources,
+                        suggested_transform=transform,
+                        validation_steps=[
+                            "Update only Pipes feeding the MTA Tool destination unless the user approves broader changes.",
+                            "Test purchase/lead/signup examples and non-conversion events to avoid false positives.",
+                            "Replay recent raw-event archive in MMM and confirm conversion linkage and dedupe coverage improve.",
+                            "Do not fabricate value/currency; set null when absent and let MMM quarantine/fallback policies decide.",
+                        ],
+                    ),
+                }
+            )
+
+        if isinstance(deciengine_route, dict) and deciengine_route.get("status") != "ready":
+            title = "Repair deciEngine precompute route in Pipes"
+            observed = {
+                "route": {
+                    key: deciengine_route.get(key)
+                    for key in ("status", "pipe_count", "enabled_pipe_count", "delivery_count_last_hour", "source_slugs", "issues")
+                },
+            }
+            desired_contract = {
+                "destination": "deciEngine Precompute Trigger",
+                "source": "meiro-io decision/precompute events",
+                "required_fields": ["profile_id", "audience_id", "decision_rule_id", "triggered_at"],
+            }
+            transform = """
+Ensure an enabled Pipe routes the selected audience/decision precompute trigger to the deciEngine Precompute Trigger destination.
+Payload should include profile/audience/rule identifiers and preserve the original event timestamp for auditability.
+"""
+            pipes_fix_proposals.append(
+                {
+                    "id": "pipes_deciengine_precompute_route",
+                    "type": "decision_precompute_route",
+                    "title": title,
+                    "severity": "blocked",
+                    "target_destination_slug": "deciengine-precompute-trigger",
+                    "target_source_slugs": list(deciengine_route.get("source_slugs") or []),
+                    "observed": observed,
+                    "desired_contract": desired_contract,
+                    "suggested_transform": transform.strip(),
+                    "pipes_agent_prompt": _proposal_prompt(
+                        title=title,
+                        goal="Restore the Pipes route that lets deciEngine precompute selected decisions/audiences.",
+                        observed=observed,
+                        desired_contract=desired_contract,
+                        target_sources=list(deciengine_route.get("source_slugs") or []),
+                        suggested_transform=transform,
+                        validation_steps=[
+                            "Verify the destination exists and is enabled.",
+                            "Verify at least one enabled pipe feeds the destination from meiro-io.",
+                            "Trigger a controlled precompute test and confirm deciEngine receives it.",
+                        ],
+                    ),
+                }
+            )
+
         return {
             "generated_at": datetime.utcnow().isoformat() + "Z",
             "events_analyzed": raw_events_analyzed or len(events),
@@ -2927,6 +3147,7 @@ def create_router(
             "kpi_suggestions": kpi_suggestions,
             "conversion_event_suggestions": [{"event_name": name, "count": count} for name, count in top_conversion_names],
             "sanitation_suggestions": sanitation_suggestions[:8],
+            "pipes_fix_proposals": pipes_fix_proposals[:6],
             "taxonomy_suggestions": {
                 "channel_rules": taxonomy_rules,
                 "source_aliases": suggested_source_aliases,

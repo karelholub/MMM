@@ -307,6 +307,18 @@ export interface MeiroWebhookSuggestions {
     recommended_action?: string
     payload?: Record<string, unknown>
   }>
+  pipes_fix_proposals?: Array<{
+    id: string
+    type: string
+    title: string
+    severity?: 'warning' | 'blocked' | string
+    target_destination_slug?: string | null
+    target_source_slugs?: string[]
+    observed?: Record<string, unknown>
+    desired_contract?: Record<string, unknown>
+    suggested_transform?: string
+    pipes_agent_prompt?: string
+  }>
   taxonomy_suggestions?: {
     channel_rules?: Array<Record<string, unknown>>
     source_aliases?: Record<string, string>
