@@ -12,6 +12,7 @@ from sqlalchemy.pool import StaticPool
 from app.db import Base, get_db
 from app.main import app
 import app.main as main_module
+import app.modules.mmm.router as mmm_router
 from app.models_config_dq import MeiroEventProfileState
 from app.modules.mmm.service import fit_model
 from app.modules.mmm.schemas import ModelConfig
@@ -53,7 +54,22 @@ def mmm_client(tmp_path, monkeypatch: pytest.MonkeyPatch):
 
     old_expenses = dict(main_module.EXPENSES)
     old_datasets = dict(main_module.DATASETS)
+    old_runs = dict(main_module.RUNS)
     monkeypatch.setattr(main_module, "MMM_PLATFORM_DIR", tmp_path)
+    monkeypatch.setattr(
+        mmm_router,
+        "get_pull_config",
+        lambda: {"primary_ingest_source": "events", "replay_archive_source": "events"},
+    )
+    monkeypatch.setattr(
+        mmm_router,
+        "get_event_archive_status",
+        lambda: {
+            "source_scope": {"status": "target_verified", "target_host": "meiro-internal.eu.pipes.meiro.io"},
+            "site_scope": {"target_site_events": 25, "out_of_scope_site_events": 0},
+        },
+    )
+    monkeypatch.setattr(mmm_router, "get_mapping_state", lambda: {"approval": {"status": "approved"}})
     main_module.EXPENSES.clear()
     main_module.EXPENSES.update(
         {
@@ -67,6 +83,7 @@ def mmm_client(tmp_path, monkeypatch: pytest.MonkeyPatch):
         }
     )
     main_module.DATASETS.clear()
+    main_module.RUNS.clear()
 
     def override_get_db():
         db = SessionLocal()
@@ -88,6 +105,8 @@ def mmm_client(tmp_path, monkeypatch: pytest.MonkeyPatch):
         main_module.EXPENSES.update(old_expenses)
         main_module.DATASETS.clear()
         main_module.DATASETS.update(old_datasets)
+        main_module.RUNS.clear()
+        main_module.RUNS.update(old_runs)
         engine.dispose()
 
 
@@ -239,6 +258,43 @@ def test_build_platform_dataset_endpoint_filters_to_measurement_audience(mmm_cli
     assert audience["profile_count"] == 1
     assert audience["journey_rows"] == 1
     assert payload["metadata"]["source_contract"]["measurement_audience"]["external_segment_id"] == "vip"
+    readiness = payload["metadata"]["source_contract"]["meiro_production_readiness"]
+    assert readiness["status"] == "ready"
+    assert readiness["primary_ingest_source"] == "events"
+    assert readiness["target_instance_host"] == "meiro-internal.eu.pipes.meiro.io"
+
+
+def test_run_model_blocks_platform_dataset_when_meiro_source_contract_blocked(mmm_client):
+    client, _ = mmm_client
+    main_module.DATASETS["platform-blocked"] = {
+        "path": str(main_module.SAMPLE_DIR / "sample-weekly-01.csv"),
+        "type": "sales",
+        "source": "platform",
+        "metadata": {
+            "source": "platform",
+            "source_contract": {
+                "meiro_production_readiness": {
+                    "status": "blocked",
+                    "blockers": ["No target-site raw events are available for the MMM production scope."],
+                }
+            },
+        },
+    }
+
+    resp = client.post(
+        "/api/models",
+        json={
+            "dataset_id": "platform-blocked",
+            "frequency": "W",
+            "kpi": "sales",
+            "spend_channels": ["paid_search"],
+            "covariates": [],
+        },
+    )
+
+    assert resp.status_code == 409
+    assert "Meiro source contract" in resp.json()["detail"]
+    assert not any(run.get("dataset_id") == "platform-blocked" for run in main_module.RUNS.values())
 
 
 def test_build_platform_dataset_endpoint_rejects_audience_without_matching_journeys(mmm_client):

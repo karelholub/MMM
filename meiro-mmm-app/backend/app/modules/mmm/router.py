@@ -32,7 +32,15 @@ from app.services_walled_garden import (
     source_channel_from_synthetic_column,
     synthetic_column,
 )
-from app.utils.meiro_config import expense_matches_target_site_scope, site_scope_is_strict
+from app.utils.meiro_config import (
+    expense_matches_target_site_scope,
+    get_event_archive_status,
+    get_mapping_state,
+    get_pull_config,
+    get_target_instance_host,
+    get_target_site_domains,
+    site_scope_is_strict,
+)
 
 
 def create_router(
@@ -67,6 +75,48 @@ def create_router(
             for expense in expenses
             if expense_matches_target_site_scope(expense, allow_unknown=True)
         ]
+
+    def _build_meiro_mmm_source_guard() -> Dict[str, Any]:
+        pull_config = get_pull_config()
+        event_archive_status = get_event_archive_status()
+        source_scope = event_archive_status.get("source_scope") or {}
+        site_scope = event_archive_status.get("site_scope") or {}
+        mapping_state = get_mapping_state()
+        mapping_status = str(((mapping_state.get("approval") or {}) if isinstance(mapping_state, dict) else {}).get("status") or "unreviewed").strip().lower()
+        primary_source = str(pull_config.get("primary_ingest_source") or "events").strip().lower()
+        replay_source = str(pull_config.get("replay_archive_source") or "events").strip().lower()
+        source_scope_status = str(source_scope.get("status") or "empty").strip().lower()
+        target_events = int(site_scope.get("target_site_events") or 0)
+        out_of_scope_events = int(site_scope.get("out_of_scope_site_events") or 0)
+        blockers: list[str] = []
+        warnings: list[str] = []
+        if primary_source != "events":
+            blockers.append("Platform MMM requires raw Pipes events as the primary Meiro source.")
+        if replay_source != "events":
+            warnings.append("Replay archive is not pinned to raw events; profile/archive ambiguity is possible.")
+        if source_scope_status == "out_of_scope":
+            blockers.append(f"Raw-event archive is not scoped to {get_target_instance_host()}.")
+        elif source_scope_status in {"empty", "legacy_unverified"}:
+            warnings.append(f"Raw-event archive scope is {source_scope_status.replace('_', ' ')} for {get_target_instance_host()}.")
+        if target_events <= 0:
+            blockers.append("No target-site raw events are available for the MMM production scope.")
+        if out_of_scope_events > 0:
+            warnings.append(f"{out_of_scope_events:,} out-of-scope raw events are present and excluded from scoped reporting.")
+        if mapping_status != "approved":
+            warnings.append(f"Taxonomy mapping is {mapping_status}; approve it before automated replay.")
+        status = "blocked" if blockers else "warning" if warnings else "ready"
+        return {
+            "status": status,
+            "target_instance_host": get_target_instance_host(),
+            "target_sites": get_target_site_domains(),
+            "primary_ingest_source": primary_source,
+            "replay_archive_source": replay_source,
+            "source_scope": source_scope,
+            "site_scope": site_scope,
+            "mapping_status": mapping_status,
+            "blockers": blockers,
+            "warnings": warnings,
+        }
 
     def _load_run_and_dataset_rows(run_id: str) -> tuple[Dict[str, Any], list[dict[str, Any]]]:
         run = get_runs_obj().get(run_id)
@@ -417,6 +467,10 @@ def create_router(
         }
         if body.source_contract:
             metadata["source_contract"] = body.source_contract
+        source_contract = dict(metadata.get("source_contract") or {})
+        source_contract["measurement_source"] = "meiro_pipes_raw_events"
+        source_contract["meiro_production_readiness"] = _build_meiro_mmm_source_guard()
+        metadata["source_contract"] = source_contract
         if measurement_audience:
             metadata["measurement_audience"] = measurement_audience
             source_contract = dict(metadata.get("source_contract") or {})
@@ -484,6 +538,16 @@ def create_router(
         now = now_iso_fn()
         config_dict = json.loads(cfg.model_dump_json())
         dataset_meta = (datasets.get(cfg.dataset_id) or {}).get("metadata") or {}
+        source_contract = dataset_meta.get("source_contract") if isinstance(dataset_meta.get("source_contract"), dict) else {}
+        production_readiness = source_contract.get("meiro_production_readiness") if isinstance(source_contract, dict) else {}
+        if (
+            dataset_meta.get("source") == "platform"
+            and isinstance(production_readiness, dict)
+            and production_readiness.get("status") == "blocked"
+        ):
+            blockers = production_readiness.get("blockers") if isinstance(production_readiness.get("blockers"), list) else []
+            detail = " ".join(str(item) for item in blockers[:3]) or "Meiro Pipes production readiness is blocked for this MMM dataset."
+            raise HTTPException(status_code=409, detail=f"MMM run blocked by Meiro source contract: {detail}")
         runs = get_runs_obj()
         runs[run_id] = {
             "status": "queued",

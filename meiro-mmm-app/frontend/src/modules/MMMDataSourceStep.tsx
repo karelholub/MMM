@@ -7,6 +7,7 @@ import { useWorkspaceContext } from '../components/WorkspaceContext'
 import { segmentOptionLabel, type SegmentRegistryItem, type SegmentRegistryResponse } from '../lib/segments'
 import MeiroTargetInstanceBadge from '../features/meiro/MeiroTargetInstanceBadge'
 import { getMeiroConfig, type MeiroConfig } from '../connectors/meiroConnector'
+import MeiroMeasurementScopeNotice from '../features/meiro/MeiroMeasurementScopeNotice'
 
 const t = tokens
 
@@ -664,6 +665,9 @@ export default function MMMDataSourceStep({ onMappingComplete, initialPlatformDr
 
         <div style={{ marginBottom: t.space.lg }}>
           <MeiroTargetInstanceBadge config={meiroConfig} compact />
+        </div>
+        <div style={{ marginBottom: t.space.lg }}>
+          <MeiroMeasurementScopeNotice />
         </div>
 
         <div
