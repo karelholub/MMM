@@ -178,6 +178,7 @@ export interface MeiroPipesCliStatus {
     instance_url?: string | null
     api?: Record<string, unknown> | null
     auth?: string | null
+    authenticated?: boolean
     instance_scope?: MeiroConfig['cdp_instance_scope']
     error?: string | null
     hint?: string | null
@@ -187,6 +188,7 @@ export interface MeiroPipesCliStatus {
     generated_at?: string | null
     path?: string | null
     summary?: {
+      auth?: string | null
       event_stream_count?: number | null
       pipe_count?: number | null
       event_destination_count?: number | null

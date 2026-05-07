@@ -82,6 +82,8 @@ def list_count(result: Dict[str, Any]) -> int | None:
     if not result.get("json"):
         return None
     value = result["json"][0]
+    if isinstance(value, list):
+        return len(value)
     if isinstance(value.get("items"), list):
         return len(value["items"])
     if isinstance(value.get("data"), list):
@@ -115,6 +117,7 @@ def main() -> int:
         "status": status,
         "results": results,
         "summary": {
+            "auth": status.get("auth"),
             "event_stream_count": list_count(results["event_streams"]),
             "pipe_count": list_count(results["pipes"]),
             "event_destination_count": list_count(results["event_destinations"]),

@@ -129,6 +129,14 @@ def build_pipes_cli_status(*, live: bool = False) -> Dict[str, Any]:
         instance_url = snapshot_status.get("instance")
         api_info = snapshot_status.get("api")
         auth_status = snapshot_status.get("auth")
+    auth_text = str(auth_status or "").strip().lower()
+    authenticated = bool(auth_text) and auth_text not in {
+        "missing_or_invalid_token",
+        "missing",
+        "invalid",
+        "unauthenticated",
+        "not_authenticated",
+    }
     scope = instance_scope(instance_url or get_target_instance_url())
     return {
         "generated_at": _now_iso(),
@@ -144,6 +152,7 @@ def build_pipes_cli_status(*, live: bool = False) -> Dict[str, Any]:
             "instance_url": instance_url,
             "api": api_info,
             "auth": auth_status,
+            "authenticated": authenticated,
             "instance_scope": scope,
             "error": (live_status or {}).get("error") if live_status and not live_status.get("ok") else None,
             "hint": (live_status or {}).get("hint") if live_status else None,

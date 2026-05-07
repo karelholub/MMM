@@ -538,10 +538,11 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
   const pipesCli = refreshPipesCliStatusMutation.data || pipesCliStatusQuery.data
   const pipesCliScope = pipesCli?.status.instance_scope
   const pipesCliScopeStatus = pipesCliScope?.status || 'not_configured'
+  const pipesCliAuthenticated = Boolean(pipesCli?.status.authenticated)
   const pipesCliSummary = pipesCli?.snapshot.summary
   const pipesCliAvailable = Boolean(pipesCli?.status.available)
   const pipesCliTone = pipelineTone(
-    pipesCliAvailable && pipesCliScopeStatus === 'in_scope'
+    pipesCliAvailable && pipesCliScopeStatus === 'in_scope' && pipesCliAuthenticated
       ? 'ready'
       : pipesCliAvailable
         ? 'warning'
@@ -749,7 +750,11 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
                   <div style={{ display: 'grid', gap: 5, minWidth: 0 }}>
                     <div style={{ display: 'flex', gap: t.space.xs, alignItems: 'center', flexWrap: 'wrap' }}>
                       <span style={{ borderRadius: t.radius.full, background: pipesCliTone.bg, color: pipesCliTone.color, padding: '2px 7px', fontSize: t.font.sizeXs, fontWeight: t.font.weightSemibold }}>
-                        {pipesCliAvailable ? pipesCliScopeStatus.replace(/_/g, ' ') : 'snapshot missing'}
+                        {pipesCliAvailable
+                          ? pipesCliAuthenticated
+                            ? pipesCliScopeStatus.replace(/_/g, ' ')
+                            : 'auth required'
+                          : 'snapshot missing'}
                       </span>
                       <span style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
                         {pipesCli?.source === 'live' ? 'Live mpcli check' : pipesCli?.snapshot.available ? 'Host mpcli snapshot' : 'No mpcli snapshot'}
@@ -758,7 +763,9 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
                     <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Meiro Pipes CLI verification</div>
                     <div style={{ fontSize: t.font.sizeSm, color: t.color.textSecondary }}>
                       {pipesCliAvailable
-                        ? `CLI context ${pipesCliScope?.configured_host || pipesCli?.status.instance_url || 'unknown'} -> target ${pipesCli?.target.instance_host || 'meiro-internal.eu.pipes.meiro.io'}.`
+                        ? pipesCliAuthenticated
+                          ? `CLI context ${pipesCliScope?.configured_host || pipesCli?.status.instance_url || 'unknown'} -> target ${pipesCli?.target.instance_host || 'meiro-internal.eu.pipes.meiro.io'}.`
+                          : `CLI reaches ${pipesCli?.target.instance_host || 'meiro-internal.eu.pipes.meiro.io'}, but this shell is not authenticated. Export MPCLI_TOKEN and regenerate the snapshot.`
                         : 'Run the host mpcli snapshot script to let MMM verify Pipes sources, pipes, destinations, and queue health without using CDP/MCP.'}
                       {pipesCliSummary ? (
                         <> Streams {Number(pipesCliSummary.event_stream_count ?? 0).toLocaleString()} · pipes {Number(pipesCliSummary.pipe_count ?? 0).toLocaleString()} · destinations {Number(pipesCliSummary.event_destination_count ?? 0).toLocaleString()}</>
