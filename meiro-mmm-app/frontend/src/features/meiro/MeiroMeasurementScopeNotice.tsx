@@ -25,17 +25,23 @@ export default function MeiroMeasurementScopeNotice({ compact = false, scope, ta
   const summary = summaryQuery.data
   if (!summary && summaryQuery.isLoading && compact) return null
 
+  const currentWindow = summary?.source.current_window
+  const currentSourceScope = currentWindow?.window_batches ? currentWindow.source_scope : null
+  const currentSiteScope = currentWindow?.window_batches ? currentWindow.site_scope : null
   const sourceScope = scope?.source_scope || summary?.source.source_scope
   const siteScope = scope?.event_archive_site_scope || summary?.source.site_scope
-  const status = formatStatus(sourceScope?.status)
-  const outOfScopeEvents = Number(siteScope?.out_of_scope_site_events || 0)
-  const targetEvents = Number(siteScope?.target_site_events || 0)
-  const targetHost = providedTargetHost || sourceScope?.target_host || summary?.target.instance_host || 'meiro-internal.eu.pipes.meiro.io'
+  const effectiveSourceScope = currentSourceScope || sourceScope
+  const effectiveSiteScope = currentSiteScope || siteScope
+  const status = formatStatus(effectiveSourceScope?.status)
+  const archiveStatus = formatStatus(sourceScope?.status)
+  const currentOutOfScopeEvents = Number(effectiveSiteScope?.out_of_scope_site_events || 0)
+  const targetEvents = Number(effectiveSiteScope?.target_site_events || 0)
+  const targetHost = providedTargetHost || effectiveSourceScope?.target_host || sourceScope?.target_host || summary?.target.instance_host || 'meiro-internal.eu.pipes.meiro.io'
   const targetSites = scope?.target_sites?.length ? scope.target_sites : summary?.target.site_domains?.length ? summary.target.site_domains : ['meiro.io', 'meir.store']
   const sourceLabel = source || summary?.source.primary_ingest_source || 'events'
   const productionStatus = summary?.production_readiness?.status || summary?.status || 'unknown'
   const productionChecks = summary?.production_readiness?.checks || []
-  const warning = productionStatus === 'blocked' || productionStatus === 'warning' || outOfScopeEvents > 0 || status !== 'target verified'
+  const warning = productionStatus === 'blocked' || productionStatus === 'warning' || currentOutOfScopeEvents > 0 || status !== 'target verified'
   const borderColor = productionStatus === 'blocked' ? t.color.danger : warning ? t.color.warning : t.color.borderLight
   const background = productionStatus === 'blocked' ? t.color.dangerSubtle : warning ? t.color.warningMuted : t.color.bg
   const statusColor = productionStatus === 'ready' ? t.color.success : productionStatus === 'blocked' ? t.color.danger : t.color.warning
@@ -62,9 +68,9 @@ export default function MeiroMeasurementScopeNotice({ compact = false, scope, ta
           {[
             { label: 'Production', value: formatStatus(productionStatus), color: statusColor },
             { label: 'Source', value: sourceLabel },
-            { label: 'Archive scope', value: status },
+            { label: 'Current scope', value: status },
             { label: 'Target events', value: targetEvents.toLocaleString() },
-            { label: 'Out-of-scope', value: outOfScopeEvents.toLocaleString() },
+            { label: 'Out-of-scope', value: currentOutOfScopeEvents.toLocaleString() },
           ].map((item) => (
             <div key={item.label} style={{ border: `1px solid ${t.color.borderLight}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '6px 8px', minWidth: 112 }}>
               <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{item.label}</div>
@@ -92,6 +98,11 @@ export default function MeiroMeasurementScopeNotice({ compact = false, scope, ta
       {warning ? (
         <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
           Legacy or out-of-scope replay rows may still exist in archives. Treat campaign/channel rows as production evidence only when they are backed by target-scope raw events.
+        </div>
+      ) : null}
+      {archiveStatus !== status ? (
+        <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+          Full archive scope is {archiveStatus}; current production window is {status}. Historical archive warnings are retained for hygiene but do not replace current-window readiness.
         </div>
       ) : null}
     </div>

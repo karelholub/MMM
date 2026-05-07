@@ -243,6 +243,42 @@ def test_event_archive_append_updates_status_cache_without_rescan(monkeypatch, t
     assert second["site_scope"]["target_site_events"] == 2
 
 
+def test_event_archive_status_separates_current_window_from_legacy_batches(monkeypatch, tmp_path):
+    event_archive_path = tmp_path / "meiro_event_archive.jsonl"
+    monkeypatch.setattr(meiro_config, "EVENT_ARCHIVE_PATH", event_archive_path)
+    monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
+    meiro_config._ARCHIVE_STATUS_CACHE.clear()
+
+    for index in range(25):
+        meiro_config.append_event_archive_entry(
+            {
+                "received_at": f"2026-03-26T09:{index:02d}:00Z",
+                "parser_version": "legacy",
+                "replace": False,
+                "events": [{"event_id": f"legacy-{index}", "site": "meiro.io"}],
+                "received_count": 1,
+            }
+        )
+    for index in range(25):
+        meiro_config.append_event_archive_entry(
+            {
+                **meiro_config.archive_source_metadata(),
+                "received_at": f"2026-03-26T10:{index:02d}:00Z",
+                "parser_version": "v4",
+                "replace": False,
+                "events": [{"event_id": f"target-{index}", "site": "meiro.io"}],
+                "received_count": 1,
+            }
+        )
+
+    status = meiro_config.get_event_archive_status()
+    assert status["source_scope"]["status"] == "legacy_unverified"
+    assert status["current_window"]["window_batches"] == 25
+    assert status["current_window"]["source_scope"]["status"] == "target_verified"
+    assert status["current_window"]["site_scope"]["target_site_events"] == 25
+    assert status["current_window"]["site_scope"]["out_of_scope_site_events"] == 0
+
+
 def test_event_contract_readiness_reports_target_site_coverage(monkeypatch, tmp_path):
     monkeypatch.setattr(meiro_config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(meiro_config, "CONFIG_PATH", tmp_path / "meiro_config.json")

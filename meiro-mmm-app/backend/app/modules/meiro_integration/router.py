@@ -628,7 +628,7 @@ def _build_measurement_production_readiness(
         "instance_scope",
         "Pipes instance",
         "ready" if source_status == "target_verified" else "blocked" if source_status == "out_of_scope" else "warning",
-        f"Archive status: {source_status.replace('_', ' ')} for {get_target_instance_host()}.",
+        f"Current source status: {source_status.replace('_', ' ')} for {get_target_instance_host()}.",
     )
     target_events = int(site_scope.get("target_site_events") or 0)
     out_of_scope_events = int(site_scope.get("out_of_scope_site_events") or 0)
@@ -1650,21 +1650,27 @@ def create_router(
         mapping_status = str((mapping_approval or {}).get("status") or "unreviewed").strip().lower()
         source_scope = event_archive_status.get("source_scope") or {}
         site_scope = event_archive_status.get("site_scope") or {}
+        current_window = event_archive_status.get("current_window") if isinstance(event_archive_status.get("current_window"), dict) else {}
+        current_source_scope = current_window.get("source_scope") if isinstance(current_window.get("source_scope"), dict) else {}
+        current_site_scope = current_window.get("site_scope") if isinstance(current_window.get("site_scope"), dict) else {}
+        readiness_source_scope = current_source_scope if int(current_window.get("window_batches") or 0) > 0 else source_scope
+        readiness_site_scope = current_site_scope if int(current_window.get("window_batches") or 0) > 0 else site_scope
         source_scope_status = str(source_scope.get("status") or "empty")
+        current_source_scope_status = str(readiness_source_scope.get("status") or "empty")
         warnings = list(readiness.get("warnings") or [])
         blockers = list(readiness.get("blockers") or [])
         if source_mode == "events" and source_scope_status == "out_of_scope":
             blockers.append("Raw-event archive contains batches from a non-target Meiro Pipes instance.")
-        if source_mode == "events" and source_scope_status == "legacy_unverified":
+        if source_mode == "events" and source_scope_status == "legacy_unverified" and current_source_scope_status != "target_verified":
             warnings.append("Some raw-event archive batches are legacy/unverified; new reporting should use target-verified batches.")
-        if site_scope.get("out_of_scope_site_events"):
+        if site_scope.get("out_of_scope_site_events") and int(readiness_site_scope.get("out_of_scope_site_events") or 0) > 0:
             warnings.append("Some raw events are outside the active meiro.io / meir.store site scope and are excluded from campaign samples.")
         dual_ingest_detected = bool(readiness.get("summary", {}).get("dual_ingest_detected"))
         production_readiness = _build_measurement_production_readiness(
             source_mode=source_mode,
             replay_source=replay_source,
-            source_scope=source_scope,
-            site_scope=site_scope,
+            source_scope=readiness_source_scope,
+            site_scope=readiness_site_scope,
             mapping_status=mapping_status,
             raw_event_diagnostics=raw_event_diagnostics,
             dual_ingest_detected=dual_ingest_detected,
@@ -1704,6 +1710,7 @@ def create_router(
                 "last_event_received_at": config.get("event_webhook_last_received_at") or event_archive_status.get("last_received_at"),
                 "source_scope": source_scope,
                 "site_scope": site_scope,
+                "current_window": current_window,
                 "webhook_secret_configured": bool(config.get("webhook_has_secret")),
                 "dual_ingest_detected": dual_ingest_detected,
             },

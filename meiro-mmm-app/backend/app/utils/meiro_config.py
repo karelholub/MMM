@@ -25,6 +25,7 @@ _OUT_OF_SCOPE_CAMPAIGN_LOCK = threading.RLock()
 _ARCHIVE_STATUS_CACHE: dict[str, tuple[int, int, Dict[str, Any]]] = {}
 _JSONL_TAIL_BLOCK_SIZE = 64 * 1024
 _OUT_OF_SCOPE_CAMPAIGN_SCAN_LIMIT = 5000
+_ARCHIVE_CURRENT_WINDOW_SIZE = 25
 
 
 def _archive_signature(path: Path) -> tuple[int, int]:
@@ -144,6 +145,78 @@ def _entry_source_scope_delta(entry: Dict[str, Any]) -> tuple[int, int]:
     return verified, out_of_scope
 
 
+def _event_archive_batch_scope(entry: Dict[str, Any]) -> Dict[str, Any]:
+    events = entry.get("events") if isinstance(entry.get("events"), list) else []
+    target_site_events = 0
+    out_of_scope_site_events = 0
+    unknown_site_events = 0
+    host_counts: Counter[str] = Counter()
+    for event in events:
+        scope = event_site_scope(event)
+        status = str(scope.get("status") or "")
+        host = str(scope.get("host") or "unknown")
+        host_counts[host] += 1
+        if status == "target_site":
+            target_site_events += 1
+        elif status == "out_of_scope":
+            out_of_scope_site_events += 1
+        else:
+            unknown_site_events += 1
+    source_host = str(entry.get("source_instance_host") or "").strip().lower()
+    source_status = str(entry.get("source_scope_status") or "").strip().lower()
+    verified, out_of_scope = _entry_source_scope_delta(entry)
+    try:
+        events_received = int(entry.get("received_count") or len(events))
+    except Exception:
+        events_received = len(events)
+    return {
+        "received_at": entry.get("received_at") or None,
+        "source_instance_host": source_host or None,
+        "source_scope_status": source_status or None,
+        "verified": bool(verified),
+        "out_of_scope": bool(out_of_scope),
+        "events_received": events_received,
+        "target_site_events": target_site_events,
+        "out_of_scope_site_events": out_of_scope_site_events,
+        "unknown_site_events": unknown_site_events,
+        "top_hosts": [
+            {"host": host, "count": count}
+            for host, count in host_counts.most_common(8)
+        ],
+    }
+
+
+def _summarize_event_archive_current_window(batches: list[Dict[str, Any]]) -> Dict[str, Any]:
+    scoped_batches = [batch for batch in batches[-_ARCHIVE_CURRENT_WINDOW_SIZE:] if isinstance(batch, dict)]
+    host_counts: Counter[str] = Counter()
+    for batch in scoped_batches:
+        for item in batch.get("top_hosts") or []:
+            if isinstance(item, dict):
+                host_counts[str(item.get("host") or "unknown")] += int(item.get("count") or 0)
+    return {
+        "window_batches": len(scoped_batches),
+        "window_events": sum(int(batch.get("events_received") or 0) for batch in scoped_batches),
+        "last_received_at": next((batch.get("received_at") for batch in reversed(scoped_batches) if batch.get("received_at")), None),
+        "batches": scoped_batches,
+        "source_scope": summarize_archive_source_scope(
+            entries=len(scoped_batches),
+            verified_entries=sum(1 for batch in scoped_batches if batch.get("verified")),
+            out_of_scope_entries=sum(1 for batch in scoped_batches if batch.get("out_of_scope")),
+        ),
+        "site_scope": {
+            "strict": site_scope_is_strict(),
+            "target_sites": get_target_site_domains(),
+            "target_site_events": sum(int(batch.get("target_site_events") or 0) for batch in scoped_batches),
+            "out_of_scope_site_events": sum(int(batch.get("out_of_scope_site_events") or 0) for batch in scoped_batches),
+            "unknown_site_events": sum(int(batch.get("unknown_site_events") or 0) for batch in scoped_batches),
+            "top_hosts": [
+                {"host": host, "count": count}
+                for host, count in host_counts.most_common(12)
+            ],
+        },
+    }
+
+
 def _incremental_profile_archive_status(entry: Dict[str, Any]) -> None:
     previous = _latest_archive_status(WEBHOOK_ARCHIVE_PATH, "profiles")
     entries = int(previous.get("entries") or 0) + 1
@@ -210,6 +283,13 @@ def _incremental_event_archive_status(entry: Dict[str, Any]) -> None:
             out_of_scope_site_events += 1
         else:
             unknown_site_events += 1
+    previous_current_window = previous.get("current_window") if isinstance(previous.get("current_window"), dict) else {}
+    recent_batches = [
+        batch
+        for batch in previous_current_window.get("batches", [])
+        if isinstance(batch, dict)
+    ]
+    recent_batches.append(_event_archive_batch_scope(entry))
 
     _store_archive_status(EVENT_ARCHIVE_PATH, "events", {
         "available": entries > 0,
@@ -233,6 +313,7 @@ def _incremental_event_archive_status(entry: Dict[str, Any]) -> None:
                 for host, count in site_host_counts.most_common(12)
             ],
         },
+        "current_window": _summarize_event_archive_current_window(recent_batches),
     })
 
 
@@ -918,6 +999,15 @@ def get_webhook_archive_status() -> Dict[str, Any]:
 def get_event_archive_status() -> Dict[str, Any]:
     cached = _cached_archive_status(EVENT_ARCHIVE_PATH, "events")
     if cached is not None:
+        if not isinstance(cached.get("current_window"), dict) and EVENT_ARCHIVE_PATH.exists():
+            recent_batches = [
+                _event_archive_batch_scope(entry)
+                for entry in query_event_archive_entries(limit=_ARCHIVE_CURRENT_WINDOW_SIZE)
+                if isinstance(entry, dict)
+            ]
+            cached["current_window"] = _summarize_event_archive_current_window(list(reversed(recent_batches)))
+            if not cached.get("cache_stale"):
+                return _store_archive_status(EVENT_ARCHIVE_PATH, "events", cached)
         return cached
     empty_site_scope = {
         "strict": site_scope_is_strict(),
@@ -947,6 +1037,7 @@ def get_event_archive_status() -> Dict[str, Any]:
     out_of_scope_site_events = 0
     unknown_site_events = 0
     site_host_counts: Counter[str] = Counter()
+    recent_batches: list[Dict[str, Any]] = []
     try:
         with EVENT_ARCHIVE_PATH.open("r", encoding="utf-8") as handle:
             for line in handle:
@@ -976,6 +1067,9 @@ def get_event_archive_status() -> Dict[str, Any]:
                     verified_entries += 1
                 elif source_status == "out_of_scope":
                     out_of_scope_entries += 1
+                recent_batches.append(_event_archive_batch_scope(parsed))
+                if len(recent_batches) > _ARCHIVE_CURRENT_WINDOW_SIZE:
+                    recent_batches = recent_batches[-_ARCHIVE_CURRENT_WINDOW_SIZE:]
                 for event in parsed.get("events") or []:
                     scope = event_site_scope(event)
                     status = str(scope.get("status") or "")
@@ -1019,6 +1113,7 @@ def get_event_archive_status() -> Dict[str, Any]:
                 for host, count in site_host_counts.most_common(12)
             ],
         },
+        "current_window": _summarize_event_archive_current_window(recent_batches),
     })
 
 

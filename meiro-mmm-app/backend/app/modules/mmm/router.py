@@ -79,8 +79,10 @@ def create_router(
     def _build_meiro_mmm_source_guard() -> Dict[str, Any]:
         pull_config = get_pull_config()
         event_archive_status = get_event_archive_status()
-        source_scope = event_archive_status.get("source_scope") or {}
-        site_scope = event_archive_status.get("site_scope") or {}
+        current_window = event_archive_status.get("current_window") if isinstance(event_archive_status.get("current_window"), dict) else {}
+        has_current_window = int(current_window.get("window_batches") or 0) > 0
+        source_scope = (current_window.get("source_scope") if has_current_window and isinstance(current_window.get("source_scope"), dict) else event_archive_status.get("source_scope")) or {}
+        site_scope = (current_window.get("site_scope") if has_current_window and isinstance(current_window.get("site_scope"), dict) else event_archive_status.get("site_scope")) or {}
         mapping_state = get_mapping_state()
         mapping_status = str(((mapping_state.get("approval") or {}) if isinstance(mapping_state, dict) else {}).get("status") or "unreviewed").strip().lower()
         primary_source = str(pull_config.get("primary_ingest_source") or "events").strip().lower()
@@ -113,6 +115,7 @@ def create_router(
             "replay_archive_source": replay_source,
             "source_scope": source_scope,
             "site_scope": site_scope,
+            "current_window": current_window,
             "mapping_status": mapping_status,
             "blockers": blockers,
             "warnings": warnings,

@@ -135,6 +135,27 @@ export interface MeiroMeasurementPipelineSummary {
       unknown_site_events?: number
       top_hosts?: Array<{ host: string; count: number }>
     }
+    current_window?: {
+      window_batches?: number
+      window_events?: number
+      last_received_at?: string | null
+      source_scope?: {
+        status?: string
+        target_url?: string
+        target_host?: string
+        verified_entries?: number
+        legacy_unverified_entries?: number
+        out_of_scope_entries?: number
+      }
+      site_scope?: {
+        strict?: boolean
+        target_sites?: string[]
+        target_site_events?: number
+        out_of_scope_site_events?: number
+        unknown_site_events?: number
+        top_hosts?: Array<{ host: string; count: number }>
+      }
+    }
     webhook_secret_configured: boolean
     dual_ingest_detected: boolean
   }
