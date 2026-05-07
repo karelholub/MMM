@@ -76,6 +76,11 @@ from app.services_meiro_event_facts import (
 )
 from app.services_meiro_profile_facts import list_meiro_profile_facts, upsert_meiro_profile_facts
 from app.services_meiro_pipes_cli import build_pipes_cli_status
+from app.services_meiro_pipes_proposals import (
+    list_pipes_fix_proposals,
+    record_pipes_fix_proposal_event,
+    upsert_pipes_fix_proposals,
+)
 from app.services_meiro_replay_runs import list_meiro_replay_runs, record_meiro_replay_run
 from app.services_meiro_replay_snapshots import create_meiro_replay_snapshot
 from app.services_meiro_api import MeiroApiError
@@ -3131,6 +3136,13 @@ Payload should include profile/audience/rule identifiers and preserve the origin
                 }
             )
 
+        tracked_pipes_fix_proposals = upsert_pipes_fix_proposals(
+            pipes_fix_proposals[:6],
+            diagnostics=raw_event_diagnostics,
+            route_health=pipes_health if isinstance(pipes_health, dict) else {},
+            events_analyzed=raw_events_analyzed or len(events),
+        )
+
         return {
             "generated_at": datetime.utcnow().isoformat() + "Z",
             "events_analyzed": raw_events_analyzed or len(events),
@@ -3147,7 +3159,7 @@ Payload should include profile/audience/rule identifiers and preserve the origin
             "kpi_suggestions": kpi_suggestions,
             "conversion_event_suggestions": [{"event_name": name, "count": count} for name, count in top_conversion_names],
             "sanitation_suggestions": sanitation_suggestions[:8],
-            "pipes_fix_proposals": pipes_fix_proposals[:6],
+            "pipes_fix_proposals": tracked_pipes_fix_proposals,
             "taxonomy_suggestions": {
                 "channel_rules": taxonomy_rules,
                 "source_aliases": suggested_source_aliases,
@@ -3181,6 +3193,27 @@ Payload should include profile/audience/rule identifiers and preserve the origin
                 "sanitation": sanitation_apply_payload,
             },
         }
+
+    @router.get("/api/connectors/meiro/pipes-fix-proposals/audit")
+    def meiro_pipes_fix_proposal_audit(limit: int = Query(50, ge=1, le=200)):
+        return {"items": list_pipes_fix_proposals(limit=limit)}
+
+    @router.post("/api/connectors/meiro/pipes-fix-proposals/{proposal_id}/event")
+    def meiro_pipes_fix_proposal_event(proposal_id: str, payload: Optional[Dict[str, Any]] = Body(default=None)):
+        body = payload or {}
+        action = str(body.get("action") or "").strip()
+        try:
+            item = record_pipes_fix_proposal_event(
+                proposal_id,
+                action=action,
+                note=body.get("note") if isinstance(body.get("note"), str) else None,
+                metadata=body.get("metadata") if isinstance(body.get("metadata"), dict) else {},
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not item:
+            raise HTTPException(status_code=404, detail="Pipes fix proposal not found")
+        return {"item": item}
 
     @router.get("/api/connectors/meiro/mapping")
     def meiro_get_mapping():

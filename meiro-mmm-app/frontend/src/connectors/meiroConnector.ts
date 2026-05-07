@@ -318,6 +318,20 @@ export interface MeiroWebhookSuggestions {
     desired_contract?: Record<string, unknown>
     suggested_transform?: string
     pipes_agent_prompt?: string
+    audit?: {
+      status?: string
+      first_seen_at?: string | null
+      last_seen_at?: string | null
+      seen_count?: number
+      last_action?: string | null
+      last_action_at?: string | null
+    }
+    impact?: {
+      source_medium_share_delta?: number | null
+      conversion_linkage_share_delta?: number | null
+      usable_event_name_share_delta?: number | null
+      events_analyzed_delta?: number | null
+    }
   }>
   taxonomy_suggestions?: {
     channel_rules?: Array<Record<string, unknown>>
@@ -499,6 +513,18 @@ export async function getMeiroWebhookSuggestions(limit = 100): Promise<MeiroWebh
   return apiGetJson<MeiroWebhookSuggestions>(
     withQuery('/api/connectors/meiro/webhook/suggestions', { limit }),
     { fallbackMessage: 'Failed to fetch webhook suggestions' },
+  )
+}
+
+export async function recordMeiroPipesFixProposalEvent(
+  proposalId: string,
+  payload: { action: 'copied_prompt' | 'copied_transform' | 'marked_applied' | 'marked_verified'; note?: string; metadata?: Record<string, unknown> },
+) {
+  return apiSendJson<{ item: NonNullable<MeiroWebhookSuggestions['pipes_fix_proposals']>[number] }>(
+    `/api/connectors/meiro/pipes-fix-proposals/${encodeURIComponent(proposalId)}/event`,
+    'POST',
+    payload,
+    { fallbackMessage: 'Failed to record Pipes proposal action' },
   )
 }
 

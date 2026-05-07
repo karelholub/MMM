@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import type { DeciEngineEventsImportPayload, DeciEngineEventsImportResult } from '../../connectors/deciengineConnector'
+import { recordMeiroPipesFixProposalEvent } from '../../connectors/meiroConnector'
 import type { MeiroConfig, MeiroImportResult, MeiroMappingState, MeiroPullConfig, MeiroQuarantineReprocessResult, MeiroQuarantineRun, MeiroWebhookSuggestions } from '../../connectors/meiroConnector'
 import { apiGetJson, apiSendJson, withQuery } from '../../lib/apiClient'
 import { buildJourneyHypothesisSeedHref } from '../../lib/journeyLinks'
@@ -317,6 +318,7 @@ export default function MeiroImportReplay({
   const [meiroSegmentImportError, setMeiroSegmentImportError] = useState<string | null>(null)
   const [meiroSegmentImportResult, setMeiroSegmentImportResult] = useState<MeiroSegmentImportResponse | null>(null)
   const [journeySeedDefinition, setJourneySeedDefinition] = useState<{ id?: string; name?: string } | null>(null)
+  const [pipesProposalAuditOverrides, setPipesProposalAuditOverrides] = useState<Record<string, NonNullable<NonNullable<MeiroWebhookSuggestions['pipes_fix_proposals']>[number]['audit']>>>({})
   const latestImportSummary =
     importFromMeiroResult?.import_summary ||
     reprocessWebhookArchiveResult?.import_result?.import_summary ||
@@ -336,6 +338,22 @@ export default function MeiroImportReplay({
   const archiveInputSuggestions = meiroWebhookSuggestions?.taxonomy_suggestions
   const archiveMappingSuggestions = meiroWebhookSuggestions?.mapping_suggestions
   const pipesFixProposals = meiroWebhookSuggestions?.pipes_fix_proposals || []
+  const recordPipesProposalAction = async (
+    proposal: NonNullable<MeiroWebhookSuggestions['pipes_fix_proposals']>[number],
+    action: 'copied_prompt' | 'copied_transform' | 'marked_applied' | 'marked_verified',
+    textToCopy?: string,
+  ) => {
+    if (textToCopy && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(textToCopy)
+    }
+    const result = await recordMeiroPipesFixProposalEvent(proposal.id, {
+      action,
+      metadata: { proposal_type: proposal.type, severity: proposal.severity },
+    })
+    if (result.item.audit) {
+      setPipesProposalAuditOverrides((current) => ({ ...current, [proposal.id]: result.item.audit! }))
+    }
+  }
   const topArchiveSources = archiveInputSuggestions?.top_sources || []
   const topArchiveMediums = archiveInputSuggestions?.top_mediums || []
   const topArchiveCampaigns = archiveInputSuggestions?.top_campaigns || []
@@ -1285,13 +1303,24 @@ export default function MeiroImportReplay({
                 <div style={{ display: 'grid', gap: t.space.sm }}>
                   {pipesFixProposals.slice(0, 3).map((proposal) => {
                     const blocked = proposal.severity === 'blocked'
+                    const audit = pipesProposalAuditOverrides[proposal.id] || proposal.audit
+                    const impact = proposal.impact || {}
+                    const sourceMediumDelta = typeof impact.source_medium_share_delta === 'number' ? `${impact.source_medium_share_delta >= 0 ? '+' : ''}${Math.round(impact.source_medium_share_delta * 1000) / 10}pp` : null
+                    const conversionDelta = typeof impact.conversion_linkage_share_delta === 'number' ? `${impact.conversion_linkage_share_delta >= 0 ? '+' : ''}${Math.round(impact.conversion_linkage_share_delta * 1000) / 10}pp` : null
                     return (
                       <div key={proposal.id} style={{ border: `1px solid ${blocked ? t.color.danger : t.color.warning}`, borderRadius: t.radius.sm, background: blocked ? t.color.dangerMuted : t.color.warningMuted, padding: t.space.sm, display: 'grid', gap: 6 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, flexWrap: 'wrap', alignItems: 'center' }}>
                           <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>{proposal.title}</div>
-                          <span style={{ borderRadius: t.radius.full, background: t.color.surface, color: blocked ? t.color.danger : t.color.warning, padding: '2px 7px', fontSize: t.font.sizeXs, fontWeight: t.font.weightSemibold }}>
-                            {proposal.severity || 'warning'}
-                          </span>
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                            {audit?.status ? (
+                              <span style={{ borderRadius: t.radius.full, background: t.color.surface, color: t.color.textSecondary, padding: '2px 7px', fontSize: t.font.sizeXs, fontWeight: t.font.weightSemibold }}>
+                                {audit.status}
+                              </span>
+                            ) : null}
+                            <span style={{ borderRadius: t.radius.full, background: t.color.surface, color: blocked ? t.color.danger : t.color.warning, padding: '2px 7px', fontSize: t.font.sizeXs, fontWeight: t.font.weightSemibold }}>
+                              {proposal.severity || 'warning'}
+                            </span>
+                          </div>
                         </div>
                         <div style={{ fontSize: t.font.sizeXs, color: t.color.textSecondary }}>
                           Destination <strong>{proposal.target_destination_slug || 'MTA Tool'}</strong>
@@ -1302,10 +1331,19 @@ export default function MeiroImportReplay({
                             Contract fields: {Object.keys(proposal.desired_contract).slice(0, 8).join(', ')}
                           </div>
                         ) : null}
+                        {(sourceMediumDelta || conversionDelta || audit?.last_action_at) ? (
+                          <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>
+                            {sourceMediumDelta ? <>Source/medium impact <strong>{sourceMediumDelta}</strong></> : null}
+                            {sourceMediumDelta && conversionDelta ? ' · ' : null}
+                            {conversionDelta ? <>Conversion linkage impact <strong>{conversionDelta}</strong></> : null}
+                            {(sourceMediumDelta || conversionDelta) && audit?.last_action_at ? ' · ' : null}
+                            {audit?.last_action_at ? <>last action {relativeTime(audit.last_action_at)}</> : null}
+                          </div>
+                        ) : null}
                         <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
                           <button
                             type="button"
-                            onClick={() => navigator.clipboard?.writeText(proposal.pipes_agent_prompt || '')}
+                            onClick={() => recordPipesProposalAction(proposal, 'copied_prompt', proposal.pipes_agent_prompt || '')}
                             disabled={!proposal.pipes_agent_prompt}
                             style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '6px 8px', cursor: proposal.pipes_agent_prompt ? 'pointer' : 'default', fontSize: t.font.sizeXs }}
                           >
@@ -1314,12 +1352,26 @@ export default function MeiroImportReplay({
                           {proposal.suggested_transform ? (
                             <button
                               type="button"
-                              onClick={() => navigator.clipboard?.writeText(proposal.suggested_transform || '')}
+                              onClick={() => recordPipesProposalAction(proposal, 'copied_transform', proposal.suggested_transform || '')}
                               style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '6px 8px', cursor: 'pointer', fontSize: t.font.sizeXs }}
                             >
                               Copy transform guidance
                             </button>
                           ) : null}
+                          <button
+                            type="button"
+                            onClick={() => recordPipesProposalAction(proposal, 'marked_applied')}
+                            style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '6px 8px', cursor: 'pointer', fontSize: t.font.sizeXs }}
+                          >
+                            Mark applied
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => recordPipesProposalAction(proposal, 'marked_verified')}
+                            style={{ border: `1px solid ${t.color.border}`, background: t.color.surface, borderRadius: t.radius.sm, padding: '6px 8px', cursor: 'pointer', fontSize: t.font.sizeXs }}
+                          >
+                            Mark verified
+                          </button>
                         </div>
                       </div>
                     )
