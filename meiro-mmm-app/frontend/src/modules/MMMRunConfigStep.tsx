@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { tokens } from '../theme/tokens'
 import { apiGetJson } from '../lib/apiClient'
+import MeiroMeasurementScopeNotice from '../features/meiro/MeiroMeasurementScopeNotice'
 
 const t = tokens
 
@@ -148,6 +149,9 @@ export default function MMMRunConfigStep({
             <p style={{ margin: 0, fontSize: t.font.sizeSm, color: t.color.textSecondary, lineHeight: 1.5 }}>
               Confirm the analysis question, selected spend signals, and model assumptions before creating the run.
             </p>
+          </div>
+          <div style={{ marginBottom: t.space.lg }}>
+            <MeiroMeasurementScopeNotice compact />
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: t.space.md, marginBottom: t.space.xl }}>

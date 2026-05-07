@@ -594,6 +594,92 @@ def _top_campaigns_from_event_archive(entries: list[Dict[str, Any]], *, limit: i
     ]
 
 
+def _build_measurement_production_readiness(
+    *,
+    source_mode: str,
+    replay_source: str,
+    source_scope: Dict[str, Any],
+    site_scope: Dict[str, Any],
+    mapping_status: str,
+    raw_event_diagnostics: Dict[str, Any],
+    dual_ingest_detected: bool,
+    blockers: list[str],
+    warnings: list[str],
+) -> Dict[str, Any]:
+    checks: list[Dict[str, Any]] = []
+
+    def add_check(key: str, label: str, status: str, detail: str) -> None:
+        checks.append({"key": key, "label": label, "status": status, "detail": detail})
+
+    add_check(
+        "primary_source",
+        "Primary source",
+        "ready" if source_mode == "events" else "blocked",
+        "Raw Pipes events are the measurement source." if source_mode == "events" else "Switch primary ingestion to raw Pipes events.",
+    )
+    add_check(
+        "replay_source",
+        "Replay archive",
+        "ready" if replay_source == "events" else "warning",
+        "Replay is pinned to the raw-event archive." if replay_source == "events" else "Pin replay archive to events to avoid profile/archive ambiguity.",
+    )
+    source_status = str(source_scope.get("status") or "empty")
+    add_check(
+        "instance_scope",
+        "Pipes instance",
+        "ready" if source_status == "target_verified" else "blocked" if source_status == "out_of_scope" else "warning",
+        f"Archive status: {source_status.replace('_', ' ')} for {get_target_instance_host()}.",
+    )
+    target_events = int(site_scope.get("target_site_events") or 0)
+    out_of_scope_events = int(site_scope.get("out_of_scope_site_events") or 0)
+    add_check(
+        "site_scope",
+        "Site scope",
+        "ready" if target_events > 0 and out_of_scope_events == 0 else "warning" if target_events > 0 else "blocked",
+        f"{target_events:,} target-site events; {out_of_scope_events:,} out-of-scope events excluded.",
+    )
+    add_check(
+        "mapping",
+        "Taxonomy mapping",
+        "ready" if mapping_status == "approved" else "warning",
+        "Mapping is approved." if mapping_status == "approved" else f"Mapping is {mapping_status}; approve before automated replay.",
+    )
+    diagnostics_available = bool(raw_event_diagnostics.get("available"))
+    add_check(
+        "event_contract",
+        "Event contract",
+        "ready" if diagnostics_available and not raw_event_diagnostics.get("warnings") else "warning" if diagnostics_available else "blocked",
+        "Recent raw events expose the measurement fields." if diagnostics_available else "No raw events available for contract checks.",
+    )
+    add_check(
+        "dual_ingest",
+        "Single source",
+        "warning" if dual_ingest_detected else "ready",
+        "Profile and raw-event ingests are both present; reporting uses raw events." if dual_ingest_detected else "No dual-ingest ambiguity detected.",
+    )
+
+    if any(check["status"] == "blocked" for check in checks) or blockers:
+        status = "blocked"
+    elif any(check["status"] == "warning" for check in checks) or warnings:
+        status = "warning"
+    else:
+        status = "ready"
+
+    return {
+        "status": status,
+        "summary": (
+            "MMM is using target-scoped Pipes raw events as the production measurement backbone."
+            if status == "ready"
+            else "MMM can run, but some Pipes source-of-truth checks still need attention."
+            if status == "warning"
+            else "MMM is not yet production-ready for the target Pipes source of truth."
+        ),
+        "target_instance_host": get_target_instance_host(),
+        "target_sites": get_target_site_domains(),
+        "checks": checks,
+    }
+
+
 def _record_webhook_diagnostic_event(
     *,
     request: Request,
@@ -1573,11 +1659,27 @@ def create_router(
             warnings.append("Some raw-event archive batches are legacy/unverified; new reporting should use target-verified batches.")
         if site_scope.get("out_of_scope_site_events"):
             warnings.append("Some raw events are outside the active meiro.io / meir.store site scope and are excluded from campaign samples.")
+        dual_ingest_detected = bool(readiness.get("summary", {}).get("dual_ingest_detected"))
+        production_readiness = _build_measurement_production_readiness(
+            source_mode=source_mode,
+            replay_source=replay_source,
+            source_scope=source_scope,
+            site_scope=site_scope,
+            mapping_status=mapping_status,
+            raw_event_diagnostics=raw_event_diagnostics,
+            dual_ingest_detected=dual_ingest_detected,
+            blockers=blockers,
+            warnings=warnings,
+        )
 
         status = "ready"
         if blockers:
             status = "blocked"
         elif warnings or readiness.get("status") in {"warning", "blocked"}:
+            status = "warning"
+        if production_readiness["status"] == "blocked":
+            status = "blocked"
+        elif production_readiness["status"] == "warning" and status == "ready":
             status = "warning"
 
         return {
@@ -1603,7 +1705,7 @@ def create_router(
                 "source_scope": source_scope,
                 "site_scope": site_scope,
                 "webhook_secret_configured": bool(config.get("webhook_has_secret")),
-                "dual_ingest_detected": bool(readiness.get("summary", {}).get("dual_ingest_detected")),
+                "dual_ingest_detected": dual_ingest_detected,
             },
             "mapping": {
                 "status": mapping_status,
@@ -1626,6 +1728,7 @@ def create_router(
                 "blockers": blockers,
                 "warnings": warnings,
             },
+            "production_readiness": production_readiness,
         }
 
     @router.get("/api/connectors/meiro/attributes")

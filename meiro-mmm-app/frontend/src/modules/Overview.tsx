@@ -35,6 +35,7 @@ import {
 import CollapsiblePanel from '../components/dashboard/CollapsiblePanel'
 import { usePersistentToggle } from '../hooks/usePersistentToggle'
 import MeiroScopeFilterNotice from '../features/meiro/MeiroScopeFilterNotice'
+import MeiroMeasurementScopeNotice from '../features/meiro/MeiroMeasurementScopeNotice'
 import type { MeiroScopeFilterMeta } from '../features/meiro/scopeTypes'
 import {
   isLocalAnalyticalSegment,
@@ -1565,6 +1566,9 @@ export default function Overview({ lastPage, onNavigate, onConnectDataSources }:
             { label: 'Lag posture', value: lagPostureLabel },
           ]}
         />
+        <div style={{ marginTop: -t.space.md, marginBottom: t.space.md }}>
+          <MeiroMeasurementScopeNotice compact />
+        </div>
         {selectedConfigId ? (
           <SurfaceBasisNotice marginTop={-t.space.md}>
             Overview remains a workspace-fact view. Use live attribution pages to inspect the currently selected model config directly.

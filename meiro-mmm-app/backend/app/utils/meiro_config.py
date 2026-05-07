@@ -1311,12 +1311,12 @@ def _normalize_pull_config(raw: Any) -> Dict[str, Any]:
     replay_mode = str(raw.get("replay_mode") or "last_n").strip().lower()
     if replay_mode not in allowed_replay_modes:
         replay_mode = "last_n"
-    primary_ingest_source = str(raw.get("primary_ingest_source") or "profiles").strip().lower()
+    primary_ingest_source = str(raw.get("primary_ingest_source") or "events").strip().lower()
     if primary_ingest_source not in allowed_primary_sources:
-        primary_ingest_source = "profiles"
-    replay_archive_source = str(raw.get("replay_archive_source") or "auto").strip().lower()
+        primary_ingest_source = "events"
+    replay_archive_source = str(raw.get("replay_archive_source") or "events").strip().lower()
     if replay_archive_source not in allowed_replay_sources:
-        replay_archive_source = "auto"
+        replay_archive_source = "events"
     auto_replay_mode = str(raw.get("auto_replay_mode") or "disabled").strip().lower()
     if auto_replay_mode not in allowed_auto_replay_modes:
         auto_replay_mode = "disabled"

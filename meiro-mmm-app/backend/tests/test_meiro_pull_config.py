@@ -51,6 +51,8 @@ def test_pull_config_falls_back_to_safe_defaults(monkeypatch, tmp_path):
     assert cfg["dedup_mode"] == "balanced"
     assert cfg["primary_dedup_key"] == "auto"
     assert cfg["fallback_dedup_keys"] == ["conversion_id", "order_id", "event_id"]
+    assert cfg["primary_ingest_source"] == "events"
+    assert cfg["replay_archive_source"] == "events"
 
 
 def test_pull_config_normalizes_primary_ingest_source(monkeypatch, tmp_path):

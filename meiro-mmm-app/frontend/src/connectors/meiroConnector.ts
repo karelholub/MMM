@@ -162,6 +162,18 @@ export interface MeiroMeasurementPipelineSummary {
     reasons: string[]
     recommended_actions: Array<Record<string, unknown>>
   }
+  production_readiness?: {
+    status: 'ready' | 'warning' | 'blocked' | string
+    summary: string
+    target_instance_host: string
+    target_sites: string[]
+    checks: Array<{
+      key: string
+      label: string
+      status: 'ready' | 'warning' | 'blocked' | string
+      detail: string
+    }>
+  }
 }
 
 export interface MeiroPipesCliStatus {
