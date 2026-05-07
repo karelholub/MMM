@@ -195,6 +195,36 @@ export interface MeiroPipesCliStatus {
       queues_ok?: boolean | null
     } | null
   }
+  health?: {
+    streams?: {
+      total?: number
+      enabled?: number
+      active_last_hour?: number
+    }
+    destinations?: {
+      total?: number
+      enabled?: number
+      active_last_hour?: number
+    }
+    pipes?: {
+      total?: number
+      enabled?: number
+    }
+    routes?: Array<{
+      id: string
+      label: string
+      status: 'ready' | 'missing' | 'disabled' | string
+      pipe_count: number
+      enabled_pipe_count: number
+      delivery_count_last_hour: number
+      source_slugs: string[]
+      destination?: Record<string, unknown> | null
+    }>
+    queues?: {
+      available?: boolean
+      keys?: string[]
+    }
+  }
 }
 
 export interface MeiroPullConfig {

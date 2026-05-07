@@ -110,6 +110,107 @@ def read_snapshot() -> Optional[Dict[str, Any]]:
     return _redact(parsed) if isinstance(parsed, dict) else None
 
 
+def _first_json_array(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    for value in result.get("json") or []:
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def _snapshot_entities(snapshot: Optional[Dict[str, Any]], key: str) -> List[Dict[str, Any]]:
+    if not isinstance(snapshot, dict):
+        return []
+    result = (snapshot.get("results") or {}).get(key)
+    if not isinstance(result, dict):
+        return []
+    return _first_json_array(result)
+
+
+def _matches_token(value: Any, tokens: List[str]) -> bool:
+    normalized = str(value or "").strip().lower()
+    return any(token in normalized for token in tokens)
+
+
+def _route_health(snapshot: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    streams = _snapshot_entities(snapshot, "event_streams")
+    pipes = _snapshot_entities(snapshot, "pipes")
+    destinations = _snapshot_entities(snapshot, "event_destinations")
+    queues = {}
+    if isinstance(snapshot, dict):
+        queue_result = (snapshot.get("results") or {}).get("queues")
+        if isinstance(queue_result, dict):
+            for value in queue_result.get("json") or []:
+                if isinstance(value, dict) and isinstance(value.get("queues"), dict):
+                    queues = value.get("queues") or {}
+                    break
+
+    def destination_for(tokens: List[str]) -> Optional[Dict[str, Any]]:
+        for item in destinations:
+            if _matches_token(item.get("slug"), tokens) or _matches_token(item.get("name"), tokens):
+                return item
+        return None
+
+    def pipes_for_destination(destination: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not destination:
+            return []
+        destination_id = destination.get("id")
+        destination_slug = str(destination.get("slug") or "").strip().lower()
+        destination_name = str(destination.get("name") or "").strip().lower()
+        return [
+            pipe
+            for pipe in pipes
+            if pipe.get("eventDestinationId") == destination_id
+            or str(pipe.get("eventDestinationSlug") or "").strip().lower() == destination_slug
+            or str(pipe.get("eventDestinationName") or "").strip().lower() == destination_name
+        ]
+
+    def summarize_route(route_id: str, label: str, tokens: List[str]) -> Dict[str, Any]:
+        destination = destination_for(tokens)
+        route_pipes = pipes_for_destination(destination)
+        enabled_pipes = [pipe for pipe in route_pipes if bool(pipe.get("isEnabled"))]
+        source_slugs = sorted({str(pipe.get("sourceSlug") or "") for pipe in route_pipes if pipe.get("sourceSlug")})
+        delivery_count = int(destination.get("deliveryCountLastHour") or 0) if destination else 0
+        return {
+            "id": route_id,
+            "label": label,
+            "status": "ready" if destination and enabled_pipes else "missing" if not destination else "disabled",
+            "destination": destination,
+            "pipe_count": len(route_pipes),
+            "enabled_pipe_count": len(enabled_pipes),
+            "delivery_count_last_hour": delivery_count,
+            "source_slugs": source_slugs[:12],
+        }
+
+    return {
+        "streams": {
+            "total": len(streams),
+            "enabled": len([item for item in streams if bool(item.get("isEnabled"))]),
+            "active_last_hour": len([item for item in streams if int(item.get("eventCountLastHour") or 0) > 0]),
+        },
+        "destinations": {
+            "total": len(destinations),
+            "enabled": len([item for item in destinations if bool(item.get("isEnabled"))]),
+            "active_last_hour": len([item for item in destinations if int(item.get("deliveryCountLastHour") or 0) > 0]),
+        },
+        "pipes": {
+            "total": len(pipes),
+            "enabled": len([item for item in pipes if bool(item.get("isEnabled"))]),
+        },
+        "routes": [
+            summarize_route("mmm_raw_events", "MMM raw-event ingestion", ["mta-tool", "mta tool"]),
+            summarize_route(
+                "deciengine_precompute",
+                "deciEngine precompute trigger",
+                ["deciengine-precompute", "deciengine precompute"],
+            ),
+        ],
+        "queues": {
+            "available": bool(queues),
+            "keys": sorted(queues.keys()),
+        },
+    }
+
+
 def build_pipes_cli_status(*, live: bool = False) -> Dict[str, Any]:
     snapshot = read_snapshot()
     live_status = _run_mpcli(["status"]) if live else None
@@ -166,4 +267,5 @@ def build_pipes_cli_status(*, live: bool = False) -> Dict[str, Any]:
             "path": str(SNAPSHOT_PATH),
             "summary": snapshot.get("summary") if isinstance(snapshot, dict) else None,
         },
+        "health": _route_health(snapshot),
     }

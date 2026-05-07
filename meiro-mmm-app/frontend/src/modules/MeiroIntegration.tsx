@@ -540,6 +540,8 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
   const pipesCliScopeStatus = pipesCliScope?.status || 'not_configured'
   const pipesCliAuthenticated = Boolean(pipesCli?.status.authenticated)
   const pipesCliSummary = pipesCli?.snapshot.summary
+  const pipesCliHealth = pipesCli?.health
+  const pipesCliRoutes = pipesCliHealth?.routes || []
   const pipesCliAvailable = Boolean(pipesCli?.status.available)
   const pipesCliCount = (value?: number | null) => (
     typeof value === 'number' ? value.toLocaleString() : 'unknown'
@@ -774,6 +776,30 @@ export default function MeiroIntegrationPage({ onJourneysImported }: MeiroIntegr
                         <> Streams {pipesCliCount(pipesCliSummary.event_stream_count)} · pipes {pipesCliCount(pipesCliSummary.pipe_count)} · destinations {pipesCliCount(pipesCliSummary.event_destination_count)}</>
                       ) : null}
                     </div>
+                    {pipesCliAuthenticated && pipesCliRoutes.length ? (
+                      <div style={{ display: 'flex', gap: t.space.xs, flexWrap: 'wrap' }}>
+                        {pipesCliRoutes.map((route) => {
+                          const routeTone = pipelineTone(route.status === 'ready' ? 'ready' : route.status === 'missing' ? 'blocked' : 'warning')
+                          return (
+                            <span
+                              key={route.id}
+                              title={`${route.label}: ${route.enabled_pipe_count}/${route.pipe_count} pipes enabled, ${route.delivery_count_last_hour} deliveries last hour`}
+                              style={{
+                                border: `1px solid ${t.color.borderLight}`,
+                                borderRadius: t.radius.full,
+                                background: routeTone.bg,
+                                color: routeTone.color,
+                                padding: '4px 8px',
+                                fontSize: t.font.sizeXs,
+                                fontWeight: t.font.weightSemibold,
+                              }}
+                            >
+                              {route.label}: {route.enabled_pipe_count}/{route.pipe_count} pipes · {route.delivery_count_last_hour.toLocaleString()} last hour
+                            </span>
+                          )
+                        })}
+                      </div>
+                    ) : null}
                   </div>
                   <button
                     type="button"
