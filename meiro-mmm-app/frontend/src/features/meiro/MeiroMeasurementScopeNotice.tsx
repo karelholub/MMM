@@ -41,6 +41,7 @@ export default function MeiroMeasurementScopeNotice({ compact = false, scope, ta
   const sourceLabel = source || summary?.source.primary_ingest_source || 'events'
   const productionStatus = summary?.production_readiness?.status || summary?.status || 'unknown'
   const productionChecks = summary?.production_readiness?.checks || []
+  const actionItems = summary?.pipes_action_items || []
   const warning = productionStatus === 'blocked' || productionStatus === 'warning' || currentOutOfScopeEvents > 0 || status !== 'target verified'
   const borderColor = productionStatus === 'blocked' ? t.color.danger : warning ? t.color.warning : t.color.borderLight
   const background = productionStatus === 'blocked' ? t.color.dangerSubtle : warning ? t.color.warningMuted : t.color.bg
@@ -90,6 +91,34 @@ export default function MeiroMeasurementScopeNotice({ compact = false, scope, ta
               <div key={check.key} style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, background: t.color.surface, padding: t.space.sm }}>
                 <div style={{ fontSize: t.font.sizeXs, color: checkColor, fontWeight: t.font.weightSemibold }}>{check.label}: {formatStatus(check.status)}</div>
                 <div style={{ marginTop: 3, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>{check.detail}</div>
+              </div>
+            )
+          })}
+        </div>
+      ) : null}
+      {!compact && actionItems.length ? (
+        <div style={{ border: `1px solid ${t.color.borderLight}`, borderRadius: t.radius.sm, background: t.color.surface, padding: t.space.sm, display: 'grid', gap: t.space.xs }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: t.space.sm, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ fontSize: t.font.sizeSm, fontWeight: t.font.weightSemibold, color: t.color.text }}>Pipes actions</div>
+            <div style={{ fontSize: t.font.sizeXs, color: t.color.textMuted }}>{actionItems.length} open</div>
+          </div>
+          {actionItems.slice(0, 3).map((item) => {
+            const itemColor = item.severity === 'blocked' ? t.color.danger : t.color.warning
+            return (
+              <div key={item.id || item.title} style={{ display: 'grid', gridTemplateColumns: item.pipes_agent_prompt ? '1fr auto' : '1fr', gap: t.space.sm, alignItems: 'center', borderTop: `1px solid ${t.color.borderLight}`, paddingTop: t.space.xs }}>
+                <div>
+                  <div style={{ fontSize: t.font.sizeXs, color: itemColor, fontWeight: t.font.weightSemibold }}>{item.title}</div>
+                  {item.summary ? <div style={{ marginTop: 2, fontSize: t.font.sizeXs, color: t.color.textSecondary }}>{item.summary}</div> : null}
+                </div>
+                {item.pipes_agent_prompt ? (
+                  <button
+                    type="button"
+                    onClick={() => navigator.clipboard?.writeText(item.pipes_agent_prompt || '')}
+                    style={{ border: `1px solid ${t.color.border}`, background: t.color.bg, borderRadius: t.radius.sm, padding: '6px 8px', cursor: 'pointer', fontSize: t.font.sizeXs }}
+                  >
+                    Copy prompt
+                  </button>
+                ) : null}
               </div>
             )
           })}

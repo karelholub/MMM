@@ -680,6 +680,88 @@ def _build_measurement_production_readiness(
     }
 
 
+def _build_measurement_pipes_action_items(
+    *,
+    raw_event_diagnostics: Dict[str, Any],
+    proposals: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    active_proposals = [
+        proposal
+        for proposal in proposals
+        if isinstance(proposal, dict)
+        and str(((proposal.get("audit") or {}) if isinstance(proposal.get("audit"), dict) else {}).get("status") or "open") != "verified"
+    ]
+    for proposal in active_proposals[:3]:
+        items.append(
+            {
+                "id": proposal.get("id"),
+                "type": proposal.get("type") or "pipes_fix_proposal",
+                "title": proposal.get("title") or "Review upstream Pipes fix",
+                "severity": proposal.get("severity") or "warning",
+                "summary": (
+                    f"Update {', '.join(proposal.get('target_source_slugs') or [])} upstream of "
+                    f"{proposal.get('target_destination_slug') or 'the MMM/MTA destination'}."
+                )
+                if proposal.get("target_source_slugs")
+                else "Review and apply this Pipes fix proposal upstream.",
+                "proposal_id": proposal.get("id"),
+                "pipes_agent_prompt": proposal.get("pipes_agent_prompt"),
+                "target_destination_slug": proposal.get("target_destination_slug"),
+            }
+        )
+
+    if items:
+        return items
+
+    if not raw_event_diagnostics.get("available"):
+        return [
+            {
+                "id": "collect_raw_events",
+                "type": "raw_event_collection",
+                "title": "Send recent raw events from Pipes",
+                "severity": "blocked",
+                "summary": "MMM has no recent raw-event sample to diagnose. Verify the MTA Tool event destination and replay after a batch arrives.",
+            }
+        ]
+
+    source_medium_share = float(raw_event_diagnostics.get("source_medium_share") or 0.0)
+    conversion_linkage_share = float(raw_event_diagnostics.get("conversion_linkage_share") or 0.0)
+    conversion_like_events = int(raw_event_diagnostics.get("conversion_like_events") or 0)
+    usable_event_name_share = float(raw_event_diagnostics.get("usable_event_name_share") or 0.0)
+    if source_medium_share < 0.7:
+        items.append(
+            {
+                "id": "fix_source_medium_contract",
+                "type": "taxonomy_contract",
+                "title": "Normalize source and medium in Pipes",
+                "severity": "warning" if source_medium_share >= 0.3 else "blocked",
+                "summary": f"Only {source_medium_share:.0%} of raw events carry explicit source/medium. Add canonical source, medium, channel, and campaign before MMM delivery.",
+            }
+        )
+    if conversion_like_events > 0 and conversion_linkage_share < 0.7:
+        items.append(
+            {
+                "id": "fix_conversion_linkage_contract",
+                "type": "conversion_contract",
+                "title": "Attach stable conversion linkage",
+                "severity": "warning" if conversion_linkage_share >= 0.3 else "blocked",
+                "summary": f"Only {conversion_linkage_share:.0%} of conversion-like events have order/lead/conversion linkage. Add conversion_id/order_id/value/currency upstream.",
+            }
+        )
+    if usable_event_name_share < 0.8:
+        items.append(
+            {
+                "id": "fix_event_names",
+                "type": "event_contract",
+                "title": "Canonicalize event names",
+                "severity": "warning",
+                "summary": f"{usable_event_name_share:.0%} of raw events have usable names. Map opaque or generic names to page_view, click, purchase, lead, signup, refund, or cancellation.",
+            }
+        )
+    return items[:3]
+
+
 def _record_webhook_diagnostic_event(
     *,
     request: Request,
@@ -1677,6 +1759,10 @@ def create_router(
             blockers=blockers,
             warnings=warnings,
         )
+        pipes_action_items = _build_measurement_pipes_action_items(
+            raw_event_diagnostics=raw_event_diagnostics,
+            proposals=list_pipes_fix_proposals(limit=6),
+        )
 
         status = "ready"
         if blockers:
@@ -1736,6 +1822,7 @@ def create_router(
                 "warnings": warnings,
             },
             "production_readiness": production_readiness,
+            "pipes_action_items": pipes_action_items,
         }
 
     @router.get("/api/connectors/meiro/attributes")

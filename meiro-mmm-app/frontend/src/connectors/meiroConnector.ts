@@ -195,6 +195,16 @@ export interface MeiroMeasurementPipelineSummary {
       detail: string
     }>
   }
+  pipes_action_items?: Array<{
+    id?: string
+    type?: string
+    title: string
+    severity?: 'warning' | 'blocked' | string
+    summary?: string
+    proposal_id?: string | null
+    pipes_agent_prompt?: string | null
+    target_destination_slug?: string | null
+  }>
 }
 
 export interface MeiroPipesCliStatus {

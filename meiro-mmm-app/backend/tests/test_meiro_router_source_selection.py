@@ -1,5 +1,6 @@
 from app.modules.meiro_integration.router import (
     _build_event_replay_reconstruction_diagnostics,
+    _build_measurement_pipes_action_items,
     _build_raw_event_stream_diagnostics,
     _prefer_event_archive,
 )
@@ -57,6 +58,48 @@ def test_build_raw_event_stream_diagnostics_flags_referrer_only_and_missing_link
     assert diagnostics["conversion_linkage_share"] == 0.0
     assert diagnostics["avg_reconstructed_profiles_per_event"] == 0.5
     assert any("referrer fallback" in item for item in diagnostics["warnings"])
+
+
+def test_build_measurement_pipes_action_items_prefers_active_proposals():
+    items = _build_measurement_pipes_action_items(
+        raw_event_diagnostics={"available": True, "source_medium_share": 0.1},
+        proposals=[
+            {
+                "id": "pipes_taxonomy_contract",
+                "type": "taxonomy_contract",
+                "title": "Normalize taxonomy fields upstream in Pipes",
+                "severity": "blocked",
+                "target_source_slugs": ["meiro-io"],
+                "target_destination_slug": "mta-tool",
+                "pipes_agent_prompt": "fix taxonomy",
+                "audit": {"status": "open"},
+            }
+        ],
+    )
+
+    assert items[0]["id"] == "pipes_taxonomy_contract"
+    assert items[0]["pipes_agent_prompt"] == "fix taxonomy"
+    assert "meiro-io" in items[0]["summary"]
+
+
+def test_build_measurement_pipes_action_items_falls_back_to_diagnostics():
+    items = _build_measurement_pipes_action_items(
+        raw_event_diagnostics={
+            "available": True,
+            "source_medium_share": 0.1,
+            "conversion_linkage_share": 0.0,
+            "conversion_like_events": 2,
+            "usable_event_name_share": 0.4,
+        },
+        proposals=[],
+    )
+
+    assert [item["id"] for item in items] == [
+        "fix_source_medium_contract",
+        "fix_conversion_linkage_contract",
+        "fix_event_names",
+    ]
+    assert items[0]["severity"] == "blocked"
 
 
 def test_build_event_replay_reconstruction_diagnostics_explains_attrition():
